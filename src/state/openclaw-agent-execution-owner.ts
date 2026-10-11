@@ -32,7 +32,6 @@ import type {
   AgentDatabaseNativeGeneration,
   OpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution-contract.js";
-import type { IncognitoAgentExecutionOwner } from "./openclaw-agent-execution-incognito.js";
 import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
 import {
   type AgentDatabaseExecutionPreparedTarget,
@@ -54,7 +53,7 @@ import {
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
 export type AgentDatabaseExecutionState = {
-  owners: Map<string, AgentDatabaseFileExecutionOwner | IncognitoAgentExecutionOwner>;
+  owners: Map<string, AgentDatabaseFileExecutionOwner>;
   // LRU entries keep their slots during eviction and after failed cleanup.
   idle: Set<AgentDatabaseFileExecutionOwner>;
 };

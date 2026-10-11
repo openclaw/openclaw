@@ -8,6 +8,10 @@ import {
 } from "../../auto-reply/reply/reply-run-registry.js";
 import type { SessionTranscriptTurnMutation } from "../../config/sessions/goals-operations.types.js";
 import type { QualifiedSessionEntryAccessTarget } from "../../config/sessions/session-accessor.types.js";
+import {
+  getSessionActorStorageBinding,
+  runWithSessionActorStorage,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import { acquireSessionInputActor } from "../../config/sessions/session-input-actor.js";
 import { withSessionTranscriptSourcePublication } from "../../config/sessions/transcript-write-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -272,6 +276,15 @@ export function createChatSendWorkAdmission(params: {
     currentRegistration: () => { sessionId: string } | undefined;
   };
 }) {
+  const storage =
+    params.terminal &&
+    getSessionActorStorageBinding({
+      agentId: params.terminal.target.agentId,
+      sessionKey: params.terminal.target.canonicalKey,
+      storePath: params.terminal.storePath,
+    });
+  const inStorage = <T>(run: () => T): T =>
+    storage ? runWithSessionActorStorage(storage, run) : run();
   let references = 1;
   let admittedSource = params.terminal?.target.readSource;
   let admittedLifecycleRevision = params.terminal?.lifecycleRevision;
@@ -318,7 +331,7 @@ export function createChatSendWorkAdmission(params: {
     }
     let pending: void | Promise<void> = undefined;
     try {
-      pending = finishPendingInput?.();
+      pending = inStorage(() => finishPendingInput?.());
     } catch (error) {
       // The durable row remains recoverable; a failed disposition write must
       // not strand session/root drain ownership during shutdown.
@@ -405,17 +418,19 @@ export function createChatSendWorkAdmission(params: {
             throw new Error("Chat input actor admission ended");
           }
         };
-        inputActor = acquireSessionInputActor(
-          {
-            agentId: terminal.target.agentId,
-            storePath: terminal.storePath,
-            readSource: terminal.target.readSource,
-            target: {
-              canonicalKey: terminal.target.canonicalKey,
-              storeKeys: [...terminal.target.storeKeys],
+        inputActor = inStorage(() =>
+          acquireSessionInputActor(
+            {
+              agentId: terminal.target.agentId,
+              storePath: terminal.storePath,
+              readSource: terminal.target.readSource,
+              target: {
+                canonicalKey: terminal.target.canonicalKey,
+                storeKeys: [...terminal.target.storeKeys],
+              },
             },
-          },
-          { assertCurrent, assertReadable: assertCurrent },
+            { assertCurrent, assertReadable: assertCurrent },
+          ),
         );
       }
       return inputActor;
@@ -448,27 +463,29 @@ export function createChatSendWorkAdmission(params: {
       if (!terminal) {
         throw new Error("Chat input publication requires its original admission target");
       }
-      return withSessionTranscriptSourcePublication(
-        {
-          agentId: terminal.target.agentId,
-          sessionId: terminal.sessionBinding.sessionId,
-          sessionKey: terminal.target.storeKey,
-          storePath: terminal.target.storePath,
-        },
-        (source, committedEntry) => {
-          if (
-            admittedSource &&
-            (admittedSource.agentId !== source.agentId ||
-              admittedSource.path !== source.path ||
-              admittedSource.databaseIdentity !== source.databaseIdentity ||
-              admittedSource.databaseBirthtime !== source.databaseBirthtime)
-          ) {
-            throw new Error("Committed chat input changed its admitted physical source");
-          }
-          admittedSource ??= source;
-          admittedLifecycleRevision = committedEntry.lifecycleRevision;
-        },
-        run,
+      return inStorage(() =>
+        withSessionTranscriptSourcePublication(
+          {
+            agentId: terminal.target.agentId,
+            sessionId: terminal.sessionBinding.sessionId,
+            sessionKey: terminal.target.storeKey,
+            storePath: terminal.target.storePath,
+          },
+          (source, committedEntry) => {
+            if (
+              admittedSource &&
+              (admittedSource.agentId !== source.agentId ||
+                admittedSource.path !== source.path ||
+                admittedSource.databaseIdentity !== source.databaseIdentity ||
+                admittedSource.databaseBirthtime !== source.databaseBirthtime)
+            ) {
+              throw new Error("Committed chat input changed its admitted physical source");
+            }
+            admittedSource ??= source;
+            admittedLifecycleRevision = committedEntry.lifecycleRevision;
+          },
+          run,
+        ),
       );
     },
     setPendingInputCleanup: (finish: () => void | Promise<void>) => {

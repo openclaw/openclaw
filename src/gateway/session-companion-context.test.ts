@@ -6,14 +6,15 @@ import {
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import * as redact from "../logging/redact.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { createSessionCompanion } from "./session-companion.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
-import * as transcriptReaders from "./session-transcript-readers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -22,6 +23,7 @@ afterEach(async () => {
   for (const stateDir of tempDirs.dirs) {
     await cleanupSessionStateForTest({ stateDir });
   }
+  memorySessionActorOwners.reset();
   vi.unstubAllEnvs();
 });
 
@@ -126,6 +128,47 @@ describe("session companion context", () => {
         sessionId: empty.sessionId,
       },
     });
+  });
+
+  it("reads current incognito context without creating missing sessions", async () => {
+    const scope = {
+      ...createScope("companion-memory"),
+      sessionKey: "agent:main:dashboard:incognito-companion",
+    };
+    const location = {
+      agentId: scope.agentId,
+      path: resolveIncognitoOpenClawAgentSqlitePath(scope),
+    };
+    expect(await defaultSessionCompanionContextReader.read(scope)).toEqual({ kind: "missing" });
+    expect(memorySessionActorOwners.read(location)).toBeUndefined();
+    await upsertSessionEntryCore(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      incognito: true,
+    });
+    expect(defaultSessionCompanionContextReader.currentSessionId(scope)).toBe(scope.sessionId);
+    for (const [index, text] of ["First question", "Latest question"].entries()) {
+      await persistSessionTranscriptTurn(scope, {
+        messages: [
+          {
+            eventId: `question-${index}`,
+            message: { role: "user", content: text, timestamp: index },
+          },
+        ],
+        touchSessionEntry: true,
+      });
+      const result = await defaultSessionCompanionContextReader.read(scope);
+      expect(result).toMatchObject({
+        kind: "ready",
+        context: {
+          sessionId: scope.sessionId,
+          messages: expect.arrayContaining([{ role: "user", text, ts: index }]),
+        },
+      });
+    }
+    memorySessionActorOwners.closeDatabase(location);
+    expect(await defaultSessionCompanionContextReader.read(scope)).toEqual({ kind: "missing" });
+    expect(defaultSessionCompanionContextReader.currentSessionId(scope)).toBeUndefined();
   });
 
   it("reads a bounded active SQLite tail without decoding old transcript rows", async () => {
@@ -365,47 +408,6 @@ describe("session companion context", () => {
         sessionId: scope.sessionId,
       },
     });
-  });
-
-  it("rejects context assembled across different transcript snapshots", async () => {
-    const scope = createScope("companion-context-snapshot-fence");
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const page = vi
-      .spyOn(transcriptReaders, "readSessionTranscriptBoundedMessageTailPageAsync")
-      .mockResolvedValueOnce({
-        activeLeafEntryId: "leaf-1",
-        events: [
-          {
-            event: {
-              type: "message",
-              id: "message-1",
-              parentId: null,
-              message: { role: "user", content: "stable context", timestamp: 1 },
-            },
-            eventSeq: 1,
-            seq: 1,
-          },
-        ],
-        newestContiguousEventCount: 1,
-        scannedMessages: 1,
-        serializedBytes: 128,
-        snapshot: { generation: "generation-1", indexedSeq: 1 },
-        totalMessages: 1,
-      })
-      .mockResolvedValueOnce({
-        activeLeafEntryId: "leaf-1",
-        events: [],
-        newestContiguousEventCount: 0,
-        scannedMessages: 0,
-        serializedBytes: 0,
-        snapshot: { generation: "generation-2", indexedSeq: 1 },
-        totalMessages: 1,
-      });
-
-    await expect(defaultSessionCompanionContextReader.read(scope)).resolves.toEqual({
-      kind: "unavailable",
-    });
-    expect(page).toHaveBeenCalledTimes(2);
   });
 
   it("keeps transcript-visible messages across compaction", async () => {

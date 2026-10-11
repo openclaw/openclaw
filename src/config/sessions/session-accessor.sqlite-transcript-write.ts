@@ -76,8 +76,10 @@ import type {
   SessionTranscriptRuntimeTarget,
   SessionTranscriptWriteLockAccessorContext,
 } from "./session-accessor.types.js";
-import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
-import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
+import {
+  captureSessionActorStorageOwner,
+  withSessionActorStorage,
+} from "./session-actor-storage-binding.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import {
   readTranscriptAppendPostimage,
@@ -87,9 +89,9 @@ import { withTranscriptLockSettlement } from "./session-transcript-lock-settleme
 import { assertLegacyTranscriptPreparation } from "./session-transcript-preparation.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
-import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 import {
   assertOwnedTranscriptWriteCommit,
+  captureOwnedTranscriptWriteAssertion,
   withOwnedSessionTranscriptWriterFence,
 } from "./transcript-write-context.js";
 
@@ -421,32 +423,27 @@ export async function withTranscriptWriteLock<T>(
   return withHostTranscriptWriteLock(scope, run);
 }
 
-/** Actor sequences retain the captured owner; unbound callers use the existing host route. */
+/** Memory sequences retain their actor; durable sequences use the existing worker route. */
 export async function withTranscriptWriteSequence<T>(
   scope: SessionTranscriptWriteScope,
   run: (context: SessionTranscriptWriteLockAccessorContext) => Promise<T> | T,
 ): Promise<T> {
-  const memory = getSessionActorStorageBinding(scope);
-  if (memory) {
-    const { withActorTranscriptWriteSequence } =
-      await import("./session-actor-transcript-sequence.js");
-    return withActorTranscriptWriteSequence(scope, memory, run);
-  }
-  const actor = captureIncognitoSessionOperation(scope);
-  if (!actor) {
+  const assertCurrent = captureOwnedTranscriptWriteAssertion(scope);
+  const authority = { assertCurrent, authorize: assertCurrent };
+  if (!captureSessionActorStorageOwner(scope, authority)) {
     return withHostTranscriptWriteLock(scope, run);
   }
-  const resolved = resolveSqliteTranscriptScope({ ...scope, storePath: actor.actor.path });
-  const target = captureSessionTranscriptTargetBinding({
-    ...scope,
-    agentId: resolved.agentId,
-    sessionId: resolved.sessionId,
-    sessionKey: resolved.sessionKey,
-    storePath: actor.actor.path,
-  });
-  const { withIncognitoTranscriptWriteSequence } =
-    await import("./session-incognito-transcript-sequence.js");
-  return withIncognitoTranscriptWriteSequence(target, actor, run);
+  const { withActorTranscriptWriteSequence } =
+    await import("./session-actor-transcript-sequence.js");
+  const result = await withSessionActorStorage(
+    scope,
+    { authority, lifetime: { assertCurrent, assertReadable: assertCurrent } },
+    async (memory) => ({ value: await withActorTranscriptWriteSequence(scope, memory, run) }),
+  );
+  if (!result) {
+    throw new Error("Session transcript window is unavailable");
+  }
+  return result.value;
 }
 
 async function withHostTranscriptWriteLock<T>(

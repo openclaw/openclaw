@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { expressionBuilder, type AliasableExpression } from "kysely";
+import { expressionBuilder } from "kysely";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { chunkItems } from "../utils/chunk-items.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
@@ -18,10 +18,6 @@ export type SessionCostUsageRollupRow = {
   key: string;
   updatedAt: number;
   valueJson: string;
-};
-
-export type SessionCostUsageRollupByteRow = Omit<SessionCostUsageRollupRow, "valueJson"> & {
-  valueJson: Uint8Array;
 };
 
 type SessionCostUsageJson = string | Uint8Array;
@@ -54,29 +50,6 @@ export function readSessionCostUsageRollupRowsInDatabase(
   db: DatabaseSync,
   filePaths?: readonly string[],
 ): SessionCostUsageRollupRow[] {
-  return readSessionCostUsageRollupValuesInDatabase(
-    db,
-    filePaths,
-    cacheExpressions.ref("value_json"),
-  );
-}
-
-export function readSessionCostUsageRollupByteRowsInDatabase(
-  db: DatabaseSync,
-  filePaths?: readonly string[],
-): SessionCostUsageRollupByteRow[] {
-  return readSessionCostUsageRollupValuesInDatabase(
-    db,
-    filePaths,
-    cacheExpressions.cast<Uint8Array | null>("value_json", "blob"),
-  );
-}
-
-function readSessionCostUsageRollupValuesInDatabase<Value extends string | Uint8Array>(
-  db: DatabaseSync,
-  filePaths: readonly string[] | undefined,
-  valueJson: AliasableExpression<Value | null>,
-) {
   const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
   // Bound SQL parameters even when a historical family contains many instances.
   const batches = filePaths ? chunkItems([...new Set(filePaths)], 500) : [undefined];
@@ -84,7 +57,7 @@ function readSessionCostUsageRollupValuesInDatabase<Value extends string | Uint8
     .flatMap((keys) => {
       const query = kysely
         .selectFrom("cache_entries")
-        .select(["key", valueJson.as("value_json"), "updated_at"])
+        .select(["key", "value_json", "updated_at"])
         .where("scope", "=", ROLLUP_SCOPE);
       return executeSqliteQuerySync(db, keys ? query.where("key", "in", keys) : query).rows;
     })

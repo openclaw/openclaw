@@ -2,16 +2,17 @@ import { getRuntimeConfig } from "../../config/io.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
-  captureIncognitoSessionSource,
-  withIncognitoSessionBinding,
-  type IncognitoSessionBinding,
-} from "../../config/sessions/session-incognito-binding.js";
+  acquireSessionActorStorage,
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+  runWithSessionActorStorage,
+  type CapturedSessionActorStorageOwner,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import { diagnosticLogger as diag } from "../../logging/diagnostic.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 
 type ForceClearSessionSnapshot = {
-  incognito?: IncognitoSessionBinding;
-  assertCurrent?: () => void;
+  memory?: CapturedSessionActorStorageOwner;
   agentId: string;
   lifecycleRunId?: string;
   startedAt?: number;
@@ -28,19 +29,18 @@ export function tryLoadForceClearSessionSnapshot(
     const cfg = getRuntimeConfig();
     const agentId = resolveSessionAgentId({ config: cfg, sessionKey, agentId: preparedAgentId });
     const configuredStorePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-    const source = captureIncognitoSessionSource({
-      agentId,
-      sessionKey,
-      storePath: configuredStorePath,
-    });
-    if (source && "kind" in source) {
-      return undefined;
-    }
-    const storePath = source?.actor.path ?? configuredStorePath;
-    const claim = source?.actor.sessions.captureCurrent(sessionKey);
+    const source = captureSessionActorStorageOwner(
+      {
+        agentId,
+        sessionKey,
+        storePath: configuredStorePath,
+      },
+      { assertCurrent() {}, authorize() {} },
+    );
+    const storePath = source?.path ?? configuredStorePath;
     // Cancellation must not queue behind the run whose settlement it is waiting for.
     const entry = source
-      ? source.actor.sessions.readSteering(sessionKey)
+      ? readCapturedSessionActorEntry(source, sessionKey)
       : loadSessionEntry({ agentId, sessionKey, storePath });
     if (
       !entry ||
@@ -51,8 +51,7 @@ export function tryLoadForceClearSessionSnapshot(
     }
     return {
       agentId,
-      incognito: source ? { actor: source.actor } : undefined,
-      assertCurrent: claim?.assertCurrent,
+      memory: source,
       lifecycleRunId: entry.lifecycleRunId,
       ...(entry.startedAt === undefined ? {} : { startedAt: entry.startedAt }),
       storePath,
@@ -80,7 +79,6 @@ export async function persistForceClearedEmbeddedRunTerminalState(
           storePath: params.storePath,
         },
         (entry) => {
-          params.assertCurrent?.();
           // A replacement can reuse the session id; bind this patch to both owners' exact snapshot.
           if (
             hasActiveRun(params.sessionId, params.sessionKey) ||
@@ -105,20 +103,38 @@ export async function persistForceClearedEmbeddedRunTerminalState(
           skipMaintenance: true,
           takeCacheOwnership: true,
           requireWriteSuccess: false,
-          ...(params.incognito
-            ? {
-                assertCommitAllowed() {
-                  params.assertCurrent?.();
-                  if (hasActiveRun(params.sessionId, params.sessionKey)) {
-                    throw new Error("Force-clear terminal persistence lost its run ownership");
-                  }
-                },
-              }
-            : {}),
         },
       );
-    params.assertCurrent?.();
-    await (params.incognito ? withIncognitoSessionBinding(params.incognito, persist) : persist());
+    if (params.memory) {
+      const source = params.memory;
+      const lifetime = {
+        assertCurrent: () => source.authority.assertCurrent(),
+        assertReadable: () => source.authority.assertCurrent(),
+      };
+      const actor = source.owner
+        ? await source.owner.acquireExisting(params.sessionKey, lifetime)
+        : source.binding
+          ? (
+              await acquireSessionActorStorage(
+                { ...params, sessionActor: source.binding },
+                {
+                  lifetime,
+                  authority: source.authority,
+                },
+              )
+            )?.actor
+          : undefined;
+      if (!actor) {
+        return;
+      }
+      try {
+        await runWithSessionActorStorage({ ...source, actor }, persist);
+      } finally {
+        await actor.release();
+      }
+    } else {
+      await persist();
+    }
   } catch (err) {
     // Registry ownership is already gone; preserve the completed recovery result.
     diag.warn(

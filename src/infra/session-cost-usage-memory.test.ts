@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionActorAuthority } from "../config/sessions/session-actor-contract.js";
-import { createMemorySessionActorOwner } from "../config/sessions/session-actor-memory.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import {
+  acquireSessionActorStorage,
   runWithSessionActorStorage,
-  type SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
 import { resolveMemorySessionTargetsInWorker } from "../config/sessions/session-transcript-inventory-runtime.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { readTranscriptRecords } from "./session-cost-usage-collection.js";
 import { runSessionActorUsage } from "./session-cost-usage-memory.js";
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
 
@@ -27,26 +29,22 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
 const sessionKey = "agent:main:dashboard:incognito-usage";
 const sessionId = "usage-1";
-const owners: ReturnType<typeof createMemorySessionActorOwner>[] = [];
+const env = { OPENCLAW_STATE_DIR: "/synthetic/phase-e-usage" };
 afterEach(() => {
-  for (const owner of owners.splice(0)) {
-    owner.close();
-  }
+  memorySessionActorOwners.reset();
 });
 
 async function fixture(entry: Partial<InternalSessionEntry> = {}) {
-  const owner = createMemorySessionActorOwner({ agentId: "main", path: "/synthetic/memory-usage" });
-  owners.push(owner);
-  const actor = await owner.acquire(
-    { database: owner.identity, sessionKey },
-    { assertCurrent() {}, assertReadable() {} },
+  const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
+  const binding = await acquireSessionActorStorage(
+    { agentId: "main", storePath, sessionKey, env },
+    { lifetime: { assertCurrent() {}, assertReadable() {} }, authority, create: true },
   );
-  const binding: SessionActorStorageBinding = {
-    actor,
-    authority,
-    agentId: "main",
-    path: "/synthetic/memory-usage",
-  };
+  if (!binding) {
+    throw new Error("Production acquisition did not select memory storage");
+  }
+  const { actor } = binding;
+  const owner = memorySessionActorOwners.read({ agentId: "main", path: storePath })!;
   expect(
     await actor.storage!.mutate(
       {
@@ -97,17 +95,22 @@ async function fixture(entry: Partial<InternalSessionEntry> = {}) {
 }
 
 describe("actor memory usage", () => {
-  it("uses selected memory acquisition for inventory and refreshes a stale report after an in-process append", async () => {
+  it("uses production memory acquisition and refreshes a stale report after an in-process append", async () => {
     const { binding, append, sessionFile } = await fixture();
     await append(5);
-    await runWithSessionActorStorage(binding, async () => {
-      const prepared = prepareUsageCostWorker({ agentId: "main" });
+    {
+      const prepared = prepareUsageCostWorker({ agentId: "main", storePath: binding.path, env });
       expect(prepared.databases).toEqual([]);
       expect(await runUsageCostWorker(prepared, { kind: "inventory" })).toMatchObject({
         kind: "inventory",
         files: [{ sessionId }],
       });
-    });
+      expect(
+        (await Array.fromAsync(readTranscriptRecords(sessionFile))).filter(
+          (record) => record.type === "message",
+        ),
+      ).toMatchObject([{ message: { usage: { input: 5 } } }]);
+    }
     const refresh = () =>
       runSessionActorUsage(
         binding,
@@ -140,6 +143,33 @@ describe("actor memory usage", () => {
       cacheStatus: { staleFiles: 0 },
     });
     expect(await refresh()).toEqual({ kind: "refresh", changed: false });
+  });
+
+  it("returns empty usage for an absent private owner without creating storage or borrowing a database worker", async () => {
+    const databasePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
+    const prepared = prepareUsageCostWorker({ agentId: "main", databasePath, env });
+    expect(prepared.databases).toEqual([]);
+    expect(await runUsageCostWorker(prepared, { kind: "inventory" })).toEqual({
+      kind: "inventory",
+      files: [],
+    });
+    expect(
+      await runUsageCostWorker(prepared, {
+        kind: "sessions",
+        pricingFingerprint: "fixture",
+        sessions: [
+          {
+            sessionFile: formatSqliteSessionFileMarker({
+              agentId: "main",
+              storePath: databasePath,
+              sessionId,
+            }),
+          },
+        ],
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+      }),
+    ).toMatchObject({ kind: "sessions", summaries: [null] });
+    expect(memorySessionActorOwners.list()).toEqual([]);
   });
 
   it("keeps captured corpus and usage bytes detached while later writes update new reads", async () => {

@@ -1,7 +1,7 @@
 import type { SessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import type { ProgressCardStore } from "../gateway/progress-card-store.js";
 
-/** Uses the selected memory backend and leaves the default durable/native router unchanged. */
+/** Stores private progress cards in the session actor selected by the routing owner. */
 export function createSessionActorProgressCardStore(
   resolve: (sessionKey: string, agentId?: string) => SessionActorStorageBinding,
 ): ProgressCardStore {
@@ -15,7 +15,6 @@ export function createSessionActorProgressCardStore(
         },
         binding.authority,
       );
-      binding.actor.snapshot(binding.authority);
       return card;
     },
     async put(sessionKey, input, agentId) {

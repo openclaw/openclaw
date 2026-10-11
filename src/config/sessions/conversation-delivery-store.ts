@@ -17,7 +17,7 @@ import {
   pinConversationDatabaseScope,
   type ConversationRegistryScope,
 } from "./conversation-registry.js";
-import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
@@ -45,16 +45,31 @@ function readConversationDelivery(
   scope: ConversationDeliveryStoreScope,
   lookup: ConversationDeliveryLookup,
 ) {
-  const memory = getSessionActorStorageBinding({
-    agentId: scope.agentId,
-    storePath: scope.storePath,
-  });
+  const memory = captureSessionActorStorageOwner(
+    {
+      agentId: scope.databaseAgentId ?? scope.agentId,
+      storePath: scope.storePath,
+      env: scope.env,
+    },
+    { assertCurrent() {}, authorize() {} },
+  );
   if (memory) {
-    return deliveryResult(() =>
-      memory.actor.storage!.read(
-        { type: "session.conversation.delivery.read", input: lookup },
-        memory.authority,
-      ),
+    const binding =
+      memory.binding &&
+      memory.binding.agentId === memory.agentId &&
+      memory.binding.path === memory.path
+        ? memory.binding
+        : undefined;
+    return deliveryResult(async () =>
+      binding
+        ? binding.actor.storage!.read(
+            { type: "session.conversation.delivery.read", input: lookup },
+            memory.authority,
+          )
+        : memory.owner?.readConversationAfterWrites(
+            { type: "session.conversation.delivery.read", input: lookup },
+            memory.authority,
+          ),
     );
   }
   const { options, scope: preparedScope } = pinConversationDatabaseScope(scope);
@@ -105,34 +120,54 @@ function writeConversationDelivery(
     | ["conversation.delivery.begin", ConversationDeliveryBegin, (() => void)?]
     | ["conversation.delivery.transition", ConversationDeliveryTransition, (() => void)?]
 ): Promise<ConversationDeliveryRecord | { created: boolean; record: ConversationDeliveryRecord }> {
-  const memory = getSessionActorStorageBinding({
-    agentId: scope.agentId,
-    storePath: scope.storePath,
-  });
+  const memory = captureSessionActorStorageOwner(
+    {
+      agentId: scope.databaseAgentId ?? scope.agentId,
+      storePath: scope.storePath,
+      env: scope.env,
+    },
+    { assertCurrent() {}, authorize() {} },
+  );
   if (memory) {
     return deliveryResult(async () => {
       const authority = {
-        assertCurrent: () => memory.authority.assertCurrent(),
-        authorize: (...args: Parameters<typeof memory.authority.authorize>) => {
+        ...memory.authority,
+        assertCurrent() {
+          memory.authority.assertCurrent();
           assertCurrent();
-          memory.authority.authorize(...args);
         },
       };
-      const outcome =
-        type === "conversation.delivery.begin"
-          ? await memory.actor.storage!.mutate(
+      const binding =
+        memory.binding &&
+        memory.binding.agentId === memory.agentId &&
+        memory.binding.path === memory.path
+          ? memory.binding
+          : undefined;
+      if (!binding) {
+        if (!memory.owner)
+          throw new ConversationDeliveryMissingError("Conversation delivery owner is missing");
+        return type === "conversation.delivery.begin"
+          ? memory.owner.mutateConversation(
               { type: "session.conversation.delivery.begin", input },
               authority,
             )
-          : await memory.actor.storage!.mutate(
+          : memory.owner.mutateConversation(
               { type: "session.conversation.delivery.transition", input },
               authority,
             );
-      if (outcome.kind === "rolled-back") {
-        const error = new Error(outcome.error.message);
-        error.name = outcome.error.name;
-        throw error;
       }
+      const outcome =
+        type === "conversation.delivery.begin"
+          ? await binding.actor.storage!.mutate(
+              { type: "session.conversation.delivery.begin", input },
+              authority,
+            )
+          : await binding.actor.storage!.mutate(
+              { type: "session.conversation.delivery.transition", input },
+              authority,
+            );
+      if (outcome.kind === "rolled-back")
+        throw Object.assign(new Error(outcome.error.message), { name: outcome.error.name });
       return outcome.value;
     });
   }

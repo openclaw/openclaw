@@ -82,6 +82,7 @@ export function readSessionActorMemoryStorage(
       return readSessionActorBoardQuery(context, query);
     case "progressCard.get":
       return readSessionActorProgressCard(context, query.input.sessionKey);
+    case "session.rewrite.prepare":
     case "session.report.prepare":
     case "session.correction.prepare":
     case "session.transcript.messageFacts":
@@ -99,6 +100,7 @@ export function readSessionActorMemoryStorage(
       return readSessionActorMemoryCompletion(context.state, query.input, context);
     case "session.turn.prepare":
       return prepareSessionActorMemoryTurn(context, query.input);
+    case "session.lifecycle.artifacts":
     case "session.entry.creation":
     case "session.entry.read":
     case "session.entry.readById":
@@ -212,11 +214,14 @@ export function mutateSessionActorMemoryStorage(
     case "progressCard.put":
     case "progressCard.clearForReset":
       return executeSessionActorProgressCardCommand(context, command);
+    case "session.rewrite.commit":
+    case "session.event.append":
     case "session.report.assistant":
     case "session.report.abortedPartial":
     case "session.report.append":
     case "session.correction.commit":
     case "session.workerTranscript.commit":
+    case "session.transcript.manualCompact":
       return executeSessionActorMemoryReportCommand(context, command);
     case "session.usage.write":
       return mutateSessionActorMemoryUsage(context, command);
@@ -229,6 +234,7 @@ export function mutateSessionActorMemoryStorage(
     case "session.lifecycle.reclaim":
       return executeSessionActorMemoryEntryCommand(context, command);
     case "session.parentFork.commit":
+    case "session.parentFork.transcript":
     case "session.messageCut":
       return executeSessionActorMemoryForkCommand(context, command);
     case "session.pendingInput.mutate": {

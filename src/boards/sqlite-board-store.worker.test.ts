@@ -25,7 +25,6 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import * as workerStore from "../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import {
@@ -47,15 +46,12 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-function fixture(incognito = false) {
+function fixture() {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("board-worker-mutations-") };
   const sessionKey = "agent:main:board";
   const database = openOpenClawAgentDatabase({
     agentId: "main",
     env,
-    ...(incognito
-      ? { path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }) }
-      : {}),
   });
   replaceSessionEntrySync(
     { agentId: "main", sessionKey, storePath: database.path },
@@ -135,52 +131,6 @@ it("rejects a Board write whose session is replaced during preparation", async (
     message: "board session changed; retry",
   });
   expect(await store.getSnapshot(target)).toMatchObject({ revision: 0, widgets: [] });
-});
-
-it("keeps incognito Board mutations on the process-held database without creating its disk path", async () => {
-  const { database, options, store, target } = fixture(true);
-  const changes: SessionRowChange[] = [];
-  const unsubscribe = sessionChanges.subscribe((change) => changes.push(change));
-  const facts: SessionRowChange[] = [];
-  const stopFacts = sessionChanges.subscribeFacts((change) => facts.push(change));
-  try {
-    expect(existsSync(options.path)).toBe(false);
-    await store.putWidget({
-      ...target,
-      name: "private",
-      content: { kind: "html", html: "<p>process-held</p>" },
-    });
-    const updated = await store.applyOps(target, [
-      { kind: "widget_resize", name: "private", sizeW: 8, sizeH: 6 },
-    ]);
-    expect(updated).toMatchObject({
-      revision: 2,
-      widgets: [{ name: "private", revision: 1, sizeW: 8, sizeH: 6 }],
-    });
-    expect(await store.getSnapshot(target)).toEqual(updated);
-    expect(await store.useWidgetDocument(target, "private", (document) => document)).toMatchObject({
-      html: "<p>process-held</p>",
-      revision: 1,
-    });
-    expect(openOpenClawAgentDatabase(options).db).toBe(database.db);
-    expect(changes).toEqual([
-      { sessionKey: target.sessionKey, storePath: options.path },
-      { sessionKey: target.sessionKey, storePath: options.path },
-    ]);
-    expect(facts).toEqual(
-      changes.map(() => ({
-        sessionKey: target.sessionKey,
-        storePath: options.path,
-        facts: { kind: "unchanged" },
-      })),
-    );
-    for (const suffix of ["", "-wal", "-shm"]) {
-      expect(existsSync(`${options.path}${suffix}`)).toBe(false);
-    }
-  } finally {
-    stopFacts();
-    unsubscribe();
-  }
 });
 
 it("executes Board mutations off the host and publishes each committed change once", async () => {

@@ -1,11 +1,4 @@
-import { readExactSessionEntryRowValidated } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
-import {
-  captureIncognitoSessionBinding,
-  withIncognitoSessionBinding,
-  type IncognitoSessionBinding,
-} from "../config/sessions/session-incognito-binding.js";
-import { listSessionMembersInDatabase } from "../config/sessions/session-sharing-store.kernel.js";
 import {
   releaseSessionSourceAuthorities,
   type PreparedSessionSourceAuthority,
@@ -23,20 +16,8 @@ import { captureSessionStoreReadCandidates } from "../config/sessions/session-st
 import { retainSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  assertDatabasePathIdentity,
-  assertExistingDatabaseIdentity,
-} from "../infra/sqlite-worker-identity.js";
-import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { createDeferredCore } from "../shared/deferred.js";
-import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
-import { retainOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
+import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { matchesAgentDatabaseReadCandidatePath } from "../state/openclaw-agent-db-resources.js";
-import {
-  assertIncognitoAgentDatabasePathAvailable,
-  resolveIncognitoOpenClawAgentSqlitePath,
-} from "../state/openclaw-agent-db.paths.js";
-import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
@@ -47,13 +28,7 @@ import {
   type SessionSharingLookupCaches,
   type SessionMutationAuthorizationParams,
 } from "./session-sharing-authorization.js";
-import {
-  captureIncognitoSessionMutationFacts,
-  captureSessionActorMutationFacts,
-  captureSessionSharingActorBinding,
-  captureSessionSharingIncognitoBinding,
-  hasNativeIncognitoSessionSharingSource,
-} from "./session-sharing-incognito.js";
+import { captureSessionSharingMemoryFacts } from "./session-sharing-incognito.js";
 import {
   authorizeOwnSessionMutation,
   type SessionSharingTarget,
@@ -141,24 +116,18 @@ export async function prepareSessionSharingSource(
     "agentId" | "canonicalKey" | "storeKey" | "storePath" | "readSource"
   >,
   assertCallerCurrent: () => void,
-  memoryFacts?: ReturnType<typeof captureSessionActorMutationFacts>,
+  memoryFacts?: NonNullable<ReturnType<typeof captureSessionSharingMemoryFacts>>,
 ) {
-  const memoryBinding = memoryFacts
-    ? undefined
-    : captureSessionSharingActorBinding({
+  const read =
+    memoryFacts ??
+    captureSessionSharingMemoryFacts(
+      {
         agentId: target.agentId,
         sessionKey: target.storeKey,
         resolved: target,
-      });
-  const read =
-    memoryFacts ??
-    (memoryBinding &&
-      captureSessionActorMutationFacts(
-        memoryBinding,
-        target.storeKey,
-        true,
-        target.readSource?.path ?? target.storePath,
-      ));
+      },
+      assertCallerCurrent,
+    );
   if (read) {
     if (
       target.agentId !== read.location.agentId ||
@@ -181,7 +150,9 @@ export async function prepareSessionSharingSource(
     assertCurrent();
     return {
       actorSource: true as const,
-      source: read.source,
+      get source() {
+        return read.source;
+      },
       get target() {
         return read.readCurrent().target;
       },
@@ -191,68 +162,6 @@ export async function prepareSessionSharingSource(
       assertCurrent,
       async release() {
         active = false;
-      },
-    };
-  }
-  const binding = captureIncognitoSessionBinding({
-    agentId: target.agentId,
-    sessionKey: target.storeKey,
-    storePath: target.readSource?.path ?? target.storePath,
-  });
-  if (binding) {
-    const { actor } = binding;
-    const read = captureIncognitoSessionMutationFacts(binding, target.storeKey, true);
-    const source = {
-      agentId: actor.agentId,
-      path: actor.path,
-      databaseIdentity: actor.identity.incarnation,
-    };
-    if (
-      target.readSource &&
-      !isSameSessionSharingSource({ readSource: source, storePath: actor.path }, target)
-    ) {
-      throw new Error("Session sharing source changed");
-    }
-    let active = true;
-    const assertCurrent = () => {
-      if (!active) {
-        throw new Error("Session sharing source is no longer retained");
-      }
-      assertCallerCurrent();
-      read.assertCurrent();
-    };
-    assertCurrent();
-    const done = createDeferredCore();
-    const ready = createDeferredCore();
-    const work = actor.sessions.withSharedState(async () => {
-      assertCurrent();
-      ready.resolve();
-      await done.promise;
-    });
-    void work.catch(ready.reject);
-    try {
-      await ready.promise;
-      assertCurrent();
-    } catch (error) {
-      active = false;
-      done.resolve();
-      await releaseSessionSourceAuthorities([{ release: () => work }], [error]);
-      throw error;
-    }
-    return {
-      actorSource: true as const,
-      source,
-      get target() {
-        return read.readCurrent().target;
-      },
-      get members() {
-        return [...read.readCurrent().membership];
-      },
-      assertCurrent,
-      release() {
-        active = false;
-        done.resolve();
-        return work;
       },
     };
   }
@@ -320,41 +229,8 @@ export function withPreparedSessionSharingSource(params: {
 }): SessionSourceAssertion {
   const boundSources = new Map<
     AuthorizedSessionMutationTarget,
-    | {
-        kind: "memory";
-        facts: ReturnType<typeof captureSessionActorMutationFacts>;
-      }
-    | {
-        kind: "native";
-        binding: IncognitoSessionBinding;
-        facts: ReturnType<typeof captureIncognitoSessionMutationFacts>;
-      }
+    NonNullable<ReturnType<typeof captureSessionSharingMemoryFacts>>
   >();
-  for (const target of params.targets) {
-    const memoryBinding = captureSessionSharingActorBinding(target);
-    if (memoryBinding) {
-      boundSources.set(target, {
-        kind: "memory",
-        facts: captureSessionActorMutationFacts(
-          memoryBinding,
-          target.sessionKey,
-          true,
-          target.resolved?.readSource?.path ??
-            target.resolved?.storePath ??
-            target.absentTarget?.storePath,
-        ),
-      });
-      continue;
-    }
-    const binding = captureSessionSharingIncognitoBinding(target);
-    if (binding) {
-      boundSources.set(target, {
-        kind: "native",
-        binding,
-        facts: captureIncognitoSessionMutationFacts(binding, target.sessionKey, true),
-      });
-    }
-  }
   const targetChanged = (key: string) => sessionMutationTargetChanged(params.request.method, key);
   const assertSource = () => {
     const error = authorizeOwnSessionMutation({
@@ -372,7 +248,7 @@ export function withPreparedSessionSharingSource(params: {
     const currentTalkTarget = params.assertTalkTargetCurrent(cfg);
     const caches = createSessionSharingLookupCaches();
     for (const target of params.targets) {
-      const bound = boundSources.get(target)?.facts.readCurrent();
+      const bound = boundSources.get(target)?.readCurrent();
       params.assertTargetCurrent(
         target,
         target,
@@ -400,17 +276,11 @@ export function withPreparedSessionSharingSource(params: {
       throw changed();
     }
   };
-  // Unselected incognito sources remain native until the acquisition cutover.
-  if (hasNativeIncognitoSessionSharingSource(params.targets)) {
-    if (boundSources.size > 0) {
-      return Object.assign(assertCurrent, { nativeSource: true });
+  for (const target of params.targets) {
+    const facts = captureSessionSharingMemoryFacts(target, assertSourceCurrent);
+    if (facts) {
+      boundSources.set(target, facts);
     }
-    const env = captureSessionTranscriptStorageEnvironment(process.env);
-    return Object.assign(assertCurrent, {
-      nativeSource: true,
-      prepareSessionSource: () =>
-        prepareNativeSessionSharingSource(params, env, assertSourceCurrent),
-    });
   }
   const prepare = async (): Promise<PreparedSessionSourceAuthority> => {
     const prepared: Awaited<ReturnType<typeof prepareSessionSharingSource>>[] = [];
@@ -426,15 +296,7 @@ export function withPreparedSessionSharingSource(params: {
       });
       for (const [index, target] of targets.entries()) {
         const bound = boundSources.get(params.targets[index]!);
-        prepared.push(
-          await (bound
-            ? bound.kind === "memory"
-              ? prepareSessionSharingSource(target, assertSourceCurrent, bound.facts)
-              : withIncognitoSessionBinding(bound.binding, () =>
-                  prepareSessionSharingSource(target, assertSourceCurrent),
-                )
-            : prepareSessionSharingSource(target, assertSourceCurrent)),
-        );
+        prepared.push(await prepareSessionSharingSource(target, assertSourceCurrent, bound));
       }
       const assertPrepared = (index: number, facts?: SessionSourcePredicateFacts) => {
         const read = prepared[index]!;
@@ -503,155 +365,6 @@ export function withPreparedSessionSharingSource(params: {
     prepareSessionSource: prepare,
     ...(boundSources.size ? { prepareSessionSourceScope: prepare } : {}),
   });
-}
-
-async function prepareNativeSessionSharingSource(
-  params: Parameters<typeof withPreparedSessionSharingSource>[0],
-  env: NodeJS.ProcessEnv,
-  assertSourceCurrent: () => void,
-): Promise<PreparedSessionSourceAuthority> {
-  const resources: Pick<PreparedSessionSourceAuthority, "release">[] = [];
-  const release = () => releaseSessionSourceAuthorities(resources);
-  try {
-    assertSourceCurrent();
-    const sharedContext = captureOpenClawStateReadWorkerContext({ env });
-    const sharedIdentity = sharedContext.admission.identity;
-    const retainSource = (agentId: string, path: string) => {
-      const retained = retainOpenClawAgentDatabaseReadOnly({ agentId, path, env });
-      if (!retained.found) {
-        throw new Error("Session sharing source is unavailable");
-      }
-      resources.push(retained.claim);
-      return retained;
-    };
-    const selections = params.targets.map((expected) => {
-      const target = expected.resolved ?? expected.absentTarget;
-      if (!target) {
-        throw sessionMutationTargetChanged(params.request.method, expected.sessionKey);
-      }
-      if (isIncognitoSessionKey(expected.sessionKey)) {
-        // Pin every process-held source before durable owner discovery can yield.
-        const pathname = resolveIncognitoOpenClawAgentSqlitePath({ agentId: target.agentId, env });
-        return {
-          expected,
-          target,
-          incognito: true as const,
-          retained: retainSource(target.agentId, pathname),
-        };
-      }
-      return {
-        expected,
-        target,
-        incognito: false as const,
-        prepareSource: captureSessionSharingStore(target, env, assertSourceCurrent),
-      };
-    });
-    const reads: Array<
-      Pick<(typeof selections)[number], "expected" | "target" | "incognito"> & {
-        retained: ReturnType<typeof retainSource>;
-        readSource: CapturedSessionEntryReadSource;
-        assertSourceCurrent: (() => void) | undefined;
-        key: string;
-      }
-    > = [];
-    for (const selection of selections) {
-      const { expected, target, incognito } = selection;
-      const native = selection.incognito
-        ? { retained: selection.retained, assertCurrent: undefined }
-        : await selection.prepareSource().then((prepared) => ({
-            retained: retainSource(prepared.source.agentId, prepared.source.path),
-            assertCurrent: prepared.assertCurrent,
-          }));
-      const retained = native.retained;
-      const identity = readOpenClawAgentDatabaseIdentity(retained.database);
-      const readSource = {
-        agentId: retained.database.agentId,
-        path: retained.database.path,
-        databaseIdentity: identity.identity,
-        databaseBirthtime: identity.birthtime,
-      };
-      reads.push({
-        expected,
-        target,
-        incognito,
-        retained,
-        readSource,
-        assertSourceCurrent: native.assertCurrent,
-        key: expected.resolved?.storeKey ?? target.canonicalKey,
-      });
-    }
-    const [{ prepareOpenClawStateCurrentReader }, { readAgentDeletionJournalInDatabase }] =
-      await Promise.all([
-        import("../state/openclaw-state-db-current-reader.js"),
-        import("../state/agent-deletion-journal.js"),
-      ]);
-    const shared = await prepareOpenClawStateCurrentReader(sharedContext);
-    if (shared) {
-      resources.push({ release: () => shared.dispose() });
-    }
-    const assertCurrent = () => {
-      assertSourceCurrent();
-      if (!shared) {
-        // Native one-shots may have no shared state; later creation revokes that absence.
-        sharedContext.maintenanceScope?.assertReadAdmission();
-        sharedContext.admission.assertCurrent();
-        assertDatabasePathIdentity(sharedContext.admission.databasePath, sharedIdentity);
-      }
-      for (const read of reads) {
-        read.assertSourceCurrent?.();
-        read.retained.claim.assertCurrent();
-        if (read.incognito) {
-          assertIncognitoAgentDatabasePathAvailable(read.readSource.path);
-        } else {
-          assertExistingDatabaseIdentity(
-            read.readSource.path,
-            `file:${String(read.readSource.databaseIdentity)}`,
-            read.readSource.databaseBirthtime,
-          );
-        }
-        if (
-          shared?.read((database) =>
-            readAgentDeletionJournalInDatabase(database, read.target.agentId, "runtime"),
-          )
-        ) {
-          throw new Error(
-            `OpenClaw agent database is unavailable while agent ${read.target.agentId} is deleted.`,
-          );
-        }
-        const entry = readExactSessionEntryRowValidated(
-          read.retained.database,
-          read.key,
-          "list",
-        )?.entry;
-        params.assertTargetCurrent(
-          read.expected,
-          read.expected,
-          params.request.context.getRuntimeConfig(),
-          undefined,
-          undefined,
-          {
-            target: entry
-              ? {
-                  ...read.target,
-                  storeKey: read.key,
-                  storeKeys: [read.key],
-                  readSource: read.readSource,
-                  entry,
-                }
-              : null,
-            members: listSessionMembersInDatabase(read.retained.database, read.key).map(
-              (member) => member.identityId,
-            ),
-          },
-        );
-      }
-    };
-    assertCurrent();
-    return { nativeSource: true, checks: [], assertCurrent, release };
-  } catch (error) {
-    await releaseSessionSourceAuthorities(resources, [error]);
-    throw error;
-  }
 }
 
 export function captureSessionSharingTalkAuthority({

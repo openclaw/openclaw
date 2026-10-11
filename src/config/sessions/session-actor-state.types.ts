@@ -1,7 +1,4 @@
-import type {
-  AgentDatabaseExecutionFileIdentity,
-  AgentDatabaseIncognitoIdentity,
-} from "../../state/openclaw-agent-execution-identity.types.js";
+import type { AgentDatabaseExecutionFileIdentity } from "../../state/openclaw-agent-execution-identity.types.js";
 import type { SessionMember, SessionParticipantRecord } from "./session-membership-facts.types.js";
 import type { SessionPendingInputRow } from "./session-pending-input.types.js";
 import type {
@@ -14,7 +11,6 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 export type SessionActorTarget = Readonly<{
   database:
     | AgentDatabaseExecutionFileIdentity
-    | AgentDatabaseIncognitoIdentity
     | { kind: "memory"; handle: string; incarnation: string };
   sessionKey: string;
 }>;

@@ -42,8 +42,3 @@ export { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 export { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 
 export { withNativeSessionMutationForTest } from "./test-helpers/native-session-mutation.js";
-export {
-  withIncognitoSessionActor,
-  withIncognitoSessionBinding,
-} from "../config/sessions/session-incognito-binding.js";
-export { openIncognitoTestActor } from "../state/openclaw-agent-execution-incognito.test-support.js";

@@ -11,11 +11,6 @@ import {
   SessionGoalOperationError,
   type SessionGoalOperation,
 } from "../../config/sessions/goals-operations.js";
-import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
-import {
-  captureIncognitoSessionBinding,
-  withIncognitoSessionBinding,
-} from "../../config/sessions/session-incognito-binding.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
@@ -26,10 +21,7 @@ import {
 } from "../../config/sessions/session-source-authority.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import {
-  captureIncognitoSessionMutationFacts,
-  captureSessionActorMutationFacts,
-} from "../session-sharing-incognito.js";
+import { captureSessionSharingMemoryFacts } from "../session-sharing-incognito.js";
 import { captureSessionMutationRouting } from "../session-sharing-preparation.js";
 import { prepareSessionSharingSource } from "../session-sharing-source.js";
 import {
@@ -85,16 +77,21 @@ async function handleSessionGoalMutation(
       new SessionMutationAuthorizationChangedError(
         errorShape(ErrorCodes.INVALID_REQUEST, "Session changed before its Goal update; retry."),
       );
-    const actorTarget = {
-      agentId: target.agentId,
-      sessionKey: target.storeKey,
-      storePath: target.storePath,
-    };
-    const memory = getSessionActorStorageBinding(actorTarget);
-    const binding = memory ? undefined : captureIncognitoSessionBinding(actorTarget);
-    const actorFacts = memory
-      ? captureSessionActorMutationFacts(memory, target.storeKey, false)
-      : binding && captureIncognitoSessionMutationFacts(binding, target.storeKey, false);
+    const actorFacts = captureSessionSharingMemoryFacts(
+      {
+        agentId: target.agentId,
+        sessionKey: target.storeKey,
+        resolved: target,
+      },
+      () => {
+        if (options.hasCurrentClientAuthority?.() === false) {
+          throw sessionChanged();
+        }
+        options.sessionMutationCommitGuard?.();
+        options.signal?.throwIfAborted();
+      },
+      false,
+    );
     const assertRouting = captureSessionMutationRouting(cfg, sessionChanged);
     const assertTarget = (current: ReturnType<typeof resolveSessionSharingTarget>) => {
       // Reset can keep the same session ID. Fence the lifecycle and resolved store as well.
@@ -110,12 +107,7 @@ async function handleSessionGoalMutation(
       }
       const ownershipError = resolvePluginSessionOwnershipError({
         action: "patch",
-        entry: binding
-          ? {
-              ...current.entry,
-              pluginOwnerId: binding.actor.sessions.readPolicy(current.storeKey)?.pluginOwnerId,
-            }
-          : current.entry,
+        entry: current.entry,
         key: current.canonicalKey,
         pluginOwnerId: client?.internal?.pluginRuntimeOwnerId,
       });
@@ -126,7 +118,7 @@ async function handleSessionGoalMutation(
     const assertCurrent = () => {
       options.sessionMutationCommitGuard?.();
       authorization.authorization?.assertCurrent();
-      if (!memory) {
+      if (!actorFacts) {
         assertRouting(context.getRuntimeConfig());
       }
       assertTarget(
@@ -139,12 +131,12 @@ async function handleSessionGoalMutation(
             }),
       );
     };
-    if (!memory) {
+    if (!actorFacts) {
       assertCurrent();
     }
     const source: SessionSourceAssertion = Object.assign(assertCurrent, {
       async prepareSessionSource() {
-        if (memory) {
+        if (actorFacts) {
           return { assertCurrent, checks: [] };
         }
         const authority = await prepareSessionSourceAuthority(
@@ -162,11 +154,7 @@ async function handleSessionGoalMutation(
         };
         let read: Awaited<ReturnType<typeof prepareSessionSharingSource>> | undefined;
         try {
-          read = await (binding
-            ? withIncognitoSessionBinding(binding, () =>
-                prepareSessionSharingSource(target, assertHost),
-              )
-            : prepareSessionSharingSource(target, assertHost));
+          read = await prepareSessionSharingSource(target, assertHost);
           const held = read;
           const assertPrepared = () => {
             assertHost();
@@ -211,7 +199,7 @@ async function handleSessionGoalMutation(
       requestFingerprint: await fingerprintSessionGoalRequest({ method, ...request }),
       goalId: request.goalId,
     };
-    if (!memory) {
+    if (!actorFacts) {
       assertCurrent();
     }
     if (request.action === "resume") {

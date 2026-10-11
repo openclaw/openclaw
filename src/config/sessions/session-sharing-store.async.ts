@@ -13,16 +13,14 @@ import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-work
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-store.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
+import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   withOpenClawAgentDatabaseRuntime,
   deferOpenClawAgentPostCommitPublication,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.paths.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
@@ -33,73 +31,21 @@ import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { bindSessionEntryPublicationSource } from "./session-accessor.sqlite-entry-cache-publication.js";
 import { publishSessionSharingMemberChange } from "./session-accessor.sqlite-entry-cache.js";
 import { retainSessionEntryWorkerPublication } from "./session-accessor.sqlite-entry-worker-publication.js";
-import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
+import type { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { SessionActorMemoryCollaborationCommand } from "./session-actor-memory-collaboration-contract.js";
-import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import {
+  captureSessionActorStorageOwner,
+  withSessionActorStorage,
+} from "./session-actor-storage-binding.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
-import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
-import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
-import type { IncognitoSideDataOperations } from "./session-incognito-side-data-contract.js";
-import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
+import type { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
 import { readSessionCollaborationCandidate } from "./session-sharing-store.receipt.js";
 import type {
   MembershipPublication,
-  SessionCollaborationMutation,
   SessionSharingWorkerOperations,
   SessionSharingCommitReceipt,
 } from "./session-sharing-store.types.js";
-
-function toIncognitoCollaborationCommand(
-  command: SqliteWorkerCommand<SessionSharingWorkerOperations>,
-  sessionKey: string,
-): SqliteWorkerCommand<
-  Pick<IncognitoSideDataOperations, `session.sharing.${SessionCollaborationMutation}`>
-> {
-  switch (command.type) {
-    case "add":
-      return { type: "session.sharing.add", input: { sessionKey, params: command.input.params } };
-    case "remove": {
-      const { scope: _scope, ...input } = command.input;
-      return { type: "session.sharing.remove", input: { ...input, sessionKey } };
-    }
-    case "participant":
-      return {
-        type: "session.sharing.participant",
-        input: { sessionKey, params: command.input.params },
-      };
-    case "owner.assign":
-      return {
-        type: "session.sharing.owner.assign",
-        input: { sessionKey, params: command.input.params },
-      };
-    case "suggestion.add":
-      return {
-        type: "session.sharing.suggestion.add",
-        input: { sessionKey, params: command.input.params },
-      };
-    case "suggestion.claim":
-      return {
-        type: "session.sharing.suggestion.claim",
-        input: { sessionKey, params: command.input.params },
-      };
-    case "suggestion.release":
-      return {
-        type: "session.sharing.suggestion.release",
-        input: { sessionKey, params: command.input.params },
-      };
-    case "suggestion.finalize":
-      return {
-        type: "session.sharing.suggestion.finalize",
-        input: { sessionKey, params: command.input.params },
-      };
-    case "category.prepare":
-    case "category.apply":
-    case "involvement":
-      break;
-  }
-  throw new Error("Incognito collaboration command requires its dedicated owner");
-}
 
 export async function runSessionCollaborationWrite<
   Key extends keyof SessionSharingWorkerOperations,
@@ -110,7 +56,6 @@ export async function runSessionCollaborationWrite<
     type: Key;
     input: SessionSharingWorkerOperations[Key]["input"];
   } & SqliteWorkerCommand<SessionSharingWorkerOperations>,
-  native: (scope: SessionAccessScope) => T,
   publish: (
     result: SessionSharingWorkerOperations[Key]["output"],
     location: { agentId: string; storePath: string; sessionKey: string },
@@ -123,8 +68,8 @@ export async function runSessionCollaborationWrite<
     scope: SessionAccessScope,
   ) => Promise<void | SessionSharingWorkerOperations[Key]["input"]>,
 ): Promise<T> {
-  const memory = getSessionActorStorageBinding(scope);
-  if (memory) {
+  const owner = captureSessionActorStorageOwner(scope, { assertCurrent, authorize() {} });
+  if (owner) {
     if (command.type === "category.prepare" || command.type === "category.apply") {
       throw new Error("Memory categories require the category owner composition");
     }
@@ -138,38 +83,41 @@ export async function runSessionCollaborationWrite<
       type: `session.collaboration.${command.type}`,
       input: { ...input, ...(profileAliases ? { profileAliases } : {}) },
     } as SessionActorMemoryCollaborationCommand;
-    let value: T | undefined;
-    const outcome = await memory.actor.storage!.mutate(
-      actorCommand,
+    const result = await withSessionActorStorage(
+      scope,
       {
-        assertCurrent: () => {
-          assertCurrent();
-          memory.authority.assertCurrent();
+        authority: owner.authority,
+        lifetime: {
+          assertCurrent: owner.authority.assertCurrent,
+          assertReadable: owner.authority.assertCurrent,
         },
-        authorize: (stage, facts, publication) =>
-          memory.authority.authorize(stage, facts, publication),
       },
-      {
-        committed(result) {
-          value = publish(
-            result.value as SessionSharingWorkerOperations[Key]["output"],
-            {
-              agentId: memory.agentId,
-              storePath: memory.path,
-              sessionKey: memory.actor.target.sessionKey,
-            },
-            undefined,
-          );
-        },
+      async (memory) => {
+        let value: T | undefined;
+        const outcome = await memory.actor.storage!.mutate(actorCommand, memory.authority, {
+          committed(result) {
+            value = publish(
+              result.value as SessionSharingWorkerOperations[Key]["output"],
+              {
+                agentId: memory.agentId,
+                storePath: memory.path,
+                sessionKey: memory.actor.target.sessionKey,
+              },
+              undefined,
+            );
+          },
+        });
+        if (outcome.kind === "rolled-back" || outcome.failure) {
+          const failure = outcome.kind === "rolled-back" ? outcome.error : outcome.failure!;
+          const error = new Error(failure.message);
+          error.name = failure.name;
+          throw error;
+        }
+        return { value: value! };
       },
     );
-    if (outcome.kind === "rolled-back" || outcome.failure) {
-      const failure = outcome.kind === "rolled-back" ? outcome.error : outcome.failure!;
-      const error = new Error(failure.message);
-      error.name = failure.name;
-      throw error;
-    }
-    return value!;
+    if (!result) throw new IncognitoSessionMissingError();
+    return result.value;
   }
   const resolved = resolveSqliteScope(scope);
   const resolvedOptions = toDatabaseOptions(resolved);
@@ -185,75 +133,6 @@ export async function runSessionCollaborationWrite<
     storePath: options.path,
     sessionKey: resolved.sessionKey,
   };
-  const capturedScope = { ...location, env };
-  const incognito = scope.incognito ?? captureIncognitoSessionOperation(scope);
-  if (incognito) {
-    const { actor, authority } = incognito;
-    if (actor.agentId !== location.agentId || actor.path !== location.storePath) {
-      throw new Error("Collaboration target differs from its captured incognito actor");
-    }
-    if (command.type === "category.prepare" || command.type === "category.apply") {
-      throw new Error("Incognito categories require the category owner composition");
-    }
-    const currentAuthority: IncognitoSessionAuthority = {
-      assertCurrent() {
-        assertCurrent();
-        authority.assertCurrent();
-        actor.assertCurrent();
-      },
-      authorize: (stage, facts) => authority.authorize?.(stage, facts),
-    };
-    currentAuthority.assertCurrent();
-    if (command.type === "involvement") {
-      return publish(
-        // SAFETY: This discriminant's native incognito contract is the same non-mutating refusal.
-        { accepted: false, changed: false } as SessionSharingWorkerOperations[Key]["output"],
-        location,
-        undefined,
-      );
-    }
-    const actorCommand = toIncognitoCollaborationCommand(command, location.sessionKey);
-    let published = false;
-    const invalidate = () => {
-      if (!published && !command.type.startsWith("suggestion.")) {
-        sessionChanges.emit({ ...location, factsInvalidated: true });
-        published = true;
-      }
-    };
-    try {
-      let value!: T;
-      await actor.sessions.sideData(
-        currentAuthority,
-        actorCommand,
-        undefined,
-        (result) => {
-          value = publish(
-            // SAFETY: The mapped actor command retains the original Key's input/output pair.
-            result as SessionSharingWorkerOperations[Key]["output"],
-            location,
-            undefined,
-          );
-          published = true;
-        },
-        invalidate,
-      );
-      return value;
-    } catch (error) {
-      invalidate();
-      throw error;
-    }
-  }
-  if (isIncognitoOpenClawAgentSqlitePath(options.path, options)) {
-    // Process-held databases cannot be reopened in a Worker; retain their sole native owner.
-    return runOpenClawAgentWriteAdmission(
-      options,
-      () => {
-        assertCurrent();
-        return native(capturedScope);
-      },
-      true,
-    );
-  }
   const execution = captureOpenClawAgentDatabaseExecution(options);
   const assertQueuedCurrent = () => {
     execution.assertCurrent();
@@ -483,7 +362,6 @@ export function addSessionMemberInWorker(
   return runSessionCollaborationWrite(
     scope,
     { type: "add", input: { scope, params: capturedParams } },
-    (capturedScope) => addSessionMember(capturedScope, capturedParams),
     (result, location, database, currentKeys) => {
       if (result.value.inserted && (!currentKeys || currentKeys.has(location.sessionKey))) {
         publishSessionMembership(result, location, database);
@@ -519,14 +397,6 @@ export function removeSessionMemberInWorker(
         expectedEntry: capturedExpectedEntry,
       },
     },
-    (capturedScope) =>
-      removeSessionMember(
-        capturedScope,
-        identityId,
-        capturedExpected,
-        expectedSessionId,
-        capturedExpectedEntry,
-      ),
     (result, location, database, currentKeys) => {
       if (result.value && (!currentKeys || currentKeys.has(location.sessionKey))) {
         publishSessionMembership(result, location, database);
@@ -554,7 +424,6 @@ export function recordSessionParticipantInWorker(
   return runSessionCollaborationWrite(
     scope,
     { type: "participant", input: { scope, params: capturedParams } },
-    (capturedScope) => recordSessionParticipant(capturedScope, capturedParams),
     (result, location, database, currentKeys) => {
       if (
         (result.value === "inserted" || result.value === "updated") &&

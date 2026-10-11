@@ -217,7 +217,7 @@ export function selectSessionActorMemoryConversations(
 }
 
 export function readSessionActorMemoryConversation(
-  context: SessionActorMemoryStorageContext,
+  context: ConversationReadContext,
   query: Exclude<
     SessionActorMemoryConversationQuery,
     { type: "session.conversation.delivery.read" }
@@ -240,7 +240,8 @@ export function readSessionActorMemoryConversation(
 }
 
 export function writeSessionActorMemoryConversation(
-  context: SessionActorMemoryStorageContext,
+  context: ConversationReadContext &
+    Pick<SessionActorMemoryStorageContext, "admit" | "editConversations">,
   command: Extract<
     SessionActorMemoryConversationCommand,
     { type: "session.conversation.register" }

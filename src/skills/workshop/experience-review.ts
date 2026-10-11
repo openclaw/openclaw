@@ -158,12 +158,6 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
   const { source, sourceEntry, sessionManager, assertPhysicalCurrent } =
     await withSessionTranscriptReadSource(
       candidate.source,
-      (scope) =>
-        prepare(
-          { ...candidate.source, ...scope },
-          () => abortSignal.throwIfAborted(),
-          () => abortSignal.throwIfAborted(),
-        ),
       ({ scope, expectedIdentity, assertCurrent }) => {
         const assertSourceIdentity = () => {
           abortSignal.throwIfAborted();

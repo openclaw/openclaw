@@ -6,14 +6,9 @@ import {
 } from "../../agents/harness/host-private-capabilities.js";
 import { resolveRestartRecoverySteeringBlockReason } from "../../config/sessions/restart-recovery-receipt.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
-import { readIncognitoSessionSteeringEntry } from "../../config/sessions/session-accessor.sqlite-incognito-sharing.js";
-import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
-import {
-  captureSessionEntryReadScope,
-  isNativeSessionEntryRead,
-} from "../../config/sessions/session-entry-read-request.js";
+import { captureSessionActorStorageOwner } from "../../config/sessions/session-actor-storage-binding.js";
+import { captureSessionEntryReadScope } from "../../config/sessions/session-entry-read-request.js";
 import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import {
   assertSessionStoreReadCandidate,
   captureSessionStoreCandidateIdentities,
@@ -26,9 +21,6 @@ import {
 } from "../../config/sessions/store-entry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { MessageInjectionTargetUnavailableError } from "./message-injection-authority.js";
 
 function prepareCurrentSteeringRead(assertCurrent: () => void) {
@@ -80,45 +72,25 @@ export function prepareSteeringDelivery(params: {
       prepareCurrent: async () => assertEntry(fallbackEntry),
     };
   }
-  const { scope, agentId } = captureSessionEntryReadScope({
+  const memory = captureSessionActorStorageOwner(params, { assertCurrent() {}, authorize() {} });
+  if (memory) {
+    const sessionKey = params.sessionKey;
+    return prepareCurrentSteeringRead(() => {
+      const current =
+        memory.binding?.actor.target.sessionKey === sessionKey
+          ? memory.binding.actor.snapshot(memory.authority)
+          : memory.owner?.readSession(sessionKey, memory.authority);
+      if (!current?.entry) {
+        throw new MessageInjectionTargetUnavailableError("Steering target session was closed");
+      }
+      assertEntry(current.entry);
+    });
+  }
+  const { scope } = captureSessionEntryReadScope({
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
   });
-  const memory = getSessionActorStorageBinding(scope);
-  if (memory) {
-    return prepareCurrentSteeringRead(() => {
-      assertEntry(memory.actor.snapshot(memory.authority)?.entry);
-    });
-  }
-  const binding = captureIncognitoSessionBinding(scope);
-  if (binding) {
-    const claim = binding.actor.sessions.captureCurrent(scope.sessionKey);
-    const assertActorCurrent = () => {
-      params.assertCurrent();
-      binding.admissionSignal?.throwIfAborted();
-      binding.actor.assertReadable();
-      claim.assertCurrent();
-      assertEntry(binding.actor.sessions.readSteering(scope.sessionKey));
-    };
-    return prepareCurrentSteeringRead(assertActorCurrent);
-  }
-  if (isNativeSessionEntryRead(scope, agentId)) {
-    const storePath = isIncognitoSessionKey(scope.sessionKey)
-      ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: params.agentId, env: scope.env })
-      : scope.storePath!;
-    const owner = getOpenIncognitoAgentDatabase(params.agentId, storePath);
-    const assertNativeCurrent = () => {
-      params.assertCurrent();
-      if (getOpenIncognitoAgentDatabase(params.agentId, storePath) !== owner) {
-        throw new Error("Steering delivery incognito owner changed");
-      }
-      assertEntry(
-        owner ? readIncognitoSessionSteeringEntry(owner.db, scope.sessionKey) : undefined,
-      );
-    };
-    return prepareCurrentSteeringRead(assertNativeCurrent);
-  }
   const candidates = captureSessionStoreReadCandidates(scope.storePath!);
   const identities = captureSessionStoreCandidateIdentities(candidates);
   let selectedPath: string | undefined;

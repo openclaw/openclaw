@@ -1,5 +1,4 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import type { StoredSessionSuggestion } from "../../config/sessions/session-sharing-store.types.js";
 import {
   isSessionWorkStartInvalidatedError,
@@ -91,12 +90,7 @@ export async function dispatchSuggestion(params: {
     ) {
       return { ok: false, error: response?.[2] };
     }
-    const binding = captureIncognitoSessionBinding({
-      agentId: params.target.agentId,
-      sessionKey: params.target.canonicalKey,
-      storePath: current.physicalStorePath,
-    });
-    const authorization = binding
+    const authorization = isIncognitoSessionKey(params.target.canonicalKey)
       ? resolveSessionMutationAuthorization({
           client: chatClient,
           method: "chat.send",
@@ -105,7 +99,7 @@ export async function dispatchSuggestion(params: {
           expectedTarget: {
             agentId: params.target.agentId,
             sessionKey: params.target.canonicalKey,
-            storePath: binding.actor.path,
+            storePath: current.physicalStorePath,
             sessionId: params.expectedSessionId,
           },
         })
@@ -144,7 +138,6 @@ export async function dispatchSuggestion(params: {
           },
         );
     assertRequestCurrent();
-    params.readCurrent();
     if (authorization.error) {
       return { ok: false, error: authorization.error };
     }

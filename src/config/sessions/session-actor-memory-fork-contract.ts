@@ -1,5 +1,9 @@
 import type { ParentForkSourceTranscript } from "./session-accessor.sqlite-parent-fork.js";
-import type { ForkSessionEntryFromParentTargetResult } from "./session-accessor.types.js";
+import type {
+  ForkSessionEntryFromParentTargetParams,
+  ForkSessionEntryFromParentTargetResult,
+  ForkSessionFromParentTranscriptResult,
+} from "./session-accessor.types.js";
 import type {
   SessionMessageCutIntent,
   SessionMessageCutResult,
@@ -20,9 +24,18 @@ export type SessionActorMemoryForkWrites = {
       params: Omit<ParentForkEntryParams, "agentId" | "storePath">;
       patch?: ParentForkEntryPatch;
       /** Backend support is prepared by the host; bindings come from the current parent. */
-      cliForkProviders?: readonly string[];
+      supportsCliFork?: (provider: string) => boolean;
+      /** Released callback API runs synchronously inside the memory owner, like its SQL transaction. */
+      callbacks?: Pick<
+        ForkSessionEntryFromParentTargetParams,
+        "patch" | "skipPatch" | "skipForkWhen" | "decisionSkipPatch"
+      >;
     };
     output: ForkSessionEntryFromParentTargetResult;
+  };
+  "session.parentFork.transcript": {
+    input: { sessionId: string; events: readonly unknown[] };
+    output: Extract<ForkSessionFromParentTranscriptResult, { status: "created" }>;
   };
   "session.messageCut": {
     input: { intent: SessionMessageCutIntent; sourceRepositoryWorkspaceId?: string };

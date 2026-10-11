@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { publishTranscriptUpdate } from "./session-accessor.sqlite-events.js";
 import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-turn.js";
 import type { SessionActorAuthority } from "./session-actor-contract.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { createMemorySessionActorOwner } from "./session-actor-memory.js";
 import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
+import { appendPreparedTranscriptEvent } from "./session-transcript-event.js";
+import { loadTranscriptEvents } from "./session-transcript-events.js";
 import type { SqliteSessionTurnOptions } from "./session-turn.types.js";
 
 // The public turn path must neither open SQLite nor allocate worker capacity for memory sessions.
@@ -37,6 +42,7 @@ afterEach(() => {
   for (const owner of owners.splice(0)) {
     owner.close();
   }
+  memorySessionActorOwners.closeDatabase({ agentId: scope.agentId, path: scope.storePath });
 });
 
 async function fixture(boundAuthority = authority) {
@@ -80,6 +86,111 @@ async function fixture(boundAuthority = authority) {
 }
 
 describe("memory actor transcript turn binding", () => {
+  it("preserves raw events and duplicate results through the unbound writer without bypassing authority", async () => {
+    await appendExpectedSessionTranscriptTurn(scope, {
+      expectedSessionId: sessionId,
+      sessionFile: "synthetic-session.jsonl",
+      config: {},
+      initialSessionEntry: { sessionId, updatedAt: 1, incognito: true },
+      messages: [{ eventId: "raw-user", message: { role: "user", content: "Input" } }],
+    });
+    const events = [
+      {
+        type: "custom",
+        id: "raw-custom",
+        parentId: "raw-user",
+        timestamp: 2,
+        appendMode: "side",
+        data: { result: "retained" },
+      },
+      { type: "leaf", id: "raw-leaf", parentId: "raw-user", targetId: "raw-user" },
+    ];
+    for (const event of events) {
+      expect(await appendPreparedTranscriptEvent(scope, event, () => {})).toBe(true);
+      expect(await appendPreparedTranscriptEvent(scope, event, () => {})).toBe(false);
+    }
+    const before = await loadTranscriptEvents(scope);
+    expect(before.slice(-2)).toEqual(events);
+    await expect(
+      appendPreparedTranscriptEvent(
+        { ...scope, expectedWriterRunId: "stale-writer" },
+        { type: "custom", id: "refused-writer" },
+        () => {},
+      ),
+    ).rejects.toMatchObject({ name: "SessionTranscriptWriterClaimReboundError" });
+    await expect(
+      appendPreparedTranscriptEvent(scope, { type: "custom", id: "refused-authority" }, () => {
+        throw new Error("Event authority ended");
+      }),
+    ).rejects.toThrow("Event authority ended");
+    expect(await loadTranscriptEvents(scope)).toEqual(before);
+    memorySessionActorOwners.closeSession(
+      { agentId: scope.agentId, path: scope.storePath },
+      sessionKey,
+    );
+    await expect(
+      appendPreparedTranscriptEvent(scope, { type: "custom", id: "closed" }, () => {}),
+    ).rejects.toMatchObject({ code: "INCOGNITO_SESSION_MISSING" });
+    expect(await loadTranscriptEvents(scope)).toEqual([]);
+  });
+
+  it("acquires an unbound incognito owner for turns and notifications without recreating closed sessions", async () => {
+    const options = {
+      expectedSessionId: sessionId,
+      sessionFile: "synthetic-session.jsonl",
+      config: {},
+      messages: [{ message: { role: "user", content: "First input", idempotencyKey: "first" } }],
+    };
+    await expect(appendExpectedSessionTranscriptTurn(scope, options)).rejects.toMatchObject({
+      code: "INCOGNITO_SESSION_MISSING",
+    });
+    expect(
+      memorySessionActorOwners.read({ agentId: scope.agentId, path: scope.storePath }),
+    ).toBeUndefined();
+    const created = await appendExpectedSessionTranscriptTurn(scope, {
+      ...options,
+      initialSessionEntry: { sessionId, updatedAt: 1, incognito: true },
+    });
+    expect(created.appendedMessages).toEqual([
+      expect.objectContaining({ appended: true, message: options.messages[0]!.message }),
+    ]);
+    const followup = await appendExpectedSessionTranscriptTurn(scope, {
+      ...options,
+      messages: [{ message: { role: "user", content: "Follow-up", idempotencyKey: "follow-up" } }],
+    });
+    expect(followup.appendedMessages).toEqual([
+      expect.objectContaining({
+        appended: true,
+        message: expect.objectContaining({ content: "Follow-up" }),
+      }),
+    ]);
+    const notified = vi.fn();
+    const unsubscribe = onInternalSessionTranscriptUpdate(notified);
+    try {
+      await publishTranscriptUpdate(scope, { messageId: followup.appendedMessages[0]!.messageId });
+      expect(notified).toHaveBeenCalledWith(
+        expect.objectContaining({
+          target: { agentId: scope.agentId, sessionId, sessionKey, storePath: scope.storePath },
+          messageId: followup.appendedMessages[0]!.messageId,
+        }),
+      );
+      notified.mockClear();
+      memorySessionActorOwners.closeSession(
+        { agentId: scope.agentId, path: scope.storePath },
+        sessionKey,
+      );
+      await expect(publishTranscriptUpdate(scope)).rejects.toMatchObject({
+        code: "INCOGNITO_SESSION_MISSING",
+      });
+      await expect(appendExpectedSessionTranscriptTurn(scope, options)).rejects.toMatchObject({
+        code: "INCOGNITO_SESSION_MISSING",
+      });
+      expect(notified).not.toHaveBeenCalled();
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("preserves both simultaneous transcript appends", async () => {
     const { append, history } = await fixture();
     const messages = [

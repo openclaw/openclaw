@@ -51,7 +51,10 @@ import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-s
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { preserveResetSessionPresentation } from "../config/sessions/reset-preserved-presentation.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import {
+  getSessionActorStorageBinding,
+  withSessionActorStorage,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
 import { preserveSessionLineage } from "../config/sessions/session-entry-lineage.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
@@ -565,16 +568,34 @@ export async function performGatewaySessionReset(params: {
     agentId: resetTarget.requestedAgentId,
     excludeInternalEffects: true,
   };
-  return withGatewaySessionEntryReadOnly(lookup, async ({ entry }) =>
-    performPreparedGatewaySessionReset({
-      params,
-      resetTarget,
-      worktreeContext,
-      worktreeEnv,
-      lookup,
-      initialResetEntry: entry,
-    }),
+  const run = () =>
+    withGatewaySessionEntryReadOnly(lookup, async ({ entry }) =>
+      performPreparedGatewaySessionReset({
+        params,
+        resetTarget,
+        worktreeContext,
+        worktreeEnv,
+        lookup,
+        initialResetEntry: entry,
+      }),
+    );
+  const assertCurrent = () => {
+    params.assertCurrent?.();
+    params.assertAuthorizedInstance?.();
+  };
+  const reset = await withSessionActorStorage(
+    {
+      sessionKey: resetTarget.target.canonicalKey,
+      agentId: resetTarget.target.agentId,
+      storePath: resetTarget.storePath,
+    },
+    {
+      lifetime: { assertCurrent, assertReadable: assertCurrent },
+      authority: { assertCurrent, authorize() {} },
+    },
+    run,
   );
+  return reset ?? run();
 }
 
 async function performPreparedGatewaySessionReset({

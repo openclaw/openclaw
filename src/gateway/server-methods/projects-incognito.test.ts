@@ -1,18 +1,13 @@
-import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import type { SessionActorAuthority } from "../../config/sessions/session-actor-contract.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import { runWithSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
-import { withIncognitoSessionActor } from "../../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import * as projectClone from "../../projects/project-clone.js";
 import { registerClonedProjectRegistry } from "../../projects/project-registry.test-support.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   initializeRepository,
@@ -29,6 +24,7 @@ beforeEach(() => {
 
 afterEach(() => {
   clearRuntimeConfigSnapshot();
+  memorySessionActorOwners.reset();
 });
 
 test.each(["existing", "after-check"])(
@@ -47,38 +43,23 @@ test.each(["existing", "after-check"])(
         name: "Memory project",
         originUrl,
       });
-      const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
-      const lifetime = { assertCurrent() {}, assertReadable() {} };
-      const mainOwner = memorySessionActorOwners.get({
-        agentId: "main",
-        path: path.join(state.stateDir, "agents/main/sessions/incognito.sqlite"),
-      });
-      const otherOwner = memorySessionActorOwners.get({
-        agentId: "other",
-        path: path.join(state.stateDir, "agents/other/sessions/incognito.sqlite"),
-      });
       const sessionKey = "agent:main:dashboard:incognito-project";
       const otherKey = "agent:other:dashboard:incognito-reference";
-      const actor = await mainOwner.acquire({ database: mainOwner.identity, sessionKey }, lifetime);
-      const other = await otherOwner.acquire(
-        { database: otherOwner.identity, sessionKey: otherKey },
-        lifetime,
-      );
-      assert(actor.storage && other.storage);
-      await actor.storage.mutate(
-        { type: "session.entry.create", input: { entry: { sessionId: "project", updatedAt: 1 } } },
-        authority,
+      await upsertSessionEntryCore(
+        { env: state.env, sessionKey },
+        {
+          sessionId: "project",
+          updatedAt: 1,
+          incognito: true,
+        },
       );
       const addReference = () =>
-        other.storage!.mutate(
-          {
-            type: "session.entry.create",
-            input: { entry: { sessionId: "reference", updatedAt: 1, spawnedCwd: repo } },
-          },
-          authority,
+        upsertSessionEntryCore(
+          { agentId: "other", env: state.env, sessionKey: otherKey },
+          { sessionId: "reference", updatedAt: 1, incognito: true, spawnedCwd: repo },
         );
       if (timing === "existing") {
-        expect(await addReference()).toMatchObject({ kind: "committed" });
+        await addReference();
       }
       const remove = projectClone.removeClonedProjectCheckout;
       let checks = 0;
@@ -90,23 +71,17 @@ test.each(["existing", "after-check"])(
             async () => {
               await check();
               if (++checks === 2 && timing === "after-check") {
-                expect(await addReference()).toMatchObject({ kind: "committed" });
+                await addReference();
               }
             },
             options,
           ),
         );
       try {
-        const result = await runWithSessionActorStorage(
-          { actor, authority, agentId: mainOwner.agentId, path: mainOwner.path },
-          () =>
-            invokeProjectMethod(
-              "projects.remove",
-              { id: project.id, deleteCheckout: true },
-              {
-                agents: { entries: { main: { workspace: state.workspaceDir } } },
-              },
-            ),
+        const result = await invokeProjectMethod(
+          "projects.remove",
+          { id: project.id, deleteCheckout: true },
+          { agents: { entries: { main: { workspace: state.workspaceDir } } } },
         );
         expect(result).toMatchObject({
           ok: false,
@@ -115,14 +90,12 @@ test.each(["existing", "after-check"])(
         await expect(fs.stat(repo)).resolves.toBeDefined();
       } finally {
         observer.mockRestore();
-        memorySessionActorOwners.closeDatabase(mainOwner);
-        memorySessionActorOwners.closeDatabase(otherOwner);
       }
     });
   },
 );
 
-test.each(["native", "actor", "actor-changed-after-check"])(
+test.each(["durable", "memory", "memory-changed-after-check"])(
   "projects.remove preserves a checkout referenced by a %s session",
   async (mode) => {
     return withProjectState(async (state) => {
@@ -138,30 +111,19 @@ test.each(["native", "actor", "actor-changed-after-check"])(
         name: "Session project",
         originUrl,
       });
-      const authority = { assertCurrent() {} };
-      const actor =
-        mode === "native"
-          ? undefined
-          : await captureOpenClawAgentDatabaseExecution({
-              kind: "ephemeral",
-              agentId: "main",
-              env: state.env,
-              authority,
-            });
-      const sessionKey = actor
-        ? "agent:main:dashboard:incognito-project-session"
-        : "agent:main:project-session";
-      const entry = {
-        sessionId: "project-session",
-        updatedAt: 1,
-        ...(mode !== "actor-changed-after-check" && { spawnedCwd: repo }),
-        ...(actor && { incognito: true as const }),
-      };
-      if (actor) {
-        await actor.sessions.create(authority, { sessionKey, entry });
-      } else {
-        await upsertSessionEntryCore({ agentId: "main", env: state.env, sessionKey }, entry);
-      }
+      const sessionKey =
+        mode === "durable"
+          ? "agent:main:project-session"
+          : "agent:main:dashboard:incognito-project-session";
+      await upsertSessionEntryCore(
+        { agentId: "main", env: state.env, sessionKey },
+        {
+          sessionId: "project-session",
+          updatedAt: 1,
+          ...(mode !== "memory-changed-after-check" && { spawnedCwd: repo }),
+          ...(mode !== "durable" && { incognito: true as const }),
+        },
+      );
       const cfg = {
         agents: { entries: { main: { workspace: state.workspaceDir } } },
       } as OpenClawConfig;
@@ -175,17 +137,11 @@ test.each(["native", "actor", "actor-changed-after-check"])(
             selected,
             async () => {
               await check();
-              if (++checks === 2 && mode === "actor-changed-after-check") {
-                assert(actor);
-                await actor.sessions.create(authority, {
-                  sessionKey: `${sessionKey}-new`,
-                  entry: {
-                    sessionId: "project-new",
-                    updatedAt: 2,
-                    incognito: true,
-                    spawnedCwd: repo,
-                  },
-                });
+              if (++checks === 2 && mode === "memory-changed-after-check") {
+                await upsertSessionEntryCore(
+                  { agentId: "main", env: state.env, sessionKey: `${sessionKey}-new` },
+                  { sessionId: "project-new", updatedAt: 2, incognito: true, spawnedCwd: repo },
+                );
               }
             },
             options,
@@ -194,87 +150,46 @@ test.each(["native", "actor", "actor-changed-after-check"])(
       try {
         const invoke = () =>
           invokeProjectMethod("projects.remove", { id: project.id, deleteCheckout: true }, cfg);
-        expect(
-          actor ? await withIncognitoSessionActor(actor, invoke) : await invoke(),
-        ).toMatchObject({
+        expect(await invoke()).toMatchObject({
           ok: false,
           error: {
-            code: mode === "actor-changed-after-check" ? "UNAVAILABLE" : "INVALID_REQUEST",
+            code: "INVALID_REQUEST",
             message: expect.stringContaining(
-              mode === "actor-changed-after-check" ? "snapshot changed" : "project-session",
+              mode === "memory-changed-after-check" ? `${sessionKey}-new` : sessionKey,
             ),
           },
         });
         await expect(fs.stat(repo)).resolves.toBeDefined();
       } finally {
         observer.mockRestore();
-        await actor?.close();
       }
     });
   },
 );
 
-test("projects.list includes retained actor recents and refuses a changed snapshot before disclosure", async () => {
+test("projects.list includes recents from an unbound memory session", async () => {
   await withProjectState(async (state) => {
     const profile = ensureProfileForEmail("incognito-projects@example.test");
     const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
     const folder = path.join(state.workspaceDir, "private-project");
     await fs.mkdir(folder, { recursive: true });
-    const authority = { assertCurrent() {} };
-    const actor = await captureOpenClawAgentDatabaseExecution({
-      kind: "ephemeral",
-      agentId: "main",
-      env: state.env,
-      authority,
-    });
-    assert(actor);
     const sessionKey = "agent:main:dashboard:incognito-project-recent";
-    try {
-      await actor.sessions.create(authority, {
-        sessionKey,
-        entry: {
-          sessionId: "project-recent",
-          updatedAt: 1,
-          incognito: true,
-          spawnedCwd: folder,
-          execCwd: folder,
-          createdActor: { type: "human", source: "profile", id: profile.id },
-        },
-      });
-      await withIncognitoSessionActor(actor, async () => {
-        expect(
-          await invokeProjectMethod("projects.list", {}, cfg, ["operator.write"], profile.id),
-        ).toMatchObject({
-          ok: true,
-          payload: { recents: [{ kind: "folder", folder, displayName: "private-project" }] },
-        });
-        let replacementCommitted = false;
-        listRegistryRecords.mockImplementationOnce(async () => {
-          await actor.sessions.create(authority, {
-            sessionKey: `${sessionKey}-new`,
-            entry: { sessionId: "project-next", updatedAt: 2, incognito: true },
-          });
-          replacementCommitted = true;
-          return [];
-        });
-        const result = await invokeProjectMethod(
-          "projects.list",
-          { includeObserved: true },
-          cfg,
-          ["operator.write"],
-          profile.id,
-        );
-        expect(replacementCommitted).toBe(true);
-        expect(
-          (await actor.sessions.read(authority, { sessionKey: `${sessionKey}-new` })).entry,
-        ).toMatchObject({ sessionId: "project-next" });
-        expect(result).toMatchObject({
-          ok: false,
-          error: { code: "UNAVAILABLE", message: expect.stringContaining("snapshot changed") },
-        });
-      });
-    } finally {
-      await actor.close();
-    }
+    await upsertSessionEntryCore(
+      { env: state.env, sessionKey },
+      {
+        sessionId: "project-recent",
+        updatedAt: 1,
+        incognito: true,
+        spawnedCwd: folder,
+        execCwd: folder,
+        createdActor: { type: "human", source: "profile", id: profile.id },
+      },
+    );
+    expect(
+      await invokeProjectMethod("projects.list", {}, cfg, ["operator.write"], profile.id),
+    ).toMatchObject({
+      ok: true,
+      payload: { recents: [{ kind: "folder", folder, displayName: "private-project" }] },
+    });
   });
 });

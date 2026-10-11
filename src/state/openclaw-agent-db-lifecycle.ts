@@ -71,12 +71,7 @@ import {
   getOpenClawDatabaseMaintenanceScope,
   observeOpenClawDatabaseMaintenanceResource,
 } from "./openclaw-state-db-async-lifecycle.js";
-import {
-  registerOpenClawStateDatabaseLifecycleListener,
-  retainOpenClawStateDatabaseForIdle,
-} from "./openclaw-state-db-cache.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 const agentDbLog = createSubsystemLogger("state/agent-db");
 const OPENCLAW_AGENT_DB_SLOW_OPEN_MS = 1_000;
@@ -86,8 +81,6 @@ type AgentDatabaseLifecycle = {
   databases: Map<string, OpenClawAgentDatabase>;
   borrowers: WeakMap<DatabaseSync, Set<object>>;
   idleTimers: WeakMap<DatabaseSync, Disposable & { refresh(): void }>;
-  incognito: WeakSet<OpenClawAgentDatabase>;
-  generation: number;
   failures: Map<string, unknown>;
   leases: Map<
     string,
@@ -121,8 +114,6 @@ const cache = resolveGlobalSingleton<AgentDatabaseLifecycle>(
     databases: new Map(),
     borrowers: new WeakMap(),
     idleTimers: new WeakMap(),
-    incognito: new WeakSet(),
-    generation: 0,
     failures: new Map(),
     leases: new Map(),
     terminal: createSqliteTerminalOpenLatch({
@@ -199,16 +190,13 @@ export function deferOpenClawAgentPostCommitPublication(
     return false;
   }
   const lease = cache.leases.get(database.path);
-  if (
-    cache.databases.get(database.path) !== database ||
-    (!lease && !cache.incognito.has(database))
-  ) {
+  if (cache.databases.get(database.path) !== database || !lease) {
     throw new Error("Agent post-commit publication requires its admitted database owner");
   }
   const options = {
     agentId: database.agentId,
     path: database.path,
-    ...(lease ? { env: { ...lease.env } } : {}),
+    env: { ...lease.env },
   };
   return deferSqlitePostCommitPublication(database.db, () => publish(options));
 }
@@ -310,29 +298,8 @@ export function retainAgentDatabase(db: DatabaseSync): () => void {
   };
 }
 
-/** Keep live deletion-fence reads warm without creating shared state or preventing explicit close. */
-export function retainIncognitoSharedState(env?: NodeJS.ProcessEnv): () => void {
-  const statePath = path.resolve(resolveOpenClawStateSqlitePath(env));
-  let releaseIdle: (() => void) | undefined;
-  const unsubscribe = registerOpenClawStateDatabaseLifecycleListener((event) => {
-    if (event.kind === "opened" && event.database.path === statePath) {
-      releaseIdle?.();
-      releaseIdle = retainOpenClawStateDatabaseForIdle(event.database);
-    }
-  });
-  return () => {
-    unsubscribe();
-    releaseIdle?.();
-    releaseIdle = undefined;
-  };
-}
-
 /** Activity and final borrower release use the same idle or post-grace eviction. */
 export function refreshAgentDatabaseIdleTimer(database: OpenClawAgentDatabase): void {
-  // Incognito's connection is its only durable owner; idle close would erase it.
-  if (cache.incognito.has(database)) {
-    return;
-  }
   const existing = cache.idleTimers.get(database.db);
   if (existing) {
     existing.refresh();
@@ -398,9 +365,6 @@ export async function closeMaintenanceAgentDatabase(
   closeCachedOpenClawAgentDatabase(database);
   cache.databases.delete(database.path);
   cache.failures.delete(database.path);
-  if (cache.incognito.has(database)) {
-    cache.generation += 1;
-  }
 }
 
 export function closeCachedOpenClawAgentDatabase(
@@ -425,9 +389,7 @@ export function closeCachedOpenClawAgentDatabase(
       isOpenClawAgentDatabasePathCurrent(database)
     ) {
       const { identity } = readOpenClawAgentDatabaseIdentity(database);
-      if (typeof identity === "string") {
-        clean = { path: database.path, identity };
-      }
+      clean = { path: database.path, identity };
     }
     // A reader-pinned WAL is healthy; only restart proof needs a completed checkpoint.
     retainRuntimeProof =
@@ -501,13 +463,9 @@ export function closeOpenClawAgentDatabaseByPath(
   if (!database || (expectedAgentId !== undefined && database.agentId !== expectedAgentId)) {
     return false;
   }
-  const incognito = cache.incognito.has(database);
   closeCachedOpenClawAgentDatabase(database);
   cache.databases.delete(resolvedPath);
   cache.failures.delete(resolvedPath);
-  if (incognito) {
-    cache.generation += 1;
-  }
   unregisterUnusedAgentDatabaseExitClose();
   return true;
 }
@@ -561,12 +519,8 @@ export function settleOpenClawAgentDatabaseWorkerClose(
     if (!database.db.isOpen) {
       cache.idleTimers.get(database.db)?.[Symbol.dispose]();
       cache.idleTimers.delete(database.db);
-      const incognito = cache.incognito.has(database);
       cache.databases.delete(resolvedPath);
       cache.failures.delete(resolvedPath);
-      if (incognito) {
-        cache.generation += 1;
-      }
       unregisterUnusedAgentDatabaseExitClose();
     }
   }
@@ -741,36 +695,6 @@ export function inspectOpenClawAgentDatabaseOwner(
   } finally {
     db?.close();
   }
-}
-
-/** Lists process-held incognito databases without opening new sentinel handles. */
-export function listOpenIncognitoAgentDatabases(): Array<{ agentId: string; storePath: string }> {
-  return [...cache.databases.values()]
-    .filter((database) => database.db.isOpen && cache.incognito.has(database))
-    .map((database) => ({ agentId: database.agentId, storePath: database.path }))
-    .toSorted(
-      (left, right) =>
-        left.agentId.localeCompare(right.agentId) || left.storePath.localeCompare(right.storePath),
-    );
-}
-
-/** Borrow committed process-held facts without opening or querying a private store. */
-export function getOpenIncognitoAgentDatabase(agentId: string, pathname: string) {
-  const database = cache.databases.get(path.resolve(pathname));
-  return database?.db.isOpen &&
-    database.agentId === normalizeAgentId(agentId) &&
-    cache.incognito.has(database)
-    ? database
-    : undefined;
-}
-
-/** Return the generation of process-held incognito database membership. */
-export function readOpenIncognitoAgentDatabaseGeneration(): number {
-  return cache.generation;
-}
-
-export function isIncognitoOpenClawAgentDatabase(database: OpenClawAgentDatabase): boolean {
-  return cache.incognito.has(database);
 }
 
 export { cache as agentDatabaseLifecycle };

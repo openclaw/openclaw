@@ -2,10 +2,7 @@ import { BoardValidationError } from "../boards/board-layout.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import {
-  captureIncognitoSessionOperation,
-  captureIncognitoSessionSource,
-} from "../config/sessions/session-incognito-binding.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 
@@ -45,22 +42,12 @@ function resolveGatewaySessionDatabase(
 export const boardStore = new SqliteBoardStore({
   resolveSession: ({ sessionKey, agentId }) => {
     const scope = captureGatewaySessionStoreScope(sessionKey, agentId);
-    const source = captureIncognitoSessionSource(scope);
-    const absent = source && "kind" in source ? source : undefined;
-    const incognito = absent ? undefined : captureIncognitoSessionOperation(scope);
-    const database = incognito
-      ? {
-          agentId: incognito.actor.agentId,
-          path: incognito.actor.path,
-          sessionKey: scope.sessionKey,
-        }
-      : absent
-        ? { agentId: absent.agentId, path: absent.path, sessionKey: scope.sessionKey }
-        : resolveGatewaySessionDatabase(sessionKey, agentId);
+    const memory = captureSessionActorStorageOwner(scope, { assertCurrent() {} });
+    const database = memory
+      ? { agentId: memory.agentId, path: memory.path, sessionKey: scope.sessionKey }
+      : resolveGatewaySessionDatabase(sessionKey, agentId);
     return {
       ...database,
-      incognito,
-      absent,
       assertCurrent() {
         const current = captureGatewaySessionStoreScope(sessionKey, agentId);
         if (

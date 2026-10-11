@@ -11,7 +11,9 @@ import {
 } from "../../gateway/session-transcript-source-pages.js";
 import { hasInterSessionUserProvenance } from "../../sessions/input-provenance.js";
 import { NESTED_TOOL_ACTIVITY_CUSTOM_TYPE } from "../../sessions/nested-tool-activity.js";
+import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import { matchesTranscriptEvent } from "../../sessions/transcript-visible-record.js";
+import { buildRunUserTurnIdempotencyKey } from "../../sessions/user-turn-transcript.metadata.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../../shared/transcript-only-openclaw-assistant.js";
 import type {
   SessionTranscriptBoundedMessageTailOptions,
@@ -288,6 +290,41 @@ export function readSessionActorMemoryHistoryFacts(
   }
   const navigation = createSessionActorMemoryHistoryNavigation(window);
   switch (query.type) {
+    case "session.history.visibility-inputs": {
+      const runIds = new Set(query.input.runIds);
+      const inputKeys = new Set(query.input.runIds.map(buildRunUserTurnIdempotencyKey));
+      return navigation.visibleHistory.flatMap(({ event }, index) => {
+        const message = asOptionalRecord(asOptionalRecord(event)?.message);
+        const meta = asOptionalRecord(message?.__openclaw);
+        const runId = readSessionTranscriptRunId(message);
+        const inputKey = message?.idempotencyKey ?? meta?.idempotencyKey;
+        if (
+          message?.role !== "user" ||
+          !(
+            (typeof runId === "string" && runIds.has(runId)) ||
+            (typeof meta?.steerTargetRunId === "string" && runIds.has(meta.steerTargetRunId)) ||
+            (typeof inputKey === "string" && inputKeys.has(inputKey))
+          )
+        ) {
+          return [];
+        }
+        return [
+          {
+            seq: index + 1,
+            message: {
+              role: "user" as const,
+              idempotencyKey: message.idempotencyKey,
+              provenance: message.provenance,
+              __openclaw: {
+                runId,
+                steerTargetRunId: meta?.steerTargetRunId,
+                idempotencyKey: meta?.idempotencyKey,
+              },
+            },
+          },
+        ];
+      });
+    }
     case "session.history.title": {
       const first = navigation.visibleMessages.slice(0, 100).find(({ event }) => {
         const message = asOptionalRecord(asOptionalRecord(event)?.message);

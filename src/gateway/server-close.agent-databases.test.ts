@@ -25,6 +25,8 @@ import {
 import { applySessionEntryLifecycleMutation } from "../config/sessions/session-accessor.sqlite-projection.js";
 import { runSqliteSessionReclamation } from "../config/sessions/session-accessor.sqlite-reclamation-run.js";
 import { createSessionMaintenanceStatisticsOperation } from "../config/sessions/session-accessor.sqlite-reclamation.js";
+import type { SessionActor } from "../config/sessions/session-actor-contract.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { waitForAbortSignal } from "../infra/abort-signal.js";
 import { settlePendingFinalDelivery } from "../infra/outbound/delivery-completion.js";
 import { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
@@ -52,15 +54,11 @@ import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-re
 import * as schema from "../state/openclaw-agent-db-schema.js";
 import {
   closeOpenClawAgentDatabasesForTest,
-  listOpenIncognitoAgentDatabases,
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
   withOpenClawAgentDatabaseRuntime,
 } from "../state/openclaw-agent-db.js";
-import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
-import { useIncognitoActorProbe } from "../state/openclaw-agent-execution-incognito.test-support.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import { readOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
 import {
@@ -72,18 +70,14 @@ import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-
 import type { GatewayServer } from "./server-public.js";
 import * as lifecyclePersistence from "./session-lifecycle-persistence-owner.js";
 
-const probe = useIncognitoActorProbe();
-
-it("settles an accepted incognito outbox write after the close prelude and before actor retirement", async ({
+it("settles accepted incognito outbox work after the close prelude and before actor retirement", async ({
   signal,
 }) => {
   const fixture = await createGatewayMetadataCloseFixture("gateway-incognito-outbox-close");
-  const entered = createDeferredCore();
   const release = createDeferredCore();
   const accepted = createDeferredCore();
   const joining = createDeferredCore();
-  let actor: IncognitoAgentDatabaseExecution | undefined;
-  let holding: Promise<unknown> | undefined;
+  let actor: SessionActor | undefined;
   let writing: Promise<void> | undefined;
   let closing: Promise<void> | undefined;
   let persisted: unknown;
@@ -92,50 +86,70 @@ it("settles an accepted incognito outbox write after the close prelude and befor
     const server = await fixture.start(port);
     const kernel = fixture.kernels.get(port);
     assert(kernel);
-    const authority = { assertCurrent() {} };
-    actor = await captureOpenClawAgentDatabaseExecution({
-      kind: "ephemeral",
+    const authority = { assertCurrent() {}, authorize() {} };
+    const memoryOwner = memorySessionActorOwners.get({
       agentId: "main",
-      env: fixture.state.env,
-      authority,
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: fixture.state.env }),
     });
-    assert(actor);
     const target = {
       sessionKey: "agent:main:dashboard:incognito-outbox-close",
       sessionId: "outbox-close",
     };
-    await actor.sessions.create(authority, {
-      sessionKey: target.sessionKey,
-      entry: { sessionId: target.sessionId, updatedAt: 1, incognito: true },
-    });
-    const message = await actor.sessions.transcript(authority, {
-      type: "session.message.append",
-      input: { ...target, fence: {}, message: { role: "user", content: "accepted question" } },
-    });
-    assert(message.ok && message.value.append?.anchor);
+    actor = await memoryOwner.acquire(
+      { database: memoryOwner.identity, sessionKey: target.sessionKey },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    const created = await actor.storage!.mutate(
+      {
+        type: "session.entry.create",
+        input: { entry: { sessionId: target.sessionId, updatedAt: 1, incognito: true } },
+      },
+      authority,
+    );
+    expect(created.kind).toBe("committed");
+    const message = await actor.appendToolResult(
+      {
+        commandId: "outbox-close-message",
+        phaseId: "outbox-close-turn",
+        turn: {
+          agentId: "main",
+          sessionKey: target.sessionKey,
+          options: {
+            expectedSessionId: target.sessionId,
+            messages: [
+              {
+                eventId: "accepted-question",
+                message: { role: "user", content: "accepted question" },
+              },
+            ],
+          },
+        },
+      },
+      authority,
+    );
+    assert(message.kind === "committed");
+    const anchor = message.receipt.transcript.appendedMessages[0]?.anchor;
+    assert(anchor);
     const admission = {
-      ...message.value.append.anchor,
+      ...anchor,
       logicalTurnId: "accepted-close-turn",
       role: "user" as const,
     };
     const outbox = openContextEngineTurnOutboxWorkerStore({
-      agentId: actor.agentId,
-      path: actor.path,
-      incognito: { actor, authority, ...target },
+      agentId: memoryOwner.agentId,
+      path: memoryOwner.path,
+      ...target,
+      sessionActor: { actor, authority, agentId: memoryOwner.agentId, path: memoryOwner.path },
     });
-    holding = probe.read(actor, authority, async () => {
-      entered.resolve();
-      await release.promise;
-    });
-    await withinTest(entered.promise, signal);
     const filter = { engineId: "close-fixture", sessionId: target.sessionId };
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     kernel.scheduler.schedule({
       id: "accepted-incognito-outbox",
       delayMs: 0,
       async run() {
-        writing = outbox.enqueueIntent({ ...filter, admission, isHeartbeat: false });
         accepted.resolve();
+        await release.promise;
+        writing = outbox.enqueueIntent({ ...filter, admission, isHeartbeat: false });
         await writing;
         persisted = await outbox.readNextPending(filter);
       },
@@ -154,7 +168,7 @@ it("settles an accepted incognito outbox write after the close prelude and befor
       signal,
     );
     expect(kernel.scheduler.signal.aborted).toBe(true);
-    expect(() => actor?.assertCurrent()).not.toThrow();
+    expect(() => actor?.assertReadable()).not.toThrow();
     expect(persisted).toBeUndefined();
     const late = vi.fn();
     await kernel.scheduler
@@ -162,18 +176,18 @@ it("settles an accepted incognito outbox write after the close prelude and befor
       .stop();
     expect(late).not.toHaveBeenCalled();
     release.resolve();
-    await withinTest(Promise.all([holding, writing, closing]), signal);
+    await withinTest(Promise.all([writing, closing]), signal);
     expect(persisted).toMatchObject({
       advancement_key: admission.logicalTurnId,
       session_id: target.sessionId,
     });
-    expect(() => actor?.assertCurrent()).toThrow("Incognito session ended");
+    expect(() => actor?.assertReadable()).toThrow("closed");
   } finally {
     release.resolve();
-    await Promise.allSettled([holding, writing, closing]);
+    await Promise.allSettled([writing, closing]);
     vi.useRealTimers();
     vi.restoreAllMocks();
-    await actor?.close();
+    await actor?.release();
     await fixture.cleanup();
   }
 });
@@ -557,8 +571,8 @@ it("releases agent leases for Doctor after Gateway stops while its process stays
     const server = await fixture.start(await fixture.reservePort());
     const options = { agentId: "main", env: fixture.state.env };
     const agent = openOpenClawAgentDatabase(options);
-    const incognito = openOpenClawAgentDatabase({
-      ...options,
+    const incognito = memorySessionActorOwners.get({
+      agentId: "main",
       path: resolveIncognitoOpenClawAgentSqlitePath(options),
     });
     const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
@@ -573,11 +587,8 @@ it("releases agent leases for Doctor after Gateway stops while its process stays
     expect(inspectForDoctor).not.toThrow();
     expect(agent.db.isOpen).toBe(false);
     expect(shared.isOpen).toBe(false);
-    expect(incognito.db.isOpen).toBe(false);
-    expect(listOpenIncognitoAgentDatabases()).not.toContainEqual({
-      agentId: "main",
-      storePath: incognito.path,
-    });
+    expect(memorySessionActorOwners.read(incognito)).toBeUndefined();
+    expect(() => incognito.assertCurrent()).toThrow("closed");
   } finally {
     await fixture.cleanup();
   }

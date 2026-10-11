@@ -32,7 +32,6 @@ import {
 import type { GatewayClient, RespondFn } from "./types.js";
 
 const mocks = vi.hoisted(() => ({ handleChatSend: vi.fn() }));
-const sessionReadState = vi.hoisted(() => ({ mode: "normal" as "normal" | "present" | "throw" }));
 type TaskOperatorRole = "none" | "view" | "suggest" | "restricted";
 const taskRoleConfig = (role: TaskOperatorRole): OpenClawConfig => ({
   gateway: {
@@ -94,26 +93,8 @@ async function createTaskRoleScenario(role: TaskOperatorRole, ownsSource = false
 }
 
 vi.mock("./chat-send-handler.js", () => ({ handleChatSend: mocks.handleChatSend }));
-vi.mock("../session-utils-store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../session-utils-store.js")>();
-  return {
-    ...actual,
-    loadGatewaySessionEntryReadOnly: (
-      ...args: Parameters<typeof actual.loadGatewaySessionEntryReadOnly>
-    ) => {
-      if (sessionReadState.mode === "throw") {
-        throw new Error("session inspection unavailable");
-      }
-      const loaded = actual.loadGatewaySessionEntryReadOnly(...args);
-      return sessionReadState.mode === "present"
-        ? { ...loaded, entry: { sessionId: "surviving-session", updatedAt: 1 } }
-        : loaded;
-    },
-  };
-});
 
 beforeEach(async () => {
-  sessionReadState.mode = "normal";
   await dismissPendingTaskSuggestions();
   mocks.handleChatSend.mockReset();
   mocks.handleChatSend.mockImplementation(async ({ respond }: { respond: RespondFn }) => {
@@ -627,31 +608,23 @@ describe("task suggestion gateway methods", () => {
     expect(listed.response?.[1]).toMatchObject({ suggestions: [{ id: taskId }] });
   });
 
-  it.each([
-    ["delete preserves the worktree", "preserved"],
-    ["session inspection throws", "inspect-throws"],
-  ] as const)("expires a suggestion when rollback is incomplete: %s", async (_name, failure) => {
+  it("expires a suggestion when rollback preserves the worktree", async () => {
     const taskId = await createLocalTaskSuggestion();
     vi.spyOn(sessionCreateHandlers, "sessions.create").mockRejectedValue(
       new Error("initial dispatch failed"),
     );
-    sessionReadState.mode = failure === "inspect-throws" ? "throw" : "normal";
     vi.spyOn(sessionDeleteHandlers, "sessions.delete").mockImplementation(async ({ respond }) => {
       respond(
         true,
         {
           ok: true,
           deleted: true,
-          ...(failure === "preserved"
-            ? {
-                worktreePreserved: {
-                  id: "preserved-worktree",
-                  path: "/preserved-worktree",
-                  branch: "openclaw/preserved-worktree",
-                  reason: "cleanup-failed",
-                },
-              }
-            : {}),
+          worktreePreserved: {
+            id: "preserved-worktree",
+            path: "/preserved-worktree",
+            branch: "openclaw/preserved-worktree",
+            reason: "cleanup-failed",
+          },
         },
         undefined,
       );

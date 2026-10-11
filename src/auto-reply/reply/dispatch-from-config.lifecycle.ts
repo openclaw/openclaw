@@ -10,7 +10,6 @@ import {
   patchSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import {
   composeSessionSourceAssertion,
   sessionEntryCommitGuardOptions,
@@ -64,6 +63,7 @@ type DispatchReplyOperationAcquisition =
   | { status: "aborted" };
 
 async function restoreArchivedDispatchSession(params: {
+  assertCurrent: () => void;
   ctx: FinalizedMsgContext;
   entry?: SessionEntry;
   hasPluginOwnedBinding: boolean;
@@ -87,8 +87,7 @@ async function restoreArchivedDispatchSession(params: {
     return entry;
   }
   const scope = { sessionKey, storePath };
-  const actor = captureIncognitoSessionSource(scope);
-  const metadata = actor ? captureSessionEntryMetadataRead(scope) : undefined;
+  const metadata = captureSessionEntryMetadataRead(scope, params.assertCurrent);
   let placementContext = params.placementContext;
   if (!placementContext) {
     try {
@@ -108,7 +107,7 @@ async function restoreArchivedDispatchSession(params: {
     if (
       currentEntry.sessionId !== snapshotSessionId ||
       currentEntry.archivedAt !== snapshotArchivedAt ||
-      (actor && currentEntry.lifecycleRevision !== entry.lifecycleRevision) ||
+      (metadata && currentEntry.lifecycleRevision !== entry.lifecycleRevision) ||
       isRestartRecoveryTombstone(currentEntry)
     ) {
       return false;
@@ -134,17 +133,7 @@ async function restoreArchivedDispatchSession(params: {
     scope: storePath,
     identities: [sessionKey, snapshotSessionId],
     run: async () => {
-      const currentEntry = actor
-        ? "kind" in actor
-          ? undefined
-          : (
-              await actor.actor.sessions.read(
-                { assertCurrent: () => metadata!.assertCurrent() },
-                { sessionKey },
-                actor.admissionSignal,
-              )
-            ).entry
-        : loadSessionEntryReadOnly(scope);
+      const currentEntry = metadata ? metadata.readCurrent() : loadSessionEntryReadOnly(scope);
       metadata?.assertCurrent();
       if (
         !currentEntry ||
@@ -328,6 +317,7 @@ export function createDispatchReplyOperationCoordinator(params: {
     // Archive restoration belongs to pre-dispatch ownership resolution. Later calls only upgrade admission.
     if (phase === "pre_dispatch") {
       params.operationSessionStoreEntry.entry = await restoreArchivedDispatchSession({
+        assertCurrent: () => getPreDispatchAbortSignal()?.throwIfAborted(),
         ctx: params.ctx,
         entry: params.operationSessionStoreEntry.entry,
         hasPluginOwnedBinding,

@@ -7,39 +7,49 @@ import {
   cacheSessionBranchSummaries,
   cloneSessionBranchSummaries,
   readCachedSessionBranchSummaries,
-  readSessionBranchSnapshot,
   type SessionBranchSummaryReadResult,
 } from "./session-accessor.sqlite-branches.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
+import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { readSessionTranscriptHotWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 import type { SessionBranchListParams, SessionBranchListResult } from "./session-accessor.types.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
-import { captureIncognitoSessionHistoryBinding } from "./session-incognito-binding.js";
-import {
-  readIncognitoSessionHistory,
-  type IncognitoSessionHistoryBinding,
-} from "./session-incognito-history-read.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 
 const pendingBranchReads = new Map<string, Promise<SessionBranchSummaryReadResult>>();
 
 export async function listSessionBranches(
   params: SessionBranchListParams,
-  suppliedIncognito?: IncognitoSessionHistoryBinding,
 ): Promise<SessionBranchListResult> {
   const sourceKey = normalizeStoreSessionKey(params.sessionStoreKey ?? params.sessionKey);
-  const incognito =
-    suppliedIncognito ??
-    captureIncognitoSessionHistoryBinding({ ...params, sessionKey: sourceKey });
-  if (incognito) {
-    const result = await readIncognitoSessionHistory(
-      incognito,
-      { ...params, sessionKey: sourceKey, sessionId: incognito.target.sessionId },
-      (target) => ({ type: "session.history.branches", input: target }),
+  const memory = captureSessionActorStorageOwner(
+    { ...params, sessionKey: sourceKey },
+    { assertCurrent() {}, authorize() {} },
+  );
+  if (memory) {
+    const assertCurrent = () => {
+      memory.binding?.actor.assertReadable();
+      memory.authority.assertCurrent();
+    };
+    const actor = await memory.owner?.acquireExisting(
+      resolveSqliteSessionKey(sourceKey, memory.agentId),
+      { assertCurrent, assertReadable: assertCurrent },
     );
-    return result.status === "ok" ? { status: "ok", branches: result.branches } : result;
+    if (!actor) {
+      return { status: "missing-session" };
+    }
+    try {
+      const result = await actor.storage!.read(
+        { type: "session.history.branches", input: {} },
+        { ...memory.authority, assertCurrent },
+      );
+      return result.status === "ok" ? { status: "ok", branches: result.branches } : result;
+    } finally {
+      await actor.release();
+    }
   }
   const resolved = resolveSqliteScope({
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -81,9 +91,6 @@ export async function listSessionBranches(
       let snapshot: SessionBranchSummaryReadResult;
       if (cached?.maxSeq === watermark.maxSeq) {
         snapshot = { status: "ok", ...cached };
-      } else if (typeof claim.identity === "symbol") {
-        // Incognito transcripts live only in this process's in-memory database.
-        snapshot = readSessionBranchSnapshot(database, { ...expected, previous: cached });
       } else {
         const request = {
           database: { agentId: database.agentId, path: database.path },

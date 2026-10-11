@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   resolveApprovalSessionAudienceWithFallback,
   resolveApprovalSourceStreamKey,
@@ -60,7 +62,81 @@ beforeEach(() => {
   registrySnapshotMock.mockReset().mockReturnValue(registrySnapshot);
 });
 
+afterEach(() => {
+  memorySessionActorOwners.reset();
+  vi.unstubAllEnvs();
+});
+
 describe("resolveApprovalSessionAudienceWithFallback", () => {
+  it("reads current memory lineage without creating a missing owner and refuses a closed source", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/approval-memory");
+    const sessionKey = "agent:work:dashboard:incognito-child";
+    const location = {
+      agentId: "work",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "work" }),
+    };
+    expect(await resolveApprovalSessionAudienceWithFallback(sessionKey, "work")).toEqual([
+      sessionKey,
+    ]);
+    expect(memorySessionActorOwners.read(location)).toBeUndefined();
+    const owner = memorySessionActorOwners.get(location);
+    const actor = await owner.acquire(
+      { sessionKey, database: owner.identity },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    const authority = { assertCurrent() {}, authorize() {} };
+    try {
+      expect(
+        (
+          await actor.storage!.mutate(
+            {
+              type: "session.entry.create",
+              input: {
+                entry: {
+                  sessionId: "private-child",
+                  updatedAt: 1,
+                  incognito: true,
+                  parentSessionKey: "parent",
+                },
+              },
+            },
+            authority,
+          )
+        ).kind,
+      ).toBe("committed");
+      graph = { "agent:work:parent": { stored: { parentSessionKey: "root" } } };
+      expect(await resolveApprovalSessionAudienceWithFallback(sessionKey, "work")).toEqual([
+        sessionKey,
+        "agent:work:parent",
+        "agent:work:root",
+      ]);
+      expect(
+        (
+          await actor.storage!.mutate(
+            {
+              type: "session.entry.patch",
+              input: { operation: { kind: "fields", patch: { parentSessionKey: "next-parent" } } },
+            },
+            authority,
+          )
+        ).kind,
+      ).toBe("committed");
+      expect(await resolveApprovalSessionAudienceWithFallback(sessionKey, "work")).toEqual([
+        sessionKey,
+        "agent:work:next-parent",
+      ]);
+      prepareRegistryMock.mockImplementationOnce(async () => {
+        memorySessionActorOwners.closeDatabase(location);
+        return true;
+      });
+      await expect(
+        resolveApprovalSessionAudienceWithFallback(sessionKey, "work"),
+      ).rejects.toThrow();
+    } finally {
+      await actor.release();
+    }
+  });
+
   it("canonicalizes and bounds the breadth-first audience using current lineage", async () => {
     const cases: { source: string; nodes: Record<string, GraphNode>; expected: string[] }[] = [
       { source: " Child ", nodes: {}, expected: ["agent:work:child"] },

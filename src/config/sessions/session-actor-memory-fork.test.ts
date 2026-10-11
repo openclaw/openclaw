@@ -111,7 +111,7 @@ async function fixture(entry: Partial<SessionEntry> = {}) {
       sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
       fallbackEntry: { sessionId: "child-seed", updatedAt: 1, incognito: true },
     },
-    cliForkProviders: ["claude"],
+    supportsCliFork: (provider: string) => provider === "claude",
   };
   return { owner, acquire, parent, child, forkInput };
 }

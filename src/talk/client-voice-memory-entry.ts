@@ -1,4 +1,7 @@
-import type { SessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import type {
+  CapturedSessionActorStorageOwner,
+  SessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
 import type { SessionEntryPatchOperation } from "../config/sessions/session-entry-patch-operation.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import {
@@ -62,14 +65,14 @@ export async function ensureMemoryVoiceEntry(params: {
 
 /** The live memory source is checked by the durable voice writer at its effect boundary. */
 export async function prepareMemoryVoiceSource(
-  binding: SessionActorStorageBinding,
+  binding: CapturedSessionActorStorageOwner,
   source: SessionSourceAssertion,
 ): Promise<PreparedSessionSourceAuthority> {
   const prepared = await prepareSessionSourceAuthority(source);
   return {
     ...prepared,
     assertCurrent() {
-      binding.actor.assertReadable();
+      binding.binding?.actor.assertReadable();
       binding.authority.assertCurrent();
       prepared.assertCurrent();
     },

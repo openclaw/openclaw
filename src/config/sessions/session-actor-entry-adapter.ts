@@ -1,5 +1,7 @@
+import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import {
   withSessionEntryCreationPublication,
   runWithSessionEntryCreationPublication,
@@ -10,7 +12,13 @@ import type {
   SessionEntryCreateWithTranscriptPrepareResult,
   SessionEntryCreateWithTranscriptResult,
 } from "./session-accessor.types.js";
-import type { SessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import {
+  acquireSessionActorStorage,
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+  type SessionActorStorageBinding,
+  type SessionActorStorageScope,
+} from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { mergeSessionEntryPatch } from "./session-entry-patch-operation.js";
 import type { SqliteSessionEntrySnapshotPatchParams } from "./session-entry-patch-source.js";
@@ -20,7 +28,42 @@ import {
   releaseSessionSourceAuthorities,
   type SessionSourceValidation,
 } from "./session-source-authority.js";
+import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
+import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
+
+/** Entry writes may create a memory owner only when their patch provides a creation fallback. */
+export async function patchSessionActorEntryInScope(
+  scope: SessionActorStorageScope,
+  params: Pick<SqliteSessionEntrySnapshotPatchParams, "update" | "options" | "sessionKey">,
+): Promise<{ entry: SessionEntry | null } | undefined> {
+  const selected = getSessionActorStorageBinding(scope);
+  if (selected) {
+    return { entry: await patchSessionActorEntry(selected, params) };
+  }
+  const authority = { assertCurrent() {}, authorize() {} };
+  if (!captureSessionActorStorageOwner(scope, authority)) {
+    return undefined;
+  }
+  const binding = await acquireSessionActorStorage(scope, {
+    authority,
+    lifetime: { assertCurrent() {}, assertReadable() {} },
+    create: Boolean(params.options.fallbackEntry),
+  });
+  if (!binding) {
+    return { entry: null };
+  }
+  try {
+    return {
+      entry: await patchSessionActorEntry(binding, {
+        ...params,
+        sessionKey: binding.actor.target.sessionKey,
+      }),
+    };
+  } finally {
+    await binding.actor.release();
+  }
+}
 
 /** Async callbacks keep one compare-and-swap; closed reducers apply directly to current state. */
 export async function patchSessionActorEntry(
@@ -32,6 +75,9 @@ export async function patchSessionActorEntry(
   const source = await prepareSessionSourceAuthority(options.workerGuard?.source);
   const failures: unknown[] = [];
   let cancelled = false;
+  let maintenancePreservation:
+    | Awaited<ReturnType<typeof prepareSessionMaintenancePreservation>>
+    | undefined;
   try {
     const input = {
       operation: typeof update === "function" ? undefined : update,
@@ -78,8 +124,24 @@ export async function patchSessionActorEntry(
     if (!input.operation) {
       throw new Error("Session actor patch omitted its operation");
     }
+    const config = options.skipMaintenance
+      ? undefined
+      : (options.maintenanceConfig ?? resolveMaintenanceConfig());
+    if (config && config.mode !== "warn") {
+      maintenancePreservation = await prepareSessionMaintenancePreservation(binding.path);
+    }
     const result = await actor.storage!.mutate(
-      { type: "session.entry.patch", input: { ...input, operation: input.operation, expected } },
+      {
+        type: "session.entry.patch",
+        input: {
+          ...input,
+          operation: input.operation,
+          expected,
+          ...(config && maintenancePreservation
+            ? { maintenance: { config, preservation: maintenancePreservation.capture() } }
+            : {}),
+        },
+      },
       {
         ...authority,
         authorize(stage, facts, publication) {
@@ -139,7 +201,36 @@ export async function patchSessionActorEntry(
     failures.push(error);
     throw error;
   } finally {
+    maintenancePreservation?.dispose();
     await releaseSessionSourceAuthorities([source], failures);
+  }
+}
+
+/** Creation selects the memory namespace before any durable database preparation. */
+export async function createSessionActorEntryWithTranscriptInScope<TError>(
+  scope: SessionActorStorageScope,
+  createEntry: (
+    context: SessionEntryCreateWithTranscriptContext,
+  ) =>
+    | Promise<SessionEntryCreateWithTranscriptPrepareResult<TError>>
+    | SessionEntryCreateWithTranscriptPrepareResult<TError>,
+  options: SessionEntryCreateWithTranscriptOptions,
+): Promise<SessionEntryCreateWithTranscriptResult<TError> | undefined> {
+  const signal = getAsyncWorkSignal();
+  const assertCurrent = () => signal?.throwIfAborted();
+  const binding = await acquireSessionActorStorage(scope, {
+    authority: { assertCurrent, authorize: assertCurrent },
+    lifetime: { assertCurrent, assertReadable: assertCurrent },
+    create: true,
+  });
+  if (!binding) {
+    return undefined;
+  }
+  try {
+    const env = { ...scope.env, OPENCLAW_STATE_DIR: path.resolve(binding.path, "../../../..") };
+    return await createSessionActorEntryWithTranscript(binding, env, createEntry, options);
+  } finally {
+    await binding.actor.release();
   }
 }
 

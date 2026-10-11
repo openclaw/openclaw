@@ -3,17 +3,18 @@ import type {
   SessionTranscriptCorpusOptions,
   SessionTranscriptCorpusScope,
 } from "../../../packages/memory-host-sdk/src/host/session-transcript-corpus.types.js";
-import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
-import { listSessionTranscriptArchivesReadOnly } from "./session-accessor.sqlite-history.js";
-import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import {
+  captureSessionActorStorageOwner,
+  withSessionActorStorage,
+  type SelectedSessionActorStorageBinding,
+} from "./session-actor-storage-binding.js";
 import {
   readSessionEntryInWorker,
   withSessionStoreReaderInWorker,
 } from "./session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
 import {
-  readMemorySessionTargets,
   resolveMemorySessionSince,
   unresolvedMemorySessionTarget,
 } from "./session-memory-targets.js";
@@ -21,38 +22,56 @@ import type { MemorySessionSelectors } from "./session-memory-targets.types.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import type { SessionArchiveInventoryScope } from "./session-transcript-inventory.types.js";
 
+function captureMemoryInventory(scope: SessionArchiveInventoryScope) {
+  const signal = getAsyncWorkSignal();
+  const assertCurrent = () => signal?.throwIfAborted();
+  return captureSessionActorStorageOwner(scope, { assertCurrent, authorize: assertCurrent });
+}
+
+async function readMemoryInventory<T>(
+  memory: NonNullable<ReturnType<typeof captureMemoryInventory>>,
+  missing: T,
+  consume: (binding: SelectedSessionActorStorageBinding) => Promise<T>,
+): Promise<T> {
+  const selected = memory.binding?.agentId === memory.agentId ? memory.binding : undefined;
+  const sessionKey =
+    selected?.actor.target.sessionKey ??
+    memory.owner?.listSessions(memory.authority)[0]?.target.sessionKey;
+  if (!sessionKey) {
+    memory.authority.assertCurrent();
+    return missing;
+  }
+  return (
+    (await withSessionActorStorage(
+      { agentId: memory.agentId, storePath: memory.path, sessionKey, sessionActor: selected },
+      {
+        authority: memory.authority,
+        lifetime: {
+          assertCurrent: memory.authority.assertCurrent,
+          assertReadable: memory.authority.assertCurrent,
+        },
+      },
+      consume,
+    )) ?? missing
+  );
+}
+
 export async function listSessionTranscriptArchivesInWorker(input: SessionArchiveInventoryScope) {
-  const memory = getSessionActorStorageBinding(input);
+  const memory = captureMemoryInventory(input);
   if (memory) {
-    memory.actor.snapshot(memory.authority);
+    memory.authority.assertCurrent();
     return [];
   }
-  const source = captureIncognitoSessionSource(input);
   const scope = {
     ...input,
     env: cloneEnvWithPlatformSemantics(input.env ?? process.env),
     sessionIds: [...new Set(input.sessionIds ?? [])],
     archiveNames: [...new Set(input.archiveNames ?? [])],
   };
-  if (source) {
-    // Actor transcripts never create durable archive artifacts.
-    source.admissionSignal?.throwIfAborted();
-    if ("kind" in source) {
-      source.assertCurrent();
-    } else {
-      source.actor.assertReadable();
-    }
-    return [];
-  }
   if (scope.sessionIds.length === 0 && scope.archiveNames.length === 0) {
     return [];
   }
   const storePath = resolveSessionStorePathForScope(scope);
-  if (
-    isIncognitoOpenClawAgentSqlitePath(storePath, { ...scope, agentId: scope.agentId ?? "main" })
-  ) {
-    return listSessionTranscriptArchivesReadOnly({ ...scope, storePath });
-  }
   return withSessionStoreReaderInWorker(
     { ...scope, storePath },
     async ({ reader, database, logicalAgentId, assertCurrent }) => {
@@ -74,11 +93,13 @@ export async function readSessionTranscriptCorpusInWorker(
   prepareArtifacts: () => Promise<readonly SessionTranscriptCorpusArtifact[]>,
 ) {
   const input = { agentId: scope.normalizedAgentId, storePath: scope.storePath, env: scope.env };
-  const memory = getSessionActorStorageBinding(input);
+  const memory = captureMemoryInventory(input);
   if (memory) {
-    return memory.actor.storage!.read(
-      { type: "session.corpus.list", input: { options } },
-      memory.authority,
+    return readMemoryInventory(memory, [], (binding) =>
+      binding.actor.storage.read(
+        { type: "session.corpus.list", input: { options } },
+        binding.authority,
+      ),
     );
   }
   return withSessionStoreReaderInWorker(
@@ -112,14 +133,25 @@ export async function readSessionTranscriptCorpusInWorker(
 }
 
 export async function resolveMemorySessionTargetsInWorker(input: MemorySessionSelectors) {
-  const memory = getSessionActorStorageBinding(input);
+  if (!input.sessionIds?.length && !input.hookSources?.length && !input.participants?.length) {
+    return [];
+  }
+  const memory = captureMemoryInventory(input);
   if (memory) {
-    return memory.actor.storage!.read(
-      {
-        type: "session.memory.targets",
-        input: { selectors: { ...input, storePath: memory.path } },
-      },
-      memory.authority,
+    resolveMemorySessionSince(input.since);
+    return readMemoryInventory(
+      memory,
+      [...new Set(input.sessionIds ?? [])].map((sessionId) =>
+        unresolvedMemorySessionTarget(input.agentId, sessionId),
+      ),
+      (binding) =>
+        binding.actor.storage.read(
+          {
+            type: "session.memory.targets",
+            input: { selectors: { ...input, storePath: memory.path } },
+          },
+          binding.authority,
+        ),
     );
   }
   const scope = {
@@ -129,41 +161,7 @@ export async function resolveMemorySessionTargetsInWorker(input: MemorySessionSe
     hookSources: [...new Set(input.hookSources ?? [])],
     participants: [...new Set(input.participants ?? [])],
   };
-  if (!scope.sessionIds.length && !scope.hookSources.length && !scope.participants.length) {
-    return [];
-  }
   const storePath = resolveSessionStorePathForScope(scope);
-  const binding = captureIncognitoSessionSource({ ...input, storePath });
-  if (binding && "kind" in binding) {
-    resolveMemorySessionSince(scope.since);
-    binding.assertCurrent();
-    return scope.sessionIds.map((sessionId) =>
-      unresolvedMemorySessionTarget(scope.agentId, sessionId),
-    );
-  }
-  if (binding) {
-    const { actor } = binding;
-    const sessions = actor.sessions.deadlines().map(({ sessionKey, sessionId }) => ({
-      sessionKey,
-      sessionId,
-      lifecycleRevision: actor.sessions.readSharing(sessionKey)?.entry?.lifecycleRevision,
-    }));
-    const assertCurrent = () => {
-      binding.admissionSignal?.throwIfAborted();
-      actor.assertReadable();
-    };
-    // Memory discovery uses one captured inventory; concurrent changes appear on its next read.
-    return actor.sessions.withSharedState(() =>
-      actor.sessions.history(
-        { assertCurrent },
-        { type: "session.history.memory-targets", input: { selectors: scope, sessions } },
-        binding.admissionSignal,
-      ),
-    );
-  }
-  if (isIncognitoOpenClawAgentSqlitePath(storePath, scope)) {
-    return readMemorySessionTargets({ ...scope, storePath });
-  }
   return withSessionStoreReaderInWorker(
     { ...scope, storePath },
     async ({ reader, database, logicalAgentId, continuation, assertCurrent }) => {

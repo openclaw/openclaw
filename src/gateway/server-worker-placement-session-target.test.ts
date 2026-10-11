@@ -13,8 +13,8 @@ import {
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
-import { openIncognitoTestActor } from "../state/openclaw-agent-execution-incognito.test-support.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import * as repositoryPublications from "../state/session-repository-workspaces.publication.js";
@@ -35,7 +35,10 @@ import { createWorkerSessionPlacementGate } from "./worker-environments/placemen
 import { createWorkerEnvironmentService } from "./worker-environments/service.js";
 import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
 
-afterEach(() => resetConfigRuntimeState());
+afterEach(() => {
+  memorySessionActorOwners.reset();
+  resetConfigRuntimeState();
+});
 
 test("prepares an actor workspace and guards exact placement metadata without host session SQL", async () => {
   await withStateDirEnv("actor-placement-source-", async () => {
@@ -51,48 +54,59 @@ test("prepares an actor workspace and guards exact placement metadata without ho
       runSetupScript: false,
       provisionIgnoredFiles: false,
     });
-    const actor = await openIncognitoTestActor(process.env, { assertCurrent() {} });
-    await actor.sessions.create(
-      { assertCurrent() {} },
-      {
-        sessionKey: identity.sessionKey,
-        entry: {
-          sessionId: identity.sessionId,
-          updatedAt: Date.now(),
-          lifecycleRevision: "placement-window",
-          incognito: true,
-          projectId: "full-planning-project",
-          worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
-        },
-      },
+    const owner = memorySessionActorOwners.get({
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    });
+    const actor = await owner.acquire(
+      { database: owner.identity, sessionKey: identity.sessionKey },
+      { assertCurrent() {}, assertReadable() {} },
     );
+    expect(
+      (
+        await actor.storage!.mutate(
+          {
+            type: "session.entry.create",
+            input: {
+              entry: {
+                sessionId: identity.sessionId,
+                updatedAt: Date.now(),
+                lifecycleRevision: "placement-window",
+                incognito: true,
+                projectId: "full-planning-project",
+                worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
+              },
+            },
+          },
+          { assertCurrent() {}, authorize() {} },
+        )
+      ).kind,
+    ).toBe("committed");
     const sql = observeHostDataSql();
     try {
-      await withIncognitoSessionActor(actor, async () => {
-        const resolved = await resolveWorkerPlacementSessionTarget({
-          ...identity,
-          config: {},
-          errorMessage: "placement source changed",
-          sessionRuntime: {
-            managedWorktrees,
-            resolveGatewaySessionStoreTargetWithStore,
-            resolveCanonicalSessionEntryFromStoreKeys,
-          },
-        });
-        expect(resolved.workspace).toEqual({ kind: "local", path: worktree.path });
-        expect(resolved.entry.projectId).toBe("full-planning-project");
-        const scope = { ...identity, storePath: actor.path };
-        await patchSessionEntryCore(scope, () => ({ label: "unrelated title" }));
-        expect(() => resolved.assertCurrent()).not.toThrow();
-        await patchSessionEntryCore(scope, () => ({
-          worktree: { id: "replacement", branch: worktree.branch, repoRoot: worktree.repoRoot },
-        }));
-        expect(() => resolved.assertCurrent()).toThrow("placement source changed");
+      const resolved = await resolveWorkerPlacementSessionTarget({
+        ...identity,
+        config: {},
+        errorMessage: "placement source changed",
+        sessionRuntime: {
+          managedWorktrees,
+          resolveGatewaySessionStoreTargetWithStore,
+          resolveCanonicalSessionEntryFromStoreKeys,
+        },
       });
+      expect(resolved.workspace).toEqual({ kind: "local", path: worktree.path });
+      expect(resolved.entry.projectId).toBe("full-planning-project");
+      const scope = { ...identity, storePath: owner.path };
+      await patchSessionEntryCore(scope, () => ({ label: "unrelated title" }));
+      expect(() => resolved.assertCurrent()).not.toThrow();
+      await patchSessionEntryCore(scope, () => ({
+        worktree: { id: "replacement", branch: worktree.branch, repoRoot: worktree.repoRoot },
+      }));
+      expect(() => resolved.assertCurrent()).toThrow("placement source changed");
       expect(sql.queries).toEqual([]);
     } finally {
       sql.restore();
-      await actor.close();
+      await actor.release();
     }
   });
 });

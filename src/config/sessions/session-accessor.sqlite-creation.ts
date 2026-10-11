@@ -40,11 +40,8 @@ import type {
   SessionEntryCreateWithTranscriptResult,
   SessionEntryCommitContext,
 } from "./session-accessor.types.js";
-import { createSessionActorEntryWithTranscript } from "./session-actor-entry-adapter.js";
-import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import { createSessionActorEntryWithTranscriptInScope } from "./session-actor-entry-adapter.js";
 import { publishSessionStateArchivesInWorker } from "./session-archive-publication.js";
-import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
-import { createIncognitoSessionEntryWithTranscript } from "./session-incognito-entry-creation.js";
 import { retainSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 type CreationScope = ResolvedSqliteScope & { path: string; env: NodeJS.ProcessEnv };
@@ -65,13 +62,13 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
     | SessionEntryCreateWithTranscriptPrepareResult<TError>,
   options: SessionEntryCreateWithTranscriptOptions,
 ): Promise<SessionEntryCreateWithTranscriptResult<TError>> {
-  const memory = getSessionActorStorageBinding({ ...scope, storePath: scope.path });
+  const memory = await createSessionActorEntryWithTranscriptInScope(
+    { ...scope, storePath: scope.path },
+    createEntry,
+    options,
+  );
   if (memory) {
-    return createSessionActorEntryWithTranscript(memory, scope.env, createEntry, options);
-  }
-  const binding = captureIncognitoSessionBinding({ ...scope, storePath: scope.path });
-  if (binding) {
-    return createIncognitoSessionEntryWithTranscript(binding, scope, createEntry, options);
+    return memory;
   }
   const databaseOptions = { ...toDatabaseOptions(scope), path: scope.path };
   const useWorker =

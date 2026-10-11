@@ -168,7 +168,6 @@ export function createSqliteWorkerLifecycle({
     if (
       !prepared ||
       !runtime ||
-      options.target ||
       options.runtimeGeneration ||
       runtime.closeEpoch !== closeEpoch ||
       completedCloseEpoch !== closeEpoch ||
@@ -226,10 +225,8 @@ export function createSqliteWorkerLifecycle({
       );
     }
     const shareWorkers = explicitSqliteCloseReleasesNativeResources;
-    const hasEphemeral = Boolean(options.target) || [...slots].some((slot) => slot.ephemeral);
     const available = [...slots].filter(
       (slot) =>
-        !slot.ephemeral &&
         !slot.failed &&
         !slot.retiring &&
         !reservedSlots.has(slot) &&
@@ -239,16 +236,15 @@ export function createSqliteWorkerLifecycle({
     // One extra slot belongs to the broker, not to each generation requesting one.
     const borrowedGenerationSlot =
       shareWorkers &&
-      !hasEphemeral &&
       options.runtimeGeneration !== undefined &&
       available.length === 0 &&
       slots.size >= limits.maxWorkers &&
       ![...slots].some((slot) => slot.borrowedGenerationSlot);
     if (
       !borrowedGenerationSlot &&
-      slots.size >= (shareWorkers || hasEphemeral ? limits.maxWorkers : limits.maxStores)
+      slots.size >= (shareWorkers ? limits.maxWorkers : limits.maxStores)
     ) {
-      if (options.target || !available.length || !shareWorkers) {
+      if (!available.length || !shareWorkers) {
         const optional = [...preparedRuntimes.values()].find(
           (runtime) =>
             reservedSlots.has(runtime.slot) && !runtime.preempted && !runtime.slot.failed,
@@ -290,7 +286,7 @@ export function createSqliteWorkerLifecycle({
   function createSlot(
     options: Pick<
       PreparedSqliteWorkerOpen,
-      "carrierUrl" | "runtimeGeneration" | "target" | "assertCurrent" | "signal"
+      "carrierUrl" | "runtimeGeneration" | "assertCurrent" | "signal"
     >,
     borrowedGenerationSlot: boolean,
     createReplyOwner: (slot: Slot) => SqliteWorkerReplyOwner,
@@ -322,7 +318,6 @@ export function createSqliteWorkerLifecycle({
     }));
     trackSqliteDatabaseAdmissionWorker(worker);
     const slot: Slot = {
-      ...(options.target ? { ephemeral: true as const } : {}),
       runtimeGeneration: options.runtimeGeneration,
       ...(borrowedGenerationSlot ? { borrowedGenerationSlot: true as const } : {}),
       worker,

@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { trimTranscriptForManualCompact } from "./session-accessor.sqlite-compaction.js";
 import type {
@@ -5,10 +6,15 @@ import type {
   SessionTranscriptManualTrimResult,
   SessionTranscriptManualTrimPreflightResult,
 } from "./session-accessor.types.js";
+import {
+  captureSessionActorStorageOwner,
+  withSessionActorStorage,
+} from "./session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
-import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { selectManualCompactTranscriptLines } from "./session-manual-compact-selection.js";
 import { trimSessionTranscriptInWorker } from "./session-manual-compact.js";
+import type { ManualCompactValidation } from "./session-manual-compact.worker.js";
 import {
   acceptSessionSourceValidation,
   prepareSessionSourceAuthority,
@@ -102,18 +108,95 @@ export async function trimSessionTranscriptForManualCompact(
   },
 ): Promise<SessionTranscriptManualTrimResult> {
   const authority = params.authority;
-  const incognito = captureIncognitoSessionOperation(scope);
-  if (!authority && incognito) {
-    return trimPreparedSessionTranscriptForManualCompact(scope, params);
+  const memory = captureSessionActorStorageOwner(scope, {
+    assertCurrent: () => authority?.assertHostCurrent(),
+    authorize: () => authority?.assertHostCurrent(),
+  });
+  if (memory) {
+    if (!memory.owner && !memory.binding) {
+      return { compacted: false, reason: "no transcript" };
+    }
+    const source = authority ? await prepareSessionSourceAuthority(authority.source) : undefined;
+    const assertCurrent = () => {
+      memory.owner?.assertCurrent();
+      memory.binding?.actor.assertReadable();
+      memory.authority.assertCurrent();
+    };
+    try {
+      return (
+        (await withSessionActorStorage(
+          scope,
+          {
+            lifetime: { assertCurrent, assertReadable: assertCurrent },
+            authority: memory.authority,
+          },
+          async (binding) => {
+            const expected = authority?.expectedSource;
+            if (
+              expected &&
+              (expected.path !== binding.path ||
+                expected.agentId !== binding.agentId ||
+                expected.databaseIdentity !== binding.actor.target.database.incarnation)
+            ) {
+              throw new Error("Session compaction changed its memory owner");
+            }
+            return readSessionActorStorageResult(
+              await binding.actor.storage.mutate(
+                {
+                  type: "session.transcript.manualCompact",
+                  input: {
+                    scope: { ...scope, storePath: binding.path },
+                    maxLines: params.maxLines,
+                    nowMs: params.nowMs,
+                    sources: source?.checks.map(({ predicate }) => predicate),
+                  },
+                },
+                {
+                  assertCurrent,
+                  authorize(stage, facts, publication) {
+                    binding.authority.authorize(stage, facts, publication);
+                    if (
+                      authority &&
+                      stage === "commit" &&
+                      facts.target.sessionKey === scope.sessionKey &&
+                      (!facts.entry ||
+                        facts.entry.sessionId !== scope.sessionId ||
+                        facts.entry.lifecycleRevision !== authority.expectedLifecycleRevision ||
+                        resolveSessionWorkStartError(scope.sessionKey, facts.entry))
+                    ) {
+                      throw new SessionWorkStartChangedError(
+                        "Session changed before compaction. Retry.",
+                      );
+                    }
+                    if (
+                      source &&
+                      isRecord(publication) &&
+                      publication.kind === "session-manual-compact-validated"
+                    ) {
+                      // SAFETY: The paired memory kernel supplies this command's validated source facts.
+                      const validation = publication as Pick<
+                        ManualCompactValidation,
+                        "kind" | "sourceValidation"
+                      >;
+                      acceptSessionSourceValidation(source, validation.sourceValidation);
+                    }
+                  },
+                },
+                { beforeCommit: () => source?.assertCurrent() },
+              ),
+            );
+          },
+        )) ?? { compacted: false, reason: "no transcript" }
+      );
+    } finally {
+      if (source) {
+        await releaseSessionSourceAuthorities([source]);
+      }
+    }
   }
   if (!authority) {
     return withSessionTranscriptReadSource(
       scope,
-      (captured) =>
-        trimPreparedSessionTranscriptForManualCompact(
-          { ...captured, sessionKey: scope.sessionKey },
-          params,
-        ),
       async ({ scope: captured, resolved, expectedIdentity, assertCurrent }) => {
         const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
         assertCurrent();
@@ -144,69 +227,8 @@ export async function trimSessionTranscriptForManualCompact(
       throw new SessionWorkStartChangedError("Session changed before compaction. Retry.");
     }
   };
-  if (incognito) {
-    const { actor } = incognito;
-    const expected = authority.expectedSource;
-    if (
-      expected &&
-      (expected.path !== actor.path ||
-        expected.agentId !== actor.agentId ||
-        expected.databaseIdentity !== actor.identity.incarnation)
-    ) {
-      throw new Error("Session compaction changed its physical actor");
-    }
-    return actor.sessions.withSharedState(async () => {
-      const source = await prepareSessionSourceAuthority(authority.source);
-      try {
-        if (
-          source.nativeSource ||
-          source.hasOpaqueCheck ||
-          source.checks.some(
-            ({ predicate }) =>
-              predicate.source.path !== actor.path ||
-              predicate.source.agentId !== actor.agentId ||
-              predicate.source.databaseIdentity !== actor.identity.incarnation,
-          )
-        ) {
-          throw new Error("Incognito compaction requires source authority prepared for its actor");
-        }
-        const assertCurrent = () => {
-          incognito.authority.assertCurrent();
-          authority.assertHostCurrent();
-          (source.assertPreparedCurrent ?? source.assertCurrent)();
-        };
-        assertCurrent();
-        return await trimPreparedSessionTranscriptForManualCompact(scope, params, {
-          assertEntryCurrent,
-          assertCurrent,
-          assertCommitCurrent: assertCurrent,
-          source,
-          // The actor never owns a cold archive; native restoration remains below.
-          restore: async () => {},
-        });
-      } finally {
-        await releaseSessionSourceAuthorities([source]);
-      }
-    });
-  }
   return withSessionTranscriptReadSource(
     scope,
-    (captured) =>
-      trimPreparedSessionTranscriptForManualCompact(
-        { ...captured, sessionKey: scope.sessionKey },
-        params,
-        {
-          assertEntryCurrent,
-          assertCurrent: authority.source,
-          assertCommitCurrent: authority.source,
-          restore: async () => {
-            const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
-            authority.source();
-            await restoreSessionColdTranscript(captured, authority.assertHostCurrent);
-            authority.source();
-          },
-        },
-      ),
     async ({ scope: captured, resolved, owner, expectedIdentity, assertCurrent: assertReader }) => {
       const expectedSource = authority.expectedSource;
       const assertPhysicalSource = () => {

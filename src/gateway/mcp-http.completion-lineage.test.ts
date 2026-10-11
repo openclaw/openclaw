@@ -19,6 +19,7 @@ import {
   deleteSessionEntryRows,
   writeSessionEntry,
 } from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
@@ -29,6 +30,7 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { registerSessionStateWatch } from "../sessions/session-state-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -100,6 +102,7 @@ beforeAll(async () => {
 
 afterEach(() => {
   resetGlobalHookRunner();
+  memorySessionActorOwners.reset();
   vi.mocked(callGatewayTool).mockReset();
   for (const captureKey of captures.splice(0)) {
     clearMcpLoopbackToolCallCapture(captureKey);
@@ -122,10 +125,34 @@ async function seedLineage(child: Partial<SessionEntry> = {}, sourceKey = childK
     { agentId: "main", sessionKey: requesterKey },
     { sessionId: requesterSessionId, updatedAt: 1 },
   );
-  await replaceSessionEntry(
-    { agentId: "main", sessionKey: sourceKey },
-    { ...childEntry, ...child },
-  );
+  if (isIncognitoSessionKey(sourceKey)) {
+    const owner = memorySessionActorOwners.get({
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    });
+    const authority = { assertCurrent() {}, authorize() {} };
+    const actor = await owner.acquire(
+      { database: owner.identity, sessionKey: sourceKey },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    try {
+      const result = await actor.storage!.mutate(
+        {
+          type: "session.entry.create",
+          input: { entry: { ...childEntry, ...child, incognito: true } },
+        },
+        authority,
+      );
+      expect(result.kind).toBe("committed");
+    } finally {
+      await actor.release();
+    }
+  } else {
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: sourceKey },
+      { ...childEntry, ...child },
+    );
+  }
   clearSessionStoreCacheForTest();
 }
 
@@ -144,9 +171,9 @@ async function reparentChild() {
   clearSessionStoreCacheForTest();
 }
 
-async function reownChild() {
+async function reownChild(sourceKey = childKey) {
   await replaceSessionEntry(
-    { agentId: "main", sessionKey: childKey },
+    { agentId: "main", sessionKey: sourceKey },
     { ...childEntry, completionOwnerSessionKey: "agent:main:direct:another-requester" },
   );
   clearSessionStoreCacheForTest();
@@ -262,6 +289,19 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
       sessionId: childEntry.sessionId,
     },
     {
+      kind: "incognito-by-id",
+      sourceKey: "agent:main:subagent:incognito-lineage-id-alias",
+      storedKey: incognitoChildKey,
+      sessionId: "agent:main:subagent:incognito-lineage-id-alias",
+    },
+    {
+      kind: "mixed",
+      sourceKey: incognitoChildKey,
+      storedKey: incognitoChildKey,
+      sessionId: childEntry.sessionId,
+      parentKey: childKey,
+    },
+    {
       kind: "by-id",
       sourceKey: "agent:main:subagent:lineage-id-alias",
       storedKey: childKey,
@@ -269,8 +309,12 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
     },
   ])(
     "registers watches without host SQL for $kind lineage",
-    async ({ kind, sourceKey, storedKey, sessionId }) => {
-      await seedLineage({ sessionId }, storedKey);
+    async ({ kind, sourceKey, storedKey, sessionId, ...lineage }) => {
+      const parentKey = "parentKey" in lineage ? lineage.parentKey : undefined;
+      await seedLineage({ sessionId, ...(parentKey ? { spawnedBy: parentKey } : {}) }, storedKey);
+      if (parentKey) {
+        await replaceSessionEntry({ agentId: "main", sessionKey: parentKey }, childEntry);
+      }
       const runId = `lineage-${kind}-allowed`;
       const grant = await mintCompletionGrant(runId, sourceKey, sessionId);
       const listed = await grant.request("tools/list");
@@ -310,7 +354,7 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
     },
   );
 
-  it("rolls back a watch after an incognito completion-owner change at commit", async () => {
+  it("rolls back a watch after the incognito source closes at commit", async () => {
     await seedLineage({}, incognitoChildKey);
     const grant = await mintCompletionGrant("lineage-incognito-reowned", incognitoChildKey);
     const targetSessionKey = "agent:main:dashboard:incognito-lineage-watch";
@@ -320,16 +364,12 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
       const admission = probe.admission(workerAdmission, (request, allow, admit) => {
         if (request.stage === "commit" && !witnessed) {
           witnessed = true;
-          runOpenClawAgentWriteTransaction(
-            (database) =>
-              writeSessionEntry(database, incognitoChildKey, {
-                ...childEntry,
-                completionOwnerSessionKey: "agent:main:direct:another-requester",
-              }),
+          memorySessionActorOwners.closeSession(
             {
               agentId: "main",
               path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
             },
+            incognitoChildKey,
           );
         }
         admit(request, allow);
@@ -450,17 +490,25 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
       seed: { completionOwnerSessionKey: requesterKey },
       revoke: reownChild,
     },
+    {
+      name: "reassigned in memory",
+      runId: "lineage-memory-reowned-in-hook",
+      sourceKey: incognitoChildKey,
+      revoke: () => reownChild(incognitoChildKey),
+    },
   ] satisfies Array<{
     name: string;
     runId: string;
     seed?: Partial<SessionEntry>;
+    sourceKey?: string;
     revoke: () => Promise<void>;
   }>)(
     "rejects the write when the child lineage is $name during an awaited before-tool hook",
     async (testCase) => {
       const { runId, revoke } = testCase;
-      await seedLineage("seed" in testCase ? testCase.seed : undefined);
-      const grant = await mintCompletionGrant(runId);
+      const sourceKey = "sourceKey" in testCase ? testCase.sourceKey : childKey;
+      await seedLineage("seed" in testCase ? testCase.seed : undefined, sourceKey);
+      const grant = await mintCompletionGrant(runId, sourceKey);
       // The tool list resolves while the lineage still verifies.
       await (await grant.request("tools/list")).body?.cancel();
       registerBeforeToolCallHook(revoke);

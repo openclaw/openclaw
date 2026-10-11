@@ -15,9 +15,13 @@ vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
 }));
 vi.mock("../config/sessions/session-accessor.js", () => ({
   patchSessionEntryCore: updateSessionEntry,
-  loadSessionEntry,
 }));
-vi.mock("./session-transcript-title-reader.js", () => ({ readSessionTitleFieldsFromTranscript }));
+vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: loadSessionEntry,
+}));
+vi.mock("./session-transcript-title-reader.js", () => ({
+  readSessionTitleFieldsFromTranscriptAsync: readSessionTitleFieldsFromTranscript,
+}));
 
 import type { WorktreeSourceStage } from "../agents/worktrees/types.js";
 import type { SessionEntry } from "../config/sessions/types.js";

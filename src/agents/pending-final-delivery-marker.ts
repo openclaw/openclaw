@@ -12,7 +12,6 @@ import {
   normalizePendingFinalDeliveryPayloads,
   normalizePendingFinalRecoveryPayloads,
 } from "../auto-reply/reply/pending-final-delivery.js";
-import { captureSessionWriterDeliveryRead } from "../auto-reply/reply/session-writer-delivery-authority.js";
 import {
   getRestartRecoveryTerminalDeliveryEvidence,
   mergeRestartRecoveryTerminalDeliveryEvidence,
@@ -80,11 +79,6 @@ export async function persistPendingFinalDeliveryMarker(
     };
   }
 
-  const readCurrentSession = captureSessionWriterDeliveryRead({
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-  });
   params.assertCurrent?.();
   const sessionKey = resolveSqliteSessionKey(params.sessionKey, params.agentId);
   const now = Date.now();
@@ -169,7 +163,6 @@ export async function persistPendingFinalDeliveryMarker(
                 sessionKey: params.sessionKey,
                 storePath: params.storePath,
                 harnessCompletion,
-                ...(readCurrentSession ? { readCurrentSession } : {}),
               },
             }
           : {}),

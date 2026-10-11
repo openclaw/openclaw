@@ -32,12 +32,7 @@ export function updatePreparedSessionProfileInvolvement(
       }
       if (
         params.expectedEntry &&
-        !sessionMetadataExpectedEntryMatches(
-          database,
-          resolved.sessionKey,
-          params.expectedEntry,
-          toDatabaseOptions(resolved),
-        )
+        !sessionMetadataExpectedEntryMatches(database, resolved.sessionKey, params.expectedEntry)
       ) {
         return { accepted: false, changed: false };
       }

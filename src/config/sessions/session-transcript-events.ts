@@ -1,20 +1,11 @@
 import path from "node:path";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
-import {
-  isIncognitoSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.paths.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type {
   SessionTranscriptReadScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
-import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
 import {
   prepareSqliteTranscriptReadScope,
   resolveSqliteTranscriptReadScope,
@@ -22,14 +13,6 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { captureSessionActorTranscriptRead } from "./session-actor-transcript-read.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
-import {
-  captureIncognitoSessionHistoryBinding,
-  captureIncognitoSessionSource,
-} from "./session-incognito-binding.js";
-import {
-  readIncognitoSessionHistory,
-  type IncognitoSessionHistoryBinding,
-} from "./session-incognito-history-read.js";
 import {
   assertSessionStoreReadCandidate,
   captureSessionStoreCandidateIdentities,
@@ -50,7 +33,6 @@ import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-
 /** Load durable raw events through the existing full-transcript hydration owner. */
 export async function loadTranscriptEvents(
   scope: SessionTranscriptReadScope,
-  suppliedIncognito?: IncognitoSessionHistoryBinding,
 ): Promise<TranscriptEvent[]> {
   const memory = captureSessionActorTranscriptRead(scope);
   if (memory) {
@@ -61,22 +43,6 @@ export async function loadTranscriptEvents(
     const result = await memory.read("session.history.hydrate", {
       maxEventBytes: scope.maxEventBytes,
     });
-    if (result.kind !== "full") {
-      throw new Error("Transcript events received a bounded hydration result");
-    }
-    return result.snapshot.events;
-  }
-  const source = suppliedIncognito ? undefined : captureIncognitoSessionSource(scope);
-  if (source && "kind" in source) {
-    source.assertCurrent();
-    return [];
-  }
-  const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryBinding(scope);
-  if (incognito) {
-    const result = await readIncognitoSessionHistory(incognito, scope, (target) => ({
-      type: "session.history.hydrate",
-      input: { ...target, maxEventBytes: scope.maxEventBytes },
-    }));
     if (result.kind !== "full") {
       throw new Error("Transcript events received a bounded hydration result");
     }
@@ -97,21 +63,6 @@ export async function loadTranscriptEvents(
     ...(scope.storePath ? { storePath: path.resolve(scope.storePath) } : {}),
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   } satisfies SessionTranscriptReadScope;
-  if (
-    isIncognitoSessionKey(captured.sessionKey) ||
-    (captured.storePath &&
-      isIncognitoOpenClawAgentSqlitePath(captured.storePath, {
-        agentId: normalizeAgentId(
-          captured.agentId ??
-            parseAgentSessionKey(captured.sessionKey)?.agentId ??
-            captured.defaultAgentId,
-        ),
-        env: captured.env,
-      }))
-  ) {
-    // Incognito SQLite stays with its process-held owner until the actor cutover.
-    return readRestoredSessionTranscript(captured, () => loadTranscriptEventsSync(captured));
-  }
   const storePath =
     captured.storePath ??
     resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolveSqliteTranscriptReadScope(captured)));

@@ -1,22 +1,64 @@
-import type { SessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import {
+  getSessionActorStorageBinding,
+  type captureSessionActorStorageOwner,
+} from "../config/sessions/session-actor-storage-binding.js";
+import { IncognitoSessionMissingError } from "../state/incognito-session-error.js";
+import type { SqliteTrajectoryRuntimeAppend } from "./runtime-store.contract.js";
 import type { TrajectoryEvent } from "./types.js";
 
 /** The runtime owns opt-in; this sink only queues its already-approved bounded events. */
 export function createMemoryTrajectoryRuntimeSink(
-  binding: SessionActorStorageBinding,
-  params: { sessionId: string; maxRuntimeFileBytes: number; assertCommitAllowed?: () => void },
+  source: NonNullable<ReturnType<typeof captureSessionActorStorageOwner>>,
+  params: {
+    sessionId: string;
+    sessionKey?: string;
+    maxRuntimeFileBytes: number;
+    assertCommitAllowed?: () => void;
+  },
 ) {
-  const { actor } = binding;
-  const authority = {
-    ...binding.authority,
-    assertCurrent() {
-      binding.authority.assertCurrent();
-      params.assertCommitAllowed?.();
-    },
+  const { authority } = source;
+  const sessionKey =
+    params.sessionKey ??
+    source.owner?.readSessionById(params.sessionId, authority)?.sessionKey ??
+    source.binding?.actor.target.sessionKey;
+  const selected = () => {
+    const binding = getSessionActorStorageBinding({}) ?? source.binding;
+    return binding?.agentId === source.agentId &&
+      binding.path === source.path &&
+      binding.actor.target.sessionKey === sessionKey
+      ? binding
+      : undefined;
   };
-  if (actor.snapshot(authority)?.entry?.sessionId !== params.sessionId) {
+  const bound = selected();
+  const current = bound
+    ? bound.actor.snapshot(authority)
+    : sessionKey
+      ? source.owner?.readSession(sessionKey, authority)
+      : undefined;
+  if (current?.entry?.sessionId !== params.sessionId) {
     return null;
   }
+  const append = async (input: SqliteTrajectoryRuntimeAppend) => {
+    const binding = selected();
+    const actor =
+      binding?.actor ??
+      (sessionKey
+        ? await source.owner?.acquireExisting(sessionKey, {
+            assertCurrent: authority.assertCurrent,
+            assertReadable: authority.assertCurrent,
+          })
+        : undefined);
+    if (!actor) {
+      throw new IncognitoSessionMissingError();
+    }
+    try {
+      return await actor.storage!.mutate({ type: "session.trajectory.append", input }, authority);
+    } finally {
+      if (!binding) {
+        await actor.release();
+      }
+    }
+  };
   let pending = new Map<TrajectoryEvent, number>();
   let queuedBytes = 0;
   let discardPrevious = false;
@@ -43,19 +85,12 @@ export function createMemoryTrajectoryRuntimeSink(
     pending = new Map();
     queuedBytes = 0;
     discardPrevious = false;
-    flushing = actor
-      .storage!.mutate(
-        {
-          type: "session.trajectory.append",
-          input: {
-            sessionId: params.sessionId,
-            events: [...batch.keys()],
-            discardPrevious: batchDiscard,
-            maxRuntimeBytes: params.maxRuntimeFileBytes,
-          },
-        },
-        authority,
-      )
+    flushing = append({
+      sessionId: params.sessionId,
+      events: [...batch.keys()],
+      discardPrevious: batchDiscard,
+      maxRuntimeBytes: params.maxRuntimeFileBytes,
+    })
       .then((result) => {
         if (result.kind === "rolled-back") {
           throw new Error(result.error.message);

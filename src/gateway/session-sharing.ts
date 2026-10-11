@@ -709,7 +709,6 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
         params,
         authorization,
         () => consuming.sharing!,
-        authorizedTargets,
       );
       return authorization;
     })(),

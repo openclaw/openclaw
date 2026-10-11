@@ -13,6 +13,7 @@ import {
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
+import { SessionWorkStartChangedError } from "./work-start-error.js";
 
 /** The write settled; callers must not retry it as a rolled-back operation. */
 export class SessionActorStorageCommittedError<Value> extends Error {
@@ -33,6 +34,8 @@ export function readSessionActorStorageResult<Value>(
   }
   const error = outcome.error;
   switch (error.name) {
+    case "SessionWorkStartChangedError":
+      throw new SessionWorkStartChangedError(error.message);
     case "ModelSelectionLockedError":
       throw new ModelSelectionLockedError(error.message);
     case "SqliteTranscriptMutationConflictError":

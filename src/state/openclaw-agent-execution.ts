@@ -9,7 +9,6 @@ import { assertAgentDeletionExecutionCleanupAccess } from "./agent-deletion-clea
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import type { OpenClawAgentDatabaseExecution } from "./openclaw-agent-execution-contract.js";
-import { createAgentDatabaseExecutionCapture } from "./openclaw-agent-execution-incognito.js";
 import {
   createAgentDatabaseExecution,
   type AgentDatabaseExecutionState,
@@ -31,12 +30,6 @@ const executionState = resolveGlobalSingleton<AgentDatabaseExecutionState>(
 );
 const executions = executionState.owners;
 
-/** File captures stay synchronous; explicit ephemeral targets await their pinned actor. */
-export const captureOpenClawAgentDatabaseExecution = createAgentDatabaseExecutionCapture(
-  executions,
-  captureFileAgentDatabaseExecution,
-);
-
 /** Borrow an existing physical owner without opening or preparing a writer. */
 export function captureExistingOpenClawAgentDatabaseExecution(
   options: { path: string; env?: NodeJS.ProcessEnv },
@@ -45,12 +38,14 @@ export function captureExistingOpenClawAgentDatabaseExecution(
   return borrowExistingAgentDatabaseExecution(
     executions,
     options,
-    constraints ? (target) => captureFileAgentDatabaseExecution(target, constraints) : undefined,
+    constraints
+      ? (target) => captureOpenClawAgentDatabaseExecution(target, constraints)
+      : undefined,
   );
 }
 
 /** Borrow before callers yield; native opening stays lazy and release joins owned work. */
-function captureFileAgentDatabaseExecution(
+export function captureOpenClawAgentDatabaseExecution(
   options: OpenClawAgentDatabaseOptions,
   constraints: AgentDatabaseExecutionCaptureConstraints = {},
 ): OpenClawAgentDatabaseExecution {
@@ -71,7 +66,7 @@ function captureFileAgentDatabaseExecution(
       assertAgentDatabaseExecutionCreationIdentity(
         pathname,
         expectedCreationIdentity,
-        expectedCreationIdentity.key.startsWith("path:") && existing?.kind === "file"
+        expectedCreationIdentity.key.startsWith("path:") && existing
           ? existing.creationIdentity
           : identity,
         constraints.expectedIdentity,
@@ -91,9 +86,6 @@ function captureFileAgentDatabaseExecution(
         executionState,
       );
     }
-  }
-  if (existing.kind !== "file") {
-    throw new Error("Agent namespace belongs to an incognito execution owner");
   }
   if (existing.agentId !== agentId) {
     throw new Error(

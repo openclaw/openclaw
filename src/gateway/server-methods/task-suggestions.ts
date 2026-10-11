@@ -12,7 +12,6 @@ import {
   validateTaskSuggestionsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveProjectCheckout } from "../../projects/project-checkout.js";
@@ -34,7 +33,6 @@ import {
   resolveSessionMutationAuthorization,
   resolveSessionSharingTarget,
 } from "../session-sharing.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils-store.js";
 import {
   beginTaskSuggestionAcceptance,
   createTaskSuggestion,
@@ -282,26 +280,19 @@ async function deliverSuggestedTaskToSourceSession(
   const { agentId } = params;
   const fail = (error: NonNullable<Parameters<RespondFn>[2]>) =>
     restoreSuggestedTaskClaim({ taskId: params.taskId, options: params.options, error });
-  let sourceFacts: SessionFactsRead<PreparedSessionMutationFacts> | undefined;
-  let nativeSource: ReturnType<typeof loadGatewaySessionEntryReadOnly> | undefined;
+  let sourceFacts: SessionFactsRead<PreparedSessionMutationFacts>;
   try {
-    if (captureIncognitoSessionSource({ sessionKey: params.suggestion.sessionKey, agentId })) {
-      sourceFacts = await prepareSessionMutationFacts({
-        cfg: params.options.context.getRuntimeConfig(),
-        sessionKey: params.suggestion.sessionKey,
-        agentId,
-        allowMissing: true,
-      });
-    } else {
-      nativeSource = loadGatewaySessionEntryReadOnly(params.suggestion.sessionKey, { agentId });
-    }
+    sourceFacts = await prepareSessionMutationFacts({
+      cfg: params.options.context.getRuntimeConfig(),
+      sessionKey: params.suggestion.sessionKey,
+      agentId,
+      allowMissing: true,
+    });
   } catch (error) {
     return fail(errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
   }
   try {
-    const source = sourceFacts
-      ? sourceFacts.readCurrent(params.options.context.getRuntimeConfig()).target
-      : nativeSource;
+    const source = sourceFacts.readCurrent(params.options.context.getRuntimeConfig()).target;
     if (!source?.entry?.sessionId) {
       return fail(
         errorShape(
@@ -328,7 +319,7 @@ async function deliverSuggestedTaskToSourceSession(
       sessionKey: params.suggestion.sessionKey,
     });
   } finally {
-    sourceFacts?.release();
+    sourceFacts.release();
   }
 }
 

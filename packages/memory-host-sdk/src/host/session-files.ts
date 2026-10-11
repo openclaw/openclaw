@@ -25,8 +25,6 @@ import {
   isCronRunSessionKey,
   isExecCompletionEvent,
   isHeartbeatUserMessage,
-  isIncognitoOpenClawAgentSqlitePath,
-  isIncognitoSessionKey,
   isSessionArchiveArtifactName,
   isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
@@ -524,30 +522,14 @@ async function yieldSessionEntryParseIfNeeded(
 export async function buildSessionEntry(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
-  source?: {
-    memoryEntry(
-      absPath: string,
-      options: BuildSessionEntryOptions,
-    ): Promise<SessionFileEntry | null>;
-  },
 ): Promise<SessionFileEntry | null> {
-  if (source) {
-    return source.memoryEntry(absPath, opts);
-  }
   const identity = resolveBuildSessionSqliteIdentity(absPath, opts);
   const incognito = identity && captureIncognitoMemoryReader(identity);
   if (incognito) {
     return incognito.memoryEntry(absPath, opts);
   }
   const prepare = async () => {
-    // Unbound private stores retain their native owner until the atomic cutover.
-    if (
-      identity &&
-      !opts.onTranscriptMessage &&
-      opts.parseYieldEveryLines === undefined &&
-      !isIncognitoSessionKey(opts.sessionKey) &&
-      !isIncognitoOpenClawAgentSqlitePath(identity.storePath, { agentId: identity.agentId })
-    ) {
+    if (identity && !opts.onTranscriptMessage && opts.parseYieldEveryLines === undefined) {
       const options = { ...opts, ...identity };
       for (let attempt = 0; attempt < 2; attempt++) {
         const redaction = captureSensitiveTextRedactionSnapshot();

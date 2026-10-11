@@ -34,14 +34,13 @@ import {
 } from "../../agents/tool-policy.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import {
   prepareGatewaySessionEntryReadOnlyInWorker,
   type GatewaySessionEntryReadPlan,
 } from "../../gateway/session-utils-store-worker.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { FollowupRun } from "./queue/types.js";
@@ -57,7 +56,6 @@ import {
   type CapturedReplyToolAuthoritySession,
 } from "./reply-tool-authority-cohort.js";
 import { prepareMemoryReplyToolAuthorityCaller } from "./reply-tool-authority-memory.js";
-import { prepareNativeReplyToolAuthorityRead } from "./reply-tool-authority.native-read.js";
 
 export type ReplyToolAuthorityInput = {
   operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -363,14 +361,14 @@ export async function resolveFollowupRunToolAuthorityFingerprintAsync(
   assertCurrent: () => void = () => {},
 ): Promise<string> {
   const sessionKey = snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey;
-  const memory = sessionKey && getSessionActorStorageBinding({ sessionKey });
+  const memory =
+    sessionKey &&
+    captureSessionEntryMetadataRead({ sessionKey }, () =>
+      assertCurrentOperatorAuthority(snapshot.operatorAuthority),
+    );
   if (memory && !isToolAuthorityReadCaptureActive()) {
     assertCurrent();
-    return resolvePreparedReplyToolAuthorityFingerprint(
-      snapshot,
-      route,
-      memory.actor.snapshot(memory.authority)?.entry,
-    );
+    return resolvePreparedReplyToolAuthorityFingerprint(snapshot, route, memory.readCurrent());
   }
   if (isToolAuthorityReadCaptureActive()) {
     const owner = prepareReplyToolAuthority(snapshot);
@@ -458,7 +456,11 @@ export function prepareReplyToolAuthority(
   const env = { ...process.env };
   const cwd = process.cwd();
   const sessionKey = snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey;
-  const memory = sessionKey && getSessionActorStorageBinding({ sessionKey });
+  const memory =
+    sessionKey &&
+    captureSessionEntryMetadataRead({ sessionKey }, () =>
+      assertCurrentOperatorAuthority(snapshot.operatorAuthority),
+    );
   let captured: CapturedReplyToolAuthoritySession | undefined;
   let capturedReadPlan: GatewaySessionEntryReadPlan | undefined;
   const assertClassificationSession = (
@@ -479,11 +481,7 @@ export function prepareReplyToolAuthority(
     consumeInitialSelection = false,
   ) => {
     if (memory) {
-      return resolvePreparedReplyToolAuthorityFingerprint(
-        input,
-        route,
-        memory.actor.snapshot(memory.authority)?.entry,
-      );
+      return resolvePreparedReplyToolAuthorityFingerprint(input, route, memory.readCurrent());
     }
     let selectedFingerprint: string | undefined;
     const assertCurrent = () => {
@@ -559,11 +557,7 @@ export function prepareReplyToolAuthority(
     requestedRoute: Object.freeze({ provider: snapshot.run.provider, model: snapshot.run.model }),
     fingerprint: (route?: ReplyToolAuthorityRoute) =>
       memory
-        ? resolvePreparedReplyToolAuthorityFingerprint(
-            snapshot,
-            route,
-            memory.actor.snapshot(memory.authority)?.entry,
-          )
+        ? resolvePreparedReplyToolAuthorityFingerprint(snapshot, route, memory.readCurrent())
         : resolveFollowupRunToolAuthorityFingerprint(snapshot, route),
     fingerprintAsync: async (route?: ReplyToolAuthorityRoute) =>
       memory
@@ -589,7 +583,7 @@ export function prepareReplyToolAuthority(
         ? resolvePreparedReplyToolAuthorityFingerprint(
             projectInput(overlay),
             route,
-            memory.actor.snapshot(memory.authority)?.entry,
+            memory.readCurrent(),
           )
         : resolveFollowupRunToolAuthorityFingerprint(projectInput(overlay), route);
     },
@@ -599,31 +593,20 @@ export function prepareReplyToolAuthority(
     async (caller, expected, route, assertActive) => {
       if (memory) {
         const projected = projectInput(caller);
-        const prepared = prepareMemoryReplyToolAuthorityCaller(memory, assertActive, (entry) =>
-          [snapshot, projected].every(
-            (input) =>
-              resolvePreparedReplyToolAuthorityFingerprint(input, route, entry) === expected,
-          ),
+        const prepared = prepareMemoryReplyToolAuthorityCaller(
+          () => memory.readCurrent(),
+          assertActive,
+          (entry) =>
+            [snapshot, projected].every(
+              (input) =>
+                resolvePreparedReplyToolAuthorityFingerprint(input, route, entry) === expected,
+            ),
         );
         recordPreparedToolAuthorityRead({
           ...prepared,
           assertLegacyCurrent: () => prepared.assertPrepared([]),
         });
         return prepared;
-      }
-      if (isIncognitoSessionKey(snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey)) {
-        if (!captured) {
-          await prepare(snapshot, route);
-        }
-        const original = captured;
-        if (!original) {
-          throw new Error("Tool authority classification source is unavailable");
-        }
-        recordPreparedToolAuthorityRead(
-          prepareNativeReplyToolAuthorityRead(original, assertActive),
-        );
-        // Published lineage is SQL-free; mutable native policy still uses compatibility.
-        return undefined;
       }
       // The consuming phase rereads this plan's original sources before checking policy.
       if (!captured) {

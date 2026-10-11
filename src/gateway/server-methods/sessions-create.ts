@@ -367,7 +367,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     let sessionAgentId = catalogAgentId ?? explicitlyRequestedAgent.agentId;
     if (repository) {
-      sessionKey ??= buildDashboardSessionKey(sessionAgentId);
+      sessionKey ??= buildDashboardSessionKey(sessionAgentId, { incognito: p.incognito });
     }
     let preparedWorktree: PreparedGatewaySessionLifecycle | undefined;
     const sessionExecCwd = requestedExecNode ? requestedCwd : undefined;
@@ -427,7 +427,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           preservesUnspecifiedKey = true;
         }
       }
-      targetKey ??= buildDashboardSessionKey(agentId);
+      targetKey ??= buildDashboardSessionKey(agentId, { incognito: p.incognito });
       const target = await resolveGatewaySessionStoreTargetInWorker({
         cfg,
         key: targetKey,

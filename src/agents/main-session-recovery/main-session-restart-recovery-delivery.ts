@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -69,11 +69,7 @@ export function captureRestartRecoveryDeliveryCurrent(
   input: RestartRecoveryDeliveryScope,
 ): (cfg?: OpenClawConfig) => boolean {
   const params = { ...input, deliveryContext: { ...input.deliveryContext } };
-  const source = captureIncognitoSessionSource(params);
-  const claim =
-    source && !("kind" in source)
-      ? source.actor.sessions.captureCurrent(params.sessionKey)
-      : undefined;
+  const source = captureSessionEntryMetadataRead(params, () => {});
   return (cfg = params.cfg) => {
     if (
       params.shouldContinue?.() === false ||
@@ -81,20 +77,7 @@ export function captureRestartRecoveryDeliveryCurrent(
     ) {
       return false;
     }
-    if (source && "kind" in source) {
-      source.assertCurrent();
-      return false;
-    }
-    source?.admissionSignal?.throwIfAborted();
-    claim?.assertCurrent();
-    const facts = source?.actor.sessions.readSteering(params.sessionKey);
-    const current = source
-      ? facts && {
-          ...facts,
-          restartRecoveryDeliveryContext:
-            facts.pendingFinalDeliveryContext ?? facts.restartRecoveryDeliveryContext,
-        }
-      : loadSessionEntryReadOnly(params);
+    const current = source ? source.readCurrent() : loadSessionEntryReadOnly(params);
     return (
       current?.sessionId === params.sessionId &&
       current.abortedLastRun !== true &&

@@ -45,8 +45,8 @@ targets with their original transaction ordering. One deprecation warning is
 emitted per plugin for this family. Incognito and actor-bound targets reject the
 old form with an actionable replacement error. The old exports and fields remain
 available to compile existing plugins and will be removed at the **next Plugin SDK
-major**. This target-specific deprecation does not activate actor routing for
-ordinary incognito sessions or change stored data, schema, retention, or updates.
+major**. Incognito targets use the memory actor. Durable stored data, schema,
+retention, and update behavior are unchanged.
 
 Discord and llama.cpp retain their declared OpenClaw 2026.9.2 host support.
 They use the newer prepared-expiry, DM-policy refinement, and live-catalog outcome
@@ -347,9 +347,9 @@ one warning per plugin and session-persistence family per process.
 Use the [awaited session persistence migration](/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence)
 for the complete method mapping, extension calls, and versioned provider replay
 types. Bundled code uses the awaited contracts. File-backed writes reuse the
-canonical worker writer; incognito retains its process-local owner until its
-separate cutover. Schemas, persisted bytes, and supported update paths are
-unchanged. Removal still requires explicit breaking-release approval.
+canonical worker writer; incognito uses the session actor's memory backend.
+Synchronous incognito persistence refuses access and names its awaited
+replacement. Schemas, persisted bytes, and supported update paths are unchanged. Removal still requires explicit breaking-release approval.
 
 ### Reply run-start transcript facts
 
@@ -505,30 +505,30 @@ October 1, 2026. Await `loadArchivedSessionsAsync` and
 `resolveMemorySessionTargetsAsync` from the same subpath. The replacements
 run durable archive and selector reads in the retained session worker and
 preserve selection, ordering, missing-store behavior, and result shapes.
-Process-held incognito stores keep their native owner.
+Incognito reads use committed facts from the session actor's memory backend.
 
 Bundled memory search and memory-forget use the awaited readers. The synchronous
-exports retain their signatures and behavior for existing consumers until removal
+exports retain their durable signatures and behavior for existing consumers until removal
 at the next Plugin SDK major. Deprecation is communicated through JSDoc and the
 compatibility registry; these readers emit no runtime warnings.
 
-The prepared incognito actor adapters remain inactive for ordinary unbound
-calls. Under an explicit actor binding, Memory entry, reset-cutoff, corpus, and
-selector reads retain that actor; a selected missing actor returns the normal
-missing result, while a retained ended actor rejects. Archive discovery returns
-no durable artifacts for that actor. Private transcripts are not added to the
-durable Memory ingestion corpus.
+Memory entry, reset-cutoff, corpus, and selector reads capture the incognito
+memory namespace, including calls without an explicit actor binding. Missing
+state returns the normal missing result without creating a session; a closed
+handle cannot reopen it. Archive discovery returns no durable artifacts for
+incognito. Private transcripts are not added to the durable Memory ingestion
+corpus.
 
 The synchronous `loadMemorySessionMetadata` and
 `loadMemorySessionMetadataBatch` helpers remain durable ingestion admission
 guards. `statSessionEntrySync`, batch transcript stats, and synchronous archive
-and selector readers retain their existing native/offline contracts. Explicitly
-bound actor calls refuse synchronous database access with
+and selector readers retain their existing durable/offline contracts. Incognito
+targets refuse synchronous storage access with
 `IncognitoSessionSyncAccessError`: await `resolveMemorySessionTargetsAsync`,
 `loadArchivedSessionsAsync`, or `buildSessionEntry` as named by the error.
-Worker snapshot kernels and supplied transcript statistics remain synchronous;
-this preparation does not change production incognito selection or the
-released synchronous full-row session getter.
+Worker snapshot kernels and supplied transcript statistics remain synchronous.
+The released durable synchronous full-row session getter retains its separate
+compatibility contract.
 
 ### Memory read missing results
 

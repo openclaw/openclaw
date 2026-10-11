@@ -1,4 +1,4 @@
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { probePathSuffixAliasesSync, resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
@@ -14,24 +14,6 @@ type OpenClawAgentSqlitePathOptions = {
 };
 
 export const INCOGNITO_AGENT_SQLITE_BASENAME = "incognito-openclaw-agent.sqlite";
-
-class IncognitoAgentDatabasePathCollisionError extends Error {
-  readonly path: string;
-
-  constructor(pathname: string) {
-    super(
-      `Incognito agent database sentinel path already exists: ${pathname}. This filename is reserved for in-memory incognito state; move or rename the file and retry.`,
-    );
-    this.name = "IncognitoAgentDatabasePathCollisionError";
-    this.path = pathname;
-  }
-}
-
-export function assertIncognitoAgentDatabasePathAvailable(pathname: string): void {
-  if (existsSync(pathname)) {
-    throw new IncognitoAgentDatabasePathCollisionError(pathname);
-  }
-}
 
 const agentSqlitePaths = new Map<string, string>();
 // Keep the FIFO cursor so eviction never rescans deleted Map entries.
@@ -61,7 +43,7 @@ export function resolveOpenClawAgentSqlitePath(options: OpenClawAgentSqlitePathO
   return resolved;
 }
 
-/** Resolve the lexical sentinel path that keys one agent's process-held incognito database. */
+/** Resolve the lexical sentinel path used by an agent's memory session owner. */
 export function resolveIncognitoOpenClawAgentSqlitePath(
   options: Omit<OpenClawAgentSqlitePathOptions, "path">,
 ): string {

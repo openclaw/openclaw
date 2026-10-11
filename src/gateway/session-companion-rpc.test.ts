@@ -1,12 +1,14 @@
-import { isMainThread } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayErrorDetailCodes } from "../../packages/gateway-protocol/src/index.js";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import * as profileReader from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -15,7 +17,13 @@ import { sessionCompanionHandlers } from "./session-companion-rpc.js";
 import type { SessionCompanionService } from "./session-companion.js";
 import { roleClient, rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
 
-afterEach(() => closeOpenClawAgentDatabasesForTest());
+const memoryOwners: Array<{ agentId: string; path: string }> = [];
+afterEach(() => {
+  for (const owner of memoryOwners.splice(0)) {
+    memorySessionActorOwners.closeDatabase(owner);
+  }
+  closeOpenClawAgentDatabasesForTest();
+});
 
 async function invoke(
   method: keyof typeof sessionCompanionHandlers,
@@ -41,8 +49,7 @@ async function invoke(
 }
 
 describe("session companion RPC", () => {
-  it("keeps an incognito source native through captured operator authority for durable side chat writes", async () => {
-    expect(isMainThread).toBe(true);
+  it("keeps a memory incognito source current through operator authority for durable side chat writes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForEmail("incognito-companion@example.test");
       const client = {
@@ -50,16 +57,31 @@ describe("session companion RPC", () => {
         connId: "incognito-companion-connection",
       };
       const sessionKey = "agent:main:dashboard:incognito-companion-source";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
+      const location = {
+        agentId: "main",
+        path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+      };
+      memoryOwners.push(location);
+      const created = await withSessionActorStorage(
+        { agentId: "main", sessionKey, storePath: location.path },
         {
-          sessionId: "incognito-companion-source",
-          updatedAt: Date.now(),
-          incognito: true,
-          visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: profile.id },
+          lifetime: { assertCurrent() {}, assertReadable() {} },
+          authority: { assertCurrent() {}, authorize() {} },
+          create: true,
         },
+        () =>
+          upsertSessionEntryCore(
+            { agentId: "main", sessionKey },
+            {
+              sessionId: "incognito-companion-source",
+              updatedAt: Date.now(),
+              incognito: true,
+              visibility: "shared",
+              createdActor: { type: "human", source: "profile", id: profile.id },
+            },
+          ),
       );
+      expect(created?.sessionId).toBe("incognito-companion-source");
       const target = { agentId: "main", sessionKey: "agent:main:companion-durable-target" };
       await upsertSessionEntryCore(target, {
         sessionId: "companion-durable-target",

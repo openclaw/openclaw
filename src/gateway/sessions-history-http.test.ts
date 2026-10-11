@@ -7,6 +7,8 @@ import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as sessionEntryRows from "../config/sessions/session-accessor.sqlite-status.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -14,6 +16,7 @@ import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { persistUserTurnTranscript } from "../sessions/user-turn-transcript.test-support.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { setAvatar, setDisplayName } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
@@ -250,6 +253,91 @@ describe("session history HTTP endpoints", () => {
     }
     testState.sessionConfig = undefined;
     testState.agentsConfig = undefined;
+  });
+
+  test("reads unbound memory history without creating missing owners and withholds a closed owner's snapshot", async () => {
+    await createSessionStoreFile();
+    await withGatewayHarness(async (harness) => {
+      const sessionKey = "agent:main:dashboard:incognito-http-history";
+      const sessionId = "memory-http-history";
+      const text = "Private memory reply";
+      const location = {
+        agentId: AGENT_ID,
+        path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: AGENT_ID }),
+      };
+      expect(memorySessionActorOwners.read(location)).toBeUndefined();
+      try {
+        const missing = await fetchSessionHistory(harness.port, sessionKey);
+        expect(missing.status).toBe(404);
+        expectErrorResponse(await missing.json(), {
+          type: "not_found",
+          message: `Session not found: ${sessionKey}`,
+        });
+        expect(memorySessionActorOwners.read(location)).toBeUndefined();
+
+        const authority = { assertCurrent() {}, authorize() {} };
+        const created = await withSessionActorStorage(
+          { agentId: AGENT_ID, sessionKey, storePath: location.path },
+          {
+            create: true,
+            authority,
+            lifetime: { assertCurrent() {}, assertReadable() {} },
+          },
+          ({ actor }) =>
+            actor.storage.mutate(
+              {
+                type: "session.entry.create",
+                input: {
+                  entry: {
+                    sessionId,
+                    updatedAt: Date.now(),
+                    incognito: true,
+                    lifecycleRevision: "memory-http-lifecycle",
+                  },
+                  transcriptEvents: [
+                    { type: "session", id: sessionId, version: 3, cwd: "/synthetic" },
+                    {
+                      type: "message",
+                      id: "memory-http-reply",
+                      parentId: null,
+                      message: makeTranscriptAssistantMessage({ text }),
+                    },
+                  ],
+                },
+              },
+              authority,
+            ),
+        );
+        expect(created?.kind).toBe("committed");
+
+        const history = await readSessionHistoryBody(harness.port, sessionKey);
+        expect(history.sessionKey).toBe(sessionKey);
+        expect(history.messages?.map((message) => message.content?.[0]?.text)).toEqual([text]);
+
+        const readSnapshot = sessionHistoryState.readSessionHistorySnapshotAsync;
+        const snapshotSpy = vi
+          .spyOn(sessionHistoryState, "readSessionHistorySnapshotAsync")
+          .mockImplementationOnce(async (params) => {
+            const snapshot = await readSnapshot(params);
+            memorySessionActorOwners.closeDatabase(location);
+            return snapshot;
+          });
+        try {
+          const closed = await fetchSessionHistory(harness.port, sessionKey);
+          expect(closed.status).toBe(404);
+          expectErrorResponse(await closed.json(), {
+            type: "not_found",
+            message: `Session not found: ${sessionKey}`,
+          });
+          expect(snapshotSpy).toHaveBeenCalledOnce();
+          expect(memorySessionActorOwners.read(location)).toBeUndefined();
+        } finally {
+          snapshotSpy.mockRestore();
+        }
+      } finally {
+        memorySessionActorOwners.closeDatabase(location);
+      }
+    });
   });
 
   test("uses SSE only for an explicit acceptable event-stream media range", async () => {

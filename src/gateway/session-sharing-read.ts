@@ -23,10 +23,6 @@ import {
   SessionSharingProfileFactsChangedError,
 } from "./session-mutation-authorization-error.js";
 import {
-  hasNativeIncognitoSessionSharingSource,
-  type IncognitoSessionSharingTarget,
-} from "./session-sharing-incognito.js";
-import {
   authorizeSessionSharingTarget,
   canManageSessionSharing,
   isGatewayAdmin,
@@ -345,10 +341,9 @@ export function createSessionSharingInputAuthority(
   ownedParams: { client: GatewayClient | null; preparedProfiles?: PreparedSessionSharingProfiles },
   authorization: SessionMutationAuthorization,
   readSharing: () => Parameters<Parameters<typeof withSessionSharingTarget>[1]>[0],
-  targets: readonly IncognitoSessionSharingTarget[],
 ): SessionMutationAuthorization["admittedInputAuthority"] {
   const { withCurrent, withPreparedCurrent } = authorization;
-  if (!withCurrent || !withPreparedCurrent || hasNativeIncognitoSessionSharingSource(targets)) {
+  if (!withCurrent || !withPreparedCurrent) {
     return undefined;
   }
   return {

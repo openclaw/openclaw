@@ -21,7 +21,6 @@ import {
   openOpenClawAgentDatabaseReadOnly,
   withOpenClawAgentDatabaseReadOnly,
 } from "../state/openclaw-agent-db-readonly.js";
-import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
 import { iterateSqliteQuerySync } from "./kysely-sync.js";
 import {
@@ -114,9 +113,6 @@ export async function executeUsageCostWorker(
   };
   const readStore = <T>(agentId: string, storePath: string, read: () => T) => {
     const database = target(agentId, storePath);
-    if (isIncognitoOpenClawAgentSqlitePath(database.path, { agentId: database.agentId, env })) {
-      throw new Error("Memory transcript reads require the host owner");
-    }
     return control.runNativeSection(() => readDatabase(database, read));
   };
   const access: UsageCostCollectionAccess = {
@@ -124,14 +120,10 @@ export async function executeUsageCostWorker(
     materializeArchive: (sourcePath) =>
       control.runNativeSection(() => materializeSessionArchiveForRead(sourcePath)),
     readSqliteMetadata: (storePath, read) => readStore(location.agentId, storePath, read),
-    listSqliteInstances: async (agentId, storePath) => {
-      const database = target(agentId, storePath);
-      return isIncognitoOpenClawAgentSqlitePath(database.path, { agentId: database.agentId, env })
-        ? host("memory-instances", { agentId, storePath })
-        : readStore(agentId, storePath, () =>
-            listSessionTranscriptInstances({ agentId, storePath, env, projection: "list" }),
-          );
-    },
+    listSqliteInstances: async (agentId, storePath) =>
+      readStore(agentId, storePath, () =>
+        listSessionTranscriptInstances({ agentId, storePath, env, projection: "list" }),
+      ),
     readSqliteStats: async (markers) => {
       const result: Array<SessionTranscriptStats | undefined> = Array(markers.length);
       const groups = new Map<string, Array<{ marker: SqliteSessionFileMarker; index: number }>>();
@@ -144,18 +136,9 @@ export async function executeUsageCostWorker(
       }
       for (const group of groups.values()) {
         const marker = group[0]!.marker;
-        const database = target(marker.agentId, marker.storePath);
-        const stats = isIncognitoOpenClawAgentSqlitePath(database.path, {
-          agentId: database.agentId,
-          env,
-        })
-          ? await host(
-              "memory-stats",
-              group.map((item) => item.marker),
-            )
-          : await readStore(marker.agentId, marker.storePath, () =>
-              readTranscriptStatsBatchReadOnlySync(group.map((item) => ({ ...item.marker, env }))),
-            );
+        const stats = await readStore(marker.agentId, marker.storePath, () =>
+          readTranscriptStatsBatchReadOnlySync(group.map((item) => ({ ...item.marker, env }))),
+        );
         for (const [index, item] of group.entries()) {
           result[item.index] = stats[index] ?? undefined;
         }
@@ -164,18 +147,14 @@ export async function executeUsageCostWorker(
     },
   };
   const inventory = async (sessionsDir?: string) =>
-    input.transcriptFiles
-      ? (await resolveUsageCostTranscriptFiles(input.transcriptFiles, access)).filter(
-          (file) => file !== undefined,
-        )
-      : listUsageCountedTranscriptStats(location.agentId, {
-          ...access,
-          storePath: location.storePath,
-          sessionsDir,
-        });
+    listUsageCountedTranscriptStats(location.agentId, {
+      ...access,
+      storePath: location.storePath,
+      sessionsDir,
+    });
   if (operation.kind === "inventory") {
-    const selected = operation.sessionFiles ?? input.transcriptFiles;
-    let files = selected
+    const selected = operation.sessionFiles;
+    const files = selected
       ? (await resolveUsageCostTranscriptSources(selected, access)).filter(
           (file) => file !== undefined,
         )
@@ -184,14 +163,6 @@ export async function executeUsageCostWorker(
           storePath: location.storePath,
           minMtimeMs: operation.minMtimeMs,
         });
-    if (
-      input.transcriptFiles &&
-      operation.sessionFiles === undefined &&
-      operation.minMtimeMs !== undefined
-    ) {
-      const minMtimeMs = operation.minMtimeMs;
-      files = files.filter((file) => !(file.mtimeMs < minMtimeMs));
-    }
     return {
       kind: "inventory",
       files: files.map(({ kind, sourcePath, sessionId, mtimeMs }) => ({
@@ -215,10 +186,6 @@ export async function executeUsageCostWorker(
     operation.kind === "sessions"
       ? selectedFiles.flatMap((file) => (file ? [file.filePath] : []))
       : undefined;
-  const memoryCache = isIncognitoOpenClawAgentSqlitePath(location.databasePath, {
-    agentId: location.agentId,
-    env,
-  });
   const cacheDatabase = input.databases.find(
     (entry) => entry.path === location.databasePath && entry.agentId === location.agentId,
   );
@@ -226,18 +193,6 @@ export async function executeUsageCostWorker(
     throw new Error("Usage cache database is not owned by this worker operation");
   }
   const readMetadata = async (): Promise<SessionCostUsageRollupRow[]> => {
-    if (memoryCache) {
-      const bytes = await host("memory-cache", { filePaths: selectedPaths });
-      return bytes.map((row) => ({
-        key: row.key,
-        updatedAt: row.updatedAt,
-        valueJson: Buffer.from(
-          row.valueJson.buffer,
-          row.valueJson.byteOffset,
-          row.valueJson.byteLength,
-        ).toString("utf8"),
-      }));
-    }
     return control.runNativeSection(() =>
       readDatabase(cacheDatabase, () => {
         try {
@@ -256,17 +211,15 @@ export async function executeUsageCostWorker(
     );
   };
   const readBody = (row: SessionCostUsageRollupRow) =>
-    memoryCache
-      ? host("memory-cache-body", row)
-      : control.runNativeSection(() =>
-          readDatabase(cacheDatabase, () => {
-            const result = withOpenClawAgentDatabaseReadOnly(
-              (opened) => readSessionCostUsageRollupBodyInDatabase(opened.db, row),
-              { ...cacheDatabase, env },
-            );
-            return result.found ? result.value : undefined;
-          }),
+    control.runNativeSection(() =>
+      readDatabase(cacheDatabase, () => {
+        const result = withOpenClawAgentDatabaseReadOnly(
+          (opened) => readSessionCostUsageRollupBodyInDatabase(opened.db, row),
+          { ...cacheDatabase, env },
         );
+        return result.found ? result.value : undefined;
+      }),
+    );
   if (operation.kind === "summary" || operation.kind === "sessions") {
     const project = async (
       rows: SessionCostUsageRollupRow[],
@@ -325,76 +278,43 @@ export async function executeUsageCostWorker(
       control.throwIfCancelled();
       return { ...result, invalidRows: [...invalidRows.values()] };
     };
-    if (!memoryCache) {
-      try {
-        return await control.runNativeSection(async () => {
-          const opened = openOpenClawAgentDatabaseReadOnly({ ...cacheDatabase, env });
-          if (!opened.found) {
-            return project([], () => null);
-          }
-          const { db } = opened.database;
-          try {
-            // sqlite-allow-raw: This dedicated read-only handle owns the complete report snapshot.
-            db.exec("BEGIN DEFERRED");
-            return await project(
-              readSessionCostUsageRollupRowsInDatabase(db, selectedPaths),
-              (row) => {
-                const body = readSessionCostUsageRollupBodyInDatabase(db, row);
-                if (!body) {
-                  throw new WorkerTaskError("Usage cache snapshot is unavailable", "unavailable");
-                }
-                return body.blob;
-              },
-            );
-          } finally {
-            try {
-              if (db.isTransaction) {
-                // sqlite-allow-raw: End this report's read-only snapshot before closing its handle.
-                db.exec("ROLLBACK");
+    try {
+      return await control.runNativeSection(async () => {
+        const opened = openOpenClawAgentDatabaseReadOnly({ ...cacheDatabase, env });
+        if (!opened.found) {
+          return project([], () => null);
+        }
+        const { db } = opened.database;
+        try {
+          // sqlite-allow-raw: This dedicated read-only handle owns the complete report snapshot.
+          db.exec("BEGIN DEFERRED");
+          return await project(
+            readSessionCostUsageRollupRowsInDatabase(db, selectedPaths),
+            (row) => {
+              const body = readSessionCostUsageRollupBodyInDatabase(db, row);
+              if (!body) {
+                throw new WorkerTaskError("Usage cache snapshot is unavailable", "unavailable");
               }
-            } finally {
-              opened.database.close();
+              return body.blob;
+            },
+          );
+        } finally {
+          try {
+            if (db.isTransaction) {
+              // sqlite-allow-raw: End this report's read-only snapshot before closing its handle.
+              db.exec("ROLLBACK");
             }
+          } finally {
+            opened.database.close();
           }
-        });
-      } catch (error) {
-        if (!isTransientSqliteError(error)) {
-          throw error;
         }
-        return project([], () => null);
+      });
+    } catch (error) {
+      if (!isTransientSqliteError(error)) {
+        throw error;
       }
+      return project([], () => null);
     }
-    // Incognito uses its live host writer; validate the complete metadata snapshot
-    // after streamed body reads instead of retaining a transaction across host awaits.
-    const changed = new Error("usage cache snapshot changed");
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const rows = await readMetadata();
-      try {
-        const result = await project(rows, async (row) => {
-          const body = await readBody(row);
-          if (!body) {
-            throw changed;
-          }
-          return body.blob;
-        });
-        const current = new Map((await readMetadata()).map((row) => [row.key, row]));
-        if (
-          current.size === rows.length &&
-          rows.every((row) => {
-            const next = current.get(row.key);
-            return next?.valueJson === row.valueJson && next.updatedAt === row.updatedAt;
-          })
-        ) {
-          control.throwIfCancelled();
-          return result;
-        }
-      } catch (error) {
-        if (error !== changed) {
-          throw error;
-        }
-      }
-    }
-    throw new WorkerTaskError("Usage cache changed while reading; retry the report", "unavailable");
   }
 
   const rows = await readMetadata();
@@ -464,7 +384,6 @@ export async function executeUsageCostWorker(
     }
     return pairs.map((pair) => prices.get(JSON.stringify(pair)));
   };
-  let readId = 0;
   const readRows = async (
     marker: SqliteSessionFileMarker,
     afterSeq: number,
@@ -474,28 +393,6 @@ export async function executeUsageCostWorker(
       return [];
     }
     const database = target(marker.agentId, marker.storePath);
-    if (isIncognitoOpenClawAgentSqlitePath(database.path, { agentId: database.agentId, env })) {
-      const request = { marker, afterSeq, throughSeq, readId: ++readId };
-      const events: Array<{ seq: number; event: unknown }> = [];
-      let chunks: Uint8Array[] = [];
-      for (;;) {
-        const frame = await host("memory-transcript", request);
-        if (frame.type === "source-unavailable") {
-          throw new Error("Usage memory transcript changed while scanning");
-        }
-        if (frame.type === "source-end") {
-          return events;
-        }
-        chunks.push(frame.bytes);
-        if (frame.final) {
-          events.push({
-            seq: frame.seq,
-            event: JSON.parse(Buffer.concat(chunks).toString("utf8")),
-          });
-          chunks = [];
-        }
-      }
-    }
     const read = async () => {
       const stored = await readStore(marker.agentId, marker.storePath, () => {
         const result = withOpenClawAgentDatabaseReadOnly(

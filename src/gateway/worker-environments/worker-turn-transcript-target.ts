@@ -9,9 +9,13 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
+import {
+  acquireSessionActorStorage,
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+  runWithSessionActorStorage,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import {
   releaseSessionSourceAuthorities,
   type PreparedSessionSourceAuthority,
@@ -26,10 +30,7 @@ import {
 } from "../../infra/sqlite-worker-identity.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseRuntime } from "../../state/openclaw-agent-db.js";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.paths.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
 
 type WorkerTranscriptSourceIdentity = Pick<
@@ -76,13 +77,10 @@ export function resolveWorkerTurnTranscriptTarget(
   turn: WorkerTranscriptTurn,
 ): BoundAgentRunSessionTarget {
   const target = captureWorkerTurnTranscriptTarget(turn);
-  const memory = getSessionActorStorageBinding(target);
-  const binding = memory ? undefined : captureIncognitoSessionBinding(target);
+  const memory = captureSessionActorStorageOwner(target, { assertCurrent() {}, authorize() {} });
   const currentEntry = memory
-    ? memory.actor.snapshot(memory.authority)?.entry
-    : binding
-      ? binding.actor.sessions.readSharing(target.sessionKey)?.entry
-      : loadSessionEntry(target);
+    ? readCapturedSessionActorEntry(memory, target.sessionKey)
+    : loadSessionEntry(target);
   if (
     currentEntry?.sessionId !== target.sessionId ||
     (target.expectedLifecycleRevision !== undefined &&
@@ -95,7 +93,7 @@ export function resolveWorkerTurnTranscriptTarget(
   return target;
 }
 
-/** Keep native compatibility guards on the worker-admitted handle through turn settlement. */
+/** Keep the chosen session backend through worker turn settlement. */
 export async function withWorkerTurnTranscriptDatabase<T>(
   turn: WorkerTranscriptTurn,
   controls: {
@@ -107,8 +105,6 @@ export async function withWorkerTurnTranscriptDatabase<T>(
 ): Promise<T> {
   const captured = captureWorkerTurnTranscriptTarget(turn);
   const target = { ...captured, storePath: nodePath.resolve(captured.storePath) };
-  const memory = getSessionActorStorageBinding(target);
-  const binding = memory ? undefined : captureIncognitoSessionBinding(target);
   let executing = false;
   let authority: Awaited<ReturnType<typeof controls.prepareAuthority>> | undefined;
   const assertPreparing = () => {
@@ -120,18 +116,11 @@ export async function withWorkerTurnTranscriptDatabase<T>(
     if (authority && !authority.isCurrent()) {
       throw new Error("Cloud worker placement authority changed during preparation");
     }
-    const current = captureWorkerTurnTranscriptTarget(turn);
-    if (
-      current.agentId !== target.agentId ||
-      current.sessionId !== target.sessionId ||
-      current.sessionKey !== target.sessionKey ||
-      nodePath.resolve(current.storePath) !== target.storePath ||
-      current.expectedLifecycleRevision !== target.expectedLifecycleRevision ||
-      current.expectedWriterRunId !== target.expectedWriterRunId
-    ) {
-      throw new Error("Cloud worker transcript target changed during preparation");
-    }
   };
+  const memory = captureSessionActorStorageOwner(target, {
+    assertCurrent: assertPreparing,
+    authorize: assertPreparing,
+  });
   const runAdmitted = async (pinned: BoundAgentRunSessionTarget) => {
     controls.assertCurrent();
     const current = resolveWorkerTurnTranscriptTarget({ ...pinned, sessionTarget: pinned });
@@ -146,35 +135,22 @@ export async function withWorkerTurnTranscriptDatabase<T>(
   };
   controls.assertCurrent();
   if (memory) {
-    authority = await controls.prepareAuthority();
-    try {
-      assertPreparing();
-      return await runAdmitted(target);
-    } finally {
-      authority.release();
-      authority = undefined;
-    }
-  }
-  if (binding) {
-    return binding.actor.sessions.withSharedState(async () => {
-      await binding.actor.sessions.read(
-        { assertCurrent: assertPreparing },
-        { sessionKey: target.sessionKey },
-        binding.admissionSignal,
-      );
-      binding.actor.assertReadable();
-      assertPreparing();
-      authority = await controls.prepareAuthority();
-      try {
-        binding.admissionSignal?.throwIfAborted();
-        binding.actor.assertReadable();
-        assertPreparing();
-        return await runAdmitted(target);
-      } finally {
-        authority.release();
-        authority = undefined;
-      }
+    const acquired = await acquireSessionActorStorage(target, {
+      authority: memory.authority,
+      lifetime: { assertCurrent: assertPreparing, assertReadable: assertPreparing },
     });
+    if (!acquired) {
+      throw new Error("Cloud worker transcript identity is no longer current");
+    }
+    try {
+      authority = await controls.prepareAuthority();
+      assertPreparing();
+      return await runWithSessionActorStorage(acquired, () => runAdmitted(target));
+    } finally {
+      authority?.release();
+      authority = undefined;
+      await acquired.actor.release();
+    }
   }
   return withSessionEntryReadOnlyInWorker(target, assertPreparing, async (read, owner) => {
     controls.assertCurrent();
@@ -222,8 +198,7 @@ export function captureWorkerTurnTranscriptSource(
     refuse: () => never;
   },
 ): SessionSourceAssertion {
-  const memory = getSessionActorStorageBinding(target);
-  const binding = memory ? undefined : captureIncognitoSessionBinding(target);
+  const memory = captureSessionActorStorageOwner(target, { assertCurrent() {}, authorize() {} });
   const expected: WorkerTranscriptSourceIdentity = predicate
     ? { ...predicate.expected }
     : {
@@ -251,28 +226,15 @@ export function captureWorkerTurnTranscriptSource(
     }
   };
   if (memory) {
-    return () => assertEntry(memory.actor.snapshot(memory.authority)?.entry);
-  }
-  if (binding) {
-    const claim = binding.actor.sessions.captureCurrent(target.sessionKey);
-    return () => {
-      binding.admissionSignal?.throwIfAborted();
-      binding.actor.assertReadable();
-      claim.assertCurrent();
-      assertEntry(binding.actor.sessions.readSharing(target.sessionKey)?.entry);
-    };
+    return () => assertEntry(readCapturedSessionActorEntry(memory, target.sessionKey));
   }
   const env = captureSessionTranscriptStorageEnvironment(process.env);
   const resolved = resolveSqliteScope({ ...target, env });
   const options = toDatabaseOptions(resolved);
   const path = resolveOpenClawAgentSqlitePath(options);
-  const incognito = isIncognitoOpenClawAgentSqlitePath(path, options);
   const identity = readDatabasePathIdentitySync(path);
   const captured = { ...target, sessionKey: resolved.sessionKey, storePath: path };
   const assertCurrent = () => {
-    if (incognito) {
-      return;
-    }
     if (!identity.key.startsWith("file:")) {
       refuse();
     }
@@ -282,9 +244,6 @@ export function captureWorkerTurnTranscriptSource(
     assertCurrent();
     assertEntry(loadSessionEntryReadOnly({ ...captured, env }));
   };
-  if (incognito) {
-    return Object.assign(assertNative, { nativeSource: true });
-  }
   return Object.assign(assertNative, {
     async prepareSessionSource(): Promise<PreparedSessionSourceAuthority> {
       assertCurrent();

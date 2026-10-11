@@ -9,7 +9,6 @@ import {
   closeOpenClawAgentDatabasesForTest,
   isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
-  resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
@@ -20,67 +19,14 @@ import {
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import * as sqliteArchive from "./session-accessor.sqlite-archive.js";
-import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
-import { readCommittedIncognitoSessionSharing } from "./session-accessor.sqlite-incognito-sharing.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
 import { createSessionMaintenanceFinalizationOperation } from "./session-accessor.sqlite-reclamation.js";
 import { isSessionMember, listSessionMembers } from "./session-sharing-store.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
-import type { SessionEntry } from "./types.js";
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("session sharing store", () => {
-  it.each(["commit", "rollback"] as const)(
-    "keeps incognito capability and membership aligned after owner reversal (%s)",
-    async (outcome) => {
-      await withOpenClawTestState({ layout: "state-only" }, async ({ env }) => {
-        const sessionKey = "agent:main:subagent:incognito-owner-reversal";
-        const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
-        const scope = { agentId: "main", env, sessionKey, storePath };
-        const options = { agentId: "main", env, path: storePath };
-        const entry: SessionEntry = {
-          sessionId: "incognito-owner-reversal",
-          updatedAt: 1,
-          incognito: true,
-          spawnedBy: "agent:main:requester-a",
-          spawnDepth: 1,
-          inheritedToolPolicyVersion: 1,
-          completionOwnerSessionKey: "agent:main:requester-a",
-        };
-        await upsertSessionEntryCore(scope, entry);
-        addSessionMember(scope, { identityId: "existing", addedBy: "owner" });
-        const database = openOpenClawAgentDatabase(options);
-        const rollback = new Error("Rollback owner reversal");
-        const reverseOwner = () =>
-          runOpenClawAgentWriteTransaction((writer) => {
-            writeSessionEntry(writer, sessionKey, {
-              ...entry,
-              completionOwnerSessionKey: "agent:main:requester-b",
-            });
-            addSessionMember(scope, { identityId: "late", addedBy: "owner" });
-            writeSessionEntry(writer, sessionKey, entry);
-            if (outcome === "rollback") {
-              throw rollback;
-            }
-          }, options);
-        if (outcome === "rollback") {
-          expect(reverseOwner).toThrow(rollback);
-        } else {
-          reverseOwner();
-        }
-        expect(loadSessionEntry(scope)?.completionOwnerSessionKey).toBe("agent:main:requester-a");
-        const published = readCommittedIncognitoSessionSharing(database.db, sessionKey);
-        expect(published?.capability?.completionOwnerSessionKey).toBe("agent:main:requester-a");
-        const expectedMembers = outcome === "commit" ? ["existing", "late"] : ["existing"];
-        expect([...(published?.membership ?? [])].toSorted()).toEqual(expectedMembers);
-        expect(listSessionMembers(scope).map((member) => member.identityId)).toEqual(
-          expectedMembers,
-        );
-      });
-    },
-  );
-
   it("joins exited maintenance leases before removing sharing fixture state", async () => {
     let fixtureRoot = "";
     const workers: Worker[] = [];

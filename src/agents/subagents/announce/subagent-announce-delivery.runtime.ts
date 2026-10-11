@@ -3,12 +3,13 @@ import { getRuntimeConfig } from "../../../config/config.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { loadSessionEntryReadOnly as loadSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { captureSessionActorStorageOwner } from "../../../config/sessions/session-actor-storage-binding.js";
 import type { SessionEntryCurrentFacts } from "../../../config/sessions/session-entry-current.types.js";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../../config/sessions/session-incognito-binding.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
+  isIncognitoSessionKey,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
@@ -110,16 +111,12 @@ export async function loadRequesterSessionEntry(
   return withSubagentSessionSource(
     { agentId: resolved.agentId, sessionKey: storageKey },
     async (source) => {
-      // Until activation, unbound requester reads retain their native owner and SQL.
-      const storePath = source
-        ? "kind" in source
-          ? source.path
-          : source.actor.path
-        : resolved.storePath;
-      const target = { ...scope, storePath };
+      const storePath = source?.path ?? resolved.storePath;
       const entry = source
-        ? await readSessionEntryReadOnlyInWorker(target)
-        : loadSessionEntry(target);
+        ? source.actor.snapshot(source.authority)?.entry
+        : isIncognitoSessionKey(storageKey)
+          ? undefined
+          : await readSessionEntryReadOnlyInWorker({ ...scope, storePath });
       return { ...resolved, storePath, entry };
     },
   );
@@ -130,25 +127,18 @@ export function captureRequesterSessionEntryCurrent(
   requesterSessionKey: string,
   explicitAgentId?: string,
 ): () => SessionEntryCurrentFacts | undefined {
-  const source = captureIncognitoSessionSource({
-    sessionKey: requesterSessionKey,
-    agentId: explicitAgentId,
-  });
+  const source = captureSessionActorStorageOwner(
+    {
+      sessionKey: requesterSessionKey,
+      agentId: explicitAgentId,
+    },
+    { assertCurrent() {}, authorize() {} },
+  );
   if (source) {
-    if ("kind" in source) {
-      return () => {
-        source.assertCurrent();
-        source.admissionSignal?.throwIfAborted();
-        return undefined;
-      };
-    }
-    const claim = source.actor.sessions.captureCurrent(requesterSessionKey);
-    return () => {
-      source.admissionSignal?.throwIfAborted();
-      source.actor.assertReadable();
-      claim.assertCurrent();
-      return source.actor.sessions.readSharing(requesterSessionKey)?.entry;
-    };
+    return () =>
+      source.binding?.actor.target.sessionKey === requesterSessionKey
+        ? source.binding.actor.snapshot(source.authority)?.entry
+        : source.owner?.readSession(requesterSessionKey, source.authority)?.entry;
   }
   const { storageKey, agentId, storePath } = resolveRequesterSessionEntryScope(
     requesterSessionKey,
@@ -172,7 +162,7 @@ export function withSubagentRequesterSource<T>(
   }
   return withSubagentSessionSource({ agentId, sessionKey: requesterSessionKey }, async (source) => {
     if (!source) {
-      return consume();
+      return consume(isIncognitoSessionKey(requesterSessionKey) ? () => false : undefined);
     }
     const readCurrent = captureRequesterSessionEntryCurrent(requesterSessionKey, agentId);
     const isCurrent = () => {
@@ -195,12 +185,8 @@ export function getSubagentRequesterSessionActivity(
   }
   const storedSessionId = requester.entry?.sessionId;
   // Active-run keys carry no physical root; selected actors use their own session identity.
-  const source = captureIncognitoSessionSource({
-    sessionKey: requesterSessionKey,
-    agentId: requester.agentId,
-  });
   const activeSessionId =
-    !source && parseAgentSessionKey(requesterSessionKey)
+    !isIncognitoSessionKey(requesterSessionKey) && parseAgentSessionKey(requesterSessionKey)
       ? resolveActiveEmbeddedRunSessionId(requesterSessionKey)
       : undefined;
   const sessionId = activeSessionId ?? storedSessionId;
@@ -218,11 +204,10 @@ export async function loadSessionEntryByKey(sessionKey: string, explicitAgentId?
   }
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   return withSubagentSessionSource({ agentId, sessionKey }, async (source) =>
-    readSessionEntryReadOnlyInWorker({
-      storePath: source ? ("kind" in source ? source.path : source.actor.path) : storePath,
-      sessionKey,
-      agentId,
-      projection: "list",
-    }),
+    source
+      ? source.actor.snapshot(source.authority)?.entry
+      : isIncognitoSessionKey(sessionKey)
+        ? undefined
+        : readSessionEntryReadOnlyInWorker({ storePath, sessionKey, agentId, projection: "list" }),
   );
 }

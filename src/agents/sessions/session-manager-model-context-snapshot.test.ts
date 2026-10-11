@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -16,6 +16,7 @@ import { readTranscriptEventRows } from "../../config/sessions/session-accessor.
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
 import type { SessionActor } from "../../config/sessions/session-actor-contract.js";
 import { createDurableSessionActorFactory } from "../../config/sessions/session-actor-durable.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import * as transcriptAnchors from "../../config/sessions/session-transcript-anchor-read.js";
 import * as transcriptReaders from "../../config/sessions/session-transcript-execution-read.js";
 import * as transcriptHydration from "../../config/sessions/session-transcript-hydration.js";
@@ -45,6 +46,11 @@ import {
   sessionManagerReadInitialContext,
 } from "./session-manager-current-turn.js";
 import { SessionManager } from "./session-manager.js";
+
+const memoryOwners: Array<{ agentId: string; path: string }> = [];
+afterEach(() => {
+  for (const owner of memoryOwners.splice(0)) memorySessionActorOwners.closeDatabase(owner);
+});
 
 async function withSelectedTranscriptReader<T>(
   target: Parameters<typeof SessionManager.openModelContextAsync>[0],
@@ -289,40 +295,6 @@ it("retains the full-context read owner until an awaited consumer settles", asyn
   });
 });
 
-it.each(["key", "path"] as const)(
-  "rejects a replaced native owner selected by %s",
-  async (route) => {
-    await withOpenClawTestState({ label: "native-context-owner" }, async (state) => {
-      const pathname = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
-      const options = { agentId: "main", path: pathname, env: state.env };
-      const original = openOpenClawAgentDatabase(options);
-      const target = {
-        agentId: "main",
-        sessionId: "empty-native-context",
-        sessionKey:
-          route === "key"
-            ? "agent:main:dashboard:incognito-context-owner"
-            : "agent:main:context-owner",
-        storePath:
-          route === "key" ? path.join(state.agentDir("main"), "openclaw-agent.sqlite") : pathname,
-        env: state.env,
-      };
-      await expect(
-        SessionManager.readSessionContextAsync(target, async (messages) => {
-          expect([...messages]).toEqual([]);
-          await closeOpenClawAgentDatabaseByPathAsync(pathname, "main");
-          expect(openOpenClawAgentDatabase(options)).not.toBe(original);
-          return "stale owner result";
-        }),
-      ).rejects.toThrow("incognito database owner is no longer current");
-      expect(
-        await SessionManager.readSessionContextAsync(target, (messages) => [...messages]),
-      ).toEqual([]);
-      expect(fs.existsSync(pathname)).toBe(false);
-    });
-  },
-);
-
 it("reads full durable context through workers and preserves the deprecated synchronous result", async () => {
   await withOpenClawTestState({ label: "context-read-async" }, async (state) => {
     const target = {
@@ -418,7 +390,14 @@ it.each(["durable", "admitted", "incognito"] as const)(
             : "agent:main:shared-context",
         storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
       };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      if (mode === "incognito") {
+        memoryOwners.push({
+          agentId: "main",
+          path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+        });
+      } else {
+        await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      }
       const seed = await SessionManager.openAsync(scope);
       const userId = await seed.appendMessageAsync({
         role: "user",
@@ -737,20 +716,14 @@ it("keeps one bounded context snapshot and observes a foreign rewrite on the nex
   });
 });
 
-it.each(
-  [false, true].flatMap((incognito) =>
-    (["append", "rewrite"] as const).map((mutation) => ({ incognito, mutation })),
-  ),
-)(
-  "reads the completed-turn snapshot across later $mutation (incognito=$incognito)",
-  async ({ incognito, mutation }) => {
+it.each(["append", "rewrite"] as const)(
+  "reads the completed durable turn snapshot across later %s",
+  async (mutation) => {
     await withOpenClawTestState({ label: "completed-model-context" }, async (state) => {
       const scope = {
         agentId: "main",
         sessionId: "completed-context",
-        sessionKey: incognito
-          ? "agent:main:dashboard:incognito-completed-context"
-          : "agent:main:completed-context",
+        sessionKey: "agent:main:completed-context",
         storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
       };
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
@@ -776,21 +749,16 @@ it.each(
         }
         source.appendMessage({ role: "user", content: "newest question", timestamp: 3 });
       };
-      const spy = incognito
-        ? undefined
-        : vi
-            .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
-            .mockImplementationOnce(async (...args) => {
-              spy!.mockRestore();
-              const result = await contextWorker.readSessionTranscriptModelContextInWorker(...args);
-              mutate();
-              return result;
-            });
+      const spy = vi
+        .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
+        .mockImplementationOnce(async (...args) => {
+          spy.mockRestore();
+          const result = await contextWorker.readSessionTranscriptModelContextInWorker(...args);
+          mutate();
+          return result;
+        });
       try {
         const pending = SessionManager.openModelContextAsync(scope, { through: terminal.anchor });
-        if (incognito) {
-          mutate();
-        }
         if (mutation === "rewrite") {
           await expect(pending).rejects.toThrow(/transcript|anchor/i);
         } else {
@@ -802,7 +770,7 @@ it.each(
           });
         }
       } finally {
-        spy?.mockRestore();
+        spy.mockRestore();
       }
     });
   },

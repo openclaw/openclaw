@@ -1,4 +1,3 @@
-import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds } from "../agents/agent-scope.js";
@@ -7,10 +6,7 @@ import { resolveAgentMainSessionKey, type SessionEntry } from "../config/session
 import { collectCanonicalSessionLookupKeys } from "../config/sessions/main-session-key.js";
 import { listSessionChildEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntryReadScope } from "../config/sessions/session-accessor.types.js";
-import {
-  captureSessionActorStorageOwner,
-  getSessionActorStorageBinding,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { SessionEntryChangedDuringReadError } from "../config/sessions/session-entry-read-errors.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { attachSessionEntrySnapshots } from "../config/sessions/session-entry-snapshot-values.js";
@@ -29,7 +25,6 @@ import {
   prepareSessionRowPublicationScope,
   sessionChangeAffectsStoredRow,
 } from "../sessions/session-row-facts.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import {
   resolveSessionStoreIdentity,
   resolveStoredSessionKeyForAgentStore,
@@ -207,64 +202,28 @@ function prepareGatewaySessionStoreTarget(
     agentId: params.agentId,
     preserveQualifiedAddress: params.preserveQualifiedAddress,
   });
-  const memory = isIncognitoSessionKey(canonicalKey)
-    ? getSessionActorStorageBinding({})
-    : undefined;
-  if (memory) {
-    const storePath = resolveIncognitoOpenClawAgentSqlitePath({
-      agentId,
-      env: params.env ?? { OPENCLAW_STATE_DIR: path.resolve(memory.path, "../../../..") },
-    });
-    const captured = captureSessionActorStorageOwner({
-      agentId,
-      storePath,
-      sessionKey: canonicalKey,
-    });
+  if (isIncognitoSessionKey(canonicalKey)) {
+    const captured = captureSessionActorStorageOwner(
+      { agentId, sessionKey: canonicalKey, env: params.env },
+      { assertCurrent() {}, authorize() {} },
+    );
+    if (!captured) {
+      throw new Error("Incognito session lookup requires a memory target");
+    }
     return {
       reads: [],
       resolve() {
-        memory.actor.assertReadable();
-        const hot =
-          memory.actor.target.sessionKey === canonicalKey
-            ? memory.actor.snapshot(memory.authority)
-            : captured?.owner.readSession(canonicalKey, memory.authority);
+        const hot = captured.owner?.readSession(canonicalKey, captured.authority);
         const entry = hot?.entry && attachSessionEntrySnapshots(hot.entry, {}, params.projection);
         return {
           agentId,
           canonicalKey,
-          storePath: captured?.path ?? storePath,
+          storePath: captured.path,
           storeKeys: [canonicalKey],
           store: entry ? { [canonicalKey]: entry } : {},
-          readSource: { agentId, path: captured?.path ?? storePath },
+          readSource: { agentId, path: captured.path },
         };
       },
-    };
-  }
-  if (isIncognitoSessionKey(canonicalKey)) {
-    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: params.env });
-    const read: GatewaySessionStoreRead = {
-      storePath,
-      agentId,
-      clone: params.clone,
-      // Arbitrary stale keys must not materialize process-lifetime incognito state.
-      options: gatewaySessionStoreReadOptions(params, [canonicalKey], true),
-    };
-    return {
-      reads: [read],
-      resolve: () => ({
-        agentId,
-        storePath,
-        canonicalKey,
-        storeKeys: [canonicalKey],
-        store: (params.readStore ?? readGatewaySessionStore)(read),
-        ...(read.readSource ? { readSource: read.readSource } : {}),
-        ...(read.capturedReadSource
-          ? {
-              capturedReadSource: read.capturedReadSource,
-              capturedReadSources: [read.capturedReadSource],
-            }
-          : {}),
-      }),
     };
   }
   const storeKeys = params.preserveQualifiedAddress
@@ -375,7 +334,6 @@ export async function withGatewaySessionStoreTarget<T>(
       env: params.env,
       includeMembership: params.includeMembership,
       identity,
-      resolve: () => resolveGatewaySessionStoreTargetWithStore(normalized),
       consume: (target, membership, assertCurrent) =>
         consume(target, membership, assertCurrent, []),
     });

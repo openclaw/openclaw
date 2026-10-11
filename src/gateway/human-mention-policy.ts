@@ -16,7 +16,6 @@ import {
   updateSessionProfileInvolvement,
   updateSessionProfileInvolvementAsync,
 } from "../config/sessions/session-accessor.js";
-import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -211,18 +210,11 @@ export function createHumanMentionPolicy(params: {
       if (!agent.ok) {
         return err(agent.error);
       }
-      const binding = captureIncognitoSessionSource({
+      const resolved = resolveSessionSharingTarget({
+        cfg,
         sessionKey: input.sessionKey,
         agentId: agent.agentId,
       });
-      const resolved =
-        binding && "kind" in binding
-          ? null
-          : resolveSessionSharingTarget({
-              cfg,
-              sessionKey: input.sessionKey,
-              agentId: agent.agentId,
-            });
       const target = resolved && {
         agentId: resolved.agentId,
         sessionKey: resolved.canonicalKey,

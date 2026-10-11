@@ -14,14 +14,13 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
-  isIncognitoOpenClawAgentSqlitePath,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
+import { resolveExplicitIncognitoAgentSqliteTarget } from "../../state/openclaw-agent-db.paths.js";
 import { resolveStateDir } from "../paths.js";
 import {
   hasRetainedSessionTranscriptArchives,
@@ -74,10 +73,8 @@ import {
 } from "./session-history-budget-state.js";
 import {
   collectSessionAdmissionReferences,
-  readDiskEvictableArchivedSessionBatchInDatabase,
   readHistoricalSessionIdsInDatabase,
 } from "./session-history-eviction-candidates.js";
-import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
 import {
   assertSessionStoreReadCandidate,
   captureSessionStoreCandidateIdentities,
@@ -93,10 +90,7 @@ import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 export async function inspectSqliteSessionHistoryDiskBudget(
   input: SessionHistoryDiskBudgetParams,
 ): Promise<{ diskBudget: SessionDiskBudgetSweepResult | null; wouldMutate: boolean }> {
-  const binding = captureIncognitoSessionBinding(input);
-  if (binding) {
-    binding.admissionSignal?.throwIfAborted();
-    binding.actor.assertReadable();
+  if (resolveExplicitIncognitoAgentSqliteTarget(input.storePath, { agentId: input.agentId })) {
     return { diskBudget: null, wouldMutate: false };
   }
   const params = { ...input, env: { ...(input.env ?? process.env) } };
@@ -187,13 +181,7 @@ async function readHistoricalSessionIds(params: {
     ],
     preserveRecentMs: params.preserveRecentMs,
   };
-  if (
-    params.reclamationMode === "in-process" ||
-    isIncognitoOpenClawAgentSqlitePath(
-      resolveOpenClawAgentSqlitePath(params.databaseOptions),
-      params.databaseOptions,
-    )
-  ) {
+  if (params.reclamationMode === "in-process") {
     return readHistoricalSessionIdsInDatabase({
       ...input,
       database: openOpenClawAgentDatabase(params.databaseOptions),
@@ -220,18 +208,6 @@ async function readDiskEvictableArchivedSessionBatch({
     ...query,
     liveSessionKeys: [...iterateProjectedAgentRunSessionKeys(buildProjectedAgentRunIndex())],
   };
-  if (
-    isIncognitoOpenClawAgentSqlitePath(
-      resolveOpenClawAgentSqlitePath(databaseOptions),
-      databaseOptions,
-    )
-  ) {
-    const result = withOpenClawAgentDatabaseReadOnly(
-      (database) => readDiskEvictableArchivedSessionBatchInDatabase(database, archived),
-      databaseOptions,
-    );
-    return result.found ? result.value : { candidates: [], exhausted: true };
-  }
   const options = { ...databaseOptions, path: resolveOpenClawAgentSqlitePath(databaseOptions) };
   return withSqliteMutationWorkerLifetime(options, async ({ assertCurrent }) => {
     assertCurrent();
@@ -268,13 +244,7 @@ function isSessionHistoryAdmitted(storePath: string, sessionId: string, sessionK
 
 /** Fire-and-forget budget pass from the ordinary entry-write maintenance seam. */
 export function kickSessionHistoryDiskBudgetMaintenance(input: SessionHistoryBudgetKick): void {
-  if (
-    input.agentId &&
-    isIncognitoOpenClawAgentSqlitePath(input.storePath, {
-      agentId: input.agentId,
-      env: input.env,
-    })
-  ) {
+  if (resolveExplicitIncognitoAgentSqliteTarget(input.storePath, { agentId: input.agentId })) {
     return;
   }
   const maintenance = input.maintenanceConfig ?? resolveMaintenanceConfig();
@@ -350,10 +320,7 @@ const SESSION_HISTORY_MAINTENANCE_QUEUES = new Map<string, StoreWriterQueue>();
 export async function enforceSqliteSessionHistoryDiskBudget(
   input: SessionHistoryDiskBudgetParams,
 ): Promise<SessionDiskBudgetSweepResult | null> {
-  const binding = captureIncognitoSessionBinding(input);
-  if (binding) {
-    binding.admissionSignal?.throwIfAborted();
-    binding.actor.assertReadable();
+  if (resolveExplicitIncognitoAgentSqliteTarget(input.storePath, { agentId: input.agentId })) {
     return null;
   }
   // Measurement and queued cleanup must keep the invoking shared-state owner.

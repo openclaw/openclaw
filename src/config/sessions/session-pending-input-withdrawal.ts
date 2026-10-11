@@ -3,10 +3,7 @@ import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.paths.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
@@ -18,7 +15,7 @@ import {
   resolveSqliteWriteAdmissionScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import type { SessionPendingInputWithdrawal } from "./session-pending-input-withdrawal.worker.js";
 import {
   assertSessionStoreReadCandidate,
@@ -47,7 +44,7 @@ export async function discardSessionPendingInput(
   assertCurrent: () => void,
 ): Promise<boolean> {
   assertCurrent();
-  if (getSessionActorStorageBinding(scope)) {
+  if (captureSessionActorStorageOwner(scope, { assertCurrent, authorize: assertCurrent })) {
     throw new Error(
       "Queued input removal is unavailable for incognito chats; use Stop to cancel execution",
     );
@@ -63,11 +60,6 @@ export async function discardSessionPendingInput(
     sessionId: target.sessionId,
     runId,
   };
-  if (isIncognitoOpenClawAgentSqlitePath(storePath, toDatabaseOptions(logical))) {
-    throw new Error(
-      "Queued input removal is unavailable for incognito chats; use Stop to cancel execution",
-    );
-  }
   const candidates = captureSessionStoreReadCandidates(storePath);
   const identities = captureSessionStoreCandidateIdentities(candidates);
   const writeAdmission = resolveSqliteWriteAdmissionScope(target);

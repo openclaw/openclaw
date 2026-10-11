@@ -1,24 +1,16 @@
-import "../../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.entry.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import {
-  withIncognitoSessionActor,
-  withIncognitoSessionBinding,
-} from "../../config/sessions/session-incognito-binding.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import * as approvals from "../../infra/exec-approvals-store.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
-import {
-  IncognitoSessionEndedError,
-  IncognitoSessionMissingError,
-} from "../../state/incognito-session-error.js";
-import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
-import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { boardStore } from "../board-store.js";
 import { progressCardStore } from "../progress-card-store.js";
@@ -32,28 +24,36 @@ vi.mock("../../agents/exec-auto-reviewer.js", () => ({
   createModelExecAutoReviewer: () => review,
 }));
 
-const tempDirs = useAutoCleanupTempDirTracker(afterAll);
-const authority = { assertCurrent() {} };
+const authority = { assertCurrent() {}, authorize() {} };
 const cfg = {
   agents: { entries: { main: {}, absent: {} } },
   tools: { exec: { mode: "auto" as const } },
 };
-let actor: IncognitoAgentDatabaseExecution;
-let env: NodeJS.ProcessEnv;
+const env = { OPENCLAW_STATE_DIR: "/synthetic/board-incognito-rpc" };
+const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
 
-beforeAll(async () => {
-  env = { OPENCLAW_STATE_DIR: tempDirs.make("board-incognito-rpc-") };
+beforeAll(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
   setRuntimeConfigSnapshot(cfg, cfg);
-  const opened = await captureOpenClawAgentDatabaseExecution({
-    kind: "ephemeral",
-    agentId: "main",
-    env,
-    authority,
-  });
-  assert(opened);
-  actor = opened;
 });
+
+async function createSession(sessionKey: string, entry: SessionEntry) {
+  const binding = await acquireSessionActorStorage(
+    { sessionKey, agentId: "main", storePath, env },
+    { authority, lifetime: { assertCurrent() {}, assertReadable() {} }, create: true },
+  );
+  assert(binding);
+  try {
+    const result = await binding.actor.storage.mutate(
+      { type: "session.entry.create", input: { entry } },
+      authority,
+    );
+    expect(result.kind).toBe("committed");
+  } finally {
+    await binding.actor.release();
+  }
+}
+
 beforeEach(() => {
   resetPluginRuntimeStateForTest();
   review.mockReset();
@@ -63,9 +63,8 @@ beforeEach(() => {
   });
   return () => policy.mockRestore();
 });
-afterAll(async () => {
-  await actor?.close();
-  await closeOpenClawStateDatabaseAsync();
+afterAll(() => {
+  memorySessionActorOwners.reset();
   clearRuntimeConfigSnapshot();
   resetPluginRuntimeStateForTest();
   vi.unstubAllEnvs();
@@ -82,7 +81,7 @@ it.each(["grant", "permission", "replacement", "approval-failure", "review-failu
       incognito: true as const,
       permissionMode: "workspace" as const,
     };
-    await actor.sessions.create(authority, { sessionKey, entry });
+    await createSession(sessionKey, entry);
     const harness = createBoardHarness(undefined, {}, boardStore, { getRuntimeConfig: () => cfg });
     const started = createDeferred();
     const release = createDeferred();
@@ -102,29 +101,25 @@ it.each(["grant", "permission", "replacement", "approval-failure", "review-failu
       });
     }
     const sql = observeMainThreadSql();
-    const putting = withIncognitoSessionActor(actor, () =>
-      harness.invoke("board.widget.put", {
-        sessionKey,
-        name: "status",
-        content: { kind: "html", html: "<p>Private status</p>" },
-        declared: { tools: ["health"] },
-      }),
-    );
+    const putting = harness.invoke("board.widget.put", {
+      sessionKey,
+      name: "status",
+      content: { kind: "html", html: "<p>Private status</p>" },
+      declared: { tools: ["health"] },
+    });
     try {
       await awaitGateBeforeSettlement(started.promise, putting, "Board put did not reach review");
       if (outcome === "permission" || outcome === "replacement") {
-        const scope = { sessionKey, agentId: actor.agentId, storePath: actor.path, env };
-        await withIncognitoSessionActor(actor, async () => {
-          if (outcome === "permission") {
-            await patchSessionEntryCore(scope, () => ({ permissionMode: "guarded" }));
-          } else {
-            await replaceSessionEntry(scope, {
-              ...entry,
-              sessionId: "replacement",
-              lifecycleRevision: "replacement",
-            });
-          }
-        });
+        const scope = { sessionKey, agentId: "main", storePath, env };
+        if (outcome === "permission") {
+          await patchSessionEntryCore(scope, () => ({ permissionMode: "guarded" }));
+        } else {
+          await replaceSessionEntry(scope, {
+            ...entry,
+            sessionId: "replacement",
+            lifecycleRevision: "replacement",
+          });
+        }
       }
       release.resolve();
       const response = await putting;
@@ -141,9 +136,7 @@ it.each(["grant", "permission", "replacement", "approval-failure", "review-failu
           }),
         );
       }
-      const stored = await withIncognitoSessionActor(actor, () =>
-        boardStore.getSnapshot({ sessionKey }),
-      );
+      const stored = await boardStore.getSnapshot({ sessionKey });
       expect(stored.widgets).toHaveLength(1);
       expect(stored.revision).toBe(outcome === "grant" || outcome === "review-failure" ? 2 : 1);
       expect(stored.widgets[0]?.grantState).toBe(
@@ -159,163 +152,109 @@ it.each(["grant", "permission", "replacement", "approval-failure", "review-failu
   },
 );
 
-it("returns explicit absence without opening native Board, progress, or deletion sources", async () => {
+it("returns explicit absence without opening Board, progress, or deletion sources", async () => {
   const sessionKey = "agent:absent:dashboard:incognito-missing";
   const harness = createBoardHarness(undefined, {}, boardStore, { getRuntimeConfig: () => cfg });
   Object.assign(harness.handlers, createProgressCardHandlers(), sessionDeleteHandlers);
-  await withIncognitoSessionBinding(
-    { kind: "absent", agentId: "absent", env, authority },
-    async () => {
-      const sql = observeMainThreadSql();
-      try {
-        const read = await harness.invoke("board.get", { sessionKey });
-        expect(read).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ revision: 0, widgets: [] }),
-        );
-        expect(await boardStore.readWidgetMcpApp({ sessionKey }, "missing")).toBeUndefined();
-        await expect(
-          boardStore.putWidget({
-            sessionKey,
-            name: "status",
-            content: { kind: "html", html: "<p>Absent</p>" },
-          }),
-        ).rejects.toBeInstanceOf(IncognitoSessionMissingError);
-        expect(await progressCardStore.get(sessionKey)).toBeNull();
-        await expect(
-          progressCardStore.put(sessionKey, { markdown: "Absent" }),
-        ).rejects.toBeInstanceOf(IncognitoSessionMissingError);
-        const refresh = await harness.invoke("progressCard.refresh", {
-          sessionKey,
-          idempotencyKey: "missing-card",
-        });
-        expect(refresh).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ message: "There is no progress card to refresh." }),
-        );
-        const deleted = await harness.invoke("sessions.delete", { key: sessionKey });
-        expect(deleted).toHaveBeenCalledWith(
-          true,
-          { ok: true, key: sessionKey, deleted: false, archived: [] },
-          undefined,
-        );
-        const changed = await harness.invoke("sessions.delete", {
-          key: sessionKey,
-          expectedSessionId: "old",
-        });
-        expect(changed.mock.calls[0]?.[0]).toBe(false);
-        sql.expectIdle();
-      } finally {
-        sql.restore();
-      }
-    },
-  );
-  expect(
-    captureOpenClawAgentDatabaseExecution.listIncognito(env).map((owner) => owner.agentId),
-  ).toEqual(["main"]);
+  const sql = observeMainThreadSql();
+  try {
+    const read = await harness.invoke("board.get", { sessionKey });
+    expect(read).toHaveBeenCalledWith(true, expect.objectContaining({ revision: 0, widgets: [] }));
+    expect(await boardStore.readWidgetMcpApp({ sessionKey }, "missing")).toBeUndefined();
+    await expect(
+      boardStore.putWidget({
+        sessionKey,
+        name: "status",
+        content: { kind: "html", html: "<p>Absent</p>" },
+      }),
+    ).rejects.toMatchObject({ code: "not_found" });
+    expect(await progressCardStore.get(sessionKey)).toBeNull();
+    await expect(progressCardStore.put(sessionKey, { markdown: "Absent" })).rejects.toBeInstanceOf(
+      IncognitoSessionMissingError,
+    );
+    const refresh = await harness.invoke("progressCard.refresh", {
+      sessionKey,
+      idempotencyKey: "missing-card",
+    });
+    expect(refresh).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "There is no progress card to refresh." }),
+    );
+    const deleted = await harness.invoke("sessions.delete", { key: sessionKey });
+    expect(deleted).toHaveBeenCalledWith(
+      true,
+      { ok: true, key: sessionKey, deleted: false, archived: [] },
+      undefined,
+    );
+    const changed = await harness.invoke("sessions.delete", {
+      key: sessionKey,
+      expectedSessionId: "old",
+    });
+    expect(changed.mock.calls[0]?.[0]).toBe(false);
+    sql.expectIdle();
+  } finally {
+    sql.restore();
+  }
+  expect(memorySessionActorOwners.list().some((owner) => owner.agentId === "absent")).toBe(false);
 });
 
-it("does not turn a retained ended actor into a fresh missing result", async () => {
-  const ended = await captureOpenClawAgentDatabaseExecution({
-    kind: "ephemeral",
-    agentId: "absent",
-    env,
-    authority,
+it("reads guarded permission mode from the memory owner before granting a widget", async () => {
+  const sessionKey = "agent:main:dashboard:incognito-guarded";
+  await createSession(sessionKey, {
+    sessionId: "guarded-widget",
+    updatedAt: 1,
+    incognito: true,
+    permissionMode: "guarded",
   });
-  assert(ended);
-  await ended.close();
-  const sessionKey = "agent:absent:dashboard:incognito-ended";
   const harness = createBoardHarness(undefined, {}, boardStore, { getRuntimeConfig: () => cfg });
-  Object.assign(harness.handlers, sessionDeleteHandlers);
-  await withIncognitoSessionBinding({ actor: ended }, async () => {
-    const sql = observeMainThreadSql();
-    try {
-      await expect(boardStore.getSnapshot({ sessionKey })).rejects.toBeInstanceOf(
-        IncognitoSessionEndedError,
-      );
-      await expect(progressCardStore.get(sessionKey)).rejects.toBeInstanceOf(
-        IncognitoSessionEndedError,
-      );
-      await expect(harness.invoke("sessions.delete", { key: sessionKey })).rejects.toBeInstanceOf(
-        IncognitoSessionEndedError,
-      );
-      sql.expectIdle();
-    } finally {
-      sql.restore();
-    }
-  });
-});
-
-it("joins an accepted Board approval before releasing its captured actor borrow", async () => {
-  const sessionKey = "agent:main:dashboard:incognito-board-release";
-  await actor.sessions.create(authority, {
+  const response = await harness.invoke("board.widget.put", {
     sessionKey,
-    entry: {
-      sessionId: "board-release",
-      updatedAt: 1,
-      incognito: true,
-      permissionMode: "workspace",
-    },
+    name: "health",
+    content: { kind: "html", html: "<p>health</p>" },
+    declared: { tools: ["health"] },
   });
-  const borrowed = await captureOpenClawAgentDatabaseExecution({
-    kind: "ephemeral",
-    agentId: actor.agentId,
-    env,
-    authority,
-    existingOnly: true,
+  expect(response).toHaveBeenCalledWith(
+    true,
+    expect.objectContaining({
+      widgets: [expect.objectContaining({ grantState: "pending" })],
+    }),
+  );
+  expect(review).not.toHaveBeenCalled();
+});
+
+it("refuses a pending Board approval after its memory owner closes", async () => {
+  const sessionKey = "agent:main:dashboard:incognito-board-close";
+  await createSession(sessionKey, {
+    sessionId: "closing-widget",
+    updatedAt: 1,
+    incognito: true,
+    permissionMode: "workspace",
   });
-  assert(borrowed);
   const harness = createBoardHarness(undefined, {}, boardStore, { getRuntimeConfig: () => cfg });
-  const entered = createDeferred();
+  const started = createDeferred();
   const finish = createDeferred();
   review.mockImplementation(async () => {
-    entered.resolve();
+    started.resolve();
     await finish.promise;
     return { decision: "allow-once", risk: "low", rationale: "Synthetic Board" };
   });
-  const respond = vi.fn();
-  const params = {
+  const putting = harness.invoke("board.widget.put", {
     sessionKey,
-    name: "status",
-    content: { kind: "html", html: "<p>Private status</p>" },
+    name: "health",
+    content: { kind: "html", html: "<p>health</p>" },
     declared: { tools: ["health"] },
-  };
-  const putting = withIncognitoSessionActor(borrowed, async () => {
-    await harness.handlers["board.widget.put"]!({
-      req: { type: "req", id: "board-release", method: "board.widget.put", params },
-      params,
-      client: null,
-      context: harness.context,
-      respond,
-      isWebchatConnect: () => false,
-    });
   });
-  const outcome = Promise.allSettled([putting]);
-  let released = false;
-  let releasing: Promise<void> | undefined;
   try {
-    await awaitGateBeforeSettlement(entered.promise, putting, "Board put did not reach review");
-    releasing = borrowed.release().then(() => {
-      released = true;
-    });
-    await Promise.resolve();
-    expect(released).toBe(false);
+    await awaitGateBeforeSettlement(started.promise, putting, "Board put did not reach review");
+    memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });
     finish.resolve();
-    expect(await outcome).toMatchObject([
-      { status: "rejected", reason: { message: "Incognito execution reference is released" } },
-    ]);
-    await releasing;
-    expect(released).toBe(true);
-    expect(respond.mock.calls.some(([ok]) => ok === true)).toBe(false);
-    const stored = await withIncognitoSessionActor(actor, () =>
-      boardStore.getSnapshot({ sessionKey }),
-    );
-    expect(stored.widgets).toHaveLength(1);
+    const response = await putting;
+    expect(response.mock.calls[0]?.[0]).toBe(false);
+    expect(harness.broadcast).not.toHaveBeenCalled();
+    expect(memorySessionActorOwners.read({ agentId: "main", path: storePath })).toBeUndefined();
   } finally {
     finish.resolve();
-    await outcome;
-    await borrowed.release();
-    await releasing;
+    await putting;
   }
 });

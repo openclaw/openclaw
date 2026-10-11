@@ -13,10 +13,7 @@ import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
-import {
-  agentDatabaseLifecycle as cache,
-  retainAgentDatabase,
-} from "./openclaw-agent-db-lifecycle.js";
+import { retainAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
 import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
 import { getOpenClawAgentDatabaseIfOpen, openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 
@@ -42,9 +39,7 @@ export async function runOpenClawAgentWriteWithYieldingAdmission<T>(
       async () => () => {
         assertAgentDeletionDatabaseCleanupAccess(database, captured);
         const result = operation(database);
-        if (!cache.incognito.has(database)) {
-          ensureOpenClawAgentDatabasePermissions(database.path, captured);
-        }
+        ensureOpenClawAgentDatabasePermissions(database.path, captured);
         return result;
       },
       {

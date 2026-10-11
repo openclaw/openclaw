@@ -6,10 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { FailoverReason } from "../agents/failover/signal.js";
 import type { ProgressContinuationCapability } from "../channels/progress-continuation.js";
-import type {
-  HarnessCompletionRecovery,
-  RestartRecoveryTerminalDeliveryEvidence,
-} from "../config/sessions/restart-recovery-types.js";
+import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
 import type { ReplyToMode } from "../config/types.base.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
@@ -223,16 +220,6 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
 export type SessionWriterDeliveryAuthority = {
   agentId?: string;
-  /** Current facts from the original process-owned actor, never a replacement. */
-  readCurrentSession?: () =>
-    | {
-        sessionId: string;
-        lifecycleRevision?: string;
-        activeWriterRunId?: string;
-        restartRecoveryHarnessCompletion?: HarnessCompletionRecovery;
-        restartRecoveryTerminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidence[];
-      }
-    | undefined;
   /** Captured admitted completion authority, retained by the durable queue. */
   harnessCompletion?: HarnessCompletionRecovery;
   expectedLifecycleRevision?: string;

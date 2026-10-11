@@ -13,12 +13,11 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { attachInitialGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
 import * as deletion from "./server-methods/sessions-delete.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import {
-  startIncognitoActorsSessionLifetime,
-  startIncognitoActorSessionLifetime,
-} from "./session-incognito-lifetime.js";
+import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
+import { startIncognitoActorSessionLifetime } from "./session-incognito-lifetime.js";
 
 // These adapters must not allocate persistence or consume database-worker capacity.
 vi.mock("node:sqlite", async (importOriginal) => ({
@@ -34,6 +33,11 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
   }),
 }));
 
+vi.mock("./github-oauth-lifecycle.js", () => ({
+  createGitHubOAuthLifecycle: () => ({ start() {}, async stop() {} }),
+  installActiveGitHubOAuthLifecycle: () => () => {},
+}));
+
 const env = { OPENCLAW_STATE_DIR: "/synthetic/incognito-lifetime" };
 const authority: SessionActorStorageAuthority = { assertCurrent() {}, authorize() {} };
 const actors: SessionActor[] = [];
@@ -44,6 +48,7 @@ afterEach(async () => {
   await Promise.all(actors.splice(0).map((actor) => actor.release()));
   memorySessionActorOwners.reset();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 async function createSession(createdAt: number, key = sessionKey, sessionId = "original") {
@@ -173,7 +178,8 @@ it("retries failed cleanup without extending the original lifetime", async () =>
   }
 });
 
-it("follows new memory owners without expiring a replacement at its predecessor's deadline", async () => {
+it("starts memory expiry with Gateway sidecars and preserves replacement deadlines", async () => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
   const time = createGatewaySchedulerClock(1_000);
   const scheduler = createTestGatewayScheduler(time.clock);
   const first = await createSession(time.clock.now());
@@ -190,11 +196,15 @@ it("follows new memory owners without expiring a replacement at its predecessor'
     return { ok: true, result: { ok: true, key: params.params.key, deleted: true, archived: [] } };
   });
   const logWarning = vi.fn();
-  const sidecar = startIncognitoActorsSessionLifetime({
-    context: {} as GatewayRequestContext,
+  const sidecar = createGatewaySidecarStopOwner();
+  await attachInitialGatewayLifetimeSidecars({
     scheduler,
+    gatewayRequestContext: { getRuntimeConfig: () => ({}) } as GatewayRequestContext,
+    chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
+    minimalTestGateway: true,
+    flushPendingSessionsChangedEvents: async () => {},
     logWarning,
-    env,
+    publishSidecars: sidecar.publish,
   });
   try {
     await time.advanceBy(60_000);

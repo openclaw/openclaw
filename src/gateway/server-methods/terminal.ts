@@ -21,7 +21,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { allowsProcessHomeSessionScan } from "../../config/paths.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import { NODE_TERMINAL_UPLOAD_COMMAND } from "../../infra/node-commands.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
 import type { TerminalUploadFile } from "../../infra/terminal-file-upload.js";
@@ -154,46 +154,26 @@ export async function openTerminalSession(
   opts: GatewayRequestHandlerOptions,
   request: TerminalSessionOpenRequest,
 ): Promise<void> {
-  const binding = request.sessionKey
-    ? captureIncognitoSessionSource({ agentId: request.agentId, sessionKey: request.sessionKey })
+  const authority = readGatewayRequestMutationAuthority(opts);
+  const metadata = request.sessionKey
+    ? captureSessionEntryMetadataRead(
+        { agentId: request.agentId, sessionKey: request.sessionKey },
+        authority.assertCurrent,
+      )
     : undefined;
-  if (binding && request.sessionKey) {
-    const authority = readGatewayRequestMutationAuthority(opts);
+  if (metadata && request.sessionKey) {
     const sessionKey = request.sessionKey;
-    if ("kind" in binding) {
-      return openTerminalSessionWithSource(opts, request, {
-        entry: undefined,
-        assertCurrent() {
-          authority.assertCurrent();
-          binding.assertCurrent();
-        },
-      });
-    }
-    const claim = binding.actor.sessions.captureCurrent(sessionKey);
-    return binding.actor.sessions.withSharedState(async () => {
-      const read = await binding.actor.sessions.read(
-        authority,
-        { sessionKey },
-        binding.admissionSignal,
-      );
-      const assertCurrent = () => {
-        authority.assertCurrent();
-        binding.admissionSignal?.throwIfAborted();
-        binding.actor.assertReadable();
-        claim.assertCurrent();
-        const error = resolveSessionWorkStartError(
-          sessionKey,
-          binding.actor.sessions.readSharing(sessionKey)?.entry,
-          {
-            expectedSessionId: read.entry?.sessionId,
-          },
-        );
+    const entry = metadata.readCurrent();
+    return openTerminalSessionWithSource(opts, request, {
+      entry,
+      assertCurrent() {
+        const error = resolveSessionWorkStartError(sessionKey, metadata.readCurrent(), {
+          expectedSessionId: entry?.sessionId,
+        });
         if (error) {
           throw new Error(error);
         }
-      };
-      read.snapshot.assertCurrent();
-      return openTerminalSessionWithSource(opts, request, { entry: read.entry, assertCurrent });
+      },
     });
   }
   return openTerminalSessionWithSource(opts, request);

@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { AgentMessage } from "../../../../packages/agent-core/src/types.js";
 import type { SessionTranscriptWriteScope } from "../../../config/sessions/session-accessor.sqlite-contract.js";
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.types.js";
+import { runWithSessionActorStorage } from "../../../config/sessions/session-actor-storage-binding.js";
 import { readSessionTranscriptAnchorsAsync } from "../../../config/sessions/session-transcript-anchor-read.js";
 import { resolveSessionTranscriptReadFence } from "../../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "../../../config/sessions/session-transcript-read-source.js";
@@ -28,6 +29,7 @@ import {
   sessionManagerPrepareCurrentTurnReplay,
   type CurrentTurnReplaySelection,
 } from "../../sessions/session-manager-current-turn.js";
+import { withSessionManagerMemoryActor } from "../../sessions/session-manager-incognito-scope.js";
 import { prepareSessionManagerHydration } from "../../sessions/session-manager-incognito.js";
 import type { SessionEntry } from "../../sessions/session-manager-types.js";
 import type {
@@ -215,22 +217,28 @@ export async function preparePersistedCurrentUserTurn(params: {
     reader.assertCurrent();
   };
   const binding = reader.incognitoBinding;
-  const incognito = binding && {
-    actor: binding.actor,
-    authority: { assertCurrent },
-    target: { sessionKey: scope.sessionKey, sessionId: scope.sessionId },
-  };
   const withSource = <T>(
     signal: AbortSignal | undefined,
     operation: (target: typeof scope, assertSource: () => void) => Promise<T>,
   ): Promise<T> => {
     assertCurrent();
-    const native = () => operation(scope, assertCurrent);
     return binding
-      ? binding.actor.sessions.withSharedState(native)
+      ? withSessionManagerMemoryActor(binding, false, async (selected) => {
+          if (!selected) {
+            throw new Error("Persisted user turn memory session is closed");
+          }
+          return runWithSessionActorStorage(
+            {
+              actor: selected.actor,
+              authority: selected.authority,
+              agentId: selected.database.agentId,
+              path: selected.database.path,
+            },
+            () => operation(scope, assertCurrent),
+          );
+        })
       : withSessionTranscriptReadSource(
           scope,
-          native,
           ({ scope: captured, assertCurrent: assertSource }) =>
             operation(
               { ...scope, agentId: captured.agentId, storePath: captured.storePath },
@@ -281,7 +289,6 @@ export async function preparePersistedCurrentUserTurn(params: {
         consume(prepared && anchor ? { ...prepared, anchor } : undefined);
         accepted = true;
       },
-      incognito,
     );
     assertCurrent();
     if (!accepted) {

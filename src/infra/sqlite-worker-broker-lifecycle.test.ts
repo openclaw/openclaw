@@ -95,26 +95,22 @@ describe("SQLite worker slots", () => {
     await replacing;
   });
 
-  it("yields optional capacity to an accepted ephemeral opener and later opens cold", async () => {
+  it("yields optional capacity to an accepted opener and later opens cold", async () => {
     const { lifecycle, close, slots, workers, options, source, replyOwner } = runtimeFixture();
     const prepared = lifecycle.prepareRuntime(source, 1, replyOwner);
     assert(prepared);
-    const ephemeral = await lifecycle.acquireSlot(
-      {
-        ...options,
-        target: { kind: "ephemeral", handle: "accepted", incarnation: "first" },
-      },
+    const accepted = await lifecycle.acquireSlot(
+      options,
       source.moduleUrl,
       { maxWorkers: 1, maxStores: 1 },
       replyOwner,
     );
     expect(workers).toHaveLength(2);
     expect(workers[0]?.terminate).toHaveBeenCalledOnce();
-    expect(ephemeral.ephemeral).toBe(true);
-    expect(ephemeral.pendingOpens).toBe(1);
+    expect(accepted.pendingOpens).toBe(1);
     expect(slots.size).toBe(1);
     await expect(
-      lifecycle.rejectSlotAdmission(ephemeral, new Error("fixture open finished")),
+      lifecycle.rejectSlotAdmission(accepted, new Error("fixture open finished")),
     ).rejects.toThrow("fixture open finished");
     await close();
     const opening = { ...options, runtimePreparation: prepared };
@@ -125,7 +121,7 @@ describe("SQLite worker slots", () => {
       replyOwner,
     );
     expect(workers).toHaveLength(3);
-    expect(cold.worker).not.toBe(ephemeral.worker);
+    expect(cold.worker).not.toBe(accepted.worker);
     expect(cold.pendingOpens).toBe(1);
     expect(slots.size).toBe(1);
     await expect(

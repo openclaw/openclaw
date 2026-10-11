@@ -7,9 +7,9 @@ import {
 } from "../config/sessions/lifecycle.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../config/sessions/restart-recovery-types.js";
 import {
-  captureIncognitoSessionSource,
-  withIncognitoSessionEntry,
-} from "../config/sessions/session-incognito-binding.js";
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
@@ -89,11 +89,19 @@ async function agentCommandInternal(
   watchSkills = false,
 ) {
   const sessionSource = prepared.sessionKey
-    ? captureIncognitoSessionSource({
-        agentId: prepared.sessionAgentId,
-        storePath: prepared.storePath,
-        sessionKey: prepared.sessionKey,
-      })
+    ? captureSessionActorStorageOwner(
+        {
+          agentId: prepared.sessionAgentId,
+          storePath: prepared.storePath,
+          sessionKey: prepared.sessionKey,
+        },
+        {
+          assertCurrent() {
+            prepared.opts.assertSourceCurrent?.();
+          },
+          authorize() {},
+        },
+      )
     : undefined;
   const resolvedDeps = await resolveAgentCommandDeps(deps);
   const isRawModelRun = prepared.opts.modelRun === true || prepared.opts.promptMode === "none";
@@ -230,16 +238,7 @@ async function agentCommandInternal(
         const currentEntry =
           sessionStoreRuntime && storePath && sessionKey
             ? sessionSource
-              ? await withIncognitoSessionEntry(
-                  sessionSource,
-                  normalizeStoreSessionKey(sessionKey),
-                  () => {
-                    opts.abortSignal?.throwIfAborted();
-                    assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-                    opts.assertSourceCurrent?.();
-                  },
-                  async (entry) => entry,
-                )
+              ? readCapturedSessionActorEntry(sessionSource, normalizeStoreSessionKey(sessionKey))
               : sessionStoreRuntime.loadSessionEntry({ ...scope, readConsistency: "latest" })
             : sessionEntry;
         if (!currentEntry && preparedSessionId) {

@@ -7,13 +7,13 @@ import { deleteRegistryWorktree, insertRegistryWorktree } from "../agents/worktr
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
-import { withIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { GitHubPublicationRow } from "../state/github-publication-read.types.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
-import { openIncognitoTestActor } from "../state/openclaw-agent-execution-incognito.test-support.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -86,16 +86,40 @@ function prohibitPublicationWork() {
   }
 }
 
+async function createPrivatePublicationSession(sessionKey: string) {
+  const location = {
+    agentId: "main",
+    path: resolveIncognitoOpenClawAgentSqlitePath({
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: root },
+    }),
+  };
+  const owner = memorySessionActorOwners.get(location);
+  const actor = await owner.acquire(
+    { database: owner.identity, sessionKey },
+    { assertCurrent() {}, assertReadable() {} },
+  );
+  try {
+    readSessionActorStorageResult(
+      await actor.storage!.mutate(
+        {
+          type: "session.entry.create",
+          input: { entry: { ...mocks.loadSession(SESSION_KEY).entry, updatedAt: Date.now() } },
+        },
+        { assertCurrent() {}, authorize() {} },
+      ),
+    );
+  } finally {
+    await actor.release();
+  }
+  return { owner, location };
+}
+
 describe("shared worktree receipt observation", () => {
-  it("publishes a bound private worktree through the existing coordinator without host session reads", async () => {
-    const authority = { assertCurrent() {} };
-    const actor = await openIncognitoTestActor({ OPENCLAW_STATE_DIR: root }, authority);
+  it("publishes a memory-only private worktree through the existing coordinator without host session reads", async () => {
+    const privateKey = "agent:main:dashboard:incognito-publication-execute";
+    const { location } = await createPrivatePublicationSession(privateKey);
     try {
-      const privateKey = "agent:main:dashboard:incognito-publication-execute";
-      await actor.sessions.create(authority, {
-        sessionKey: privateKey,
-        entry: { ...mocks.loadSession(SESSION_KEY).entry, updatedAt: Date.now() },
-      });
       await deleteRegistryWorktree(process.env, "worktree-1");
       await insertRegistryWorktree(process.env, {
         id: "worktree-1",
@@ -112,64 +136,31 @@ describe("shared worktree receipt observation", () => {
       });
       const sql = observeHostDataSql();
       try {
-        const result = await withIncognitoSessionBinding({ actor }, () =>
-          sharedPublicationCoordinator().requestForSession({
-            sessionKey: privateKey,
-            agentId: "main",
-            idempotencyKey: "bound-publication",
-          }),
-        );
+        const result = await sharedPublicationCoordinator().requestForSession({
+          sessionKey: privateKey,
+          agentId: "main",
+          idempotencyKey: "memory-publication",
+        });
         expect(result).toMatchObject({ status: "published", headCommit: NEW_HEAD });
         expect(sql.queries.filter((query) => /\bsession_nodes\b/.test(query))).toEqual([]);
       } finally {
         sql.restore();
       }
     } finally {
-      await actor.close();
-      await actor.release();
+      memorySessionActorOwners.closeDatabase(location);
     }
   });
-  it("keeps ordinary private receipt reads on the native owner without allocating an actor", async () => {
-    const native = { ...session, sessionKey: "agent:main:dashboard:incognito-native-publication" };
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: native.sessionKey },
-      { ...mocks.loadSession(SESSION_KEY).entry, updatedAt: Date.now(), incognito: true },
-    );
-    const row = insertSharedWorktreeReceipt("native-private-receipt", { session: native });
-    publishWorktree(row);
-    const before = captureOpenClawAgentDatabaseExecution.listIncognito({
-      OPENCLAW_STATE_DIR: root,
-    });
-    expect(
-      (await sharedPublicationCoordinator().sharedStatus(native, row.request_id))?.result.status,
-    ).toBe("published");
-    expect(
-      captureOpenClawAgentDatabaseExecution.listIncognito({ OPENCLAW_STATE_DIR: root }),
-    ).toEqual(before);
-    expect(before).toEqual([]);
-  });
-  it("observes bound private receipts without native session access and fences a retired actor", async () => {
-    const authority = { assertCurrent() {} };
-    const env = { OPENCLAW_STATE_DIR: root };
-    const actor = await openIncognitoTestActor(env, authority);
+  it("observes memory-only private receipts and refuses disclosure after session close", async () => {
+    const privateSession = {
+      ...session,
+      sessionKey: "agent:main:dashboard:incognito-publication-receipt",
+    };
+    const { owner, location } = await createPrivatePublicationSession(privateSession.sessionKey);
     try {
-      const privateSession = {
-        ...session,
-        sessionKey: "agent:main:dashboard:incognito-publication-receipt",
-      };
-      const entry = {
-        ...mocks.loadSession(SESSION_KEY).entry,
-        updatedAt: Date.now(),
-        incognito: true as const,
-      };
-      await actor.sessions.create(authority, { sessionKey: privateSession.sessionKey, entry });
       const row = insertSharedWorktreeReceipt("private-receipt", { session: privateSession });
       publishWorktree(row);
       const coordinator = sharedPublicationCoordinator();
-      const observe = () =>
-        withIncognitoSessionBinding({ actor }, () =>
-          coordinator.sharedStatus(privateSession, row.request_id),
-        );
+      const observe = () => coordinator.sharedStatus(privateSession, row.request_id);
       const sql = observeHostDataSql();
       try {
         expect((await observe())?.result).toMatchObject({
@@ -194,7 +185,6 @@ describe("shared worktree receipt observation", () => {
           return result;
         });
       const pending = observe();
-      let closing: Promise<void> | undefined;
       try {
         await Promise.race([
           entered.promise,
@@ -207,31 +197,16 @@ describe("shared worktree receipt observation", () => {
             },
           ),
         ]);
-        closing = actor.close();
+        owner.closeSession(privateSession.sessionKey);
         release.resolve();
-        await expect(pending).rejects.toThrow(/ended|current|closed/i);
-        await closing;
-        const replacement = await openIncognitoTestActor(env, authority);
-        try {
-          await replacement.sessions.create(authority, {
-            sessionKey: privateSession.sessionKey,
-            entry,
-          });
-          expect(replacement.identity.incarnation).not.toBe(actor.identity.incarnation);
-          await expect(observe()).rejects.toThrow(/ended|current|closed/i);
-        } finally {
-          await replacement.close();
-          await replacement.release();
-        }
+        await expect(pending).rejects.toThrow(/session.*changed/i);
       } finally {
         release.resolve();
         await pending.catch(() => {});
-        await closing;
         held.mockRestore();
       }
     } finally {
-      await actor.close();
-      await actor.release();
+      memorySessionActorOwners.closeDatabase(location);
     }
   });
 

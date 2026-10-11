@@ -15,7 +15,6 @@ import type {
 } from "../auto-reply/reply-payload.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import type { SessionStoreTargetsReadCache } from "../config/sessions/targets-read-availability.js";
 import { resolveDeliveryQueueStateEnv } from "../infra/delivery-queue-sqlite.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
@@ -44,7 +43,6 @@ import {
   captureChannelReadScope,
   withChannelReadAuthority,
 } from "../shared/channel-read-authority.js";
-import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { buildManagedMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import {
@@ -81,7 +79,7 @@ import {
   type ManagedImageRecord,
 } from "./managed-image-record-store.js";
 import {
-  resolveNativeManagedImageSessionRead,
+  resolveSavedManagedImageSessionRead,
   withManagedImageSessionRead,
   type SessionStoreAvailabilityRead,
 } from "./managed-image-session-read.js";
@@ -726,14 +724,7 @@ async function recordMatchesTranscriptMessage(
     return "unavailable";
   }
   const env = stateDir ? { ...process.env, OPENCLAW_STATE_DIR: stateDir } : process.env;
-  if (
-    captureIncognitoSessionSource({
-      agentId: ownerAgentId,
-      sessionKey,
-      storePath: cfg.session?.store,
-      env,
-    })
-  ) {
+  if (isIncognitoSessionKey(sessionKey)) {
     return (
       (await withManagedImageSessionRead(
         {
@@ -756,7 +747,7 @@ async function recordMatchesTranscriptMessage(
       )) ?? "missing"
     );
   }
-  const selected = resolveNativeManagedImageSessionRead({
+  const selected = resolveSavedManagedImageSessionRead({
     cfg,
     sessionKey,
     agentId,
@@ -876,31 +867,6 @@ async function withManagedOutgoingMediaRead<T>(
     tryResolveSessionCompatibilityOwnerAgentId(cfg, record.sessionKey);
   if (!agentId) {
     return null;
-  }
-  // Process-held incognito reads retain their native owner until its complete cutover.
-  if (
-    !captureIncognitoSessionSource({
-      agentId,
-      sessionKey: record.sessionKey,
-      storePath: cfg.session?.store,
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    }) &&
-    (isIncognitoSessionKey(record.sessionKey) ||
-      (cfg.session?.store &&
-        isIncognitoOpenClawAgentSqlitePath(cfg.session.store, {
-          agentId,
-          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-        })))
-  ) {
-    const match = await recordMatchesTranscriptMessage(
-      record,
-      undefined,
-      undefined,
-      undefined,
-      stateDir,
-    );
-    assertCallerCurrent();
-    return match === "match" ? consume(assertCallerCurrent) : null;
   }
   return withManagedImageSessionRead(
     { cfg, agentId, sessionKey: record.sessionKey, stateDir, assertCurrent: assertCallerCurrent },

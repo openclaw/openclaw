@@ -6,24 +6,22 @@ import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import * as configEnv from "../../config/config-env-vars.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import * as transcriptHydration from "../../config/sessions/session-transcript-hydration.js";
-import { SessionTranscriptStorageUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { SessionManager, type SessionEntry } from "../../plugin-sdk/agent-sessions.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
-  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
-  listOpenIncognitoAgentDatabases,
   recordOpenClawAgentDatabaseOpenFailure,
   clearOpenClawAgentDatabaseOpenFailure,
 } from "../../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -32,7 +30,6 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
-import { sessionManagerPrepareCurrentTurnReplay } from "./session-manager-current-turn.js";
 
 const { prepareSessionTranscriptHydration } = transcriptHydration;
 
@@ -200,87 +197,71 @@ it("preserves the shipped SDK omitted-history option for bounded views", async (
   });
 });
 
-it.each(["file", "incognito"])(
-  "pairs current-turn entries with the complete hydrated version and captured prefix in %s storage",
-  async (storage) => {
-    await withOpenClawTestState({ label: "current-turn-entry-version" }, async (state) => {
-      const target = canonicalTarget(
-        state,
-        "current-turn-version",
-        storage === "incognito"
-          ? "agent:main:dashboard:incognito-current-turn-version"
-          : "agent:main:current-turn-version",
-      );
-      await upsertSessionEntryCore(target, {
-        sessionId: target.sessionId,
-        updatedAt: 1,
-        ...(storage === "incognito" ? { incognito: true } : {}),
-      });
-      const source = SessionManager.open(target);
-      const beforeEntryId = source.appendMessage(makeUserMessage("earlier user", 0));
-      const entryId = source.appendMessage(makeUserMessage("current user", 1));
-      await waitForSessionTranscriptProjection(target);
-      const reader = prepareSessionTranscriptHydration(target, { maxBytes: 4096, maxEvents: 5 });
-      const { snapshot } = await reader.read();
-      const request = { entryId, version: snapshot.version, includeEntry: true };
-      const current = await reader.readCurrentTurnEntry(request);
-      expect(current.event).toEqual(source.getEntry(entryId));
-      if (!current.anchor) {
-        throw new Error("expected current-turn anchor");
-      }
-      const changedVersions = [
-        { ...snapshot.version, generation: "other-generation" },
-        { ...snapshot.version, rawSeq: (snapshot.version.rawSeq ?? 0) + 1 },
-        { ...snapshot.version, updatedAt: (snapshot.version.updatedAt ?? 0) + 1 },
-      ];
-      for (const version of changedVersions) {
-        await expect(reader.readCurrentTurnEntry({ ...request, version })).rejects.toThrow(
-          "changed before replay admission",
-        );
-      }
-      const laterEntryId = source.appendMessage(makeUserMessage("newer user", 2));
-      await waitForSessionTranscriptProjection(target);
-      await expect(reader.readCurrentTurnEntry(request)).rejects.toThrow(
-        "changed before replay admission",
-      );
-      const fencedReader = runWithSessionTranscriptReadFence(
-        { ...current.anchor, logicalTurnId: "current-turn-prefix", role: "user" },
-        () => prepareSessionTranscriptHydration(target, { maxBytes: 4096, maxEvents: 5 }),
-      );
-      const { snapshot: fencedSnapshot } = await fencedReader.read();
-      expect(fencedSnapshot.events).toContainEqual(source.getEntry(beforeEntryId));
-      expect(fencedSnapshot.events).not.toContainEqual(source.getEntry(entryId));
-      const fencedRequest = { ...request, version: fencedSnapshot.version };
-      expect(
-        (await fencedReader.readCurrentTurnEntry({ ...fencedRequest, entryId: beforeEntryId }))
-          .event,
-      ).toEqual(source.getEntry(beforeEntryId));
-      for (const hiddenEntryId of [entryId, laterEntryId]) {
-        for (const includeEntry of [false, true]) {
-          const hidden = await fencedReader.readCurrentTurnEntry({
-            ...fencedRequest,
-            entryId: hiddenEntryId,
-            includeEntry,
-          });
-          expect(hidden.anchor).toBeUndefined();
-          expect(hidden.event).toBeUndefined();
-        }
-      }
-      await expect(fencedReader.readCurrentTurnEntry(request)).rejects.toThrow(
-        "changed before replay admission",
-      );
-      if (storage === "incognito") {
-        expect(fs.existsSync(target.storePath)).toBe(false);
-        closeOpenClawAgentDatabases(state.root);
-        const owners = listOpenIncognitoAgentDatabases();
-        await expect(reader.readCurrentTurnEntry(request)).rejects.toThrow(
-          SessionTranscriptStorageUnavailableError,
-        );
-        expect(listOpenIncognitoAgentDatabases()).toEqual(owners);
-      }
+it("pairs current-turn entries with the complete hydrated version and captured prefix in durable storage", async () => {
+  await withOpenClawTestState({ label: "current-turn-entry-version" }, async (state) => {
+    const target = canonicalTarget(
+      state,
+      "current-turn-version",
+      "agent:main:current-turn-version",
+    );
+    await upsertSessionEntryCore(target, {
+      sessionId: target.sessionId,
+      updatedAt: 1,
     });
-  },
-);
+    const source = SessionManager.open(target);
+    const beforeEntryId = source.appendMessage(makeUserMessage("earlier user", 0));
+    const entryId = source.appendMessage(makeUserMessage("current user", 1));
+    await waitForSessionTranscriptProjection(target);
+    const reader = prepareSessionTranscriptHydration(target, { maxBytes: 4096, maxEvents: 5 });
+    const { snapshot } = await reader.read();
+    const request = { entryId, version: snapshot.version, includeEntry: true };
+    const current = await reader.readCurrentTurnEntry(request);
+    expect(current.event).toEqual(source.getEntry(entryId));
+    if (!current.anchor) {
+      throw new Error("expected current-turn anchor");
+    }
+    const changedVersions = [
+      { ...snapshot.version, generation: "other-generation" },
+      { ...snapshot.version, rawSeq: (snapshot.version.rawSeq ?? 0) + 1 },
+      { ...snapshot.version, updatedAt: (snapshot.version.updatedAt ?? 0) + 1 },
+    ];
+    for (const version of changedVersions) {
+      await expect(reader.readCurrentTurnEntry({ ...request, version })).rejects.toThrow(
+        "changed before replay admission",
+      );
+    }
+    const laterEntryId = source.appendMessage(makeUserMessage("newer user", 2));
+    await waitForSessionTranscriptProjection(target);
+    await expect(reader.readCurrentTurnEntry(request)).rejects.toThrow(
+      "changed before replay admission",
+    );
+    const fencedReader = runWithSessionTranscriptReadFence(
+      { ...current.anchor, logicalTurnId: "current-turn-prefix", role: "user" },
+      () => prepareSessionTranscriptHydration(target, { maxBytes: 4096, maxEvents: 5 }),
+    );
+    const { snapshot: fencedSnapshot } = await fencedReader.read();
+    expect(fencedSnapshot.events).toContainEqual(source.getEntry(beforeEntryId));
+    expect(fencedSnapshot.events).not.toContainEqual(source.getEntry(entryId));
+    const fencedRequest = { ...request, version: fencedSnapshot.version };
+    expect(
+      (await fencedReader.readCurrentTurnEntry({ ...fencedRequest, entryId: beforeEntryId })).event,
+    ).toEqual(source.getEntry(beforeEntryId));
+    for (const hiddenEntryId of [entryId, laterEntryId]) {
+      for (const includeEntry of [false, true]) {
+        const hidden = await fencedReader.readCurrentTurnEntry({
+          ...fencedRequest,
+          entryId: hiddenEntryId,
+          includeEntry,
+        });
+        expect(hidden.anchor).toBeUndefined();
+        expect(hidden.event).toBeUndefined();
+      }
+    }
+    await expect(fencedReader.readCurrentTurnEntry(request)).rejects.toThrow(
+      "changed before replay admission",
+    );
+  });
+});
 
 it("does not publish a stale retarget over a manager changed while its worker read waits", async () => {
   await withOpenClawTestState({ label: "session-hydration-retarget" }, async (state) => {
@@ -486,137 +467,6 @@ it.each(["abort", "database-close"] as const)(
   },
 );
 
-it.each(["full", "bounded"])(
-  "keeps %s incognito hydration on an existing process-local SQLite identity",
-  async (mode) => {
-    await withOpenClawTestState({ label: "session-hydration-incognito" }, async (state) => {
-      const target = canonicalTarget(state, "private", "agent:main:dashboard:incognito-hydration");
-      const open = () =>
-        mode === "full"
-          ? SessionManager.openAsync(target)
-          : SessionManager.openBoundedAsync(target, { maxBytes: 4096, maxEvents: 5 });
-      const owners = listOpenIncognitoAgentDatabases();
-      await expect(open()).rejects.toThrow(SessionTranscriptStorageUnavailableError);
-      expect(listOpenIncognitoAgentDatabases()).toEqual(owners);
-      await upsertSessionEntryCore(target, {
-        sessionId: target.sessionId,
-        updatedAt: 1,
-        incognito: true,
-      });
-      SessionManager.open(target).appendMessage(makeUserMessage("process local", 1));
-      expect((await open()).buildSessionContext().messages).toEqual([
-        makeUserMessage("process local", 1),
-      ]);
-      expect(fs.existsSync(target.storePath)).toBe(false);
-    });
-  },
-);
-
-it.each([
-  { entry: "full", transition: "close" },
-  { entry: "full", transition: "replace" },
-  { entry: "bounded", transition: "replace" },
-  { entry: "bounded-callback", transition: "close" },
-  { entry: "retarget", transition: "replace" },
-  { entry: "replay", transition: "replace" },
-])(
-  "rejects incognito $entry publication after owner $transition",
-  async ({ entry, transition }) => {
-    await withOpenClawTestState({ label: "session-hydration-incognito-owner" }, async (state) => {
-      const target = canonicalTarget(
-        state,
-        "private-owner",
-        "agent:main:dashboard:incognito-owner",
-      );
-      await upsertSessionEntryCore(target, {
-        sessionId: target.sessionId,
-        updatedAt: 1,
-        incognito: true,
-      });
-      const source = SessionManager.open(target);
-      source.appendMessage(makeUserMessage("discarded private history", 1));
-      if (entry === "bounded-callback") {
-        source.appendMessage(makeUserMessage("latest private history", 2));
-      }
-      const onTruncated = vi.fn(() => closeOpenClawAgentDatabases(state.root));
-      const receiver = entry === "replay" ? source : SessionManager.inMemory();
-      if (entry === "replay") {
-        await receiver.reloadPersistedTranscriptAsync();
-      }
-      const originalView = receiver.buildSessionContext();
-      const received = createDeferredCore();
-      const publish = createDeferredCore();
-      const holdPublication = async <T>(read: Promise<T>) => {
-        const result = await read;
-        received.resolve();
-        await publish.promise;
-        return result;
-      };
-      const hydration =
-        transition === "replace"
-          ? vi
-              .spyOn(transcriptHydration, "prepareSessionTranscriptHydration")
-              .mockImplementationOnce((...args) => {
-                const reader = prepareSessionTranscriptHydration(...args);
-                return {
-                  ...reader,
-                  read: () => holdPublication(reader.read()),
-                  readCurrentTurnEntry: (request) =>
-                    holdPublication(reader.readCurrentTurnEntry(request)),
-                };
-              })
-          : undefined;
-      const pending =
-        entry === "full"
-          ? SessionManager.openAsync(target)
-          : entry === "bounded" || entry === "bounded-callback"
-            ? SessionManager.openBoundedAsync(target, {
-                maxBytes: 4096,
-                maxEvents: entry === "bounded-callback" ? 1 : 5,
-                ...(entry === "bounded-callback" ? { onTruncated } : {}),
-              })
-            : entry === "retarget"
-              ? receiver.setSessionTargetAsync(target)
-              : receiver[sessionManagerPrepareCurrentTurnReplay](
-                  () => false,
-                  (candidate) => candidate?.type === "message" && candidate.message.role === "user",
-                );
-      const rejected = expect(pending).rejects.toThrow(
-        "incognito database owner is no longer current",
-      );
-      try {
-        if (transition === "replace") {
-          await Promise.race([
-            received.promise,
-            rejected.then(() => {
-              throw new Error("Hydration settled before its replacement publication barrier");
-            }),
-          ]);
-          await closeOpenClawAgentDatabasesAsync(state.root);
-          const replacement = SessionManager.open(target);
-          replacement.appendMessage(makeUserMessage("replacement private history", 2));
-          expect(replacement.buildSessionContext().messages).toEqual([
-            makeUserMessage("replacement private history", 2),
-          ]);
-          publish.resolve();
-        } else if (entry !== "bounded-callback") {
-          closeOpenClawAgentDatabases(state.root);
-        }
-        await rejected;
-        if (entry === "bounded-callback") {
-          expect(onTruncated).toHaveBeenCalledOnce();
-        }
-        expect(receiver.buildSessionContext()).toEqual(originalView);
-        expect(fs.existsSync(target.storePath)).toBe(false);
-      } finally {
-        publish.resolve();
-        hydration?.mockRestore();
-        await Promise.allSettled([pending, rejected]);
-      }
-    });
-  },
-);
-
 it.each([
   { entry: "openAsync", environment: "explicit" },
   { entry: "openBoundedAsync", environment: "process" },
@@ -630,12 +480,12 @@ it.each([
         "private-environment",
         "agent:main:dashboard:incognito-environment",
       );
-      await upsertSessionEntryCore(target, {
-        sessionId: target.sessionId,
-        updatedAt: 1,
-        incognito: true,
-      });
-      SessionManager.open(target).appendMessage(makeUserMessage("original private history", 1));
+      const ownerLocation = {
+        agentId: target.agentId,
+        path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: target.agentId, env: state.env }),
+      };
+      const seed = await SessionManager.openAsync(target);
+      await seed.appendMessageAsync(makeUserMessage("original private history", 1));
       const originalEnvironment = process.env.OPENCLAW_STATE_DIR;
       const env = { OPENCLAW_STATE_DIR: state.stateDir };
       const input = environment === "explicit" ? { ...target, env } : target;
@@ -663,9 +513,9 @@ it.each([
         expect(manager.buildSessionContext().messages).toEqual([
           makeUserMessage("original private history", 1),
         ]);
-        manager.appendMessage(makeUserMessage("same private owner", 2));
+        await manager.appendMessageAsync(makeUserMessage("same private owner", 2));
         const original = { ...target, env: { OPENCLAW_STATE_DIR: state.stateDir } };
-        expect(SessionManager.open(original).buildSessionContext().messages).toEqual([
+        expect((await SessionManager.openAsync(original)).buildSessionContext().messages).toEqual([
           makeUserMessage("original private history", 1),
           makeUserMessage("same private owner", 2),
         ]);
@@ -676,6 +526,7 @@ it.each([
           process.env.OPENCLAW_STATE_DIR = originalEnvironment;
         }
         await Promise.allSettled([pending]);
+        memorySessionActorOwners.closeDatabase(ownerLocation);
       }
     });
   },

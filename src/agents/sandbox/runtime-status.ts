@@ -18,6 +18,10 @@ import {
   resolveSessionEntry,
 } from "../../config/sessions/session-accessor.sqlite-exact-read.js";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import { assertSessionEntryCohortScope } from "../../config/sessions/session-entry-cohort-scope.js";
 import { captureNativeSessionEntryCurrentRead } from "../../config/sessions/session-entry-current-runtime.js";
 import {
@@ -41,10 +45,6 @@ import type {
 } from "../../config/sessions/session-entry-read-runtime.types.js";
 import { assertCapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
-import {
-  captureIncognitoSessionSource,
-  withIncognitoSessionEntry,
-} from "../../config/sessions/session-incognito-binding.js";
 import {
   assertSessionStoreReadCandidate,
   captureSessionStoreCandidateIdentities,
@@ -165,6 +165,32 @@ export async function withSandboxRuntimeStatusInWorker<T>(
           )),
     env: source.env,
   };
+  const memory = captureSessionActorStorageOwner(scope, {
+    assertCurrent,
+    authorize() {},
+  });
+  if (memory) {
+    const entry = readCapturedSessionActorEntry(memory, sessionKey);
+    source.assertEntryCurrent?.(entry);
+    const sandbox = resolveSandboxRuntimeStatusForClassification(
+      { ...params, preparedSessionEntry: entry ?? null },
+      classification,
+    );
+    const result = await consume(sandbox);
+    assertCurrent();
+    const currentEntry = readCapturedSessionActorEntry(memory, sessionKey);
+    source.assertEntryCurrent?.(currentEntry);
+    const current = resolveSandboxRuntimeStatusForClassification(
+      { ...params, preparedSessionEntry: currentEntry ?? null },
+      classification,
+    );
+    // Policy preparation can await approval; apply its result only under the current policy.
+    if (!isDeepStrictEqual(current, sandbox)) {
+      throw new SessionEntryChangedDuringReadError();
+    }
+    source.prepareEntryConsumer?.(result)?.(currentEntry);
+    return result;
+  }
   if (reader) {
     const key = assertSessionEntryCohortScope(reader, scope);
     const withClassification = <R>(
@@ -248,7 +274,7 @@ export async function withSandboxRuntimeStatusInWorker<T>(
   );
 }
 
-/** Compare policies only after every original source has entered the same ordered read. */
+/** Read current memory policy when the durable sources reach their ordered publication. */
 export function withSandboxRuntimeStatusesInWorker<T>(
   requests: readonly Omit<SandboxRuntimeStatusParams, "preparedSessionEntry">[],
   source: { env: NodeJS.ProcessEnv; cwd: string; assertCurrent: () => void },
@@ -256,7 +282,6 @@ export function withSandboxRuntimeStatusesInWorker<T>(
 ): Promise<T> {
   source.assertCurrent();
   const inputs: Array<SessionEntryWorkerRead & { sessionKeys: string[] }> = [];
-  const privateReads: Array<(next: () => Promise<T>) => Promise<T>> = [];
   const projections = requests.map((params) => {
     const classification = resolveSandboxClassification(params);
     const project = (entry: SessionEntry | undefined) =>
@@ -284,26 +309,12 @@ export function withSandboxRuntimeStatusesInWorker<T>(
       storePath,
       env: source.env,
     };
-    const privateSource = captureIncognitoSessionSource(target);
+    const privateSource = captureSessionActorStorageOwner(target, {
+      assertCurrent: source.assertCurrent,
+      authorize() {},
+    });
     if (privateSource) {
-      let entry: SessionEntry | undefined;
-      let assertCurrent = source.assertCurrent;
-      privateReads.push((next) =>
-        withIncognitoSessionEntry(
-          privateSource,
-          target.sessionKey,
-          source.assertCurrent,
-          async (current, assertReadCurrent) => {
-            entry = current;
-            assertCurrent = assertReadCurrent;
-            return next();
-          },
-        ),
-      );
-      return () => {
-        assertCurrent();
-        return project(entry);
-      };
+      return () => project(readCapturedSessionActorEntry(privateSource, target.sessionKey));
     }
     const { scope } = captureSessionEntryReadScope({
       agentId: classification.classificationAgentId,
@@ -357,40 +368,36 @@ export function withSandboxRuntimeStatusesInWorker<T>(
     const candidates = captureSessionStoreReadCandidates(input.storePath);
     return { input, candidates, identities: captureSessionStoreCandidateIdentities(candidates) };
   });
-  const readDurable = () =>
-    withSessionEntriesFromStoresInWorker(
-      inputs,
-      (reads) => {
-        source.assertCurrent();
-        const statuses = projections.map((project) => project(reads));
-        source.assertCurrent();
-        const result = consume(statuses);
-        source.assertCurrent();
-        for (const read of reads) {
-          read.assertCurrent();
+  return withSessionEntriesFromStoresInWorker(
+    inputs,
+    (reads) => {
+      source.assertCurrent();
+      const statuses = projections.map((project) => project(reads));
+      source.assertCurrent();
+      const result = consume(statuses);
+      source.assertCurrent();
+      for (const read of reads) {
+        read.assertCurrent();
+      }
+      return result;
+    },
+    {
+      ordered: true,
+      prepareSource(input, database, identity) {
+        const captured = captures.find((capture) => capture.input === input)!;
+        const expected = captured.identities.get(
+          assertSessionStoreReadCandidate(database.path, captured.candidates),
+        );
+        if (
+          !expected ||
+          expected.key !== identity.key ||
+          expected.birthtime !== identity.birthtime
+        ) {
+          throw new Error("Sandbox classification source changed during batch preparation");
         }
-        return result;
       },
-      {
-        ordered: true,
-        prepareSource(input, database, identity) {
-          const captured = captures.find((capture) => capture.input === input)!;
-          const expected = captured.identities.get(
-            assertSessionStoreReadCandidate(database.path, captured.candidates),
-          );
-          if (
-            !expected ||
-            expected.key !== identity.key ||
-            expected.birthtime !== identity.birthtime
-          ) {
-            throw new Error("Sandbox classification source changed during batch preparation");
-          }
-        },
-      },
-    );
-  const enter = (index: number): Promise<T> =>
-    privateReads[index]?.(() => enter(index + 1)) ?? readDurable();
-  return enter(0);
+    },
+  );
 }
 
 /** Classifies durable canonical keys without admitting the same store once per session. */
@@ -500,22 +507,22 @@ function resolveSandboxRuntimeStatusForClassification(
   } = classification;
   const privateSource =
     params.preparedSessionEntry === undefined && classificationSessionKey
-      ? captureIncognitoSessionSource({
-          agentId: classificationAgentId,
-          sessionKey: comparableSessionKey,
-          storePath: cfg?.session?.store
-            ? resolveSessionStorePathCore(cfg.session.store, { agentId: classificationAgentId })
-            : undefined,
-        })
+      ? captureSessionActorStorageOwner(
+          {
+            agentId: classificationAgentId,
+            sessionKey: comparableSessionKey,
+            storePath: cfg?.session?.store
+              ? resolveSessionStorePathCore(cfg.session.store, { agentId: classificationAgentId })
+              : undefined,
+          },
+          { assertCurrent() {}, authorize() {} },
+        )
       : undefined;
-  // Explicit actor selection consumes its live policy receipt, including acknowledged absence.
+  // Memory policy comes from the selected owner, including acknowledged absence.
   // Creation owns this immutable requirement; current callers and agent mode cannot relax it.
   const session = privateSource
     ? {
-        existing:
-          "kind" in privateSource
-            ? undefined
-            : privateSource.actor.sessions.readPolicy(comparableSessionKey),
+        existing: readCapturedSessionActorEntry(privateSource, comparableSessionKey),
         normalizedKey: comparableSessionKey,
       }
     : params.preparedSessionEntry !== undefined

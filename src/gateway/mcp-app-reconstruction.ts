@@ -10,9 +10,8 @@ import {
   type McpAppViewLease,
 } from "../agents/mcp-ui-resource.js";
 import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
-import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { McpAppTranscriptLookup } from "./mcp-app-transcript.js";
@@ -38,7 +37,6 @@ async function reconstructMcpAppView(params: {
   viewId?: string;
 }): Promise<ReconstructionResult | undefined> {
   const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
-  const metadata = captureSessionEntryMetadataRead({ sessionKey: params.sessionKey, agentId });
   const reconstruct = async (
     loaded: ReturnType<typeof loadGatewaySessionEntryReadOnly>,
     assertCurrent: () => void,
@@ -86,22 +84,9 @@ async function reconstructMcpAppView(params: {
         toolResult: data.toolResult,
         ...(params.viewId ? { viewId: params.viewId } : {}),
         allowedAppToolNames: params.allowedAppToolNames,
-        ...(metadata
-          ? {
-              authorizeAppInteraction: () => {
-                assertCurrent();
-                const allowed = params.authorizeAppInteraction?.() ?? true;
-                return allowed instanceof Promise
-                  ? allowed.then((value) => {
-                      assertCurrent();
-                      return value;
-                    })
-                  : allowed;
-              },
-            }
-          : params.authorizeAppInteraction
-            ? { authorizeAppInteraction: params.authorizeAppInteraction }
-            : {}),
+        ...(params.authorizeAppInteraction
+          ? { authorizeAppInteraction: params.authorizeAppInteraction }
+          : {}),
         ...(params.readOnly ? { readOnly: true as const } : {}),
       });
       try {
@@ -118,13 +103,16 @@ async function reconstructMcpAppView(params: {
       await releaseSessionMcpRuntime(acquisition);
     }
   };
-  if (metadata) {
+  if (isIncognitoSessionKey(params.sessionKey)) {
     return withGatewaySessionEntryReadOnly(
       { cfg: params.cfg, key: params.sessionKey, agentId },
       async (loaded, assertSourceCurrent) => {
+        const metadata = captureSessionEntryMetadataRead(
+          { sessionKey: params.sessionKey, agentId },
+          assertSourceCurrent,
+        );
         const assertCurrent = () => {
-          assertSourceCurrent();
-          const current = metadata.readCurrent();
+          const current = metadata?.readCurrent();
           if (
             current?.sessionId !== loaded.entry?.sessionId ||
             current?.lifecycleRevision !== loaded.entry?.lifecycleRevision ||
@@ -133,16 +121,7 @@ async function reconstructMcpAppView(params: {
             throw new Error("MCP App reconstruction session changed");
           }
         };
-        const result = await reconstruct(loaded, assertCurrent);
-        try {
-          assertCurrent();
-        } catch (error) {
-          if (result) {
-            releaseMcpAppView(result.view.viewId, result.runtime);
-          }
-          throw error;
-        }
-        return result;
+        return reconstruct(loaded, assertCurrent);
       },
     );
   }
@@ -171,13 +150,7 @@ export async function restoreMcpAppView(params: {
   sessionKey: string;
   viewId: string;
 }): Promise<ReconstructionResult | undefined> {
-  const source = captureIncognitoSessionSource(params);
-  const sourceId = source
-    ? "kind" in source
-      ? `absent:${source.path}`
-      : source.actor.identity.incarnation
-    : "native";
-  const key = `${params.agentId ?? ""}\0${params.sessionKey}\0${params.viewId}\0${sourceId}`;
+  const key = `${params.agentId ?? ""}\0${params.sessionKey}\0${params.viewId}`;
   const inFlight = resolveGlobalMap<string, Promise<ReconstructionResult | undefined>>(
     MCP_APP_RESTORE_IN_FLIGHT_KEY,
   );
@@ -198,12 +171,5 @@ export async function restoreMcpAppView(params: {
     },
     { evictOnSettled: true },
   );
-  if (source) {
-    if ("kind" in source) {
-      source.assertCurrent();
-    } else {
-      source.actor.assertReadable();
-    }
-  }
   return result;
 }

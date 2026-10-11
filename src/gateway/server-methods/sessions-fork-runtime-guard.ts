@@ -53,11 +53,14 @@ export function createUpstreamForkCurrentGuard(params: {
   if (!expectedEntry) {
     throw new Error(`Session ${params.sessionKey} changed during fork initialization`);
   }
-  const sourceMetadata = captureSessionEntryMetadataRead({
-    agentId: params.source.agentId,
-    sessionKey: params.source.canonicalKey,
-    storePath: params.source.storePath,
-  });
+  const sourceMetadata = captureSessionEntryMetadataRead(
+    {
+      agentId: params.source.agentId,
+      sessionKey: params.source.canonicalKey,
+      storePath: params.source.storePath,
+    },
+    params.commitGuard,
+  );
   const assertCurrent = () => {
     params.commitGuard();
     const currentConfig = params.context.getRuntimeConfig();

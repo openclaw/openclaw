@@ -1,7 +1,10 @@
 import { acknowledgeReplySessionTransition } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../../config/sessions/session-actor-storage-binding.js";
 import { captureSessionEntrySourceAssertion } from "../../../config/sessions/session-entry-source-authority.js";
-import { captureIncognitoSessionSource } from "../../../config/sessions/session-incognito-binding.js";
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import {
   withOwnedSessionTranscriptWrites,
@@ -287,7 +290,13 @@ export function createEmbeddedRunCompactionRuntime(input: {
   const initialTarget = sessionPromptState.sessionTarget;
   const incognito =
     !memoryManager && !detached && initialTarget
-      ? captureIncognitoSessionSource(initialTarget)
+      ? captureSessionActorStorageOwner(initialTarget, {
+          assertCurrent() {
+            abortSignal?.throwIfAborted();
+            admittedAssertion?.();
+          },
+          authorize() {},
+        })
       : undefined;
   const assertAdmittedActive = composeSessionSourceAssertion(
     [admittedAssertion],
@@ -309,10 +318,6 @@ export function createEmbeddedRunCompactionRuntime(input: {
     if (memoryManager || detached) {
       return;
     }
-    incognito?.admissionSignal?.throwIfAborted();
-    if (incognito && "kind" in incognito) {
-      incognito.assertCurrent();
-    }
     if (
       incognito &&
       (target?.agentId !== initialTarget?.agentId || target?.storePath !== initialTarget?.storePath)
@@ -322,9 +327,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
     const entry =
       target?.sessionKey && target.storePath
         ? incognito
-          ? "kind" in incognito
-            ? undefined
-            : incognito.actor.sessions.readSharing(target.sessionKey)?.entry
+          ? readCapturedSessionActorEntry(incognito, target.sessionKey)
           : loadSessionEntry({
               agentId: target.agentId,
               sessionKey: target.sessionKey,

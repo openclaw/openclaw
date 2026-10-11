@@ -1,19 +1,17 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
-import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import {
-  withIncognitoSessionActor,
-  withIncognitoSessionBinding,
-} from "../config/sessions/session-incognito-binding.js";
+  runWithSessionActorStorage,
+  type SessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  openIncognitoTestActor,
-  useIncognitoNoHostSql,
-} from "../state/openclaw-agent-execution-incognito.test-support.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -23,34 +21,51 @@ vi.mock("./tools/gateway.js", () => ({ callGatewayTool: vi.fn() }));
 vi.mock("../infra/outbound/message.js", () => ({ sendMessage: vi.fn(async () => ({ ok: true })) }));
 
 const temporary = useAutoCleanupTempDirTracker(afterAll);
-const authority = { assertCurrent() {} };
-let actor: Awaited<ReturnType<typeof openIncognitoTestActor>>;
-let closingActor: typeof actor;
-beforeAll(async () => {
-  actor = await openIncognitoTestActor(
-    { OPENCLAW_STATE_DIR: temporary.make("approval-followup-incognito-") },
-    authority,
-  );
-  closingActor = await openIncognitoTestActor(
-    { OPENCLAW_STATE_DIR: temporary.make("approval-followup-closing-") },
-    authority,
-  );
+const authority = { assertCurrent() {}, authorize() {} };
+let actor: ReturnType<typeof memorySessionActorOwners.get>;
+const bindings: SessionActorStorageBinding[] = [];
+let sql: ReturnType<typeof observeHostDataSql>;
+beforeAll(() => {
+  const env = { OPENCLAW_STATE_DIR: temporary.make("approval-followup-incognito-") };
+  actor = memorySessionActorOwners.get({
+    agentId: "main",
+    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+  });
 });
 afterAll(async () => {
-  await Promise.all([actor.close(), closingActor.close()]);
+  for (const binding of bindings) {
+    await binding.actor.release();
+  }
+  memorySessionActorOwners.closeDatabase(actor);
 });
 beforeEach(() => {
+  sql = observeHostDataSql();
   vi.mocked(sendMessage).mockClear();
   vi.mocked(callGatewayTool).mockReset();
 });
-useIncognitoNoHostSql();
+afterEach(() => {
+  try {
+    expect(sql.queries).toEqual([]);
+  } finally {
+    sql.restore();
+  }
+});
 
 async function session(name: string, owner = actor) {
   const sessionKey = `agent:main:dashboard:incognito-${name}`;
   const entry = { sessionId: name, lifecycleRevision: "original", updatedAt: 1 };
-  await owner.sessions.create(authority, { sessionKey, entry });
+  const handle = await owner.acquire(
+    { database: owner.identity, sessionKey },
+    { assertCurrent() {}, assertReadable() {} },
+  );
+  const binding = { actor: handle, authority, agentId: owner.agentId, path: owner.path };
+  bindings.push(binding);
+  expect(
+    await handle.storage!.mutate({ type: "session.entry.create", input: { entry } }, authority),
+  ).toMatchObject({ kind: "committed" });
   return {
     entry,
+    binding,
     target: { agentId: "main", sessionKey, storePath: owner.path },
     followup: {
       approvalId: name,
@@ -67,7 +82,7 @@ async function session(name: string, owner = actor) {
 
 it("delivers matching actor completion and denial without consulting native sessions", async () => {
   const fixture = await session("current");
-  await withIncognitoSessionActor(actor, async () => {
+  await runWithSessionActorStorage(fixture.binding, async () => {
     await expect(sendExecApprovalFollowup({ ...fixture.followup, direct: true })).resolves.toBe(
       true,
     );
@@ -89,7 +104,7 @@ it("delivers matching actor completion and denial without consulting native sess
 it.each(["reset", "rebound", "close"] as const)(
   "suppresses fallback after actor %s during the session-resume wait",
   async (change) => {
-    const owner = change === "close" ? closingActor : actor;
+    const owner = actor;
     const fixture = await session(change, owner);
     const requested = createDeferredCore();
     const resume = createDeferredCore<Record<string, unknown>>();
@@ -97,16 +112,15 @@ it.each(["reset", "rebound", "close"] as const)(
       requested.resolve();
       return resume.promise;
     });
-    let closing: Promise<void> | undefined;
-    const result = withIncognitoSessionActor(owner, () =>
+    const result = runWithSessionActorStorage(fixture.binding, () =>
       sendExecApprovalFollowup(fixture.followup),
     );
     try {
       await awaitGateBeforeSettlement(requested.promise, result, "Followup settled before resume");
       if (change === "close") {
-        closing = owner.close();
+        owner.closeSession(fixture.target.sessionKey);
       } else {
-        await withIncognitoSessionActor(owner, () =>
+        await runWithSessionActorStorage(fixture.binding, () =>
           replaceSessionEntry(fixture.target, {
             ...fixture.entry,
             ...(change === "rebound" ? { sessionId: "replacement" } : {}),
@@ -117,42 +131,21 @@ it.each(["reset", "rebound", "close"] as const)(
     } finally {
       resume.reject(new Error("session resume unavailable"));
     }
-    if (change === "close") {
-      await expect(result).rejects.toMatchObject({ code: "INCOGNITO_SESSION_ENDED" });
-    } else {
-      await expect(result).resolves.toBe(false);
-    }
-    await closing;
-    if (change === "close") {
-      await expect(
-        withIncognitoSessionBinding({ actor: owner }, () =>
-          sendExecApprovalFollowup({ ...fixture.followup, direct: true }),
-        ),
-      ).rejects.toThrow("Incognito session ended");
-    }
+    await expect(result).resolves.toBe(false);
     expect(callGatewayTool).toHaveBeenCalledOnce();
     expect(sendMessage).not.toHaveBeenCalled();
   },
 );
 
-it("keeps selected absence noncreating", async () => {
-  const env = { OPENCLAW_STATE_DIR: temporary.make("approval-followup-absent-") };
-  const followup = {
-    approvalId: "absent",
-    agentId: "main",
-    sessionKey: "agent:main:dashboard:incognito-absent",
-    expectedSessionId: "absent",
-    resultText: "Exec finished (gateway id=absent, code 0)\nprivate result",
-    turnSourceChannel: "telegram",
-    turnSourceTo: "123",
-    direct: true,
-  };
+it("keeps a closed session absent without creating a replacement", async () => {
+  const fixture = await session("absent");
+  actor.closeSession(fixture.target.sessionKey);
   await expect(
-    withIncognitoSessionBinding({ kind: "absent", agentId: "main", env, authority }, () =>
-      sendExecApprovalFollowup(followup),
+    runWithSessionActorStorage(fixture.binding, () =>
+      sendExecApprovalFollowup({ ...fixture.followup, direct: true }),
     ),
   ).resolves.toBe(false);
-  expect(captureOpenClawAgentDatabaseExecution.listIncognito(env)).toEqual([]);
+  expect(actor.readSession(fixture.target.sessionKey, authority)).toBeUndefined();
   expect(callGatewayTool).not.toHaveBeenCalled();
   expect(sendMessage).not.toHaveBeenCalled();
 });

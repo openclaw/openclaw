@@ -59,8 +59,6 @@ import {
   requestRestrictedAgentDatabaseAdmission,
   type AgentDatabaseAdmissionRestriction,
 } from "./openclaw-agent-execution-domain.js";
-import type { IncognitoAgentDatabaseOperations } from "./openclaw-agent-execution-incognito-contract.js";
-import { createIncognitoAgentDatabaseBackend } from "./openclaw-agent-execution-incognito.worker.js";
 import { createAgentDatabaseMaintenanceOwner } from "./openclaw-agent-execution-maintenance.js";
 import {
   loadAgentTranscriptOperations,
@@ -103,12 +101,7 @@ import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 export function createSqliteWorkerBackend(
   input: AgentDatabaseExecutionOpen,
   opening: { databasePath: string },
-):
-  | SqliteWorkerPreparedBackend<AgentDatabaseOperations>
-  | SqliteWorkerPreparedBackend<IncognitoAgentDatabaseOperations> {
-  if (input.kind === "ephemeral") {
-    return createIncognitoAgentDatabaseBackend(input, opening);
-  }
+): SqliteWorkerPreparedBackend<AgentDatabaseOperations> {
   const backend = openAgentDatabaseBackend(input, opening);
   try {
     backend.execute({ type: "database.prepareWrite", input: undefined });
@@ -322,9 +315,6 @@ function openAgentDatabaseBackend(
       }
       const opened = openingResult.value;
       const nativeIdentity = readOpenClawAgentDatabaseIdentity(opened);
-      if (typeof nativeIdentity.identity !== "string") {
-        throw new Error("Disk agent execution requires its canonical file identity");
-      }
       const openedFileIdentity = `file:${nativeIdentity.identity}`;
       if (
         admittedFileIdentity.startsWith("file:") &&

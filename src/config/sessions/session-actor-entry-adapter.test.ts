@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { createSessionEntryWithTranscriptInScope } from "./session-accessor.sqlite-creation.js";
@@ -11,6 +11,8 @@ import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-re
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
+import * as maintenanceRuntime from "./store-maintenance-runtime.js";
+import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -18,6 +20,7 @@ const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
 const owned: Array<{ agentId: string; path: string }> = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const options of owned.splice(0)) {
     memorySessionActorOwners.closeDatabase(options);
   }
@@ -259,7 +262,7 @@ describe("generic session entry APIs with actor memory storage", () => {
       const pending = applySessionEntryExactReplacements({
         ...params,
         includeSessionWindowOwner: undefined,
-        includeLabelOwners: "Batch sibling",
+        sessionKeys: [scope.sessionKey, siblingKey],
         update: async (rows) => {
           entered.resolve();
           await resume.promise;
@@ -293,5 +296,160 @@ describe("generic session entry APIs with actor memory storage", () => {
       });
     });
     await Promise.all([actor.release(), sibling.release()]);
+  });
+  it("keeps absent replacement reads noncreating and rejects required writes", async () => {
+    const env = { OPENCLAW_STATE_DIR: "/synthetic/actor-entry-adapter/absent-replacement" };
+    const scope = {
+      agentId: "main",
+      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+      sessionKeys: ["agent:main:dashboard:incognito-absent-replacement"],
+    };
+    const update = (rows: unknown[]) => {
+      expect(rows).toEqual([]);
+      return {
+        result: "absent",
+        replacements: [
+          { sessionKey: scope.sessionKeys[0]!, entry: { sessionId: "absent", updatedAt: 1 } },
+        ],
+      };
+    };
+    await expect(applySessionEntryExactReplacements({ ...scope, update })).resolves.toBe("absent");
+    await expect(
+      applySessionEntryExactReplacements({ ...scope, update, requireWriteSuccess: true }),
+    ).rejects.toThrow("did not persist any rows");
+    expect(
+      memorySessionActorOwners.read({ agentId: scope.agentId, path: scope.storePath }),
+    ).toBeUndefined();
+  });
+
+  it("replaces the requested agent's entries while another agent is bound", async () => {
+    const { actor, binding, scope } = await fixture("cross-agent-replacement");
+    const target = {
+      agentId: "other",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "other", env: scope.env }),
+    };
+    owned.push(target);
+    const owner = memorySessionActorOwners.get(target);
+    const sessionKey = "agent:other:dashboard:incognito-replacement";
+    const other = await owner.acquire({ database: owner.identity, sessionKey }, lifetime);
+    try {
+      expect(
+        await other.storage!.mutate(
+          {
+            type: "session.entry.create",
+            input: { entry: { sessionId: "other", updatedAt: 1, label: "Other original" } },
+          },
+          authority,
+        ),
+      ).toMatchObject({ kind: "committed" });
+      await runWithSessionActorStorage(binding, () =>
+        applySessionEntryExactReplacements({
+          agentId: target.agentId,
+          storePath: target.path,
+          sessionKeys: [sessionKey],
+          requireWriteSuccess: true,
+          update: (entries) => ({
+            result: undefined,
+            replacements: entries.map((row) => ({
+              sessionKey: row.sessionKey,
+              entry: { ...row.entry, label: "Other replaced" },
+            })),
+          }),
+        }),
+      );
+      expect(
+        await other.storage!.read({ type: "session.entry.read", input: {} }, authority),
+      ).toMatchObject({ label: "Other replaced" });
+      expect(
+        await actor.storage!.read({ type: "session.entry.read", input: {} }, authority),
+      ).toMatchObject({ label: "Original" });
+    } finally {
+      await Promise.all([actor.release(), other.release()]);
+    }
+  });
+
+  it("replaces existing unbound memory entries, consumes pending reset, and applies maintenance", async () => {
+    const { actor, scope } = await fixture("unbound-replacement");
+    const staleKey = "agent:main:dashboard:incognito-replacement-stale";
+    const stale = await actor.storage!.acquire(staleKey);
+    try {
+      const original = await actor.storage!.read(
+        { type: "session.entry.read", input: {} },
+        authority,
+      );
+      expect(
+        await actor.storage!.mutate(
+          {
+            type: "session.entry.replace",
+            input: { expected: original, entry: { ...original!, updatedAt: 0 } },
+          },
+          authority,
+        ),
+      ).toMatchObject({ kind: "committed" });
+      expect(
+        await stale.storage!.mutate(
+          {
+            type: "session.entry.create",
+            input: {
+              entry: { sessionId: "stale", updatedAt: 1 },
+              transcriptEvents: [{ type: "metadata", id: "retained" }],
+            },
+          },
+          authority,
+        ),
+      ).toMatchObject({ kind: "committed" });
+      vi.spyOn(maintenanceRuntime, "resolveMaintenanceConfig").mockReturnValue(
+        resolveMaintenanceConfigFromInput({ mode: "enforce", pruneAfter: "1d", maxEntries: 100 }),
+      );
+      const replace = (consumePendingReset: boolean) =>
+        applySessionEntryExactReplacements({
+          agentId: scope.agentId,
+          storePath: scope.storePath,
+          sessionKeys: [scope.sessionKey],
+          activeSessionKey: scope.sessionKey,
+          consumePendingReset,
+          skipMaintenance: !consumePendingReset,
+          update: (rows) => ({
+            result: "updated",
+            replacements: rows.map(({ sessionKey, entry }) => ({
+              sessionKey,
+              entry: { ...entry, updatedAt: Date.now(), label: "Replaced" },
+            })),
+          }),
+        });
+      await replace(false);
+      expect(
+        (await actor.storage!.read({ type: "session.entry.read", input: {} }, authority))
+          ?.updatedAt,
+      ).toBe(0);
+      expect(
+        (await stale.storage!.read({ type: "session.entry.read", input: {} }, authority))
+          ?.archivedAt,
+      ).toBeUndefined();
+      await replace(true);
+      expect(
+        (await actor.storage!.read({ type: "session.entry.read", input: {} }, authority))
+          ?.updatedAt,
+      ).toBeGreaterThan(0);
+      expect(
+        await stale.storage!.read({ type: "session.entry.read", input: {} }, authority),
+      ).toMatchObject({ archivedAt: expect.any(Number) });
+      expect(
+        await stale.storage!.read({ type: "session.history.hydrate", input: {} }, authority),
+      ).toMatchObject({ snapshot: { events: [{ type: "metadata", id: "retained" }] } });
+      await expect(
+        applySessionEntryExactReplacements({
+          agentId: scope.agentId,
+          storePath: scope.storePath,
+          sessionKeys: [scope.sessionKey],
+          update: () => ({
+            result: "unselected",
+            replacements: [{ sessionKey: staleKey, entry: { sessionId: "stale", updatedAt: 2 } }],
+          }),
+        }),
+      ).rejects.toThrow("outside the selected key set");
+    } finally {
+      await Promise.all([actor.release(), stale.release()]);
+    }
   });
 });

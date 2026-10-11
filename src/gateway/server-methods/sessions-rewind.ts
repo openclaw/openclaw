@@ -22,6 +22,7 @@ import {
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
+  withSessionActorStorage,
 } from "../../config/sessions/session-actor-storage-binding.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -35,7 +36,6 @@ import {
   isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   captureSessionUpstreamLinkReadSource,
   prepareSessionUpstreamLink,
@@ -61,6 +61,7 @@ import { forkSessionRepositoryWorkspace } from "../worker-environments/session-r
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { prepareSessionForkFilesystemRoot } from "./session-create-root.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { waitForTerminalSessionRunSettlement } from "./session-run-settlement.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
 import {
@@ -158,8 +159,8 @@ async function listBranches(
   const read = retainSessionScopedRead(options, sessionKey, requestedAgent.agentId, {
     allowMetadataChanges: true,
   });
-  try {
-    await withGatewaySessionEntryReadOnly(
+  const run = () =>
+    withGatewaySessionEntryReadOnly(
       {
         key: sessionKey,
         cfg,
@@ -219,6 +220,22 @@ async function listBranches(
         respond(true, { branches: result.branches }, undefined);
       },
     );
+  const assertCurrent = () => read?.assertCurrent();
+  try {
+    const handled = await withSessionActorStorage(
+      { sessionKey, agentId: requestedAgent.agentId },
+      {
+        lifetime: { assertCurrent, assertReadable: assertCurrent },
+        authority: { assertCurrent, authorize() {} },
+      },
+      async () => {
+        await run();
+        return true;
+      },
+    );
+    if (!handled) {
+      await run();
+    }
   } finally {
     read?.release();
   }
@@ -238,18 +255,37 @@ async function mutateSessionAtMessage(
     respond(false, undefined, requestedAgent.error);
     return;
   }
-  return withGatewaySessionEntryReadOnly(
-    { key: sessionKey, cfg, agentId: requestedAgent.agentId, excludeInternalEffects: true },
-    async (initial, assertSourceCurrent) =>
-      mutatePreparedSessionAtMessage({
-        options,
-        action,
-        cfg,
-        requestedAgentId: requestedAgent.agentId,
-        initial,
-        assertSourceCurrent,
-      }),
+  const run = () =>
+    withGatewaySessionEntryReadOnly(
+      { key: sessionKey, cfg, agentId: requestedAgent.agentId, excludeInternalEffects: true },
+      async (initial, assertSourceCurrent) =>
+        mutatePreparedSessionAtMessage({
+          options,
+          action,
+          cfg,
+          requestedAgentId: requestedAgent.agentId,
+          initial,
+          assertSourceCurrent,
+        }),
+    );
+  const assertCurrent = () => {
+    options.sessionMutationCommitGuard?.();
+    options.sessionMutationAuthorization?.assertCurrent();
+  };
+  const handled = await withSessionActorStorage(
+    { sessionKey, agentId: requestedAgent.agentId },
+    {
+      lifetime: { assertCurrent, assertReadable: assertCurrent },
+      authority: { assertCurrent, authorize() {} },
+    },
+    async () => {
+      await run();
+      return true;
+    },
   );
+  if (!handled) {
+    await run();
+  }
 }
 
 async function mutatePreparedSessionAtMessage({
@@ -547,25 +583,27 @@ async function mutatePreparedSessionAtMessage({
             source: ReturnType<typeof captureOpenClawStateWorkerContext>;
           }
         | undefined;
-      const repositoryEntrySource = captureSessionEntryMetadataRead({
-        agentId: current.agentId,
-        sessionKey: current.canonicalKey,
-        storePath: current.storePath,
-      });
+      const repositoryEntrySource = captureSessionEntryMetadataRead(
+        {
+          agentId: current.agentId,
+          sessionKey: current.canonicalKey,
+          storePath: current.storePath,
+        },
+        assertMutationCurrent,
+      );
       const memoryOwner = memory && captureSessionActorStorageOwner(memory);
       const readRepositoryEntry = (key: string) => {
         if (memory) {
-          return memoryOwner?.owner.readSession(key, memory.authority)?.entry;
+          return memoryOwner?.owner?.readSession(key, memory.authority)?.entry;
         }
         if (repositoryEntrySource) {
           if (key === current.canonicalKey) {
             return repositoryEntrySource.readCurrent();
           }
-          return captureSessionEntryMetadataRead({
-            agentId: current.agentId,
-            sessionKey: key,
-            storePath: current.storePath,
-          })?.readCurrent();
+          return captureSessionEntryMetadataRead(
+            { agentId: current.agentId, sessionKey: key, storePath: current.storePath },
+            assertMutationCurrent,
+          )?.readCurrent();
         }
         return loadAccessorSessionEntryForGatewayTarget({
           key,
@@ -758,7 +796,6 @@ async function mutatePreparedSessionAtMessage({
           reason: action === "switch" ? "branch-switch" : action,
         };
         if (memory) {
-          sessionChanges.emit({ sessionKey: payload.sessionKey, agentId: payload.agentId });
           try {
             await withPreparedSessionEventRow(
               getSessionRowProjection(context),
@@ -776,9 +813,17 @@ async function mutatePreparedSessionAtMessage({
         }
       };
       if (memory) {
-        const actor = await memory.actor.storage!.acquire(committedResult.key);
+        const assertCurrent = readGatewayRequestMutationAuthority(options).assertLifetimeCurrent;
+        // The mutation consumed the old instance authority; publication uses live recipient policy.
+        const actor = await memory.actor.storage!.acquire(committedResult.key, {
+          assertCurrent,
+          assertReadable: assertCurrent,
+        });
         try {
-          await runWithSessionActorStorage({ ...memory, actor }, complete);
+          await runWithSessionActorStorage(
+            { ...memory, actor, authority: { assertCurrent, authorize() {} } },
+            complete,
+          );
         } finally {
           await actor.release();
         }

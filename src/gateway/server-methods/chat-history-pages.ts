@@ -3,6 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { captureTranscriptRedactionSnapshot } from "../../agents/transcript-redact-text.js";
 import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
 import { readLegacyCompactionMetrics } from "../../config/sessions/legacy-compaction-history.js";
+import { captureSessionActorTranscriptRead } from "../../config/sessions/session-actor-transcript-read.js";
 import type {
   ChatHistoryPage,
   ChatHistoryPageParams,
@@ -14,7 +15,7 @@ import {
   projectForwardedMessages,
 } from "../chat-display-projection.history.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
-import type { IncognitoSessionHistoryReader } from "../session-history-snapshot.js";
+import { createSessionActorTranscriptReader } from "../session-transcript-memory-reader.js";
 import * as sessionTranscriptReaders from "../session-transcript-readers.js";
 import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
 import { projectChatHistoryWithReplies } from "./chat-history-reply-messages.js";
@@ -40,29 +41,36 @@ function chatHistoryScope(params: ChatHistoryPageParams) {
   };
 }
 
-export async function readChatHistoryMessageById(
-  input: ChatHistoryMessageParams,
-  suppliedIncognito?: IncognitoSessionHistoryReader,
-) {
-  const incognito =
-    suppliedIncognito ??
-    sessionTranscriptReaders.captureIncognitoSessionHistoryReader(chatHistoryScope(input));
-  if (incognito) {
+export async function readChatHistoryMessageById(input: ChatHistoryMessageParams) {
+  const scope = chatHistoryScope(input);
+  const memory = captureSessionActorTranscriptRead(scope);
+  if (memory) {
     const captured = structuredClone(input);
-    return incognito.consume(chatHistoryScope(captured), async (readers) => {
-      if (getCliSessionBinding(captured.entry, "claude-cli")?.sessionId) {
-        const { readProcessHeldCliHistoryMessage } =
-          await import("../cli-session-history.process-held.js");
-        return readProcessHeldCliHistoryMessage(prepareChatHistoryParams(captured), incognito);
-      }
-      return readers.readSessionMessageByIdAsync(chatHistoryScope(captured), captured.messageId, {
-        allowResetArchiveFallback: true,
-        historyVisibility: { sessionStartedAt: captured.entry?.sessionStartedAt },
-      });
-    });
+    let result;
+    if (getCliSessionBinding(captured.entry, "claude-cli")?.sessionId) {
+      const { readProcessHeldCliHistoryMessage } =
+        await import("../cli-session-history.process-held.js");
+      result = await readProcessHeldCliHistoryMessage(prepareChatHistoryParams(captured), memory);
+    } else {
+      result = await createSessionActorTranscriptReader(memory).readSessionMessageByIdAsync(
+        scope,
+        captured.messageId,
+        {
+          allowResetArchiveFallback: true,
+          historyVisibility: { sessionStartedAt: captured.entry?.sessionStartedAt },
+        },
+      );
+    }
+    memory.assertCurrent();
+    return result;
   }
   const binding = getCliSessionBinding(input.entry, "claude-cli");
-  if (!binding?.sessionId || !input.storePath) {
+  if (
+    !binding?.sessionId ||
+    !input.storePath ||
+    input.entry?.incognito ||
+    isIncognitoSessionKey(input.canonicalKey)
+  ) {
     return sessionTranscriptReaders.readSessionMessageByIdAsync(
       chatHistoryScope(input),
       input.messageId,
@@ -73,11 +81,6 @@ export async function readChatHistoryMessageById(
     );
   }
   const params = prepareChatHistoryParams(input);
-  if (params.entry?.incognito || isIncognitoSessionKey(params.canonicalKey)) {
-    const { readProcessHeldCliHistoryMessage } =
-      await import("../cli-session-history.process-held.js");
-    return readProcessHeldCliHistoryMessage(params);
-  }
   const { readSessionHistoryPageInWorker } =
     await import("../../config/sessions/session-history-worker-runtime.js");
   return readSessionHistoryPageInWorker({
@@ -89,46 +92,30 @@ export async function readChatHistoryMessageById(
 export async function readChatHistoryPage(
   input: ChatHistoryPageParams,
   signal?: AbortSignal,
-  suppliedIncognito?: IncognitoSessionHistoryReader,
 ): Promise<ChatHistoryPage> {
   signal?.throwIfAborted();
-  const incognito =
-    suppliedIncognito ??
-    (input.sessionId && input.storePath
-      ? sessionTranscriptReaders.captureIncognitoSessionHistoryReader(
-          chatHistoryScope(input),
-          signal,
-        )
-      : undefined);
+  const scope = chatHistoryScope(input);
+  const memory = captureSessionActorTranscriptRead(scope, signal);
   const binding = getCliSessionBinding(input.entry, "claude-cli");
-  const params = prepareChatHistoryParams(incognito ? structuredClone(input) : input);
-  if (incognito) {
+  const params = prepareChatHistoryParams(memory ? structuredClone(input) : input);
+  if (memory) {
     const useCliHistory = Boolean(binding?.sessionId && !params.ignoreCliSessionImports);
-    return incognito.consume(chatHistoryScope(params), async () => {
-      let page: ChatHistoryPage;
-      if (useCliHistory) {
-        const { readProcessHeldCliHistory } =
-          await import("../cli-session-history.process-held.js");
-        page = await readProcessHeldCliHistory(params, signal, incognito);
-      } else {
-        page = await incognito.rpc({ ...params, encodeResponse: false });
-      }
-      const messages = await refreshForwardedLabels(page.messages);
-      signal?.throwIfAborted();
-      const refreshed = { ...page, messages };
-      return useCliHistory ? refreshed : encodeChatHistoryResponsePage(refreshed, params);
-    });
-  }
-  if (
-    params.sessionId &&
-    params.storePath &&
-    (params.entry?.incognito || isIncognitoSessionKey(params.canonicalKey)) &&
-    binding?.sessionId &&
-    !params.ignoreCliSessionImports
-  ) {
-    const { readProcessHeldCliHistory } = await import("../cli-session-history.process-held.js");
-    const page = await readProcessHeldCliHistory(params, signal);
-    return { ...page, messages: await refreshForwardedLabels(page.messages) };
+    let page: ChatHistoryPage;
+    if (useCliHistory) {
+      const { readProcessHeldCliHistory } = await import("../cli-session-history.process-held.js");
+      page = await readProcessHeldCliHistory(params, signal, memory);
+    } else {
+      page = await readChatHistoryPageKernel(params, {
+        readers: createSessionActorTranscriptReader(memory),
+        readOnly: true,
+        resolveCurrentUserProfileDisplay,
+        resolveCronJobName: () => undefined,
+      });
+    }
+    const refreshed = { ...page, messages: await refreshForwardedLabels(page.messages) };
+    signal?.throwIfAborted();
+    memory.assertCurrent();
+    return useCliHistory ? refreshed : encodeChatHistoryResponsePage(refreshed, params);
   }
   if (
     !params.sessionId ||

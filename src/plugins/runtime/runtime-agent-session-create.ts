@@ -6,10 +6,10 @@ import {
   rollbackAgentHarnessSessionEntryLifecycle,
   rollbackPluginOwnedSessionEntryLifecycle,
 } from "../../config/sessions/session-accessor.js";
+import { captureMemoryExactSessionReader } from "../../config/sessions/session-accessor.memory-exact-read.js";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
-import { sessionInitializationFingerprint } from "../../config/sessions/session-entry-read-revision.js";
+import { captureSessionActorStorageOwner } from "../../config/sessions/session-actor-storage-binding.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { sessionEntryCommitGuardOptions } from "../../config/sessions/session-source-authority.js";
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
 import {
@@ -26,9 +26,12 @@ import type { PluginRuntime } from "./types.js";
 export async function createRuntimeSessionEntry(
   params: Parameters<PluginRuntime["agent"]["session"]["createSessionEntry"]>[0],
 ): Promise<Awaited<ReturnType<PluginRuntime["agent"]["session"]["createSessionEntry"]>>> {
-  const source = captureIncognitoSessionSource({ sessionKey: params.key, agentId: params.agentId });
   const creationOwner = captureSessionInitializationOwner(
     "agentHarnessId" in params.initialEntry ? params.initialEntry.agentHarnessId : undefined,
+  );
+  const source = captureSessionActorStorageOwner(
+    { sessionKey: params.key, agentId: params.agentId },
+    { assertCurrent: creationOwner.assertCurrent, authorize: creationOwner.assertCurrent },
   );
   // Session creation stays behind the canonical Gateway lifecycle boundary while
   // keeping that heavier runtime out of plugin discovery and cold startup.
@@ -53,13 +56,12 @@ export async function createRuntimeSessionEntry(
   type CreatedContext = Parameters<
     NonNullable<Parameters<typeof createGatewaySession>[0]["afterCreate"]>
   >[0];
-  const selectedActor = source && !("kind" in source) ? source.actor : source;
-  const target = selectedActor
+  const target = source
     ? {
-        agentId: selectedActor.agentId,
-        canonicalKey: resolveSqliteSessionKey(params.key, selectedActor.agentId),
-        storeKeys: [resolveSqliteSessionKey(params.key, selectedActor.agentId)],
-        storePath: selectedActor.path,
+        agentId: source.agentId,
+        canonicalKey: resolveSqliteSessionKey(params.key, source.agentId),
+        storeKeys: [resolveSqliteSessionKey(params.key, source.agentId)],
+        storePath: source.path,
       }
     : resolveGatewaySessionStoreTarget({
         cfg: params.cfg,
@@ -161,6 +163,10 @@ export async function createRuntimeSessionEntry(
           rollbackExpectedEntry = structuredClone(callbackContext.entry);
           const captured = callbackContext;
           const expected = rollbackExpectedEntry;
+          const memory = captureMemoryExactSessionReader({
+            sessionKey: captured.key,
+            storePath: captured.storePath,
+          });
           initialization = createSessionInitialization(
             {
               storePath: captured.storePath,
@@ -174,24 +180,14 @@ export async function createRuntimeSessionEntry(
               } else {
                 creationOwner.assertCurrent();
               }
-              const selected = captureIncognitoSessionSource({
-                sessionKey: captured.key,
-                storePath: captured.storePath,
-              });
-              const current = selected
-                ? "kind" in selected
-                  ? undefined
-                  : selected.actor.sessions.readSharing(captured.key)?.entry
+              const current = memory
+                ? memory.read(captured.key)
                 : loadSessionEntryReadOnly({
                     sessionKey: captured.key,
                     storePath: captured.storePath,
                     readConsistency: "latest",
                   });
-              const matches =
-                selected && !("kind" in selected)
-                  ? selected.actor.sessions.readInitializationFingerprint(captured.key) ===
-                    sessionInitializationFingerprint(expected)
-                  : isDeepStrictEqual(current, expected);
+              const matches = isDeepStrictEqual(current, expected);
               if (
                 deleted
                   ? current !== undefined
@@ -491,7 +487,5 @@ export async function createRuntimeSessionEntry(
         }
       },
     });
-  return source && !("kind" in source)
-    ? source.actor.sessions.withSharedState(create)
-    : await create();
+  return await create();
 }

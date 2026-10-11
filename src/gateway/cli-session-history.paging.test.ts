@@ -2,6 +2,10 @@ import rawFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import {
+  formatCliImageTurnContext,
+  hashCliImageTurnEntryId,
+} from "../agents/cli-image-turn-correlation.js";
 import { buildCliSessionDriftNote } from "../agents/cli-session.js";
 import { captureTranscriptRedactionSnapshot } from "../agents/transcript-redact-text.js";
 import {
@@ -11,10 +15,11 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { buildExecEventPrompt } from "../infra/heartbeat-events-filter.js";
+import * as nodeSqlite from "../infra/node-sqlite.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../state/openclaw-agent-db-readonly-scope.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { prepareCliSessionHistoryReader } from "./cli-session-history.js";
+import { prepareCliSessionHistoryReader, type CliHistoryReaders } from "./cli-session-history.js";
 import { withClaudeProjectsDir } from "./cli-session-history.test-support.js";
 import { readChatHistoryPageKernel } from "./server-methods/chat-history-page-kernel.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
@@ -516,5 +521,141 @@ it.each([
         owner.close();
       }
     });
+  });
+});
+
+it("pages merged incognito CLI history without allocating SQLite", async () => {
+  await withClaudeProjectsDir(async ({ homeDir, sessionId: nativeId, filePath }) => {
+    const scope = {
+      agentId: "main",
+      sessionId: "cli-memory",
+      sessionKey: "agent:main:incognito:cli-memory",
+      storePath: path.join(homeDir, "sessions.json"),
+    };
+    const local = [
+      { role: "user", content: "repeat", timestamp: 1000, __openclaw: { id: "first", seq: 1 } },
+      {
+        role: "assistant",
+        content: "locally edited",
+        timestamp: 2000,
+        __openclaw: {
+          id: "edited",
+          seq: 2,
+          importedFrom: "claude-cli",
+          externalId: "known",
+          cliSessionId: nativeId,
+        },
+      },
+      { role: "user", content: "repeat", timestamp: 3000, __openclaw: { id: "second", seq: 3 } },
+      {
+        role: "user",
+        content: "Photo",
+        timestamp: 4000,
+        __openclaw: {
+          id: "photo",
+          seq: 4,
+          media: [{ kind: "image", contentType: "image/png", path: "/media/inbound/test.png" }],
+        },
+      },
+    ];
+    const native = (uuid: string, role: string, content: string, timestamp: number) =>
+      JSON.stringify({
+        type: role,
+        uuid,
+        timestamp: new Date(timestamp).toISOString(),
+        message: { role, content },
+      });
+    await fs.writeFile(
+      filePath,
+      [
+        native("native-first", "user", "repeat", 1001),
+        native("known", "assistant", "original answer", 2001),
+        native("native-second", "user", "repeat", 3001),
+        native(
+          "native-photo",
+          "user",
+          `Photo\n\n${formatCliImageTurnContext(hashCliImageTurnEntryId("photo"))}\n\n@/tmp/openclaw/openclaw-cli-images/${"a".repeat(64)}.png`,
+          4001,
+        ),
+        native("native-only", "assistant", "Native only", 5000),
+      ].join("\n"),
+    );
+    const unusedReader = async (): Promise<never> => {
+      throw new Error("Unexpected canonical lookup");
+    };
+    const readers: CliHistoryReaders = {
+      readSessionMessagesPageWithStatsAsync: async (_scope, options) => ({
+        messages: local
+          .filter((message) => message.__openclaw.seq < (options.beforeSeq ?? Infinity))
+          .slice(-options.maxMessages),
+        totalMessages: local.length,
+        transcriptSource: "active",
+        displaySource: "memory",
+        activeLeafEntryId: "photo",
+      }),
+      readRecentSessionMessagesWithStatsAsync: unusedReader,
+      readSessionMessagesAroundIdWithStatsAsync: unusedReader,
+      readSessionMessageByIdAsync: unusedReader,
+    };
+    const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation(() => {
+      throw new Error("Incognito history must not allocate SQLite");
+    });
+    let cli: Awaited<ReturnType<typeof prepareCliSessionHistoryReader>> = undefined;
+    try {
+      cli = await prepareCliSessionHistoryReader(
+        {
+          entry: {
+            sessionId: scope.sessionId,
+            updatedAt: 1,
+            incognito: true,
+            cliSessionBindings: { "claude-cli": { sessionId: nativeId } },
+          },
+          provider: "claude-cli",
+          sessionId: scope.sessionId,
+          storePath: scope.storePath,
+          sessionAgentId: scope.agentId,
+          canonicalKey: scope.sessionKey,
+          cliHistoryHomeDir: homeDir,
+          cliHistoryRedaction: captureTranscriptRedactionSnapshot(),
+          max: 3,
+          maxHistoryBytes: 64 * 1024,
+          effectiveMaxChars: 4096,
+          offset: undefined,
+          messageId: undefined,
+        },
+        readers,
+      );
+      expect(cli).toBeDefined();
+      const latest = await cli!.readers.readSessionMessagesPageWithStatsAsync(scope, {
+        offset: 0,
+        maxMessages: 3,
+      });
+      expect(latest.totalMessages).toBe(5);
+      expect(latest.messages).toMatchObject([
+        { content: "repeat", __openclaw: { id: "second", externalId: "native-second" } },
+        {
+          content: "Photo",
+          __openclaw: {
+            id: "photo",
+            externalId: "native-photo",
+            media: local[3]!.__openclaw.media,
+          },
+        },
+        { content: "Native only", __openclaw: { id: "native-only" } },
+      ]);
+      const older = await cli!.readers.readSessionMessagesPageWithStatsAsync(scope, {
+        offset: 3,
+        maxMessages: 3,
+      });
+      expect(older.messages).toMatchObject([
+        { content: "repeat", __openclaw: { id: "first", externalId: "native-first" } },
+        { content: "locally edited", __openclaw: { id: "edited", externalId: "known" } },
+      ]);
+      expect([...older.messages, ...latest.messages].map(cli!.sequence)).toEqual([1, 2, 3, 4, 5]);
+      expect(open).not.toHaveBeenCalled();
+    } finally {
+      cli?.dispose();
+      open.mockRestore();
+    }
   });
 });

@@ -42,6 +42,7 @@ export async function prepareAndAdmitChatSend(
     providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   },
   diagnostics?: ChatSendDiagnostics,
+  releaseSessionStorage?: () => void,
 ) {
   const phase = diagnostics?.scope("admission");
   const assertCurrent =
@@ -141,7 +142,7 @@ export async function prepareAndAdmitChatSend(
   }
   let session: PreparedChatSendSession;
   try {
-    session = qualifyChatSendSession(loadedSession.value);
+    session = qualifyChatSendSession(loadedSession.value, releaseSessionStorage);
   } catch (error) {
     respondChatSendAdmissionError(error, respond);
     return undefined;

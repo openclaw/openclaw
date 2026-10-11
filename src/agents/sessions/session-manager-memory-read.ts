@@ -1,11 +1,19 @@
-import type { SessionActorMemoryHistoryReads } from "../../config/sessions/session-actor-memory-history-contract.js";
+import type {
+  SessionActorMemoryHistoryReads,
+  SessionActorMemoryHistoryQuery,
+} from "../../config/sessions/session-actor-memory-history-contract.js";
+import { readSessionActorMemoryHistoryQuery } from "../../config/sessions/session-actor-memory-history-read.js";
+import { createSessionActorMemoryState } from "../../config/sessions/session-actor-memory-state.js";
 import type { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
-import type { SessionManagerMemoryBinding } from "./session-manager-incognito-scope.js";
+import {
+  withSessionManagerMemoryActor,
+  type SessionManagerMemoryBinding,
+} from "./session-manager-incognito-scope.js";
 
-/** Selected memory reads share the actor lifetime, without native database claims. */
+/** Each read borrows admitted work or releases its own handle after taking a snapshot. */
 export function prepareSessionManagerMemoryRead(
   binding: SessionManagerMemoryBinding,
   signal?: AbortSignal,
@@ -15,15 +23,31 @@ export function prepareSessionManagerMemoryRead(
     signal?.throwIfAborted();
     assertOwned();
     binding.authority.assertCurrent();
-    binding.actor.assertReadable();
   };
   return {
     assertCurrent,
     read<Key extends keyof SessionActorMemoryHistoryReads>(
       type: Key,
       input: SessionActorMemoryHistoryReads[Key]["input"],
-    ) {
-      return binding.storage.read({ type, input }, { ...binding.authority, assertCurrent });
+    ): Promise<SessionActorMemoryHistoryReads[Key]["output"]> {
+      assertCurrent();
+      return withSessionManagerMemoryActor(binding, false, async (selected) => {
+        if (selected) {
+          return selected.storage.read({ type, input }, { ...binding.authority, assertCurrent });
+        }
+        // Missing reads evaluate the ordinary history projection over a transient empty
+        // value; they never allocate an owner, session record, worker, or database.
+        const state = createSessionActorMemoryState({
+          sessionKey: binding.target.sessionKey,
+          database: { kind: "memory", handle: "absent", incarnation: "absent" },
+        });
+        // SAFETY: The history dispatcher pairs every query key with this same output contract.
+        return readSessionActorMemoryHistoryQuery(
+          state,
+          { type, input } as SessionActorMemoryHistoryQuery,
+          binding.database,
+        ) as SessionActorMemoryHistoryReads[Key]["output"];
+      });
     },
   };
 }

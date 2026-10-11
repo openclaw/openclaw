@@ -406,7 +406,10 @@ export type PreparedChatSendSession = LoadedChatSendSession & {
   readSource?: CapturedSessionEntryReadSource;
 };
 
-export function qualifyChatSendSession(loaded: LoadedChatSendSession): PreparedChatSendSession {
+export function qualifyChatSendSession(
+  loaded: LoadedChatSendSession,
+  releaseSessionStorage?: () => void,
+): PreparedChatSendSession {
   const qualified = prepareQualifiedSessionEntryTarget(
     {
       ...loaded,
@@ -421,7 +424,13 @@ export function qualifyChatSendSession(loaded: LoadedChatSendSession): PreparedC
     ...loaded,
     sessionTarget: qualified.target,
     assertSessionTargetCurrent: qualified.assertCurrent,
-    releaseSessionTarget: qualified.release,
+    releaseSessionTarget() {
+      try {
+        qualified.release();
+      } finally {
+        releaseSessionStorage?.();
+      }
+    },
     activeRunScopeKey: qualified.target.canonicalKey,
     readSource: qualified.target.readSource,
   };

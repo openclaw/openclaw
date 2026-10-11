@@ -1,12 +1,7 @@
 import type { ModelCostConfig } from "@openclaw/llm-core";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
-import type { MemoryTranscriptProjectionFrame } from "../config/sessions/session-transcript-reconcile-memory.js";
 import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
-import type {
-  SessionCostUsageRollupByteRow,
-  SessionCostUsageRollupRow,
-} from "./session-cost-usage-cache.kernel.js";
+import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
 import type {
   CostUsageSummary,
   SessionCostSummary,
@@ -73,8 +68,6 @@ export type UsageCostWorkerInput = {
   location: UsageCostWorkerLocation;
   databases: UsageCostWorkerDatabase[];
   operation: UsageCostWorkerOperation;
-  /** Captured transcript selection; supplied actor work never discovers disk artifacts. */
-  transcriptFiles?: string[];
 };
 
 export type UsageCostWorkerResult =
@@ -132,31 +125,6 @@ export type UsageCostWorkerHostEffects = {
     output: Array<ModelCostConfig | undefined>;
   };
   restore: { input: SqliteSessionFileMarker; output: void };
-  "memory-stats": {
-    input: SqliteSessionFileMarker[];
-    output: Array<SessionTranscriptStats | undefined>;
-  };
-  "memory-instances": {
-    input: { agentId: string; storePath: string };
-    output: Array<{ agentId: string; sessionId: string; updatedAtMs: number }>;
-  };
-  "memory-cache": {
-    input: { filePaths?: readonly string[] };
-    output: SessionCostUsageRollupByteRow[];
-  };
-  "memory-cache-body": {
-    input: SessionCostUsageRollupRow;
-    output: { blob: Uint8Array | null } | undefined;
-  };
-  "memory-transcript": {
-    input: {
-      marker: SqliteSessionFileMarker;
-      afterSeq: number;
-      throughSeq: number;
-      readId: number;
-    };
-    output: MemoryTranscriptProjectionFrame;
-  };
   "prune-row": { input: UsageCostPruneRow; output: void };
   prune: { input: Record<string, never>; output: void };
   write: { input: UsageCostPreparedRollup; output: boolean };

@@ -61,7 +61,6 @@ import {
 import {
   createOpenClawAgentDatabasePathMatcher,
   isSameOpenClawAgentDatabasePath,
-  resolveIncognitoOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
 import {
   removeCanonicalValidationFromHistoricalAgentFixture,
@@ -687,26 +686,6 @@ afterEach(() => {
 });
 
 describe("openclaw agent database", () => {
-  it("keeps incognito state writable without SQLite extension support", () => {
-    const options = { agentId: "worker-1", env: { OPENCLAW_STATE_DIR: createTempStateDir() } };
-    const capability = vi
-      .spyOn(nodeSqlite, "supportsNodeSqliteExtensionLoading")
-      .mockReturnValue(false);
-    try {
-      const { db } = openOpenClawAgentDatabase({
-        ...options,
-        path: resolveIncognitoOpenClawAgentSqlitePath(options),
-      });
-      db.prepare("UPDATE schema_meta SET updated_at = ? WHERE meta_key = 'primary'").run(123);
-      expect(
-        db.prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'").get(),
-      ).toEqual({ updated_at: 123 });
-      expect(() => db.enableLoadExtension(true)).toThrow();
-    } finally {
-      capability.mockRestore();
-    }
-  });
-
   it("uses the canonical state schema for deletion journal reads and updates", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };

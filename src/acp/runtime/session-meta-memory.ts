@@ -1,5 +1,10 @@
-import type { SessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
+import {
+  acquireSessionActorStorage,
+  runWithSessionActorStorage,
+  type SessionActorStorageBinding,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import type { SessionActorStorageAuthority } from "../../config/sessions/session-actor-storage-contract.js";
+import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions/types.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { matchesAcpSessionControlBinding } from "./session-control-owner.js";
@@ -18,8 +23,46 @@ import {
 import type { upsertAcpSessionMetaNative } from "./session-meta-write.native.js";
 import type { AcpSessionMutationSource } from "./session-meta-write.types.js";
 
+export function acquireAcpMemorySession(params: AcpSessionEntryReadInput, create = false) {
+  const assertCurrent = () => params.assertCurrent?.();
+  return acquireSessionActorStorage(
+    {
+      sessionKey: normalizeStoreSessionKey(params.sessionKey),
+      agentId: params.agentId,
+      env: params.env,
+    },
+    {
+      create,
+      lifetime: { assertCurrent },
+      authority: { assertCurrent, authorize: assertCurrent },
+    },
+  );
+}
+
 /** The session actor owns entries; the existing shared worker owns ACP runtime metadata. */
 export async function prepareMemoryAcpSessionEntryRead(
+  params: AcpSessionEntryReadInput,
+): Promise<PreparedAcpSessionEntryRead> {
+  const binding = await acquireAcpMemorySession(params);
+  if (!binding) {
+    return { session: null, assertCurrent: () => params.assertCurrent?.(), release() {} };
+  }
+  try {
+    const prepared = await prepareBoundMemoryAcpSessionEntryRead(params, binding);
+    return {
+      ...prepared,
+      release() {
+        prepared.release();
+        void binding.actor.release();
+      },
+    };
+  } catch (error) {
+    await binding.actor.release();
+    throw error;
+  }
+}
+
+async function prepareBoundMemoryAcpSessionEntryRead(
   params: AcpSessionEntryReadInput,
   binding: SessionActorStorageBinding,
 ): Promise<PreparedAcpSessionEntryRead> {
@@ -53,6 +96,22 @@ export async function prepareMemoryAcpSessionEntryRead(
 }
 
 export async function upsertMemoryAcpSessionMeta(
+  params: Parameters<typeof upsertAcpSessionMetaNative>[0],
+): Promise<SessionEntry | null> {
+  const binding = await acquireAcpMemorySession(params, true);
+  if (!binding) {
+    return null;
+  }
+  try {
+    return await runWithSessionActorStorage(binding, () =>
+      upsertBoundMemoryAcpSessionMeta(params, binding),
+    );
+  } finally {
+    await binding.actor.release();
+  }
+}
+
+async function upsertBoundMemoryAcpSessionMeta(
   params: Parameters<typeof upsertAcpSessionMetaNative>[0],
   binding: SessionActorStorageBinding,
 ): Promise<SessionEntry | null> {

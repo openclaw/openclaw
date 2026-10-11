@@ -7,6 +7,8 @@ import { memorySessionActorOwners } from "../config/sessions/session-actor-memor
 import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { readSessionHistorySnapshotAsync } from "./session-history-state.js";
+import { readSessionPreviewItemsFromTranscriptAsync } from "./session-transcript-preview.js";
 import {
   readRecentSessionMessagesWithStatsAsync,
   readSessionArtifacts,
@@ -22,6 +24,10 @@ import {
   readSessionTranscriptBoundedMessageTailPageAsync,
   readSessionTranscriptSummaryAsync,
 } from "./session-transcript-readers.js";
+import {
+  readSessionTitleFieldsFromTranscript,
+  readSessionTitleFieldsFromTranscriptAsync,
+} from "./session-transcript-title-reader.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:sqlite")>()),
@@ -295,6 +301,51 @@ describe("Gateway memory transcript readers", () => {
     });
   });
 
+  it("hides out-of-page coordination errors and reveals output after an in-process human steer", async () => {
+    const { binding, scope, append } = await fixture();
+    await append(
+      event("coordination-input", "answer", {
+        role: "user",
+        content: "Internal coordination",
+        idempotencyKey: "coordination:user",
+        provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+      }),
+    );
+    await append(
+      event("coordination-error", "coordination-input", {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage: "Internal failure",
+        __openclaw: { runId: "coordination" },
+      }),
+    );
+    await runWithSessionActorStorage(binding, async () => {
+      const hidden = await readSessionMessageByIdAsync(scope, "coordination-error", {
+        historyVisibility: {},
+      });
+      expect(hidden).toEqual({ found: false, oversized: false, historyHidden: true });
+      const before = await readSessionHistorySnapshotAsync({ target: scope, limit: 1 });
+      expect(messageIds(before.history.messages)).toEqual(["answer"]);
+      await append(
+        event("human-steer", "coordination-error", {
+          role: "user",
+          content: "Show me the result",
+          __openclaw: { steerTargetRunId: "coordination" },
+        }),
+      );
+      await append(
+        event("visible-result", "human-steer", {
+          role: "assistant",
+          content: "Visible result",
+          __openclaw: { runId: "coordination" },
+        }),
+      );
+      const after = await readSessionHistorySnapshotAsync({ target: scope, limit: 1 });
+      expect(messageIds(after.history.messages)).toEqual(["visible-result"]);
+    });
+  });
+
   it("preserves exact-message visibility and cancellation at the Gateway reader boundary", async () => {
     const { binding, scope } = await fixture("announce", "main", true);
     await runWithSessionActorStorage(binding, async () => {
@@ -314,4 +365,32 @@ describe("Gateway memory transcript readers", () => {
       ).rejects.toThrow("reader cancelled");
     });
   });
+});
+
+it("reads unbound Gateway transcript state after an in-process append without creating missing owners", async () => {
+  const target = await fixture();
+  expect(await readSessionMessageCountAsync(target.scope)).toBe(2);
+  await target.append(event("next", "answer", { role: "user", content: "Next question" }));
+  expect(await readSessionMessageCountAsync(target.scope)).toBe(3);
+  expect(await readSessionMessageByIdAsync(target.scope, "next")).toMatchObject({ found: true });
+  expect(readSessionTitleFieldsFromTranscript(target.scope)).toMatchObject({
+    firstUserMessage: "Question",
+    lastMessagePreview: "Next question",
+  });
+  expect(await readSessionTitleFieldsFromTranscriptAsync(target.scope)).toEqual(
+    readSessionTitleFieldsFromTranscript(target.scope),
+  );
+  expect(await readSessionPreviewItemsFromTranscriptAsync(target.scope, 3, 100)).toEqual(
+    expect.arrayContaining([expect.objectContaining({ role: "user", text: "Next question" })]),
+  );
+  target.owner.closeSession(target.scope.sessionKey);
+  expect(await readSessionMessageCountAsync(target.scope)).toBe(0);
+  const missing = {
+    ...target.scope,
+    agentId: "absent",
+    sessionKey: "agent:absent:dashboard:incognito-missing",
+    storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "absent", env }),
+  };
+  expect(await readSessionMessageCountAsync(missing)).toBe(0);
+  expect(memorySessionActorOwners.list()).toHaveLength(1);
 });

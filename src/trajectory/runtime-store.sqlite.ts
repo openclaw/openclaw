@@ -6,10 +6,10 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import {
-  getSessionActorStorageBinding,
+  captureSessionActorStorageOwner,
+  withSessionActorStorage,
   type SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
-import { captureIncognitoSessionOperation } from "../config/sessions/session-incognito-binding.js";
 import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import {
   executeSqliteQuerySync,
@@ -198,38 +198,30 @@ export function appendSqliteTrajectoryRuntimeEventsWithWriter(
 export async function loadSqliteTrajectoryRuntimeEvents(
   scope: SqliteTrajectoryRuntimeReadScope & { sessionActor?: SessionActorStorageBinding },
 ): Promise<TrajectoryEvent[]> {
-  const memory = getSessionActorStorageBinding(scope);
+  const authority = { assertCurrent() {}, authorize() {} };
+  const memory = captureSessionActorStorageOwner(scope, authority);
   if (memory) {
-    return memory.actor.storage!.read(
-      {
-        type: "session.trajectory.read",
-        input: {
-          sessionId: scope.sessionId,
-          maxEventBytes: scope.maxEventBytes,
-          maxEventCount: scope.maxEventCount,
+    return (
+      (await withSessionActorStorage(
+        scope,
+        {
+          authority,
+          lifetime: { assertCurrent() {}, assertReadable() {} },
         },
-      },
-      memory.authority,
+        ({ actor, authority: current }) =>
+          actor.storage.read(
+            {
+              type: "session.trajectory.read",
+              input: {
+                sessionId: scope.sessionId,
+                maxEventBytes: scope.maxEventBytes,
+                maxEventCount: scope.maxEventCount,
+              },
+            },
+            current,
+          ),
+      )) ?? []
     );
-  }
-  const incognito = captureIncognitoSessionOperation(scope);
-  if (incognito) {
-    const session = incognito.actor.sessions
-      .deadlines()
-      .find((entry) => entry.sessionId === scope.sessionId);
-    if (!session) {
-      incognito.actor.assertReadable();
-      return [];
-    }
-    return incognito.actor.sessions.sideData(incognito.authority, {
-      type: "session.trajectory.read",
-      input: {
-        sessionKey: session.sessionKey,
-        sessionId: scope.sessionId,
-        maxEventBytes: scope.maxEventBytes,
-        maxEventCount: scope.maxEventCount,
-      },
-    });
   }
   const options = toDatabaseOptions(resolveSqliteReadScope(scope));
   return withSessionHistoryWorkerDatabase(options, (reader) =>
@@ -246,22 +238,26 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
     tailEvents?: number;
   },
 ): SqliteTrajectoryRuntimeEventRow[] {
-  const memory = getSessionActorStorageBinding(scope);
-  if (memory) {
-    return memory.actor.storage!.readCurrent(
-      {
-        type: "session.trajectory.rows",
-        input: {
-          sessionId: scope.sessionId,
-          maxEventBytes: scope.maxEventBytes,
-          maxEventCount: scope.maxEventCount,
-          afterSeq: scope.afterSeq,
-          maxEvents: scope.maxEvents,
-          tailEvents: scope.tailEvents,
-        },
+  const source = captureSessionActorStorageOwner(scope, { assertCurrent() {}, authorize() {} });
+  if (source) {
+    const query = {
+      type: "session.trajectory.rows" as const,
+      input: {
+        sessionId: scope.sessionId,
+        maxEventBytes: scope.maxEventBytes,
+        maxEventCount: scope.maxEventCount,
+        afterSeq: scope.afterSeq,
+        maxEvents: scope.maxEvents,
+        tailEvents: scope.tailEvents,
       },
-      memory.authority,
-    );
+    };
+    if (!source.owner) {
+      return source.binding?.actor.storage?.readCurrent(query, source.authority) ?? [];
+    }
+    const session = source.owner.readSessionById(scope.sessionId, source.authority);
+    return session
+      ? (source.owner.readStorage(session.sessionKey, query, source.authority) ?? [])
+      : [];
   }
   const read = withOpenClawAgentDatabaseReadOnly(
     (database) => {

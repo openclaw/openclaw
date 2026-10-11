@@ -21,13 +21,11 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
-  resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "./session-accessor.js";
-import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import type {
@@ -882,43 +880,6 @@ it.each(["retired predicate", "parent reload failure"] as const)(
     });
   },
 );
-
-it("replans incognito preservation discovery after rollback without a Worker", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const active = { sessionKey: "agent:main:dashboard:incognito-age-active" };
-    const victim = { sessionKey: "agent:main:dashboard:incognito-age-victim" };
-    const policy = resolveMaintenanceConfigFromInput({
-      mode: "enforce",
-      maxEntries: 100,
-      pruneAfter: "1s",
-      archiveDashboardAfter: "1s",
-    });
-    replaceSessionEntrySync(active, { sessionId: "active", updatedAt: Date.now() });
-    replaceSessionEntrySync(victim, { sessionId: "victim", updatedAt: 1 });
-    const results: Array<{ kind: string; workerThreadId: number | undefined }> = [];
-    const reclaim = reclamationRun.runSqliteSessionReclamation;
-    vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation(async (params) => {
-      const result = await reclaim(params);
-      results.push({ kind: result.kind, workerThreadId: params.diagnostics?.workerThreadId });
-      return result;
-    });
-    const spawn = vi.spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker");
-    const completed = observeSessionMaintenanceCompletion(
-      resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-      { accept: (result) => result.archived === 1 },
-    );
-    await patchSessionEntryCore(active, () => ({ label: "in process" }), {
-      maintenanceConfig: policy,
-    });
-    await completed;
-    expect(results.filter(({ kind }) => kind !== "maintenance-age")).toEqual([
-      { kind: "maintenance-preservation-required", workerThreadId: undefined },
-      { kind: "maintenance-plan", workerThreadId: undefined },
-    ]);
-    expect(spawn).not.toHaveBeenCalled();
-    expect(loadSessionEntry(victim)).toMatchObject({ archivedAt: expect.any(Number) });
-  });
-});
 
 it("invalidates the retained maintenance age when a worker commits a backdate", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

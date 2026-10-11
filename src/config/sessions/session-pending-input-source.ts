@@ -1,14 +1,14 @@
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
   prepareSqliteScope,
   resolveSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
-import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
+import {
+  captureSessionActorStorageOwner,
+  withSessionActorStorage,
+} from "./session-actor-storage-binding.js";
 import type { PendingInputSourceRead } from "./session-pending-input-operations.types.js";
 import type { PendingInputScope } from "./session-pending-input-store.js";
 import {
@@ -24,36 +24,54 @@ export async function readPendingInputSource(
   idempotencyKey: string,
   pendingOnly: boolean,
 ) {
-  const memory = getSessionActorStorageBinding(scope);
+  const memory = captureSessionActorStorageOwner(scope, { assertCurrent() {}, authorize() {} });
   if (memory) {
-    const snapshot = await memory.actor.storage!.read(
+    return withSessionActorStorage(
+      scope,
       {
-        type: "session.pendingInput.read",
-        input: {
-          kind: "source",
-          sessionKey: memory.actor.target.sessionKey,
-          sessionId: scope.sessionId,
-          idempotencyKey,
-          pendingOnly,
-        },
+        lifetime: { assertCurrent() {}, assertReadable() {} },
+        authority: memory.authority,
       },
-      memory.authority,
+      async (binding) => {
+        const snapshot = await binding.actor.storage!.read(
+          {
+            type: "session.pendingInput.read",
+            input: {
+              kind: "source",
+              sessionKey: binding.actor.target.sessionKey,
+              sessionId: scope.sessionId,
+              idempotencyKey,
+              pendingOnly,
+            },
+          },
+          binding.authority,
+        );
+        if (snapshot.kind !== "source") {
+          throw new Error("Submitted input returned a different operation");
+        }
+        const entry = binding.actor.snapshot(binding.authority)?.entry;
+        return {
+          path: binding.path,
+          snapshot,
+          assertCurrent() {
+            const current =
+              memory.binding?.actor.target.sessionKey === binding.actor.target.sessionKey
+                ? memory.binding.actor.snapshot(memory.authority)
+                : memory.owner?.readSession(binding.actor.target.sessionKey, memory.authority);
+            if (
+              !current?.entry ||
+              current.entry.sessionId !== entry?.sessionId ||
+              current.entry.lifecycleRevision !== entry?.lifecycleRevision
+            ) {
+              throw new Error("Submitted input session was closed or replaced");
+            }
+          },
+        };
+      },
     );
-    if (snapshot.kind !== "source") {
-      throw new Error("Submitted input returned a different operation");
-    }
-    return {
-      path: memory.path,
-      snapshot,
-      assertCurrent() {
-        memory.actor.assertReadable();
-        memory.authority.assertCurrent();
-      },
-    };
   }
   const captured = {
     ...scope,
-    incognito: scope.incognito ?? captureIncognitoSessionOperation(scope),
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
   const logical = resolveSqliteScope({ ...captured, storePath: undefined });
@@ -64,58 +82,6 @@ export async function readPendingInputSource(
     idempotencyKey,
     pendingOnly,
   };
-  if (captured.incognito) {
-    const { actor, authority } = captured.incognito;
-    actor.assertCurrent();
-    authority.assertCurrent();
-    if (
-      !isIncognitoSessionKey(logical.sessionKey) ||
-      actor.agentId !== logical.agentId ||
-      actor.path !== resolveOpenClawAgentSqlitePath(toDatabaseOptions(logical))
-    ) {
-      throw new Error("Submitted input target differs from its captured incognito actor");
-    }
-    const claim = actor.sessions.captureCurrent(logical.sessionKey);
-    const assertCurrent = () => {
-      actor.assertCurrent();
-      actor.assertReadable();
-      authority.assertCurrent();
-      claim.assertCurrent();
-    };
-    const snapshot = await actor.sessions.readPendingInput(
-      {
-        assertCurrent,
-        authorize: (stage, facts) => authority.authorize?.(stage, facts),
-      },
-      input,
-    );
-    assertCurrent();
-    if (snapshot.kind !== "source") {
-      throw new Error("Submitted input returned a different operation");
-    }
-    return { path: actor.path, snapshot, assertCurrent };
-  }
-  if (isIncognitoSessionKey(captured.sessionKey)) {
-    // Process-held incognito storage retains its native owner until the actor cutover.
-    const options = toDatabaseOptions(resolveSqliteScope(captured));
-    const database = getOpenClawAgentDatabaseIfOpen(options);
-    if (!database) {
-      return undefined;
-    }
-    const assertCurrent = () => {
-      if (getOpenClawAgentDatabaseIfOpen(options) !== database || !database.db.isOpen) {
-        throw new Error("Submitted input lost its incognito database owner");
-      }
-    };
-    const { readPendingInputSourceInDatabase } =
-      await import("./session-pending-input-source.kernel.js");
-    assertCurrent();
-    return {
-      path: database.path,
-      snapshot: readPendingInputSourceInDatabase(database, input),
-      assertCurrent,
-    };
-  }
   const storePath =
     logical.path ??
     captured.storePath ??

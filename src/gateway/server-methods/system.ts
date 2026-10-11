@@ -23,7 +23,7 @@ import { resolveUtilityModelRefForAgent } from "../../agents/utility-model.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
 import { resolveSystemMainSessionTarget } from "../../config/sessions.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import { captureSessionActorStorageOwner } from "../../config/sessions/session-actor-storage-binding.js";
 import { resolveAdvertisedLanHostCore } from "../../infra/advertised-lan-host.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { publicKeyRawBase64UrlFromPem } from "../../infra/device-identity.js";
@@ -295,29 +295,16 @@ export const systemHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      // A targeted wake starts a model run. Require a live persisted session
+      // A targeted wake starts a model run. Require a live session
       // so malformed keys cannot create phantom work under agent defaults.
-      const binding = captureIncognitoSessionSource({
-        agentId: requestedAgentId,
-        sessionKey: requestedSessionKey,
-      });
       const authority = readGatewayRequestMutationAuthority(options);
-      const read =
-        binding && !("kind" in binding)
-          ? await binding.actor.sessions.read(
-              authority,
-              { sessionKey: requestedSessionKey },
-              binding.admissionSignal,
-            )
-          : undefined;
+      const memory = captureSessionActorStorageOwner(
+        { agentId: requestedAgentId, sessionKey: requestedSessionKey },
+        { assertCurrent: authority.assertCurrent, authorize: authority.assertCurrent },
+      );
       authority.assertCurrent();
-      binding?.admissionSignal?.throwIfAborted();
-      if (binding && "kind" in binding) {
-        binding.assertCurrent();
-      }
-      read?.snapshot.assertCurrent();
-      const targetSession = binding
-        ? read?.entry
+      const targetSession = memory
+        ? memory.owner?.readSession(requestedSessionKey, memory.authority)?.entry
         : loadGatewaySessionEntryReadOnly(requestedSessionKey, {
             agentId: requestedAgentId,
           }).entry;

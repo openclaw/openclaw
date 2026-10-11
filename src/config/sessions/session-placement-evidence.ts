@@ -1,23 +1,20 @@
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isIncognitoSessionKey, normalizeAgentId } from "../../routing/session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { matchesAgentDatabaseReadCandidatePath } from "../../state/openclaw-agent-db-resources.js";
-import {
-  readOpenIncognitoAgentDatabaseGeneration,
-  resolveIncognitoOpenClawAgentSqlitePath,
-  retainOpenClawAgentDatabaseReadCandidates,
-} from "../../state/openclaw-agent-db.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { retainOpenClawAgentDatabaseReadCandidates } from "../../state/openclaw-agent-db.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import {
-  readSessionIdentityEvidenceBatch,
-  type SessionIdentityEvidenceIdentity,
-  type SessionIdentityEvidenceResult,
-} from "./session-accessor.sqlite-entry-availability.js";
+import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
+import type { SessionEntrySummary } from "./session-accessor.types.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { captureCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
-import { captureIncognitoSessionTopology } from "./session-incognito-binding.js";
+import type {
+  SessionIdentityEvidenceIdentity,
+  SessionIdentityEvidenceResult,
+} from "./session-entry-read-source.types.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import {
   captureSessionStoreReadCandidate,
@@ -34,90 +31,49 @@ export type PlacementSessionIdentityProbe = {
   sessionKey: string;
 };
 
-/** Whole evidence preparation keeps native incognito and disk-backed custody distinct. */
+/** Memory evidence is read once after durable discovery, without opening or acquiring an owner. */
 export async function readPlacementSessionIdentityEvidence(
   cfg: OpenClawConfig,
   input: readonly PlacementSessionIdentityProbe[],
 ): Promise<SessionIdentityEvidenceResult[]> {
-  const topology = captureIncognitoSessionTopology();
-  const capturedEnv = cloneEnvWithPlatformSemantics(topology?.env ?? process.env);
+  const selected = captureSessionActorStorageOwner({});
+  const capturedEnv = cloneEnvWithPlatformSemantics(
+    selected
+      ? { ...process.env, OPENCLAW_STATE_DIR: path.resolve(selected.path, "../../../..") }
+      : process.env,
+  );
   const env = { ...capturedEnv, OPENCLAW_STATE_DIR: resolveStateDir(capturedEnv) };
   const probes = input.map((probe) => ({ ...probe }));
   const results: SessionIdentityEvidenceResult[] = probes.map(() => ({ status: "absent" }));
   const incognito = probes.flatMap((probe, index) =>
     isIncognitoSessionKey(probe.sessionKey) ? [{ probe, index }] : [],
   );
-  if (topology && incognito.length) {
-    const actors = topology.entries.filter((target) =>
-      incognito.some(({ probe }) => probe.agentId === target.agentId),
-    );
-    const checks: Array<() => void> = [];
-    const assertCurrent = () => {
-      topology.assertCurrent();
-      checks.forEach((check) => check());
-    };
-    const read = async (offset: number): Promise<SessionIdentityEvidenceResult[]> => {
-      assertCurrent();
-      const target = actors[offset];
-      if (!target) {
-        const disk = probes.flatMap((probe, index) =>
-          !isIncognitoSessionKey(probe.sessionKey) ? [{ probe, index }] : [],
-        );
-        const evidence = await readPlacementSessionIdentityEvidence(
-          cfg,
-          disk.map(({ probe }) => probe),
-        );
-        disk.forEach(({ index }, indexInDisk) => {
-          results[index] = evidence[indexInDisk]!;
-        });
-        assertCurrent();
-        return results;
-      }
-      const actor = await captureOpenClawAgentDatabaseExecution({
-        kind: "ephemeral",
-        agentId: target.agentId,
-        env: topology.env,
-        existingOnly: true,
-        authority: { assertCurrent: topology.assertCurrent },
-      });
-      if (!actor || actor.identity.incarnation !== target.identity.incarnation) {
-        await actor?.release();
-        throw new Error("Incognito placement owner changed during acquisition");
-      }
-      try {
-        return await actor.sessions.withSharedState(async () => {
-          const selected = incognito.filter(({ probe }) => probe.agentId === target.agentId);
-          const found = await actor.sessions.readIdentities(
-            { assertCurrent: topology.assertCurrent },
-            { identities: selected.map(({ probe }) => probe) },
-          );
-          checks.push(found.snapshot.assertCurrent);
-          selected.forEach(({ index }, selectedIndex) => {
-            results[index] = found.evidence[selectedIndex]!;
-          });
-          return read(offset + 1);
-        });
-      } finally {
-        await actor.release();
-      }
-    };
-    return read(0).then((result) => {
-      topology.assertCurrent();
-      return result;
-    });
-  }
-  const nativeProbes = incognito.map(({ probe }) => ({
-    ...probe,
-    env,
-    storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: probe.agentId, env }),
-  }));
   const readIncognito = () => {
-    const native = readSessionIdentityEvidenceBatch(nativeProbes);
-    for (const [offset, item] of incognito.entries()) {
-      results[item.index] = expectDefined(native[offset], "incognito evidence");
+    const entriesByAgent = new Map<string, SessionEntrySummary[]>();
+    for (const { probe, index } of incognito) {
+      const agentId = normalizeAgentId(probe.agentId);
+      let entries = entriesByAgent.get(agentId);
+      if (!entries) {
+        entries =
+          captureMemoryExactSessionReader({ ...probe, agentId, env })?.entries("list") ?? [];
+        entriesByAgent.set(agentId, entries);
+      }
+      const exact = entries.find(
+        ({ sessionKey }) => sessionKey === normalizeStoreSessionKey(probe.sessionKey),
+      );
+      if (exact?.entry.sessionId === probe.sessionId) {
+        results[index] = { status: "current", sessionKey: exact.sessionKey };
+        continue;
+      }
+      const matches = entries.filter(({ entry }) => entry.sessionId === probe.sessionId);
+      results[index] =
+        matches.length > 1
+          ? { status: "unknown", reason: "ambiguous" }
+          : matches[0]
+            ? { status: "current", sessionKey: matches[0].sessionKey }
+            : { status: "absent" };
     }
   };
-  const incognitoGeneration = readOpenIncognitoAgentDatabaseGeneration();
   const disk = probes.flatMap((probe, index) =>
     !isIncognitoSessionKey(probe.sessionKey) ? [{ probe, index }] : [],
   );
@@ -286,14 +242,7 @@ export async function readPlacementSessionIdentityEvidence(
         }
       }
     }
-    if (incognitoGeneration !== readOpenIncognitoAgentDatabaseGeneration()) {
-      for (const { index } of incognito) {
-        results[index] = { status: "unknown", reason: "read-failed" };
-      }
-    } else {
-      // Rows can change without replacing the process-held incognito connection.
-      readIncognito();
-    }
+    readIncognito();
     return results;
   } finally {
     unsubscribe();

@@ -1,7 +1,13 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { upsertSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import { rewindSessionToMessage } from "./session-accessor.sqlite-message-cut.js";
-import { prepareSessionForkTranscript } from "./session-accessor.sqlite-parent-session.js";
+import {
+  forkSessionEntryFromParentTarget,
+  forkSessionEntryFromParentTargetWithPatch,
+  forkSessionTranscriptFromParent,
+  prepareSessionForkTranscript,
+} from "./session-accessor.sqlite-parent-session.js";
 import type { SessionActor } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import {
@@ -161,7 +167,7 @@ it.each([
   },
 );
 
-it("rewinds current memory state without a pre-read while preserving explicit conflicts", async () => {
+it("rewinds current memory state while preserving explicit conflicts", async () => {
   const { parent, entry } = await fixture();
   const params = {
     agentId: "main",
@@ -201,3 +207,72 @@ it("does not create a missing cross-agent source while preparing a child", async
   expect(prepared).toEqual({ status: "missing-parent" });
   expect(memorySessionActorOwners.list().map((owner) => owner.agentId)).toEqual(["research"]);
 });
+
+it.each(["main", "research"])(
+  "adopts a transcript-only fork in the %s memory owner",
+  async (childAgent) => {
+    const { parent, child, childKey, entry } = await fixture(childAgent);
+    const fork = await forkSessionTranscriptFromParent({
+      parentEntry: entry,
+      parentSessionKey: parentKey,
+      sessionKey: childKey,
+      agentId: "main",
+      storePath: parent.owner.path,
+      targetStorePath: child.owner.path,
+      targetSessionId: "pending-child-transcript",
+    });
+    expect(fork.status).toBe("created");
+    expect(child.owner.readSession(childKey, authority)?.entry).toBeUndefined();
+    const pending = await child.actor.storage!.read(
+      { type: "session.history.hydrate", input: { sessionId: "pending-child-transcript" } },
+      authority,
+    );
+    expect(pending).toMatchObject({
+      kind: "full",
+      snapshot: { events: expect.arrayContaining([expect.objectContaining({ id: "a1" })]) },
+    });
+    await upsertSessionEntryCore(
+      { agentId: childAgent, sessionKey: childKey, storePath: child.owner.path },
+      { sessionId: "pending-child-transcript", updatedAt: 2 },
+    );
+    expect(
+      await child.actor.storage!.read({ type: "session.history.hydrate", input: {} }, authority),
+    ).toMatchObject({
+      kind: "full",
+      snapshot: { events: pending.kind === "full" ? pending.snapshot.events : [] },
+    });
+  },
+);
+
+it.each(["callback", "typed"])(
+  "forks current memory state through the %s entry API",
+  async (mode) => {
+    const { parent, childKey } = await fixture();
+    const params = {
+      storePath: parent.owner.path,
+      agentId: "main",
+      parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey] },
+      sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
+      fallbackEntry: { sessionId: "child-seed", updatedAt: 2 },
+    };
+    const result =
+      mode === "callback"
+        ? await forkSessionEntryFromParentTarget({
+            ...params,
+            patch: ({ fork }) => ({ label: fork.sessionId }),
+          })
+        : await forkSessionEntryFromParentTargetWithPatch(params, {
+            forked: { label: "Copied child" },
+          });
+    expect(result.status).toBe("forked");
+    if (result.status !== "forked") {
+      throw new Error("Expected child fork");
+    }
+    expect(result.sessionEntry.label).toBe(
+      mode === "callback" ? result.fork.sessionId : "Copied child",
+    );
+    expect(parent.owner.readSession(childKey, authority)?.entry?.sessionId).toBe(
+      result.fork.sessionId,
+    );
+  },
+);

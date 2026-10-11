@@ -16,14 +16,9 @@ import {
 } from "../../config/sessions.js";
 import { rollbackPluginOwnedSessionEntryLifecycle } from "../../config/sessions/session-accessor.js";
 import {
-  getSessionActorStorageBinding,
+  withSessionActorStorage,
   type SessionActorStorageBinding,
 } from "../../config/sessions/session-actor-storage-binding.js";
-import {
-  captureIncognitoSessionOperation,
-  captureIncognitoSessionSource,
-  withIncognitoSessionBinding,
-} from "../../config/sessions/session-incognito-binding.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -84,20 +79,19 @@ type DeleteGatewaySessionResult =
 export async function deleteGatewaySession(
   options: DeleteGatewaySessionOptions,
 ): Promise<DeleteGatewaySessionResult> {
-  const scope = { sessionKey: options.params.key.trim(), agentId: options.params.agentId };
-  const memory = getSessionActorStorageBinding(scope);
-  if (memory) {
-    return deleteGatewaySessionInScope(options, undefined, undefined, memory);
-  }
-  const source = captureIncognitoSessionSource(scope);
-  const absent = source && "kind" in source ? source : undefined;
-  const binding = absent ? undefined : captureIncognitoSessionOperation(scope);
-  const run = () => deleteGatewaySessionInScope(options, binding, absent);
-  return binding
-    ? binding.actor.sessions.withSharedState(() =>
-        withIncognitoSessionBinding({ ...binding, admissionSignal: undefined }, run),
-      )
-    : run();
+  const assertCurrent = () => {
+    options.assertCurrent?.();
+    options.sessionMutationAuthorization?.assertCurrent();
+  };
+  const deleted = await withSessionActorStorage(
+    { sessionKey: options.params.key.trim(), agentId: options.params.agentId },
+    {
+      lifetime: { assertCurrent, assertReadable: assertCurrent },
+      authority: { assertCurrent, authorize() {} },
+    },
+    (memory) => deleteGatewaySessionInScope(options, memory),
+  );
+  return deleted ?? deleteGatewaySessionInScope(options);
 }
 
 async function deleteGatewaySessionInScope(
@@ -109,11 +103,6 @@ async function deleteGatewaySessionInScope(
     assertCurrent: assertCallerCurrent,
     onDeleted,
   }: DeleteGatewaySessionOptions,
-  binding: ReturnType<typeof captureIncognitoSessionOperation>,
-  absent?: Extract<
-    NonNullable<ReturnType<typeof captureIncognitoSessionSource>>,
-    { kind: "absent" }
-  >,
   memory?: SessionActorStorageBinding,
 ): Promise<DeleteGatewaySessionResult> {
   assertCallerCurrent?.();
@@ -125,9 +114,8 @@ async function deleteGatewaySessionInScope(
   }
   const requestedAgentId = requestedAgent.agentId;
   const actorIdentity =
-    (memory || binding || absent) &&
-    resolveSessionStoreIdentity({ cfg, sessionKey: key, agentId: requestedAgentId });
-  const actorOwner = memory ?? binding?.actor ?? absent;
+    memory && resolveSessionStoreIdentity({ cfg, sessionKey: key, agentId: requestedAgentId });
+  const actorOwner = memory;
   const target =
     actorIdentity && actorOwner
       ? {
@@ -170,27 +158,12 @@ async function deleteGatewaySessionInScope(
     sessionMutationAuthorization?.assertCurrent();
     memory?.actor.assertCurrent();
     memory?.authority.assertCurrent();
-    binding?.authority.assertCurrent();
-    absent?.assertCurrent();
   };
-  let actorEntry =
-    binding &&
-    (await binding.actor.sessions.read(
-      { assertCurrent: assertExternalCurrent },
-      { sessionKey: target.canonicalKey },
-    ));
-  const actorClaim = actorEntry?.claim;
   const readMemoryEntry = () =>
     memory?.actor.storage!.readCurrent({ type: "session.entry.read", input: {} }, memory.authority);
   const initialDeleteEntry = memory
     ? readMemoryEntry()
-    : actorEntry
-      ? actorEntry.entry
-      : absent
-        ? undefined
-        : loadSessionEntry(key, {
-            agentId: requestedAgentId,
-          }).entry;
+    : loadSessionEntry(key, { agentId: requestedAgentId }).entry;
   const expectedSessionId = p.expectedSessionId?.trim();
   const expectedLifecycleRevision = p.expectedLifecycleRevision?.trim();
   const sessionChangedError = () =>
@@ -233,7 +206,7 @@ async function deleteGatewaySessionInScope(
   if (initialError) {
     return { ok: false, error: initialError };
   }
-  if (absent) {
+  if (isIncognitoSessionKey(target.canonicalKey) && !memory) {
     assertExternalCurrent();
     if (p.expectedSessionUpdatedAt !== undefined) {
       return { ok: false, error: sessionChangedError() };
@@ -247,25 +220,8 @@ async function deleteGatewaySessionInScope(
     onDeleted?.(result);
     return { ok: true, result };
   }
-  const assertGenerationCurrent = () => {
-    assertExternalCurrent();
-    actorClaim?.assertCurrent();
-  };
-  const refreshActorEntry = async () => {
-    if (binding) {
-      assertGenerationCurrent();
-      actorEntry = await binding.actor.sessions.read(
-        { assertCurrent: assertExternalCurrent },
-        {
-          sessionKey: target.canonicalKey,
-        },
-      );
-      assertGenerationCurrent();
-      actorEntry.snapshot.assertCurrent();
-    }
-  };
   const assertCurrent = () => {
-    assertGenerationCurrent();
+    assertExternalCurrent();
     if (memory) {
       const entry = readMemoryEntry();
       const error = resolveEntryError(entry);
@@ -274,10 +230,7 @@ async function deleteGatewaySessionInScope(
       }
       return { ...target, entry, legacyKey: undefined };
     }
-    actorEntry?.snapshot.assertCurrent();
-    const current = actorEntry
-      ? { ...target, entry: actorEntry.entry, legacyKey: undefined }
-      : loadGatewaySessionEntryReadOnly(key, { agentId: requestedAgentId });
+    const current = loadGatewaySessionEntryReadOnly(key, { agentId: requestedAgentId });
     if (
       current.storePath !== storePath ||
       current.canonicalKey !== target.canonicalKey ||
@@ -307,7 +260,7 @@ async function deleteGatewaySessionInScope(
       try {
         drain = await prepareSessionLifecycleDrain({
           action: "delete",
-          authorize: binding || memory ? assertGenerationCurrent : assertCurrent,
+          authorize: memory ? assertExternalCurrent : assertCurrent,
           beforeCancel: () => {
             // Compare before cancellation writes its own terminal metadata.
             if (
@@ -344,7 +297,6 @@ async function deleteGatewaySessionInScope(
           ),
         );
       }
-      await refreshActorEntry();
       // Reclaim may wait for an earlier placement operation that needs this mutex.
       return await runExclusiveSessionLifecycleMutation("delete", {
         scope: storePath,
@@ -358,11 +310,7 @@ async function deleteGatewaySessionInScope(
             sessionId: entry?.sessionId,
           });
           const commitGuard = () => {
-            if (binding) {
-              assertExternalCurrent();
-            } else {
-              assertCurrent();
-            }
+            assertCurrent();
             retirement.assertCurrent();
             if (drain?.hasAuthoritativeWork()) {
               throw new SessionDeletionError(
@@ -381,28 +329,15 @@ async function deleteGatewaySessionInScope(
             legacyKey,
             canonicalKey,
             reason: "session-delete",
-            assertCurrent:
-              binding || memory
-                ? () => {
-                    assertGenerationCurrent();
-                    commitGuard();
-                  }
-                : commitGuard,
+            assertCurrent: commitGuard,
           });
           if (mutationCleanupError) {
             throw new SessionDeletionError(mutationCleanupError);
           }
-          await refreshActorEntry();
           assertCurrent();
           const postCleanupTarget = memory
             ? { entry: readMemoryEntry(), target }
-            : actorEntry
-              ? { entry: actorEntry.entry, target }
-              : loadAccessorSessionEntryForGatewayTarget({
-                  key,
-                  cfg,
-                  agentId: requestedAgentId,
-                });
+            : loadAccessorSessionEntryForGatewayTarget({ key, cfg, agentId: requestedAgentId });
           const postCleanupEntry = postCleanupTarget.entry;
           const deletedWorktreeId = normalizeOptionalString(postCleanupEntry?.worktree?.id);
           commitGuard();

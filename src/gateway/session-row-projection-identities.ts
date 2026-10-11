@@ -1,11 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { SessionSharingIdentity } from "../../packages/gateway-protocol/src/index.js";
-import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
-import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
-import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
-import { listOpenIncognitoAgentDatabases } from "../state/openclaw-agent-db.js";
 import { first, identity, type Row } from "./session-row-projection-record.js";
 
 type Contribution = { key: string; storePath: string; actor: SessionSharingIdentity };
@@ -68,7 +64,6 @@ export function createSessionRowCreatorIndex() {
       matching: (query: { key: string }) => Row[],
     ) {
       const memory = captureSessionActorStorageOwner({});
-      const binding = memory ? undefined : captureIncognitoSessionBinding();
       return inOwner(() => {
         const selectedPaths = selectPaths();
         if (disposed) {
@@ -132,7 +127,15 @@ export function createSessionRowCreatorIndex() {
                 .flatMap(({ entry }) =>
                   entry?.incognito && entry.createdActor?.id ? [entry.createdActor] : [],
                 ) ?? [])
-            : listOpenIncognitoSessionCreators(binding)),
+            : memorySessionActorOwners
+                .list()
+                .flatMap((owner) =>
+                  owner
+                    .listSessions({ assertCurrent() {} })
+                    .flatMap(({ entry }) =>
+                      entry?.incognito && entry.createdActor?.id ? [entry.createdActor] : [],
+                    ),
+                )),
         ];
       });
     },
@@ -144,32 +147,4 @@ export function createSessionRowCreatorIndex() {
       paths = undefined;
     },
   };
-}
-
-/** Incognito creators preserve the existing picker scope without entering resident memory. */
-function listOpenIncognitoSessionCreators(
-  binding: ReturnType<typeof captureIncognitoSessionBinding>,
-) {
-  if (binding) {
-    binding.admissionSignal?.throwIfAborted();
-    binding.actor.assertReadable();
-    if (readAgentDatabaseAdmissionRefusal(binding.actor.agentId)) {
-      return [];
-    }
-    return binding.actor.sessions.deadlines().flatMap(({ sessionKey }) => {
-      const entry = binding.actor.sessions.readSharing(sessionKey)?.entry;
-      return entry?.incognito && entry.createdActor?.id ? [entry.createdActor] : [];
-    });
-  }
-  return listOpenIncognitoAgentDatabases().flatMap((target) => {
-    if (readAgentDatabaseAdmissionRefusal(target.agentId)) {
-      return [];
-    }
-    return listSessionEntriesReadOnly({ ...target, projection: "list", clone: false }).flatMap(
-      ({ sessionKey, entry }) =>
-        isIncognitoSessionKey(sessionKey) && entry.incognito === true && entry.createdActor?.id
-          ? [entry.createdActor]
-          : [],
-    );
-  });
 }

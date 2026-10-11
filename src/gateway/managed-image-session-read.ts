@@ -3,11 +3,8 @@ import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { resolveStateDir } from "../config/paths.js";
 import { loadExactSessionEntryReadOnlyResult } from "../config/sessions/session-accessor.sqlite-entry-availability.js";
 import { resolveSessionEntry } from "../config/sessions/session-accessor.sqlite-exact-read.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import type { SessionExactEntriesWorkerResult } from "../config/sessions/session-entry-read.types.js";
-import {
-  captureIncognitoSessionSource,
-  withIncognitoSessionEntry,
-} from "../config/sessions/session-incognito-binding.js";
 import { captureSessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
@@ -18,6 +15,7 @@ import {
 } from "../config/sessions/targets-read-availability.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { SessionMetadataUnavailableError } from "../state/session-metadata-unavailable-error.js";
 import type { SessionTranscriptReadScope } from "./session-transcript-readers.js";
@@ -28,8 +26,8 @@ export type SessionStoreAvailabilityRead = ReturnType<
   typeof resolveExistingAgentSessionStoreTargetsReadOnlyResult
 >;
 
-/** Native cleanup selection remains available until production incognito acquisition cuts over. */
-export function resolveNativeManagedImageSessionRead(params: {
+/** Saved-session cleanup resolves the persisted transcript source. */
+export function resolveSavedManagedImageSessionRead(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
@@ -131,24 +129,39 @@ export async function withManagedImageSessionRead<T>(
     storePath: cfg.session?.store,
     env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
   };
-  const binding = captureIncognitoSessionSource(incognitoScope);
-  if (binding) {
-    return withIncognitoSessionEntry(
-      binding,
-      incognitoScope.sessionKey,
-      params.assertCurrent,
-      async (entry, assertCurrent) =>
-        entry && !("kind" in binding)
-          ? consume(
-              {
-                ...incognitoScope,
-                storePath: binding.actor.path,
-                sessionEntry: entry,
-                sessionId: entry.sessionId,
-              },
-              assertCurrent,
-            )
-          : null,
+  if (isIncognitoSessionKey(incognitoScope.sessionKey)) {
+    const assertCurrent = params.assertCurrent;
+    return (
+      (await withSessionActorStorage(
+        incognitoScope,
+        {
+          lifetime: { assertCurrent, assertReadable: assertCurrent },
+          authority: { assertCurrent, authorize: assertCurrent },
+        },
+        (binding) => {
+          const entry = binding.actor.snapshot(binding.authority)?.entry;
+          if (!entry) {
+            return null;
+          }
+          return consume(
+            {
+              ...incognitoScope,
+              storePath: binding.path,
+              sessionEntry: entry,
+              sessionId: entry.sessionId,
+            },
+            () => {
+              const current = binding.actor.snapshot(binding.authority)?.entry;
+              if (
+                current?.sessionId !== entry.sessionId ||
+                current?.lifecycleRevision !== entry.lifecycleRevision
+              ) {
+                throw new Error("Managed media session authority changed");
+              }
+            },
+          );
+        },
+      )) ?? null
     );
   }
   const { candidates, ...prepared } = prepareSessionStoreTargetInventory(cfg, [agentId], {

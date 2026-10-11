@@ -1,7 +1,5 @@
 import {
   captureIncognitoMemoryReader,
-  isIncognitoOpenClawAgentSqlitePath,
-  isIncognitoSessionKey,
   readRestoredSessionTranscript,
   readSessionResetRecallCutoffInWorker,
   readTranscriptExportSnapshotReadOnlySync,
@@ -31,19 +29,12 @@ export function readSessionResetRecallCutoffInProcess(
 
 export async function readSessionResetRecallCutoff(
   scope: SessionResetRecallScope,
-  suppliedSource?: {
-    memoryResetRecall(scope: SessionResetRecallScope): Promise<SessionResetRecallCutoff>;
-  },
 ): Promise<SessionResetRecallCutoff> {
-  const source = suppliedSource ?? captureIncognitoMemoryReader(scope);
+  const source = captureIncognitoMemoryReader(scope);
   if (source) {
-    return source.memoryResetRecall({ ...scope });
+    return source.memoryResetRecall();
   }
-  const read = () =>
-    isIncognitoSessionKey(scope.sessionKey) ||
-    isIncognitoOpenClawAgentSqlitePath(scope.storePath, { agentId: scope.agentId })
-      ? readSessionResetRecallCutoffInProcess(scope)
-      : readSessionResetRecallCutoffInWorker(scope);
+  const read = () => readSessionResetRecallCutoffInWorker(scope);
   try {
     return await read();
   } catch (error) {

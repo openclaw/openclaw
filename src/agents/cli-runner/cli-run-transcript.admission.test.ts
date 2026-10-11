@@ -40,9 +40,12 @@ vi.mock("../../config/sessions/session-accessor.js", () => ({
 vi.mock("../../config/sessions/session-store-owner.js", () => ({
   resolvePersistedSessionStoreOwnerForTarget: () => ({ kind: "none" }),
 }));
-// mock-isolation: This native admission fixture has no actor; actor paths use real-worker coverage.
-vi.mock("../../config/sessions/session-incognito-binding.js", () => ({
-  captureIncognitoSessionBinding: () => undefined,
+// mock-isolation: This durable admission fixture has no memory owner.
+vi.mock("../../config/sessions/session-actor-storage-binding.js", () => ({
+  captureSessionActorStorageOwner: () => undefined,
+  getSessionActorStorageBinding: () => undefined,
+  acquireSessionActorStorage: async () => undefined,
+  runWithSessionActorStorage: (_binding: unknown, consume: () => unknown) => consume(),
 }));
 vi.mock("../../config/sessions/transcript.js", () => ({
   appendExactAssistantMessageToSessionTranscript: vi.fn(),

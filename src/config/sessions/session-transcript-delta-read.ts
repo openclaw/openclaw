@@ -1,5 +1,4 @@
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { readSessionTranscriptVisibleMessageDeltaCore } from "./session-accessor.sqlite-active-events.js";
 import type {
   SessionTranscriptRawDeltaLimits,
   SessionTranscriptRawDeltaResult,
@@ -7,15 +6,9 @@ import type {
   SessionTranscriptVisibleMessageDeltaLimits,
   SessionTranscriptVisibleMessageDeltaResult,
 } from "./session-accessor.sqlite-contract.js";
-import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 import { toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { captureSessionActorTranscriptRead } from "./session-actor-transcript-read.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
-import {
-  captureIncognitoSessionHistoryBinding,
-  captureIncognitoSessionSource,
-} from "./session-incognito-binding.js";
-import { prepareIncognitoSessionHistoryRead } from "./session-incognito-history-read.js";
 import { isSessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
@@ -75,9 +68,6 @@ export async function withSessionTranscriptDeltaReader<T>(
       active = false;
     }
   }
-  const incognitoSource = captureIncognitoSessionSource(scope);
-  const absent = incognitoSource && "kind" in incognitoSource ? incognitoSource : undefined;
-  const incognito = absent ? undefined : captureIncognitoSessionHistoryBinding(scope);
   let active = true;
   const assertActive = () => {
     signal?.throwIfAborted();
@@ -86,70 +76,8 @@ export async function withSessionTranscriptDeltaReader<T>(
     }
   };
   try {
-    if (absent) {
-      const missing = async (): Promise<{ kind: "missing" }> => {
-        assertActive();
-        absent.assertCurrent();
-        return { kind: "missing" };
-      };
-      const result = await consume({ raw: missing, visible: missing });
-      assertActive();
-      absent.assertCurrent();
-      return result;
-    }
-    if (incognito) {
-      const prepared = prepareIncognitoSessionHistoryRead(incognito, scope, signal);
-      const read = async <Value>(operation: () => Promise<Value>) => {
-        assertActive();
-        prepared.authority.assertCurrent();
-        const value = await operation();
-        prepared.authority.assertCurrent();
-        assertActive();
-        return value;
-      };
-      const result = await prepared.actor.sessions.withSharedState(() =>
-        consume({
-          raw: (limits) =>
-            read(() =>
-              prepared.actor.sessions.history(
-                prepared.authority,
-                {
-                  type: "session.history.raw-delta",
-                  input: { ...prepared.target, limits },
-                },
-                signal,
-              ),
-            ),
-          visible: (limits) =>
-            read(() =>
-              prepared.actor.sessions.history(
-                prepared.authority,
-                {
-                  type: "session.history.visible-delta",
-                  input: { ...prepared.target, limits },
-                },
-                signal,
-              ),
-            ),
-        }),
-      );
-      prepared.authority.assertCurrent();
-      return result;
-    }
     return await withSessionTranscriptReadSource(
       scope,
-      async (captured) =>
-        consume({
-          // Process-held incognito retains its native owner until atomic activation.
-          raw: async (limits) => {
-            assertActive();
-            return readTranscriptRawDelta(captured, limits);
-          },
-          visible: async (limits) => {
-            assertActive();
-            return readSessionTranscriptVisibleMessageDeltaCore(captured, limits);
-          },
-        }),
       async (source) => {
         const reader = source.preparedReads ?? source.owner;
         const assertCurrent = () => {

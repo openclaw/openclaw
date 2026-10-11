@@ -1,31 +1,13 @@
 import { getOwedHarnessCompletionTask } from "../../agents/agent-harness-completion-recovery.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { logVerbose } from "../../globals.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import {
   getReplyPayloadMetadata,
   type ReplyPayload,
   type SessionWriterDeliveryAuthority,
 } from "../reply-payload.js";
-
-/** Capture before preparation yields; absence and ended actors never enter native discovery. */
-export function captureSessionWriterDeliveryRead(
-  target: Pick<SessionWriterDeliveryAuthority, "agentId" | "sessionKey" | "storePath">,
-): SessionWriterDeliveryAuthority["readCurrentSession"] {
-  const source = captureIncognitoSessionSource(target);
-  if (!source) {
-    return undefined;
-  }
-  const sessionKey = target.sessionKey;
-  return () => {
-    if ("kind" in source) {
-      source.assertCurrent();
-      return undefined;
-    }
-    return source.actor.sessions.readSteering(sessionKey);
-  };
-}
 
 class SessionWriterDeliveryRevokedError extends PlatformMessageNotDispatchedError {
   constructor() {
@@ -42,9 +24,8 @@ function isAuthorityCurrent(
   fallbackStorePath?: string,
 ): boolean {
   const storePath = authority.storePath ?? fallbackStorePath;
-  const current = authority.readCurrentSession
-    ? authority.readCurrentSession()
-    : storePath
+  const current =
+    storePath || isIncognitoSessionKey(authority.sessionKey)
       ? loadSessionEntryReadOnly({
           ...(authority.agentId ? { agentId: authority.agentId } : {}),
           readConsistency: "latest",

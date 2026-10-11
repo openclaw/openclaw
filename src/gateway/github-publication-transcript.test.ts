@@ -1,5 +1,4 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
-import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -11,13 +10,14 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import { withIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { reportGitHubPublicationTranscript } from "./github-publication-transcript.js";
@@ -38,25 +38,33 @@ afterEach(() => {
 });
 
 describe("GitHub publication transcript reporting", () => {
-  it("commits one bound private report before marking its publication receipt", async () => {
+  it("commits one memory-only private report before marking its publication receipt", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const authority = { assertCurrent() {} };
-      const actor = await captureOpenClawAgentDatabaseExecution({
-        kind: "ephemeral",
-        agentId: "main",
-        env: state.env,
-        authority,
-      });
-      assert(actor);
+      const authority = { assertCurrent() {}, authorize() {} };
       const session = {
         agentId: "main",
         sessionKey: "agent:main:dashboard:incognito-publication-transcript",
         sessionId: "private-publication",
       };
-      await actor.sessions.create(authority, {
-        sessionKey: session.sessionKey,
-        entry: { sessionId: session.sessionId, updatedAt: Date.now() },
-      });
+      const location = {
+        agentId: session.agentId,
+        path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: session.agentId, env: state.env }),
+      };
+      const owner = memorySessionActorOwners.get(location);
+      const actor = await owner.acquire(
+        { database: owner.identity, sessionKey: session.sessionKey },
+        { assertCurrent() {}, assertReadable() {} },
+      );
+      readSessionActorStorageResult(
+        await actor.storage!.mutate(
+          {
+            type: "session.entry.create",
+            input: { entry: { sessionId: session.sessionId, updatedAt: Date.now() } },
+          },
+          authority,
+        ),
+      );
+      await actor.release();
       const result = {
         requestId: "private-result",
         status: "published" as const,
@@ -71,38 +79,36 @@ describe("GitHub publication transcript reporting", () => {
       const markReported = vi.fn();
       const sql = observeHostDataSql();
       try {
-        await withIncognitoSessionBinding({ actor }, async () => {
-          await reportGitHubPublicationTranscript(
-            loadRuntime,
-            { markReported },
-            { ...session, result },
-          );
-          await reportGitHubPublicationTranscript(
-            loadRuntime,
-            { markReported },
-            { ...session, result },
-          );
-          const events = await loadTranscriptEvents({
-            ...session,
-            storePath: actor.path,
-            env: state.env,
-          });
-          const reports = events.filter(
-            (event) =>
-              isRecord(event) &&
-              event.type === "message" &&
-              isRecord(event.message) &&
-              event.message.responseId === `github-publication:${result.requestId}`,
-          );
-          expect(reports).toHaveLength(1);
-          expect(JSON.stringify(reports[0])).toContain(result.url);
-          expect(markReported).toHaveBeenCalledTimes(2);
-          expect(loadRuntime).not.toHaveBeenCalled();
-          expect(sql.queries).toEqual([]);
+        await reportGitHubPublicationTranscript(
+          loadRuntime,
+          { markReported },
+          { ...session, result },
+        );
+        await reportGitHubPublicationTranscript(
+          loadRuntime,
+          { markReported },
+          { ...session, result },
+        );
+        const events = await loadTranscriptEvents({
+          ...session,
+          storePath: location.path,
+          env: state.env,
         });
+        const reports = events.filter(
+          (event) =>
+            isRecord(event) &&
+            event.type === "message" &&
+            isRecord(event.message) &&
+            event.message.responseId === `github-publication:${result.requestId}`,
+        );
+        expect(reports).toHaveLength(1);
+        expect(JSON.stringify(reports[0])).toContain(result.url);
+        expect(markReported).toHaveBeenCalledTimes(2);
+        expect(loadRuntime).not.toHaveBeenCalled();
+        expect(sql.queries).toEqual([]);
       } finally {
         sql.restore();
-        await actor.close();
+        memorySessionActorOwners.closeDatabase(location);
       }
     });
   });

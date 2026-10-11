@@ -1,6 +1,5 @@
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
-import type { SqliteWorkerEphemeralTarget } from "../infra/sqlite-worker-contract.js";
 import {
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
@@ -126,29 +125,12 @@ export function runOpenClawAgentPathWriteAdmission<T>(
 
 /** Reserve a native write permit without admitting inherited foreground callbacks. */
 export function runOpenClawAgentWorkerWrite<T>(
-  options:
-    | OpenClawAgentDatabaseOptions
-    | { target: Readonly<SqliteWorkerEphemeralTarget>; assertCurrent(): void },
+  options: OpenClawAgentDatabaseOptions,
   run: () => Promise<T>,
   timing?: StoreWriterTiming,
   signal?: AbortSignal,
 ): Promise<T> {
   return observeWriteAdmission("worker", timing, (observed) => {
-    if ("target" in options) {
-      const { handle, incarnation } = options.target;
-      return runQueuedStoreWrite({
-        queues: admission.queues,
-        storePath: `ephemeral:${handle}:${incarnation}`,
-        label: "incognito agent database write admission",
-        reentrant: false,
-        fn: async () => {
-          options.assertCurrent();
-          return run();
-        },
-        timing: observed,
-        signal,
-      });
-    }
     return runOpenClawAgentWriteAdmission(
       options,
       async ({ canonicalPath: storePath }) => {

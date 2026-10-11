@@ -1,11 +1,11 @@
 // Gateway HTTP session kill handler.
 // Stops subagent runs through the admin-scoped HTTP control surface.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { killSubagentRunAdmin } from "../agents/subagents/registry/subagent-control.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import {
   sendInvalidRequest,
@@ -51,22 +51,6 @@ export async function handleSessionKillHttpRequest(
   }
 
   const capturedKey = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
-  let selected: Result<ReturnType<typeof captureIncognitoSessionSource>, unknown>;
-  let assertSourceCurrent = () => {};
-  try {
-    const source = captureIncognitoSessionSource({ sessionKey: capturedKey });
-    if (source && !("kind" in source)) {
-      const claim = source.actor.sessions.captureCurrent(capturedKey);
-      assertSourceCurrent = () => {
-        source.admissionSignal?.throwIfAborted();
-        source.actor.assertReadable();
-        claim.assertCurrent();
-      };
-    }
-    selected = ok(source);
-  } catch (error) {
-    selected = err(error);
-  }
   const requestAuth = await authorizeGatewayHttpRequestOrReply({
     ...opts,
     req,
@@ -137,28 +121,28 @@ export async function handleSessionKillHttpRequest(
     });
     return true;
   };
-  if (!selected.ok) {
-    throw selected.error;
-  }
-  const source = selected.value;
-  if (source) {
-    if ("kind" in source) {
-      source.assertCurrent();
-      return kill(undefined, sessionKey, requestAuth.assertCurrent);
-    }
-    const assertCurrent = () => {
-      requestAuth.assertCurrent();
-      assertSourceCurrent();
-    };
-    return source.actor.sessions.withSharedState(async () => {
-      const { entry } = await source.actor.sessions.read(
-        { assertCurrent },
-        { sessionKey: capturedKey },
-        source.admissionSignal,
-      );
-      assertCurrent();
-      return kill(entry, capturedKey, assertCurrent);
-    });
+  if (isIncognitoSessionKey(capturedKey)) {
+    const result = await withSessionActorStorage(
+      { sessionKey: capturedKey, agentId: requestedAgent.agentId },
+      {
+        lifetime: {
+          assertCurrent: requestAuth.assertCurrent,
+          assertReadable: requestAuth.assertCurrent,
+        },
+        authority: {
+          assertCurrent: requestAuth.assertCurrent,
+          authorize: () => requestAuth.assertCurrent(),
+        },
+      },
+      async (memory) => {
+        const entry = memory.actor.snapshot(memory.authority)?.entry;
+        return kill(entry, capturedKey, () => {
+          requestAuth.assertCurrent();
+          memory.actor.assertReadable();
+        });
+      },
+    );
+    return result ?? kill(undefined, capturedKey, requestAuth.assertCurrent);
   }
   const { entry, canonicalKey } = loadSessionEntry(sessionKey, { agentId: requestedAgent.agentId });
   return kill(entry, canonicalKey, requestAuth.assertCurrent);

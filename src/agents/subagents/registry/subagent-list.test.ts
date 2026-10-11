@@ -5,10 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
-import { withIncognitoSessionBinding } from "../../../config/sessions/session-incognito-binding.js";
+import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../../state/openclaw-agent-execution.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
@@ -19,12 +19,6 @@ import {
   resetSubagentRegistryForTests,
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-
-// Capacity under incognito is a P12 prerequisite; this contract needs two actors and durable storage.
-vi.mock("node:os", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:os")>()),
-  availableParallelism: () => 32,
-}));
 
 const STALE_UNENDED_SUBAGENT_RUN_MS = 2 * 60 * 60 * 1_000;
 
@@ -49,31 +43,24 @@ beforeEach(async () => {
 });
 
 describe("buildSubagentList", () => {
-  it("enriches mixed children from their captured actors and recorded durable owners", async () => {
+  it("enriches unbound mixed children from memory and recorded durable owners", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const authority = { assertCurrent() {} };
-      const actors = await Promise.all(
-        ["main", "research"].map((agentId) =>
-          captureOpenClawAgentDatabaseExecution({
-            kind: "ephemeral",
-            agentId,
-            env: state.env,
-            authority,
-          }),
-        ),
+      const authority = { assertCurrent() {}, authorize() {} };
+      const owners = ["main", "research"].map((agentId) =>
+        memorySessionActorOwners.get({
+          agentId,
+          path: resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: state.env }),
+        }),
       );
       const now = Date.now();
       const runs: SubagentRunRecord[] = [];
       try {
-        for (const actor of actors) {
-          if (!actor) {
-            throw new Error("Expected test-owned incognito actor");
-          }
+        for (const owner of owners) {
           for (const incognito of [false, true]) {
             const childSessionKey = incognito
-              ? `agent:${actor.agentId}:subagent:incognito-list`
+              ? `agent:${owner.agentId}:subagent:incognito-list`
               : "global";
-            const runId = `${actor.agentId}-${incognito ? "private" : "durable"}`;
+            const runId = `${owner.agentId}-${incognito ? "private" : "durable"}`;
             const entry: SessionEntry = {
               sessionId: runId,
               lifecycleRevision: runId,
@@ -82,20 +69,36 @@ describe("buildSubagentList", () => {
               ...(incognito ? { incognito: true } : {}),
             };
             if (incognito) {
-              await actor.sessions.create(authority, { sessionKey: childSessionKey, entry });
+              const actor = await owner.acquire(
+                { database: owner.identity, sessionKey: childSessionKey },
+                { assertCurrent() {}, assertReadable() {} },
+              );
+              try {
+                expect(
+                  (
+                    await actor.storage!.mutate(
+                      { type: "session.entry.create", input: { entry } },
+                      authority,
+                    )
+                  ).kind,
+                ).toBe("committed");
+              } finally {
+                await actor.release();
+              }
             } else {
               await replaceSessionEntry(
-                { agentId: actor.agentId, sessionKey: childSessionKey },
+                { agentId: owner.agentId, sessionKey: childSessionKey },
                 entry,
               );
             }
             runs.push({
               runId,
               childSessionKey,
-              childAgentId: actor.agentId,
+              childAgentId: owner.agentId,
               requesterSessionKey: "agent:main:main",
               requesterDisplayKey: "main",
               task: runId,
+              model: "openai/fallback",
               cleanup: "keep",
               createdAt: now,
               execution: { status: "running", startedAt: now },
@@ -109,13 +112,12 @@ describe("buildSubagentList", () => {
           childSessionKey: "agent:missing:subagent:incognito-list",
           model: "openai/fallback",
         });
-        const actor = actors[0]!;
-        if (!actor) {
-          throw new Error("Expected the main actor");
-        }
-        const list = await withIncognitoSessionBinding({ actor }, () =>
-          buildSubagentList({ cfg: {}, runs, recentMinutes: 30, readSnapshot: new Map() }),
-        );
+        const list = await buildSubagentList({
+          cfg: {},
+          runs,
+          recentMinutes: 30,
+          readSnapshot: new Map(),
+        });
         expect(new Map(list.active.map((entry) => [entry.runId, entry.model]))).toEqual(
           new Map([
             ["main-durable", "openai/main-durable"],
@@ -125,19 +127,20 @@ describe("buildSubagentList", () => {
             ["missing-private", "openai/fallback"],
           ]),
         );
-        expect(captureOpenClawAgentDatabaseExecution.listIncognito(state.env)).toHaveLength(2);
-        await actor.close();
-        await expect(
-          withIncognitoSessionBinding({ actor }, () =>
-            buildSubagentList({ cfg: {}, runs, recentMinutes: 30, readSnapshot: new Map() }),
-          ),
-        ).rejects.toThrow();
-      } finally {
-        await Promise.all(
-          actors.map(async (actor) => {
-            await actor?.close();
-          }),
+        owners[0]!.closeSession("agent:main:subagent:incognito-list");
+        const closed = await buildSubagentList({
+          cfg: {},
+          runs,
+          recentMinutes: 30,
+          readSnapshot: new Map(),
+        });
+        expect(closed.active.find((entry) => entry.runId === "main-private")?.model).toBe(
+          "openai/fallback",
         );
+      } finally {
+        for (const owner of owners) {
+          memorySessionActorOwners.closeDatabase(owner);
+        }
       }
     });
   });

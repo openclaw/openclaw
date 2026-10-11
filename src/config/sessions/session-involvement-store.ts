@@ -46,8 +46,6 @@ export async function updateSessionProfileInvolvementAsync(
     return await runSessionCollaborationWrite(
       scope,
       { type: "involvement", input: { scope, params: captured, profiles: [] } },
-      // Personal involvement never writes process-held incognito stores.
-      () => false,
       (result, location, database, currentKeys) => {
         if (result.changed && database && (!currentKeys || currentKeys.has(location.sessionKey))) {
           publishSessionEntryCacheInvalidation(database, {

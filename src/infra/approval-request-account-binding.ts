@@ -2,8 +2,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
-import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
@@ -95,19 +94,19 @@ export function resolveApprovalRequestSessionDelivery(params: {
   }
   const parsed = parseAgentSessionKey(sessionKey);
   const agentId = parsed?.agentId ?? params.request.request.agentId ?? "main";
-  const memory = getSessionActorStorageBinding({ sessionKey, agentId });
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
+  const memory = captureSessionActorStorageOwner(
+    { sessionKey, agentId, storePath },
+    { assertCurrent() {}, authorize() {} },
+  );
   if (memory) {
-    const entry = memory.actor.snapshot(memory.authority)?.entry;
+    const entry =
+      memory.binding?.actor.target.sessionKey === sessionKey
+        ? memory.binding.actor.snapshot(memory.authority)?.entry
+        : memory.owner?.readSession(sessionKey, memory.authority)?.entry;
     return entry
       ? { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery }
       : null;
-  }
-  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-  const binding = captureIncognitoSessionBinding({ storePath, sessionKey });
-  if (binding) {
-    binding.admissionSignal?.throwIfAborted();
-    binding.actor.assertReadable();
-    return binding.actor.sessions.readDelivery(sessionKey) ?? null;
   }
   const entry = loadSessionEntryReadOnly({
     storePath,

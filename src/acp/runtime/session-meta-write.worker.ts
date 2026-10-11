@@ -73,9 +73,7 @@ function readMutationSource(
     return input.source.snapshot;
   }
   if ("kind" in input.source) {
-    // The host grant revalidates this exact actor snapshot; never reopen its sentinel.
-    const current =
-      input.source.kind === "reset" ? { entry: input.entry, sources: [] } : input.source.snapshot;
+    const current = { entry: input.entry, sources: [] };
     assertAcpSessionMutationEntry(
       current.entry,
       input.entry ?? null,

@@ -14,16 +14,12 @@ import type {
   OpenClawAgentDatabaseAdmissionExecution,
 } from "./openclaw-agent-execution-admission-contract.js";
 import type { AgentDatabaseDomainOperations } from "./openclaw-agent-execution-domain.js";
-import type {
-  AgentDatabaseExecutionFileIdentity,
-  AgentDatabaseIncognitoIdentity,
-} from "./openclaw-agent-execution-identity.types.js";
+import type { AgentDatabaseExecutionFileIdentity } from "./openclaw-agent-execution-identity.types.js";
 import type { RegisteredAgentWorkerOperations } from "./openclaw-agent-execution-operations.js";
 
 export type {
   AgentDatabaseFileExecutionIdentity,
   AgentDatabaseExecutionFileIdentity,
-  AgentDatabaseIncognitoIdentity,
 } from "./openclaw-agent-execution-identity.types.js";
 
 export type AgentDatabaseNativeStore = SqliteWorkerStore<AgentDatabaseOperations>;
@@ -101,19 +97,7 @@ export type AgentDatabaseFileExecutionOpen = {
   creationClaim?: AgentCreationClaimWitness;
 };
 
-export type AgentDatabaseIncognitoOpen = {
-  kind: "ephemeral";
-  identity: AgentDatabaseIncognitoIdentity;
-  agentId: string;
-  databasePath: string;
-  environment: SqliteWorkerStateContext["environment"];
-};
-
-export type AgentDatabaseExecutionOpen =
-  | AgentDatabaseFileExecutionOpen
-  | AgentDatabaseIncognitoOpen;
-
-export type AgentDatabaseIncognitoAuthority = { assertCurrent(): void };
+export type AgentDatabaseExecutionOpen = AgentDatabaseFileExecutionOpen;
 
 export type AgentDatabaseOperations = AgentDatabaseDomainOperations &
   SessionActorOperations &

@@ -133,7 +133,8 @@ export type SessionActorStorageAuthority = SessionActorAuthority & {
 };
 
 export type SessionActorStorageCommitObserver<Value> = {
-  committed(outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>): void;
+  beforeCommit?(outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>): void;
+  committed?(outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>): void;
 };
 
 /** Bound at acquisition; shares the actor's accepted work, FIFO, and state owner. */

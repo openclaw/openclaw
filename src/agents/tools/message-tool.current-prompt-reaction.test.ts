@@ -7,10 +7,8 @@ import {
 } from "../../auto-reply/reply/agent-runner-utils.js";
 import { resolveReactionMessageId } from "../../channels/plugins/actions/reaction-message-id.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import {
-  listSessionReactions,
-  setSessionReactionAsync,
-} from "../../config/sessions/session-reaction-store.js";
+import { setSessionReactionAsync } from "../../config/sessions/session-reaction-store.js";
+import { listSessionReactions } from "../../config/sessions/session-reaction-store.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createCurrentPromptReaction } from "../../gateway/current-prompt-reaction.js";
 import {

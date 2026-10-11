@@ -45,8 +45,6 @@ import type {
   SessionTranscriptWriteScope,
 } from "./session-accessor.types.js";
 import { projectCompactionAccountingPatch } from "./session-entry-projection.js";
-import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
-import { trimIncognitoTranscript } from "./session-incognito-manual-compact.js";
 import type {
   CompactionBoundaryOperations,
   InitialSessionEntryCommit,
@@ -230,10 +228,6 @@ export async function trimTranscriptForManualCompact(
     };
   } = {},
 ): Promise<{ trimmed: false } | { kept: number; trimmed: true }> {
-  const binding = captureIncognitoSessionOperation(scope);
-  if (binding) {
-    return trimIncognitoTranscript(binding, scope, selectRetainedLines, options);
-  }
   const resolved = resolveSqliteTranscriptScope(scope);
   if (options.preparation) {
     options.preparation.assertCurrent();

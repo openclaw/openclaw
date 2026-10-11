@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { createMemorySessionActorOwner } from "../../config/sessions/session-actor-memory.js";
 import { runWithSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import type { InitialSessionTranscriptWriter } from "../../config/sessions/session-transcript-writer.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { readSessionManagerModelContextAsync } from "./session-manager-incognito.js";
 import { withSessionMetadataWorker } from "./session-manager-metadata-runtime.js";
 import { receiveSessionManagerCommit } from "./session-manager-persistence-error.js";
@@ -26,7 +29,11 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
 const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
 const owners: ReturnType<typeof createMemorySessionActorOwner>[] = [];
+const registryOwners: Array<{ agentId: string; path: string }> = [];
 afterEach(() => {
+  for (const options of registryOwners.splice(0)) {
+    memorySessionActorOwners.closeDatabase(options);
+  }
   for (const owner of owners.splice(0)) {
     owner.close();
   }
@@ -153,22 +160,179 @@ describe("SessionManager selected memory actor", () => {
     ).toEqual([first, later]);
   });
 
+  it("cancels context reads without preventing the next read", async () => {
+    const { target, run } = await fixture("context-abort");
+    const manager = await run(() => SessionManager.openAsync(target));
+    await manager.appendMessageAsync(makeUserMessage("retained context", 1));
+    for (const alreadyAborted of [true, false]) {
+      const controller = new AbortController();
+      const reason = new Error("context cancelled");
+      if (alreadyAborted) {
+        controller.abort(reason);
+      }
+      const pending = run(() =>
+        SessionManager.openModelContextAsync(target, { signal: controller.signal }),
+      );
+      if (!alreadyAborted) {
+        controller.abort(reason);
+      }
+      await expect(pending).rejects.toBe(reason);
+    }
+    const context = await run(() => SessionManager.openModelContextAsync(target));
+    expect(context.isPersisted()).toBe(false);
+    expect(context.buildSessionContext()).toEqual(manager.buildSessionContext());
+  });
+
+  it("keeps a completed-turn snapshot while a later rewrite invalidates its anchor for new reads", async () => {
+    const { target, run } = await fixture("completed-context");
+    const manager = await run(() => SessionManager.openAsync(target));
+    await manager.appendMessageAsync(makeUserMessage("completed question", 1));
+    const terminal = await manager.appendMessageWithTranscriptAnchorAsync(
+      makeAgentAssistantMessage({ content: [{ type: "text", text: "completed answer" }] }),
+    );
+    if (!terminal.anchor) {
+      throw new Error("Missing completed-turn anchor");
+    }
+    const expected = manager.buildSessionContext();
+    await manager.appendMessageAsync(makeUserMessage("later question", 2));
+    const context = await run(() =>
+      SessionManager.openModelContextAsync(target, { through: terminal.anchor }),
+    );
+    expect(context.buildSessionContext()).toEqual(expected);
+    await manager.removeTrailingEntriesAsync((entry) => entry.type === "message");
+    expect(context.buildSessionContext()).toEqual(expected);
+    await expect(
+      run(() => SessionManager.openModelContextAsync(target, { through: terminal.anchor })),
+    ).rejects.toThrow(/transcript|anchor/i);
+  });
+
   it("drains accepted manager work on release while preserving manager-local order", async () => {
     const { actor, target, run } = await fixture("release");
     const manager = await run(() => SessionManager.openAsync(target));
     const entered = createDeferredCore();
     const finish = createDeferredCore();
-    const writing = withSessionManagerWrite(manager, async () => {
-      entered.resolve();
-      await finish.promise;
-      return manager.appendMessageAsync(makeUserMessage("accepted", 1));
-    });
+    const writing = run(() =>
+      withSessionManagerWrite(manager, async () => {
+        entered.resolve();
+        await finish.promise;
+        return manager.appendMessageAsync(makeUserMessage("accepted", 1));
+      }),
+    );
     await entered.promise;
     const released = actor.release();
     finish.resolve();
     const entryId = await writing;
     await released;
     expect(manager.getEntry(entryId)).toMatchObject({ message: { content: "accepted" } });
+  });
+
+  it("reads an unbound missing session without creation and creates only on its first append", async () => {
+    const env = { OPENCLAW_STATE_DIR: "/synthetic/session-manager-unbound" };
+    const options = {
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+    };
+    registryOwners.push(options);
+    const target = {
+      agentId: "main",
+      storePath: options.path,
+      env,
+      sessionKey: "agent:main:dashboard:incognito-unbound",
+      sessionId: "unbound",
+    };
+    expect(
+      await SessionManager.readSessionContextAsync(target, (messages) => [...messages]),
+    ).toEqual([]);
+    const manager = await SessionManager.openAsync(target);
+    expect(manager.getEntries()).toEqual([]);
+    const bounded = await SessionManager.openBoundedAsync(target, { maxBytes: 4096, maxEvents: 5 });
+    const context = await SessionManager.openModelContextAsync(target);
+    expect(bounded.getEntries()).toEqual([]);
+    expect(context.buildSessionContext().messages).toEqual([]);
+    expect(context.isPersisted()).toBe(false);
+    expect(memorySessionActorOwners.read(options)).toBeUndefined();
+    const first = makeUserMessage("unbound first", 1);
+    const writer = await SessionManager.openAsync(target);
+    await writer.appendMessageAsync(first);
+    await manager.reloadPersistedTranscriptAsync();
+    await bounded.reloadPersistedTranscriptAsync();
+    expect(manager.buildSessionContext().messages).toEqual([first]);
+    expect(bounded.buildSessionContext().messages).toEqual([first]);
+    const owner = memorySessionActorOwners.read(options)!;
+    expect(owner.readSession(target.sessionKey, authority)?.entry).toMatchObject({
+      sessionId: target.sessionId,
+      incognito: true,
+    });
+    const second = makeUserMessage("manager second", 2);
+    await manager.appendMessageAsync(second);
+    await bounded.reloadPersistedTranscriptAsync();
+    expect(bounded.buildSessionContext().messages).toEqual([first, second]);
+    expect(
+      await SessionManager.readSessionContextAsync(target, (messages) => [...messages]),
+    ).toEqual([first, second]);
+    expect(() => SessionManager.open(target)).toThrow(/Async/);
+    memorySessionActorOwners.closeDatabase(options);
+    await expect(manager.reloadPersistedTranscriptAsync()).rejects.toThrow(/closed/);
+  });
+
+  it("keeps the owner after the opening caller releases and releases operation handles on failure", async () => {
+    const { actor, target, run, owner, storage } = await fixture("operation-lifetime");
+    const acquired: Awaited<ReturnType<typeof storage.acquire>>[] = [];
+    const acquire = storage.acquire;
+    vi.spyOn(storage, "acquire").mockImplementation(async (...args) => {
+      const handle = await acquire(...args);
+      acquired.push(handle);
+      return handle;
+    });
+    const manager = await run(() => SessionManager.openAsync(target));
+    await actor.release();
+    await expect(
+      withSessionManagerWrite(manager, async () => {
+        throw new Error("operation failed");
+      }),
+    ).rejects.toThrow("operation failed");
+    expect(acquired.length).toBeGreaterThan(0);
+    for (const handle of acquired) {
+      expect(() => handle.assertReadable()).toThrow(/released/);
+    }
+    const id = await manager.appendMessageAsync(makeUserMessage("after caller release", 1));
+    expect(manager.getEntry(id)).toMatchObject({ message: { content: "after caller release" } });
+    owner.close();
+    await expect(
+      manager.appendMessageAsync(makeUserMessage("after owner close", 2)),
+    ).rejects.toThrow(/closed/);
+  });
+
+  it("keeps caller revocation at context disclosure and subsequent manager writes", async () => {
+    const { target, binding } = await fixture("caller-revocation");
+    let revoked = false;
+    const scoped = {
+      ...binding,
+      authority: {
+        authorize() {},
+        assertCurrent() {
+          if (revoked) {
+            throw new Error("Transport closed");
+          }
+        },
+      },
+    };
+    const manager = await runWithSessionActorStorage(scoped, () =>
+      SessionManager.openAsync(target),
+    );
+    await manager.appendMessageAsync(makeUserMessage("private", 1));
+    await expect(
+      runWithSessionActorStorage(scoped, () =>
+        SessionManager.readSessionContextAsync(target, async (messages) => {
+          const captured = [...messages];
+          revoked = true;
+          return captured;
+        }),
+      ),
+    ).rejects.toThrow("Transport closed");
+    await expect(manager.appendMessageAsync(makeUserMessage("refused", 2))).rejects.toThrow(
+      "Transport closed",
+    );
   });
 
   it("retains a committed initial-writer receipt when its host publication throws", async () => {

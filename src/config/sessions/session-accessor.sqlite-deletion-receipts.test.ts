@@ -8,7 +8,6 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { openIncognitoTestActor } from "../../state/openclaw-agent-execution-incognito.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -31,7 +30,8 @@ import { emptySessionEntryMaintenancePlan } from "./session-accessor.sqlite-main
 import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import { withIncognitoSessionBinding } from "./session-incognito-binding.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -68,39 +68,80 @@ describe("SQLite session deletion receipts", () => {
 
   const seedReceipt = (key = sessionKey) => seedPersonalGitHubDeletionReceipt(key, sessionId);
 
-  it("removes a deleted incognito session's personal receipt during maintenance", async () => {
-    const incognitoKey = "agent:main:dashboard:incognito-maintenance-receipt";
-    const env = { OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR };
-    const authority = { assertCurrent() {} };
-    const actor = await openIncognitoTestActor(env, authority);
-    try {
-      const { entry } = await actor.sessions.create(authority, {
-        sessionKey: incognitoKey,
-        entry: { sessionId, lifecycleRevision: "generation-1", updatedAt: 1, incognito: true },
-      });
-      const receipt = await seedReceipt(incognitoKey);
-      expect(receipt().receipt).toBeDefined();
-      const plan = emptySessionEntryMaintenancePlan();
-      plan.entryRemovals = [
-        { sessionKey: incognitoKey, expectedEntry: entry, maintenanceReason: "pruned" },
-      ];
-
-      const result = await withIncognitoSessionBinding({ actor }, () =>
-        finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
-          { agentId: actor.agentId, path: actor.path, env },
-          [plan],
-        ),
+  it.each([false, true])(
+    "settles memory maintenance receipts only for deleted entries (changed=%s)",
+    async (changed) => {
+      const incognitoKey = "agent:main:dashboard:incognito-maintenance-receipt";
+      const env = { OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR };
+      const authority = { assertCurrent() {}, authorize() {} };
+      const binding = await acquireSessionActorStorage(
+        { agentId: "main", env, sessionKey: incognitoKey },
+        {
+          authority,
+          lifetime: { assertCurrent() {}, assertReadable() {} },
+          create: true,
+        },
       );
-
-      expect(result.pruned).toBe(1);
-      expect(
-        (await actor.sessions.read(authority, { sessionKey: incognitoKey })).entry,
-      ).toBeUndefined();
-      expect(receipt()).toEqual({ receipt: undefined, lifecycle: undefined });
-    } finally {
-      await actor.close();
-    }
-  });
+      if (!binding) {
+        throw new Error("Expected memory session actor");
+      }
+      const owner = memorySessionActorOwners.read(binding)!;
+      try {
+        const created = await binding.actor.storage.mutate(
+          {
+            type: "session.entry.create",
+            input: {
+              entry: {
+                sessionId,
+                lifecycleRevision: "generation-1",
+                updatedAt: 1,
+                incognito: true,
+              },
+            },
+          },
+          authority,
+        );
+        if (created.kind !== "committed") {
+          throw new Error("Memory entry creation failed");
+        }
+        const entry = created.value;
+        const receipt = await seedReceipt(incognitoKey);
+        expect(receipt().receipt).toBeDefined();
+        const plan = emptySessionEntryMaintenancePlan();
+        plan.entryRemovals = [
+          { sessionKey: incognitoKey, expectedEntry: entry, maintenanceReason: "pruned" },
+        ];
+        if (changed) {
+          expect(
+            await binding.actor.storage.mutate(
+              {
+                type: "session.entry.patch",
+                input: { operation: { kind: "fields", patch: { label: "Concurrent update" } } },
+              },
+              authority,
+            ),
+          ).toMatchObject({ kind: "committed" });
+        }
+        const result = await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
+          { agentId: binding.agentId, path: binding.path, env },
+          [plan],
+        );
+        expect(result.pruned).toBe(changed ? 0 : 1);
+        if (changed) {
+          expect(owner.readSession(incognitoKey, authority)?.entry?.label).toBe(
+            "Concurrent update",
+          );
+          expect(receipt().receipt).toBeDefined();
+        } else {
+          expect(owner.readSession(incognitoKey, authority)).toBeUndefined();
+          expect(receipt()).toEqual({ receipt: undefined, lifecycle: undefined });
+        }
+      } finally {
+        await binding.actor.release();
+        memorySessionActorOwners.closeDatabase(binding);
+      }
+    },
+  );
 
   it.runIf(process.platform !== "win32").each([false, true])(
     "settles workspace-free receipts against the original database after an alias retarget (aborted: %s)",

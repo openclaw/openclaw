@@ -13,6 +13,7 @@ import {
 import { isConfiguredSessionStoreAgentId } from "../config/sessions/targets-configured-agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import type { SessionOperatorScope } from "../shared/session-method-scopes-base.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
@@ -22,10 +23,7 @@ import {
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
-import {
-  captureSessionActorMutationFacts,
-  captureSessionSharingActorBinding,
-} from "./session-sharing-incognito.js";
+import { readSessionSharingMemoryFacts } from "./session-sharing-incognito.js";
 import {
   hiddenSessionNotFound,
   resolveSessionSharingTarget,
@@ -82,7 +80,7 @@ export async function prepareSessionSharingRead(params: {
   projection?: SessionSharingReadProjection;
 }) {
   try {
-    if (captureSessionSharingActorBinding({ ...params, resolved: null })) {
+    if (isIncognitoSessionKey(params.sessionKey)) {
       return prepareSessionMutationFacts({ ...params, allowMissing: true });
     }
     const { cfg, projection } = params;
@@ -223,20 +221,19 @@ export function readSessionMutationTarget(params: {
     return { error: input.error };
   }
   try {
-    const binding = captureSessionSharingActorBinding({ ...params.targetRef, resolved: null });
-    if (binding) {
+    if (isIncognitoSessionKey(params.targetRef.sessionKey)) {
       const { agentId, canonicalKey } = resolveSessionStoreIdentity({
         cfg: params.cfg,
         ...params.targetRef,
       });
-      const facts = captureSessionActorMutationFacts(
-        binding,
-        canonicalKey,
-        true,
-        params.cfg.session?.store &&
-          resolveSessionStorePathCore(params.cfg.session.store, { agentId }),
-      );
-      return { target: facts.readCurrent().target, preparedReadSource: facts.source };
+      const facts = readSessionSharingMemoryFacts({
+        agentId,
+        sessionKey: canonicalKey,
+        resolved: {
+          storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+        },
+      });
+      return { target: facts?.target ?? null, preparedReadSource: facts?.source };
     }
     const projection = getSessionRowProjection(params.context);
     const projected =

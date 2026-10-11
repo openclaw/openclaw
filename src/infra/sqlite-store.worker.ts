@@ -394,7 +394,6 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         }
         return factory(input, {
           databasePath: request.databasePath,
-          ...(request.target ? { target: request.target } : {}),
           ...(request.preparation ? { preparation: deserialize(request.preparation) } : {}),
           ...(request.existingIdentity ? { existingIdentity: request.existingIdentity } : {}),
         });
@@ -489,7 +488,6 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
     const errorContext =
       request.stateContext ??
       (request.type === "execute-frame" ? stateContexts.get(request.actor) : undefined);
-    // Canonical error identities also belong to context-free ephemeral actors.
     const sharedState = !executed
       ? encodeOpenClawStateWorkerError(failure, { includeOrdinary: Boolean(errorContext) })
       : undefined;

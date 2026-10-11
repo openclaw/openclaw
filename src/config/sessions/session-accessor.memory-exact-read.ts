@@ -1,8 +1,9 @@
 import path from "node:path";
-import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
+import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import {
   captureSessionActorStorageOwner,
-  getSessionActorStorageBinding,
+  readCapturedSessionActorEntry,
   type SessionActorStorageBinding,
 } from "./session-actor-storage-binding.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
@@ -12,76 +13,103 @@ import {
 } from "./session-entry-snapshot-values.js";
 
 /** An exact reader borrows the selected owner; absence never opens or acquires a backend. */
-export function captureMemoryExactSessionReader(scope: {
-  agentId?: string;
-  storePath?: string;
-  sessionKey?: string;
-  sessionActor?: SessionActorStorageBinding;
-}) {
-  if (scope.sessionKey && !isIncognitoSessionKey(scope.sessionKey) && !scope.sessionActor) {
+export function captureMemoryExactSessionReader(
+  scope: {
+    agentId?: string;
+    storePath?: string;
+    sessionKey?: string;
+    env?: NodeJS.ProcessEnv;
+    sessionActor?: SessionActorStorageBinding;
+  },
+  assertCallerCurrent?: () => void,
+) {
+  const signal = getAsyncWorkSignal();
+  const assertCurrent = () => {
+    signal?.throwIfAborted();
+    assertCallerCurrent?.();
+  };
+  const captured = captureSessionActorStorageOwner(scope, {
+    assertCurrent,
+    authorize: assertCurrent,
+  });
+  if (!captured) {
     return undefined;
   }
-  const selected = getSessionActorStorageBinding({ sessionActor: scope.sessionActor });
-  if (!selected) {
-    return undefined;
-  }
-  if (scope.sessionActor) {
-    getSessionActorStorageBinding(scope);
-  }
-  const agentId =
-    scope.agentId ?? parseAgentSessionKey(scope.sessionKey ?? "")?.agentId ?? selected.agentId;
-  if (agentId === selected.agentId) {
-    getSessionActorStorageBinding({ ...scope, sessionKey: undefined });
-    const source: CapturedSessionEntryReadSource = {
-      agentId,
-      path: selected.path,
-      databaseIdentity: selected.actor.target.database.incarnation,
-    };
-    return {
-      source,
-      read(sessionKey: string, projection?: SessionEntryProjection) {
-        return selected.actor.storage.readCurrent(
-          { type: "session.entry.read", input: { sessionKey, projection } },
-          selected.authority,
-        );
-      },
-      entries(projection?: SessionEntryProjection) {
-        return selected.actor.storage.readCurrent(
-          { type: "session.entries.read", input: { projection } },
-          selected.authority,
-        );
-      },
-      assertCurrent() {
-        selected.actor.assertReadable();
-        selected.authority.assertCurrent();
-      },
-    };
-  }
-  const captured = captureSessionActorStorageOwner({ ...scope, agentId })!;
-  const owner = captured.owner;
+  const { owner, authority, agentId } = captured;
+  const binding =
+    captured.binding?.agentId === agentId && captured.binding.path === captured.path
+      ? captured.binding
+      : undefined;
+  const identity =
+    owner?.identity ??
+    (binding?.agentId === agentId && binding.path === captured.path
+      ? binding.actor.target.database
+      : undefined);
+  const source: CapturedSessionEntryReadSource | undefined =
+    identity?.kind === "memory"
+      ? { agentId, path: captured.path, databaseIdentity: identity.incarnation }
+      : undefined;
   return {
-    source: owner
-      ? { agentId, path: owner.path, databaseIdentity: owner.identity.incarnation }
-      : undefined,
+    source,
+    agentId,
+    path: captured.path,
     read(sessionKey: string, projection?: SessionEntryProjection) {
-      const entry = owner?.readSession(sessionKey, captured.authority)?.entry;
+      const entry = readCapturedSessionActorEntry(
+        captured,
+        resolveSqliteSessionKey(sessionKey, agentId),
+      );
       return entry && attachSessionEntrySnapshots(entry, {}, projection);
     },
-    entries(projection?: SessionEntryProjection) {
-      return (owner?.listSessions(captured.authority) ?? []).flatMap((state) =>
-        state.entry
-          ? [
-              {
-                sessionKey: state.target.sessionKey,
-                entry: attachSessionEntrySnapshots(state.entry, {}, projection),
-              },
-            ]
-          : [],
+    readById(sessionId: string, projection?: SessionEntryProjection, orderBy?: "updatedAt") {
+      const selected = owner
+        ? owner.readSessionById(sessionId, authority, { currentOnly: true, orderBy })
+        : binding?.actor.storage?.readCurrent(
+            { type: "session.entry.readById", input: { sessionId, currentOnly: true } },
+            authority,
+          );
+      return (
+        selected && {
+          sessionKey: selected.sessionKey,
+          entry: attachSessionEntrySnapshots(selected.entry, {}, projection),
+        }
       );
     },
+    entries(projection?: SessionEntryProjection) {
+      if (owner) {
+        return owner.listSessionEntries(authority, projection);
+      }
+      return (
+        binding?.actor.storage?.readCurrent(
+          { type: "session.entries.read", input: { projection } },
+          authority,
+        ) ?? []
+      );
+    },
+    facts(sessionKey: string) {
+      if (owner) {
+        const state = owner.readSession(sessionKey, authority);
+        return { members: state?.members ?? [], participants: state?.participants ?? [] };
+      }
+      if (binding?.actor.target.sessionKey !== sessionKey) {
+        return { members: [], participants: [] };
+      }
+      return {
+        members:
+          binding.actor.storage?.readCurrent({ type: "session.members.read", input: {} }, authority)
+            .members ?? [],
+        participants:
+          binding.actor.storage?.readCurrent(
+            { type: "session.participants.read", input: {} },
+            authority,
+          ) ?? [],
+      };
+    },
     assertCurrent() {
-      selected.actor.assertReadable();
-      captured.authority.assertCurrent();
+      owner?.assertCurrent();
+      if (!owner && binding) {
+        binding.actor.assertReadable();
+      }
+      authority.assertCurrent();
     },
   };
 }

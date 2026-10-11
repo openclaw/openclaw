@@ -1,33 +1,36 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
-import { withinTest } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
-import type { IncognitoTranscriptOperations } from "../config/sessions/session-incognito-transcript-contract.js";
+import type { SessionActor } from "../config/sessions/session-actor-contract.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import {
+  isSessionTranscriptIndexReconcileRunning,
   startSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcile,
 } from "../config/sessions/session-transcript-reconcile.js";
 import { refreshCostUsageCacheForAgent } from "../infra/session-cost-usage-aggregation.js";
 import { onSessionCostUsageUpdated } from "../infra/session-cost-usage-events.js";
-import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import * as usagePricing from "../infra/session-cost-usage-pricing-context.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { IncognitoSessionEndedError } from "../state/incognito-session-error.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { createSqliteTrajectoryRuntimeSink } from "../trajectory/runtime-store-writer.js";
 import { createTrajectoryEvent } from "../trajectory/runtime-store.test-support.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 
-it("settles accepted actor reconciliation, usage and trajectory across the real close prelude", async ({
+it("settles accepted memory usage and trajectory work across the real close prelude", async ({
   signal,
 }) => {
   const fixture = await createGatewayMetadataCloseFixture("incognito-compute-close");
   const release = createDeferredCore();
+  const accepted = createDeferredCore();
+  const joining = createDeferredCore();
+  const verified = createDeferredCore();
   const finish = createDeferredCore();
-  const prelude = createDeferredCore();
-  const work = new AsyncWorkScope();
+  void verified.promise.catch(() => undefined);
+  let actor: SessionActor | undefined;
   let job: Promise<void> | undefined;
   let closing: Promise<void> | undefined;
   let sql: ReturnType<typeof observeHostDataSql> | undefined;
@@ -37,209 +40,176 @@ it("settles accepted actor reconciliation, usage and trajectory across the real 
     const server = await fixture.start(port);
     const kernel = fixture.kernels.get(port);
     assert(kernel);
-    const authority = { assertCurrent() {} };
-    const actor = await captureOpenClawAgentDatabaseExecution({
-      kind: "ephemeral",
+    const authority = { assertCurrent() {}, authorize() {} };
+    const owner = memorySessionActorOwners.get({
       agentId: "main",
-      env: fixture.state.env,
-      authority,
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: fixture.state.env }),
     });
-    assert(actor);
     const target = {
+      agentId: "main",
       sessionKey: "agent:main:dashboard:incognito-compute-close",
       sessionId: "compute-close",
+      storePath: owner.path,
     };
-    await actor.sessions.create(authority, {
-      sessionKey: target.sessionKey,
-      entry: { sessionId: target.sessionId, updatedAt: 1, incognito: true },
-    });
-    for (const content of ["old branch", "accepted current branch"]) {
-      const appended: IncognitoTranscriptOperations["session.message.append"]["output"] =
-        await actor.sessions.transcript(authority, {
-          type: "session.message.append",
-          input: {
-            ...target,
-            fence: {},
-            parentId: null,
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: content }],
-              timestamp: 10_000,
-              provider: "test",
-              model: "test",
-              usage: { input: 7, output: 3, totalTokens: 10, cost: { total: 1 } },
-            },
+    actor = await owner.acquire(
+      { database: owner.identity, sessionKey: target.sessionKey },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    const selected = actor;
+    expect(
+      (
+        await selected.storage!.mutate(
+          {
+            type: "session.entry.create",
+            input: { entry: { sessionId: target.sessionId, updatedAt: 1, incognito: true } },
           },
-        });
-      assert(appended.ok);
+          authority,
+        )
+      ).kind,
+    ).toBe("committed");
+    for (const [index, content] of ["old branch", "accepted current branch"].entries()) {
+      expect(
+        (
+          await selected.appendToolResult(
+            {
+              commandId: `compute-message-${index}`,
+              phaseId: "compute-close",
+              turn: {
+                agentId: "main",
+                sessionKey: target.sessionKey,
+                options: {
+                  expectedSessionId: target.sessionId,
+                  messages: [
+                    {
+                      eventId: `message-${index}`,
+                      parentId: null,
+                      message: {
+                        role: "assistant",
+                        content: [{ type: "text", text: content }],
+                        timestamp: 10_000,
+                        provider: "test",
+                        model: "test",
+                        usage: { input: 7, output: 3, totalTokens: 10, cost: { total: 1 } },
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+            authority,
+          )
+        ).kind,
+      ).toBe("committed");
     }
-    const binding = { actor, authority };
-    const database = { agentId: actor.agentId, path: actor.path, env: fixture.state.env };
-    const sessionFile = formatSqliteSessionFileMarker({
-      agentId: actor.agentId,
-      storePath: actor.path,
+    const database = { agentId: "main", path: owner.path, env: fixture.state.env };
+    const sessionFile = formatSqliteSessionFileMarker(target);
+    const trajectory = await createSqliteTrajectoryRuntimeSink({
+      env: fixture.state.env,
+      sessionId: target.sessionId,
+      sessionTarget: target,
+      maxRuntimeFileBytes: 1024 * 1024,
+    });
+    assert(trajectory);
+    const event = createTrajectoryEvent({
+      type: "accepted-before-close",
       sessionId: target.sessionId,
     });
-    const refresh = {
-      config: fixture.config,
-      agentId: actor.agentId,
-      databasePath: actor.path,
-      storePath: actor.path,
-      sessionFiles: [sessionFile],
-      incognito: binding,
-    };
-    const trajectory = await withIncognitoSessionActor(
-      actor,
-      () =>
-        createSqliteTrajectoryRuntimeSink({
-          env: fixture.state.env,
-          sessionId: target.sessionId,
-          sessionTarget: { ...target, agentId: actor.agentId, storePath: actor.path },
-          maxRuntimeFileBytes: 1024 * 1024,
-        }),
-      kernel.scheduler.signal,
-    );
-    assert(trajectory);
-    const trajectoryReady = createDeferredCore();
-    const trajectoryMaintenanceReplies: unknown[] = [];
-    const append = actor.sessions.sideData;
-    vi.spyOn(actor.sessions, "sideData").mockImplementation((...args) =>
-      append(...args).then(async (value) => {
-        if (args[1].type === "session.trajectory.append") {
-          trajectoryReady.resolve();
-          await release.promise;
-        } else if (args[1].type === "session.trajectory.retention.delete") {
-          trajectoryMaintenanceReplies.push(value);
-        }
-        return value;
-      }),
-    );
-    const projectionReady = createDeferredCore();
-    const usageReady = createDeferredCore();
-    const joining = createDeferredCore();
-    const verified = createDeferredCore();
-    void verified.promise.catch(() => undefined);
+    trajectory.write(event, JSON.stringify(event));
     const published = vi.fn();
     unsubscribe = onSessionCostUsageUpdated(published);
-    const withCompute = actor.sessions.withCompute;
-    vi.spyOn(actor.sessions, "withCompute").mockImplementation(
-      (caller, selected, operation, abort) =>
-        withCompute(
-          caller,
-          selected,
-          (compute) =>
-            operation({
-              assertCurrent: compute.assertCurrent,
-              async execute(command) {
-                if (command.type === "session.compute.projection.finalize") {
-                  projectionReady.resolve();
-                  await release.promise;
-                } else if (command.type === "session.compute.store.writeRollup") {
-                  usageReady.resolve();
-                  await release.promise;
-                }
-                return compute.execute(command);
-              },
-            }),
-          abort,
-        ),
-    );
-    kernel.scheduler.signal.addEventListener(
-      "abort",
-      () => {
-        work.beginClose(kernel.scheduler.signal.reason);
-        prelude.resolve();
-      },
-      { once: true },
-    );
-    const stop = kernel.scheduler.stop.bind(kernel.scheduler);
-    vi.spyOn(kernel.scheduler, "stop").mockImplementation(() => {
-      joining.resolve();
-      return stop();
+    const preparePricing = usagePricing.prepareUsageCostPricing;
+    vi.spyOn(usagePricing, "prepareUsageCostPricing").mockImplementationOnce(async (...args) => {
+      try {
+        const pricing = await preparePricing(...args);
+        accepted.resolve();
+        await release.promise;
+        return pricing;
+      } catch (error) {
+        accepted.reject(error);
+        throw error;
+      }
     });
-    sql = observeHostDataSql();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     kernel.scheduler.schedule({
       id: "incognito-compute-settlement",
       delayMs: 0,
       run() {
-        job = work
-          .run(async () => {
-            startSessionTranscriptIndexReconcile(database, binding);
-            const reconciling = waitForSessionTranscriptIndexReconcile(database, binding);
-            const refreshing = refreshCostUsageCacheForAgent(refresh);
-            const event = createTrajectoryEvent({
-              type: "accepted-before-close",
-              sessionId: target.sessionId,
-            });
-            trajectory.write(event, JSON.stringify(event));
-            const accepted = Promise.all([reconciling, refreshing, trajectory.flush()]);
-            void accepted.catch((error: unknown) => {
-              projectionReady.reject(error);
-              usageReady.reject(error);
-              trajectoryReady.reject(error);
-            });
-            await prelude.promise;
-            expect(() => startSessionTranscriptIndexReconcile(database, binding)).toThrow();
-            await expect(refreshCostUsageCacheForAgent(refresh)).rejects.toThrow();
-            await release.promise;
-            expect((await accepted)[1]).toBe("refreshed");
-            expect(trajectoryMaintenanceReplies.at(-1)).toMatchObject({ complete: true });
-            expect(trajectory.describeFlushState()).toBeUndefined();
-            await trajectory.flush();
-            await expect(
-              actor.sessions.history(authority, {
-                type: "session.history.recent",
-                input: { ...target, options: { maxMessages: 10 } },
-              }),
-            ).resolves.toMatchObject({
-              totalMessages: 1,
-              messages: [{ content: [{ type: "text", text: "accepted current branch" }] }],
-            });
-            await actor.sessions.withCompute(authority, undefined, async (compute) => {
-              expect(
-                await compute.execute({
-                  type: "session.compute.store.cache",
-                  input: { request: { filePaths: [sessionFile] } },
-                }),
-              ).toHaveLength(1);
-              expect(
-                await compute.execute({
-                  type: "session.compute.store.refreshLock",
-                  input: { request: {} },
-                }),
-              ).toBeNull();
-            });
-            expect(published).toHaveBeenCalledTimes(1);
-            expect(published).toHaveBeenCalledWith({
-              agentId: actor.agentId,
-              usageUpdatedAt: expect.any(Number),
-            });
-            actor.assertCurrent();
-            verified.resolve();
-            await finish.promise;
-          })
-          .catch((error: unknown) => {
-            verified.reject(error);
-            throw error;
+        job = (async () => {
+          const refreshed = await refreshCostUsageCacheForAgent({
+            config: fixture.config,
+            env: fixture.state.env,
+            agentId: "main",
+            databasePath: owner.path,
+            storePath: owner.path,
+            sessionFiles: [sessionFile],
           });
+          // Memory projections are already current; reconciliation allocates no work.
+          startSessionTranscriptIndexReconcile(database);
+          await waitForSessionTranscriptIndexReconcile(database);
+          expect(isSessionTranscriptIndexReconcileRunning(database)).toBe(false);
+          expect(
+            await selected.storage!.read(
+              {
+                type: "session.history.recent",
+                input: { sessionId: target.sessionId, options: { maxMessages: 10 } },
+              },
+              authority,
+            ),
+          ).toMatchObject({
+            totalMessages: 1,
+            messages: [{ content: [{ type: "text", text: "accepted current branch" }] }],
+          });
+          expect(refreshed).toBe("refreshed");
+          await trajectory.flush();
+          expect(trajectory.describeFlushState()).toBeUndefined();
+          expect(
+            await selected.storage!.read(
+              {
+                type: "session.trajectory.read",
+                input: { sessionId: target.sessionId },
+              },
+              authority,
+            ),
+          ).toEqual([event]);
+          const usage = await selected.storage!.read(
+            {
+              type: "session.usage.snapshot",
+              input: { sessionIds: [target.sessionId] },
+            },
+            authority,
+          );
+          expect(usage).toMatchObject([
+            { sessionId: target.sessionId, rollup: { valueJson: expect.any(String) } },
+          ]);
+          expect(published).toHaveBeenCalledOnce();
+          expect(published).toHaveBeenCalledWith({
+            agentId: "main",
+            usageUpdatedAt: expect.any(Number),
+          });
+          verified.resolve();
+          await finish.promise;
+        })().catch((error: unknown) => {
+          accepted.reject(error);
+          verified.reject(error);
+          throw error;
+        });
         return job;
       },
     });
     await vi.advanceTimersByTimeAsync(0);
     vi.useRealTimers();
+    await withinTest(accepted.promise, signal);
+    const stop = kernel.scheduler.stop.bind(kernel.scheduler);
+    vi.spyOn(kernel.scheduler, "stop").mockImplementation(() => {
+      joining.resolve();
+      return stop();
+    });
+    closing = server.close({ reason: "incognito compute close proof" });
     await withinTest(
-      Promise.all([projectionReady.promise, usageReady.promise, trajectoryReady.promise]),
+      awaitGateBeforeSettlement(joining.promise, closing, "Gateway skipped compute settlement"),
       signal,
     );
-    expect(sql.queries).toEqual([]);
-    sql.restore();
-    sql = undefined;
-    closing = server.close({ reason: "incognito compute close proof" });
-    await withinTest(joining.promise, signal);
-    expect(kernel.scheduler.signal.aborted).toBe(true);
-    expect(() => actor.assertCurrent()).not.toThrow();
-    // Other shutdown owners have settled; the scheduler now joins only this accepted work.
+    expect(() => selected.assertReadable()).not.toThrow();
     sql = observeHostDataSql();
     release.resolve();
     await withinTest(verified.promise, signal);
@@ -248,18 +218,16 @@ it("settles accepted actor reconciliation, usage and trajectory across the real 
     sql = undefined;
     finish.resolve();
     await closing;
-    expect(() => actor.assertCurrent()).toThrow(IncognitoSessionEndedError);
+    expect(() => selected.assertReadable()).toThrow("closed");
   } finally {
-    work.beginClose();
     vi.useRealTimers();
-    prelude.resolve();
     release.resolve();
     finish.resolve();
     sql?.restore();
     unsubscribe?.();
     await Promise.allSettled([job, closing]);
-    await work.drain();
     vi.restoreAllMocks();
+    await actor?.release();
     await fixture.cleanup();
   }
 });

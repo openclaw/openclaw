@@ -1,28 +1,21 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import {
-  withIncognitoSessionActor,
-  withIncognitoSessionBinding,
-} from "../config/sessions/session-incognito-binding.js";
+  runWithSessionActorStorage,
+  type SessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
-import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import {
-  openIncognitoTestActor,
-  useIncognitoActorProbe,
-  useIncognitoNoHostSql,
-} from "../state/openclaw-agent-execution-incognito.test-support.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import {
   abortAndDrainEmbeddedAgentRun,
   isEmbeddedAgentRunHandleActive,
@@ -34,28 +27,51 @@ import { retryRestartAbortedMainSessionRecovery } from "./main-session-recovery/
 import { resolveAgentRunSessionTarget } from "./run-session-target.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
-const authority = { assertCurrent() {} };
-const probe = useIncognitoActorProbe();
+const authority = { assertCurrent() {}, authorize() {} };
 let env: NodeJS.ProcessEnv;
-let actor: Awaited<ReturnType<typeof openIncognitoTestActor>>;
-let sibling: Awaited<ReturnType<typeof openIncognitoTestActor>>;
-useIncognitoNoHostSql();
-
-beforeAll(async () => {
+let actor: ReturnType<typeof memorySessionActorOwners.get>;
+let sibling: typeof actor;
+const bindings = new Map<string, SessionActorStorageBinding>();
+let sql: ReturnType<typeof observeHostDataSql>;
+function withMemory<T>(target: { storePath: string; sessionKey: string }, operation: () => T): T {
+  const binding = bindings.get(`${target.storePath}\n${target.sessionKey}`);
+  if (!binding) {
+    throw new Error("Missing test memory binding");
+  }
+  return runWithSessionActorStorage(binding, operation);
+}
+beforeEach(() => {
+  sql = observeHostDataSql();
+});
+beforeAll(() => {
   env = { OPENCLAW_STATE_DIR: tempDirs.make("runtime-recovery-incognito-") };
-  actor = await openIncognitoTestActor(env, authority);
-  sibling = await openIncognitoTestActor(
-    { OPENCLAW_STATE_DIR: tempDirs.make("runtime-recovery-other-root-") },
-    authority,
-  );
+  actor = memorySessionActorOwners.get({
+    agentId: "main",
+    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+  });
+  sibling = memorySessionActorOwners.get({
+    agentId: "main",
+    path: resolveIncognitoOpenClawAgentSqlitePath({
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: tempDirs.make("runtime-recovery-other-root-") },
+    }),
+  });
 });
 afterEach(() => {
   testing.resetActiveEmbeddedRuns();
   clearRuntimeConfigSnapshot();
+  try {
+    expect(sql.queries).toEqual([]);
+  } finally {
+    sql.restore();
+  }
 });
 afterAll(async () => {
-  await sibling.close();
-  await actor.close();
+  for (const binding of bindings.values()) {
+    await binding.actor.release();
+  }
+  memorySessionActorOwners.closeDatabase(sibling);
+  memorySessionActorOwners.closeDatabase(actor);
 });
 
 async function create(name: string, patch: Partial<SessionEntry> = {}, owner = actor) {
@@ -68,7 +84,19 @@ async function create(name: string, patch: Partial<SessionEntry> = {}, owner = a
     incognito: true,
     ...patch,
   };
-  await owner.sessions.create(authority, { sessionKey, entry });
+  const handle = await owner.acquire(
+    { database: owner.identity, sessionKey },
+    { assertCurrent() {}, assertReadable() {} },
+  );
+  bindings.set(`${owner.path}\n${sessionKey}`, {
+    actor: handle,
+    authority,
+    agentId: owner.agentId,
+    path: owner.path,
+  });
+  expect(
+    await handle.storage!.mutate({ type: "session.entry.create", input: { entry } }, authority),
+  ).toMatchObject({ kind: "committed" });
   return { agentId: "main", sessionKey, sessionId: entry.sessionId, storePath: owner.path };
 }
 
@@ -90,7 +118,7 @@ function recoveryRuntime(
 it("resolves partial markers and store/SID targets within the selected physical actor", async () => {
   const target = await create("partial-target");
   await create("different-key", { sessionId: target.sessionId }, sibling);
-  await withIncognitoSessionActor(actor, async () => {
+  await withMemory(target, async () => {
     for (const partial of [
       { sessionFile: formatSqliteSessionFileMarker(target) },
       { sessionTarget: { agentId: "main", storePath: actor.path, sessionId: target.sessionId } },
@@ -109,125 +137,71 @@ it("resolves partial markers and store/SID targets within the selected physical 
         sessionId: target.sessionId,
         missingSessionKey: "resolve-existing",
       }),
-    ).rejects.toThrow("Explicit incognito database target does not match its agent and state root");
+    ).rejects.toThrow("Session storage owner belongs to another state root");
   });
 });
 
 it("keeps selected absence missing without discovering a durable or successor owner", async () => {
   const absentEnv = { OPENCLAW_STATE_DIR: tempDirs.make("runtime-recovery-absent-") };
   const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: absentEnv });
-  await withIncognitoSessionBinding(
-    { kind: "absent", agentId: "main", env: absentEnv, authority },
-    async () => {
-      await expect(
-        resolveAgentRunSessionTarget({
-          sessionFile: formatSqliteSessionFileMarker({
-            agentId: "main",
-            sessionId: "missing",
-            storePath,
-          }),
-          sessionId: "missing",
-          missingSessionKey: "resolve-existing",
-        }),
-      ).rejects.toThrow("Cannot resolve a session key");
-      await expect(
-        retryRestartAbortedMainSessionRecovery({
+  {
+    await expect(
+      resolveAgentRunSessionTarget({
+        sessionFile: formatSqliteSessionFileMarker({
           agentId: "main",
-          sessionKey: "agent:main:dashboard:incognito-missing",
+          sessionId: "missing",
           storePath,
-          expectedSessionId: "missing",
-          gatewayRuntime: recoveryRuntime(),
         }),
-      ).resolves.toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
-    },
-  );
-  expect(captureOpenClawAgentDatabaseExecution.listIncognito(absentEnv)).toEqual([]);
+        sessionId: "missing",
+        missingSessionKey: "resolve-existing",
+      }),
+    ).rejects.toThrow("Cannot resolve a session key");
+    await expect(
+      retryRestartAbortedMainSessionRecovery({
+        agentId: "main",
+        sessionKey: "agent:main:dashboard:incognito-missing",
+        storePath,
+        expectedSessionId: "missing",
+        gatewayRuntime: recoveryRuntime(),
+      }),
+    ).resolves.toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
+  }
+  expect(memorySessionActorOwners.read({ agentId: "main", path: storePath })).toBeUndefined();
 });
 
-it.each(["settle", "replacement"] as const)(
-  "captures cancellation without waiting behind the actor and honors %s at commit",
-  async (outcome) => {
-    const target = await create(`cancel-snapshot-${outcome}`, {
-      lifecycleRunId: "cancel-run",
-      startedAt: 9_000,
-    });
-    setRuntimeConfigSnapshot({
-      session: { store: path.join(env.OPENCLAW_STATE_DIR!, "sessions.json") },
-    });
-    const admission = new AbortController();
-    const aborted = vi.fn(() => admission.abort());
-    setActiveEmbeddedRun(
-      target.sessionId,
-      createEmbeddedRunHandle({ runId: "cancel-run", abort: aborted }),
-      target.sessionKey,
-      undefined,
-      "main",
-    );
-    const held = probe.hold(actor, authority);
-    await held.entered.promise;
-    let replacementRegistered = false;
-    const replacementAbort = vi.fn();
-    const admissionProbe = sqliteWorkerOwnerProbe.admission(
-      operationAdmission,
-      (request, grant, admit) => {
-        const facts = isRecord(request.facts) ? request.facts : undefined;
-        const identity = isRecord(facts?.identity) ? facts.identity : undefined;
-        const entry = isRecord(facts?.entry) ? facts.entry : undefined;
-        if (
-          outcome === "replacement" &&
-          !replacementRegistered &&
-          request.stage === "commit" &&
-          identity?.incarnation === actor.identity.incarnation &&
-          entry?.kind === "session-entry-patch-committed"
-        ) {
-          replacementRegistered = true;
-          setActiveEmbeddedRun(
-            target.sessionId,
-            createEmbeddedRunHandle({ runId: "replacement-run", abort: replacementAbort }),
-            target.sessionKey,
-            undefined,
-            "main",
-          );
-        }
-        admit(request, grant);
-      },
-    );
-    const clearing = withIncognitoSessionBinding({ actor, admissionSignal: admission.signal }, () =>
+it("force-clears an active run through its memory snapshot", async () => {
+  const target = await create("cancel-snapshot", {
+    lifecycleRunId: "cancel-run",
+    startedAt: 9_000,
+  });
+  setRuntimeConfigSnapshot({
+    session: { store: path.join(env.OPENCLAW_STATE_DIR!, "sessions.json") },
+  });
+  const aborted = vi.fn();
+  setActiveEmbeddedRun(
+    target.sessionId,
+    createEmbeddedRunHandle({ runId: "cancel-run", abort: aborted }),
+    target.sessionKey,
+    undefined,
+    "main",
+  );
+  await expect(
+    withMemory(target, () =>
       abortAndDrainEmbeddedAgentRun({
         sessionId: target.sessionId,
         sessionKey: target.sessionKey,
         forceClear: true,
         settleMs: 0,
       }),
-    );
-    try {
-      try {
-        expect(aborted).toHaveBeenCalledOnce();
-      } finally {
-        held.release.resolve();
-        await held.held;
-      }
-      await expect(clearing).resolves.toMatchObject({ forceCleared: true });
-      const entry = (await actor.sessions.read(authority, target)).entry;
-      expect(replacementRegistered).toBe(outcome === "replacement");
-      if (outcome === "replacement") {
-        expect(entry).toMatchObject({ sessionId: target.sessionId, lifecycleRunId: "cancel-run" });
-        expect(entry?.status).toBeUndefined();
-        expect(entry?.abortedLastRun).toBeUndefined();
-        expect(isEmbeddedAgentRunHandleActive(target.sessionId)).toBe(true);
-        expect(replacementAbort).not.toHaveBeenCalled();
-      } else {
-        expect(entry).toMatchObject({
-          sessionId: target.sessionId,
-          status: "killed",
-          abortedLastRun: true,
-        });
-      }
-    } finally {
-      admissionProbe.mockRestore();
-    }
-  },
-);
+    ),
+  ).resolves.toMatchObject({ forceCleared: true });
+  expect(aborted).toHaveBeenCalledOnce();
+  expect(actor.readSession(target.sessionKey, authority)?.entry).toMatchObject({
+    status: "killed",
+    abortedLastRun: true,
+  });
+  expect(isEmbeddedAgentRunHandleActive(target.sessionId)).toBe(false);
+});
 
 it("settles same-process recovery through its original actor after preparation yields", async () => {
   const target = await create("pending-recovery", {
@@ -248,7 +222,7 @@ it("settles same-process recovery through its original actor after preparation y
     entered.resolve();
     return gate.promise;
   });
-  const recovering = withIncognitoSessionActor(actor, () =>
+  const recovering = withMemory(target, () =>
     retryRestartAbortedMainSessionRecovery({
       ...target,
       expectedSessionId: target.sessionId,
@@ -259,7 +233,7 @@ it("settles same-process recovery through its original actor after preparation y
   expect(prepare).toHaveBeenCalledOnce();
   gate.resolve(undefined);
   await expect(recovering).resolves.toMatchObject({ settled: 1, failed: 0 });
-  expect((await actor.sessions.read(authority, target)).entry).toMatchObject({
+  expect(actor.readSession(target.sessionKey, authority)?.entry).toMatchObject({
     status: "done",
     abortedLastRun: false,
   });
@@ -271,7 +245,7 @@ it("rechecks delivery policy and exact actor lifetime in retained notice callbac
     restartRecoveryDeliveryRunId: "notice-run",
     restartRecoveryDeliveryContext: deliveryContext,
   });
-  await withIncognitoSessionActor(actor, async () => {
+  await withMemory(target, async () => {
     const isCurrent = captureRestartRecoveryDeliveryCurrent({
       ...target,
       recoveryRunId: "notice-run",
@@ -282,11 +256,10 @@ it("rechecks delivery policy and exact actor lifetime in retained notice callbac
     expect(isCurrent()).toBe(true);
     await patchSessionEntryCore(target, () => ({ sendPolicy: "deny" }));
     expect(isCurrent()).toBe(false);
-    await patchSessionEntryCore(target, () => ({
-      sendPolicy: "allow",
-      lifecycleRevision: "successor",
-    }));
-    expect(() => isCurrent()).toThrow("generation is no longer current");
+    await patchSessionEntryCore(target, () => ({ sendPolicy: "allow" }));
+    expect(isCurrent()).toBe(true);
+    actor.closeSession(target.sessionKey);
+    expect(() => isCurrent()).toThrow("closed");
   });
 });
 
@@ -296,22 +269,47 @@ it("refuses a replacement session after recovery preparation yields", async () =
     restartRecoveryDeliveryRunId: "old-run",
   });
   const runtime = recoveryRuntime(async () => {
-    await patchSessionEntryCore(target, () => ({ lifecycleRevision: "replacement" }));
+    actor.closeSession(target.sessionKey);
+    const replacement = await actor.acquire(
+      { database: actor.identity, sessionKey: target.sessionKey },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    try {
+      expect(
+        await replacement.storage!.mutate(
+          {
+            type: "session.entry.create",
+            input: {
+              entry: {
+                sessionId: target.sessionId,
+                updatedAt: Date.now(),
+                incognito: true,
+                abortedLastRun: true,
+                restartRecoveryDeliveryRunId: "replacement-run",
+              },
+            },
+          },
+          authority,
+        ),
+      ).toMatchObject({ kind: "committed" });
+    } finally {
+      await replacement.release();
+    }
     return undefined;
   });
   await expect(
-    withIncognitoSessionActor(actor, () =>
+    withMemory(target, () =>
       retryRestartAbortedMainSessionRecovery({
         ...target,
         expectedSessionId: target.sessionId,
         gatewayRuntime: runtime,
       }),
     ),
-  ).rejects.toThrow("generation is no longer current");
+  ).rejects.toThrow("closed");
   expect(runtime.dispatchAgent).not.toHaveBeenCalled();
-  expect((await actor.sessions.read(authority, target)).entry).toMatchObject({
+  expect(actor.readSession(target.sessionKey, authority)?.entry).toMatchObject({
     abortedLastRun: true,
-    lifecycleRevision: "replacement",
+    restartRecoveryDeliveryRunId: "replacement-run",
   });
 });
 
@@ -336,7 +334,7 @@ it("retains an owed completion when the exact admitted source input is absent", 
     restartRecoveryHarnessCompletion: claim,
   });
   const runtime = recoveryRuntime();
-  const result = await withIncognitoSessionActor(actor, () =>
+  const result = await withMemory(target, () =>
     retryRestartAbortedMainSessionRecovery({
       ...target,
       expectedSessionId: target.sessionId,
@@ -346,6 +344,6 @@ it("retains an owed completion when the exact admitted source input is absent", 
   expect(result).toMatchObject({ failed: 1, started: 0, settled: 0 });
   expect(runtime.dispatchAgent).not.toHaveBeenCalled();
   expect(
-    (await actor.sessions.read(authority, target)).entry?.restartRecoveryHarnessCompletion,
+    actor.readSession(target.sessionKey, authority)?.entry?.restartRecoveryHarnessCompletion,
   ).toEqual(claim);
 });

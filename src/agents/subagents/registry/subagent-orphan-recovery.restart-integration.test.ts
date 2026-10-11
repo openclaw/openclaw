@@ -16,6 +16,7 @@ import {
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { runStartupSessionMaintenanceForTest } from "../../../gateway/server-startup-session-migration.test-support.js";
 import {
@@ -37,7 +38,6 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
-import { getOpenIncognitoAgentDatabase } from "../../../state/openclaw-agent-db-lifecycle.js";
 import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
@@ -108,7 +108,9 @@ it.each(["durable", "incognito"] as const)(
           warn: vi.fn(),
         });
       expect(existsSync(databasePath)).toBe(false);
-      expect(getOpenIncognitoAgentDatabase("main", databasePath)).toBeUndefined();
+      expect(
+        memorySessionActorOwners.read({ agentId: "main", path: databasePath }),
+      ).toBeUndefined();
       const running = { ...entry, execution: { ...entry.execution, status: "running" as const } };
       expect(await recover(running)).toEqual({ status: "ignored" });
       const result = await recover(entry);
@@ -133,7 +135,9 @@ it.each(["durable", "incognito"] as const)(
         }),
       ).toMatchObject({ status: "terminal", suppressSessionEffects: true });
       expect(existsSync(databasePath)).toBe(false);
-      expect(getOpenIncognitoAgentDatabase("main", databasePath)).toBeUndefined();
+      expect(
+        memorySessionActorOwners.read({ agentId: "main", path: databasePath }),
+      ).toBeUndefined();
 
       await replaceSessionEntry(
         { agentId: "main", sessionKey: childSessionKey },

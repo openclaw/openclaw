@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -65,7 +66,10 @@ import {
   getOpenClawAgentDatabaseValidationForTransfer,
   type OpenClawAgentDatabaseValidation,
 } from "./openclaw-agent-db-validation-cache.js";
-import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
+import {
+  INCOGNITO_AGENT_SQLITE_BASENAME,
+  resolveOpenClawAgentSqlitePath,
+} from "./openclaw-agent-db.paths.js";
 import type { OpenClawAgentDatabaseAdmissionExecution } from "./openclaw-agent-execution-admission-contract.js";
 import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 import {
@@ -123,6 +127,9 @@ function assertAgentDatabaseOperationCurrent(
 }
 
 function assertAgentDatabaseWriteAllowed(pathname: string): void {
+  if (path.basename(pathname) === INCOGNITO_AGENT_SQLITE_BASENAME) {
+    throw new Error("Incognito sessions use the memory session actor, not a SQLite database.");
+  }
   if (isArtifactPreservingStateRead("agent", pathname)) {
     throw new Error("Programming error: writable agent database open during read-only inspection.");
   }
@@ -214,7 +221,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
           assertAgentDeletionDatabaseCleanupAccess(database, options);
           assertAgentCreationClaimAccess(database, options);
           const operationResult = operation(database);
-          if (!enteredNestedTransaction && !cache.incognito.has(database)) {
+          if (!enteredNestedTransaction) {
             // Permission failure must roll back with the write. Repairing after
             // COMMIT could make callers retry a transaction already durable in SQLite.
             ensureOpenClawAgentDatabasePermissions(database.path, options);
@@ -319,9 +326,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     if (
       !prepared &&
       isMainThread &&
-      (!cached?.db.isOpen ||
-        (!cache.incognito.has(cached) &&
-          (!schema || Atomics.load(new Int32Array(schema.valid), 0) !== 1))) &&
+      (!cached?.db.isOpen || !schema || Atomics.load(new Int32Array(schema.valid), 0) !== 1) &&
       !cache.pending.has(pathname)
     ) {
       return withWorkerAdmission(
@@ -676,7 +681,7 @@ async function withWorkerAdmission<T>(
   try {
     const owner = await import("./openclaw-agent-execution.js");
     assertAdmission();
-    // Doctor/maintenance, deletion cleanup and process-held incognito retain their local owner.
+    // Doctor/maintenance and deletion cleanup retain their local durable owner.
     if (!owner.supportsOpenClawAgentDatabaseExecution(options)) {
       return await run("native");
     }

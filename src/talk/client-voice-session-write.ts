@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  applySessionEntryOperation,
-  applySessionEntryTargetOperation,
-} from "../config/sessions/session-accessor.sqlite-entry.js";
+import { applySessionEntryTargetOperation } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { resolveSqliteSessionKey } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import {
+  acquireSessionActorStorage,
+  captureSessionActorStorageOwner,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { SessionPendingInputAuthorityFacts } from "../config/sessions/session-pending-input-authority.js";
@@ -32,10 +32,8 @@ import { collectSessionEntryLookupKeys } from "../config/sessions/store-entry.js
 import { mergeSessionEntry, type InternalSessionEntry } from "../config/sessions/types.js";
 import { assertDatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
-import { isIncognitoSessionKey } from "../routing/session-key.js";
 import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db-contract.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
-import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import type {
   AgentDatabaseRequestExecutionSource,
   OpenClawAgentDatabaseAdmissionExecution,
@@ -282,29 +280,29 @@ export async function ensureClientVoiceAgentSessionEntry(params: {
     }
     return created.sessionId;
   };
-  const memory = getSessionActorStorageBinding(params);
-  if (memory || isIncognitoSessionKey(params.sessionKey)) {
-    const prepared = reduction();
-    const assertCurrent = composeSessionSourceAssertion([
-      assertLifetimeCurrent,
-      params.requester,
-      params.source,
-    ]);
-    return complete(
-      memory
-        ? await ensureMemoryVoiceEntry({
-            binding: memory,
-            ...prepared,
-            ...publication,
-            assertCurrent,
-          })
-        : await applySessionEntryOperation(params, prepared.operation, {
-            ...publication,
-            fallbackEntry: prepared.fallbackEntry,
-            workerGuard: { assertCurrent: assertLifetimeCurrent },
-            assertCommitAllowed: assertCurrent,
-          }),
-    );
+  const assertCurrent = composeSessionSourceAssertion([
+    assertLifetimeCurrent,
+    params.requester,
+    params.source,
+  ]);
+  const memory = await acquireSessionActorStorage(params, {
+    create: true,
+    lifetime: { assertCurrent, assertReadable: assertCurrent },
+    authority: { assertCurrent, authorize() {} },
+  });
+  if (memory) {
+    try {
+      return complete(
+        await ensureMemoryVoiceEntry({
+          binding: memory,
+          ...reduction(),
+          ...publication,
+          assertCurrent,
+        }),
+      );
+    } finally {
+      await memory.actor.release();
+    }
   }
   const resources: Array<Pick<PreparedSessionSourceAuthority, "release">> = [];
   return withClientVoiceSessionResources(resources, async () => {
@@ -419,7 +417,10 @@ export async function mutateAuthorizedClientVoiceSession<T>(
   const resources: Array<Pick<PreparedSessionSourceAuthority, "release">> = [];
   return withClientVoiceSessionResources(resources, async () => {
     const memorySource = params.source
-      ? getSessionActorStorageBinding({ storePath: params.source.storePath })
+      ? captureSessionActorStorageOwner(
+          { storePath: params.source.storePath },
+          { assertCurrent: params.source.assertCurrent, authorize() {} },
+        )
       : undefined;
     const sourceCandidates =
       params.source && !memorySource
@@ -495,9 +496,7 @@ export async function mutateAuthorizedClientVoiceSession<T>(
           // Reuse the prepared physical owner; opaque SDK sources resolve their original selector.
           const sourceTarget =
             preparedSource ??
-            (canonical.agentId ||
-            (authority.nativeSource &&
-              isIncognitoOpenClawAgentSqlitePath(canonical.path, writer.options))
+            (canonical.agentId
               ? { ...canonical, agentId: canonical.agentId ?? params.agentId }
               : await prepareSqliteTargetFromSessionStorePath(params.source.storePath, {
                   agentId: params.agentId,

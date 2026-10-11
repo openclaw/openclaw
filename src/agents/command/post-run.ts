@@ -3,11 +3,11 @@ import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../../config/sessions/restart-recovery-types.js";
-import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import {
-  captureIncognitoSessionSource,
-  withIncognitoSessionEntry,
-} from "../../config/sessions/session-incognito-binding.js";
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
@@ -142,7 +142,13 @@ export async function finalizeEmbeddedAgentCommand(params: {
     runId,
   } = params.prepared;
   const sessionSource = sessionKey
-    ? captureIncognitoSessionSource({ agentId: sessionAgentId, storePath, sessionKey })
+    ? captureSessionActorStorageOwner(
+        { agentId: sessionAgentId, storePath, sessionKey },
+        {
+          assertCurrent: () => assertSourceCurrent?.(),
+          authorize() {},
+        },
+      )
     : undefined;
   const {
     fallbackProvider,
@@ -362,13 +368,9 @@ export async function finalizeEmbeddedAgentCommand(params: {
               operatorAuthority?.assertCurrent();
               assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
             };
+            assertCurrent();
             const freshEntry = sessionSource
-              ? await withIncognitoSessionEntry(
-                  sessionSource,
-                  normalizeStoreSessionKey(sessionKey),
-                  assertCurrent,
-                  async (entry) => entry,
-                )
+              ? readCapturedSessionActorEntry(sessionSource, normalizeStoreSessionKey(sessionKey))
               : await readSessionEntryReadOnlyInWorker(
                   {
                     agentId: sessionAgentId,

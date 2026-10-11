@@ -1,20 +1,28 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { captureNativeSessionEntryCurrentRead } from "../config/sessions/session-entry-current-runtime.js";
+import type { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
 import type {
   ChatHistoryPage,
   ChatHistoryPageParams,
   ChatHistoryMessageParams,
   ChatHistoryDisplayRequest,
   ChatHistoryDisplayResult,
+  SessionHistorySubagentFacts,
 } from "../config/sessions/session-history-types.js";
 import type { WorkerTaskChannel } from "../infra/worker-task-server.js";
+import { createChatHistoryRecoveryProjection } from "./chat-display-projection.core.js";
 import type { CliHistoryReaders } from "./cli-session-history.js";
 import { projectChatHistoryWithReplies } from "./server-methods/chat-history-reply-messages.js";
-import type { IncognitoSessionHistoryReader } from "./session-history-snapshot.js";
+import {
+  createPreparedSessionHistorySubagentProjection,
+  prepareSessionHistorySubagentFacts,
+} from "./session-history-delta-visibility.js";
+import { createSessionActorTranscriptReader } from "./session-transcript-memory-reader.js";
 import type {
   SessionTranscriptPageOptions,
   SessionTranscriptPageReader,
 } from "./session-transcript-read.types.js";
+
+type MemoryHistoryRead = NonNullable<ReturnType<typeof captureSessionActorTranscriptRead>>;
 
 type Request =
   | {
@@ -30,13 +38,13 @@ type Request =
       >[1];
     };
 
-/** Keep process-held SQLite custody on its existing owner; move matching and projection off-loop. */
+/** Read canonical memory history from its actor while CLI matching stays in a compute worker. */
 export async function readProcessHeldCliHistory(
   params: ChatHistoryPageParams,
   signal?: AbortSignal,
-  incognito?: IncognitoSessionHistoryReader,
+  memory?: MemoryHistoryRead,
 ): Promise<ChatHistoryPage> {
-  const result = await readProcessHeldCliHistoryQuery({ kind: "rpc", params }, signal, incognito);
+  const result = await readProcessHeldCliHistoryQuery({ kind: "rpc", params }, signal, memory);
   if (result.kind !== "rpc") {
     throw new Error("Unexpected process-held history page");
   }
@@ -45,12 +53,12 @@ export async function readProcessHeldCliHistory(
 
 export async function readProcessHeldCliHistoryMessage(
   params: ChatHistoryMessageParams,
-  incognito?: IncognitoSessionHistoryReader,
+  memory?: MemoryHistoryRead,
 ) {
   const result = await readProcessHeldCliHistoryQuery(
     { kind: "rpc-message", params },
     undefined,
-    incognito,
+    memory,
   );
   if (result.kind !== "rpc-message") {
     throw new Error("Unexpected process-held history message");
@@ -61,15 +69,20 @@ export async function readProcessHeldCliHistoryMessage(
 async function readProcessHeldCliHistoryQuery(
   input: ChatHistoryDisplayRequest,
   signal?: AbortSignal,
-  incognito?: IncognitoSessionHistoryReader,
+  memory?: MemoryHistoryRead,
 ): Promise<ChatHistoryDisplayResult> {
   const history = structuredClone(input);
   const params = history.params;
   params.encodeResponse = false;
-  const [{ runProcessHeldHistoryTask }, readers] = await Promise.all([
-    import("../config/sessions/session-transcript-worker-runtime.js"),
-    incognito?.readers ?? import("./session-transcript-readers.js"),
-  ]);
+  if (!memory) {
+    throw new Error("Process-held history requires a memory session actor");
+  }
+  if (params.entry) {
+    params.entry.incognito = true;
+  }
+  const { runProcessHeldHistoryTask } =
+    await import("../config/sessions/session-transcript-worker-runtime.js");
+  const readers = createSessionActorTranscriptReader(memory);
   const scope = {
     agentId: params.sessionAgentId,
     sessionId: params.sessionId!,
@@ -77,31 +90,10 @@ async function readProcessHeldCliHistoryQuery(
     storePath: params.storePath,
     sessionEntry: params.entry,
   };
-  const current = incognito ? undefined : captureNativeSessionEntryCurrentRead(scope);
-  const initial = current?.readCurrent();
-  if (
-    !incognito &&
-    (!initial ||
-      initial.sessionId !== scope.sessionId ||
-      initial.lifecycleRevision !== params.entry?.lifecycleRevision)
-  ) {
-    throw new Error("Incognito history session is no longer current");
-  }
   const assertCurrent = () => {
     signal?.throwIfAborted();
-    if (incognito) {
-      incognito.assertCurrent();
-      return;
-    }
-    const entry = current?.readCurrent();
-    if (
-      entry?.sessionId !== initial?.sessionId ||
-      entry?.lifecycleRevision !== initial?.lifecycleRevision
-    ) {
-      throw new Error("Incognito history session generation is no longer current");
-    }
+    memory.assertCurrent();
   };
-  assertCurrent();
   const result = await runProcessHeldHistoryTask(
     history,
     async (value, { signal: requestSignal }) => {
@@ -133,7 +125,23 @@ async function readProcessHeldCliHistoryQuery(
         throw new Error("Unsupported process-held history request");
       }
       assertCurrent();
-      return { input: readResult, timeoutMs: 60_000 };
+      const messages =
+        "messages" in readResult
+          ? readResult.messages
+          : readResult.message === undefined
+            ? []
+            : [readResult.message];
+      const facts = prepareSessionHistorySubagentFacts(
+        readers.subagentCoordination,
+        (recording) => {
+          for (const message of messages) {
+            createChatHistoryRecoveryProjection({ subagentCoordination: recording }).append([
+              message,
+            ]);
+          }
+        },
+      );
+      return { input: { result: readResult, facts }, timeoutMs: 60_000 };
     },
     signal,
   );
@@ -163,16 +171,26 @@ export async function readProcessHeldCliHistoryInWorker(
   channel: WorkerTaskChannel,
 ): Promise<ChatHistoryDisplayResult> {
   const params = history.params;
+  const facts: SessionHistorySubagentFacts = { sessions: [], runMessages: [] };
+  let subagents = createPreparedSessionHistorySubagentProjection(facts, () => {});
   const request = async <T>(value: Request): Promise<T> => {
     const response = await channel.request(value);
     try {
       // SAFETY: The paired host owns this typed response and validates the retained source before disclosure.
-      return response.input as T;
+      const reply = response.input as { result: T; facts: SessionHistorySubagentFacts };
+      facts.sessions.push(...reply.facts.sessions);
+      facts.runMessages.push(...reply.facts.runMessages);
+      subagents = createPreparedSessionHistorySubagentProjection(facts, () => {});
+      return reply.result;
     } finally {
       response.consumed();
     }
   };
   const readers: CliHistoryReaders = {
+    subagentCoordination: {
+      isSubagentSession: (key) => subagents.isSubagentSession(key),
+      isSubagentRunMessage: (runId, seq) => subagents.isSubagentRunMessage(runId, seq),
+    },
     readSessionMessageByIdAsync: (_scope, messageId, options) =>
       request({ kind: "by-id", messageId, options }),
     readRecentSessionMessagesWithStatsAsync: (_scope, options) =>

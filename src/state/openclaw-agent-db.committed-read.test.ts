@@ -11,7 +11,6 @@ import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.
 import {
   closeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
-  resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db.js";
@@ -290,23 +289,6 @@ describe("committed agent database reads", () => {
         expect(first.db.isOpen).toBe(false);
         expect(second.db.isOpen).toBe(false);
       });
-    });
-  });
-
-  it("keeps incognito reads on their sole process-owned connection", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-      const options = {
-        agentId: "main",
-        env,
-        path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
-      };
-      const owner = openOpenClawAgentDatabase(options);
-      inWriterTransaction(owner.db, () => {
-        expect(readStamp(options).db === owner.db).toBe(true);
-        expect(owner.db.isTransaction).toBe(true);
-      });
-      expect(owner.db.isOpen).toBe(true);
-      expect(fs.existsSync(options.path)).toBe(false);
     });
   });
 

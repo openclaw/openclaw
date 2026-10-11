@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -49,6 +50,7 @@ beforeAll(async () => {
 });
 
 afterAll(() => server.close());
+afterEach(() => memorySessionActorOwners.reset());
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -67,6 +69,34 @@ const postToolsInvoke = async (params: {
     body: JSON.stringify(params.body),
   });
 
+it("refuses tool execution when its memory session closes during the before-tool hook", async () => {
+  await withOpenClawTestState({ label: "memory-tool-closure" }, async () => {
+    const sessionKey = "agent:main:dashboard:incognito-tool-closure";
+    runtime.cfg = { agents: { entries: { main: {} } } };
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey },
+      { sessionId: "private-tool", updatedAt: 1, incognito: true },
+    );
+    runtime.authorize.mockResolvedValue({ ok: true, method: "token" });
+    runtime.beforeHook.mockImplementationOnce(async ({ params }) => {
+      memorySessionActorOwners.reset();
+      return { blocked: false, params };
+    });
+    const response = await postToolsInvoke({
+      port: sharedPort,
+      headers: gatewayAuthHeaders(),
+      body: { name: "session_status", sessionKey },
+    });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({
+      ok: false,
+      error: { message: "tool execution failed" },
+    });
+    expect(runtime.beforeHook).toHaveBeenCalledOnce();
+    expect(runtime.execute).not.toHaveBeenCalled();
+  });
+});
+
 describe.each(["HTTP", "WebSocket"] as const)(
   "standalone role authorization over %s",
   (transport) => {
@@ -76,6 +106,7 @@ describe.each(["HTTP", "WebSocket"] as const)(
       toolName?: string;
       sandbox?: "required";
       stored?: boolean;
+      incognito?: boolean;
       system?: boolean;
       expectedError?: string;
     }> = [
@@ -108,6 +139,13 @@ describe.each(["HTTP", "WebSocket"] as const)(
         sessionKey: "agent:main:guest-session",
         sandbox: "required",
         stored: true,
+      },
+      {
+        label: "allows an owned memory session",
+        sessionKey: "agent:main:dashboard:incognito-tools",
+        sandbox: "required",
+        stored: true,
+        incognito: true,
       },
       {
         label: "preserves trusted system calls without a session",
@@ -152,6 +190,7 @@ describe.each(["HTTP", "WebSocket"] as const)(
             visibility: "shared" as const,
             createdActor: { type: "human" as const, source: "profile" as const, id: profile.id },
             sandbox: "required" as const,
+            ...(testCase.incognito ? { incognito: true } : {}),
           };
           await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
         }

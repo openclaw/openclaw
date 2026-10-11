@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { withIncognitoSessionActor } from "../../config/sessions/session-incognito-binding.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import {
   resetAgentRunRegistryForTest,
@@ -24,7 +24,7 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
-import { openIncognitoTestActor } from "../../state/openclaw-agent-execution-incognito.test-support.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -81,15 +81,16 @@ it.each(["durable", "incognito"])(
   async (storage) => {
     const previousRegistry = getActivePluginRegistry();
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-full-node-"));
-    const actor =
-      storage === "incognito"
-        ? await openIncognitoTestActor({ OPENCLAW_STATE_DIR: root }, { assertCurrent() {} })
-        : undefined;
+    const memoryPath = resolveIncognitoOpenClawAgentSqlitePath({
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: root },
+    });
     const sessionTarget = {
       agentId: "main",
-      sessionKey: actor ? "agent:main:dashboard:incognito-node" : "agent:main:session-1",
+      sessionKey:
+        storage === "incognito" ? "agent:main:dashboard:incognito-node" : "agent:main:session-1",
       sessionId: "session-1",
-      storePath: actor?.path ?? path.join(root, "sessions.json"),
+      storePath: storage === "incognito" ? memoryPath : path.join(root, "sessions.json"),
     };
     try {
       const run = async () => {
@@ -237,13 +238,9 @@ it.each(["durable", "incognito"])(
           admission.close();
         }
       };
-      if (actor) {
-        await withIncognitoSessionActor(actor, run);
-      } else {
-        await run();
-      }
+      await run();
     } finally {
-      await actor?.close();
+      memorySessionActorOwners.closeDatabase({ agentId: "main", path: memoryPath });
       if (previousRegistry) {
         setActivePluginRegistry(previousRegistry);
       } else {

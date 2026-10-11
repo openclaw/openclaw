@@ -14,14 +14,12 @@ import {
   SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
   type StoredSessionSuggestion,
 } from "../../config/sessions.js";
-import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import {
   addSessionSuggestionInWorker,
   claimSessionSuggestionDispatchInWorker,
   finalizeSessionSuggestionClaimInWorker,
   releaseSessionSuggestionDispatchInWorker,
 } from "../../config/sessions/session-metadata-write.async.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { presenceUserKey } from "../../shared/presence-user.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
@@ -29,12 +27,11 @@ import {
   resolveRequestedSessionAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "../session-request-agent.js";
-import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
 import {
   getSessionRowProjection,
   requireSessionRowProjection,
 } from "../session-row-projection-access.js";
-import { captureIncognitoSessionMutationFacts } from "../session-sharing-incognito.js";
+import { captureSessionSharingMemoryFacts } from "../session-sharing-incognito.js";
 import { SessionMutationFactsUnavailableError } from "../session-sharing-preparation.js";
 import {
   authorizeIncognitoSessionTarget,
@@ -222,18 +219,30 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       const identity = gatewayClientSessionCreator(client);
       const projection = requireSessionRowProjection(context);
       const query = { key: params.sessionKey, agentId: requested.agentId };
-      const binding = captureIncognitoSessionBinding({
-        sessionKey: query.key,
-        agentId: query.agentId,
-      });
-      const actorFacts = binding && captureIncognitoSessionMutationFacts(binding, query.key, true);
-      if (!binding) {
+      const actorFacts = captureSessionSharingMemoryFacts(
+        {
+          sessionKey: query.key,
+          agentId: query.agentId,
+          resolved: null,
+        },
+        () => {
+          signal?.throwIfAborted();
+          if (
+            client?.invalidated ||
+            client?.connectionSignal?.aborted ||
+            hasCurrentClientAuthority?.() === false
+          ) {
+            throw new SessionMutationFactsUnavailableError();
+          }
+        },
+      );
+      if (!actorFacts) {
         while (projection.needsMembershipPreparation()) {
           await projection.prepareMembership();
         }
       }
       let selected: ReturnType<typeof readCollaborationTarget> = undefined;
-      const readCurrent = (read: Pick<SessionRowReadView, "describe"> = projection) => {
+      const readCurrent = () => {
         if (
           signal?.aborted ||
           client?.invalidated ||
@@ -248,7 +257,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           );
           return null;
         }
-        const target = readCollaborationTarget(projection, query, read, actorFacts);
+        const target = readCollaborationTarget(projection, query, actorFacts);
         if (
           getSessionRowProjection(context) !== projection ||
           (selected &&
@@ -279,17 +288,14 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
         });
         return role === null || !target ? null : { target, role };
       };
-      const initial =
-        isIncognitoSessionKey(query.key) && !binding
-          ? await withReadySessionRows(projection, () => [query], readCurrent)
-          : readCurrent();
+      const initial = readCurrent();
       if (!initial) {
         return;
       }
       selected = initial.target;
       const stored = await listSessionSuggestions(suggestionScope(initial.target));
-      const reply = (read?: Pick<SessionRowReadView, "describe">) => {
-        const current = readCurrent(read);
+      const reply = () => {
+        const current = readCurrent();
         if (!current) {
           return;
         }
@@ -303,11 +309,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           suggestions: visible.map((suggestion) => protocolSuggestion(current.target, suggestion)),
         });
       };
-      if (isIncognitoSessionKey(query.key) && !binding) {
-        await withReadySessionRows(projection, () => [query], reply);
-      } else {
-        reply();
-      }
+      reply();
     },
   ),
 
@@ -537,18 +539,28 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       return;
     }
     const query = { key: params.sessionKey, agentId: requestedAgent.agentId };
-    const binding = captureIncognitoSessionBinding({
-      sessionKey: query.key,
-      agentId: query.agentId,
-    });
-    const actorFacts = binding && captureIncognitoSessionMutationFacts(binding, query.key, true);
-    if (!binding) {
+    const actorFacts = captureSessionSharingMemoryFacts(
+      {
+        sessionKey: query.key,
+        agentId: query.agentId,
+        resolved: null,
+      },
+      () => {
+        if (
+          client?.invalidated ||
+          client?.connectionSignal?.aborted ||
+          hasCurrentClientAuthority?.() === false
+        ) {
+          throw new SessionMutationFactsUnavailableError();
+        }
+      },
+    );
+    if (!actorFacts) {
       while (projection.needsMembershipPreparation()) {
         await projection.prepareMembership();
       }
     }
-    const readTarget = (read?: Pick<SessionRowReadView, "describe">) =>
-      readCollaborationTarget(projection, query, read, actorFacts);
+    const readTarget = () => readCollaborationTarget(projection, query, actorFacts);
     const incognitoError = authorizeIncognitoSessionTarget({
       client,
       sessionKey: query.key,
@@ -558,10 +570,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       respond(false, undefined, incognitoError);
       return;
     }
-    const target =
-      isIncognitoSessionKey(query.key) && !binding
-        ? await withReadySessionRows(projection, () => [query], readTarget)
-        : readTarget();
+    const target = readTarget();
     const sharing = () =>
       prepareProjectedSessionSharing({
         cfg: projection.getPolicyConfig(),

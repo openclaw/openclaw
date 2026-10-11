@@ -14,14 +14,15 @@ import {
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { isNativeSessionEntryRead } from "../config/sessions/session-entry-read-request.js";
 import {
   readSessionEntriesFromStoreInWorker,
   readSessionEntryReadOnlyInWorker,
 } from "../config/sessions/session-entry-read-runtime.js";
-import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
-import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
@@ -133,31 +134,18 @@ export function readGitHubPublicationSession(
   sessionKey: string,
   options: Parameters<typeof loadGatewaySessionEntryReadOnly>[1] = {},
 ): PublicationSessionRead {
-  const memory = getSessionActorStorageBinding({ sessionKey, agentId: options?.agentId });
-  if (memory) {
-    return {
-      canonicalKey: sessionKey,
-      agentId: memory.agentId,
-      storePath: memory.path,
-      entry: memory.actor.snapshot(memory.authority)?.entry,
-    };
-  }
-  const binding = captureIncognitoSessionBinding({ sessionKey, agentId: options?.agentId });
-  if (!binding) {
+  const memory = captureSessionActorStorageOwner(
+    { sessionKey, agentId: options?.agentId, env: options?.env },
+    { assertCurrent() {}, authorize() {} },
+  );
+  if (!memory) {
     return loadGatewaySessionEntryReadOnly(sessionKey, options);
   }
-  const { actor } = binding;
-  const source = captureSessionEntryMetadataRead({
-    sessionKey,
-    agentId: actor.agentId,
-    storePath: actor.path,
-  });
-  const metadata = source?.readCurrent();
   return {
     canonicalKey: sessionKey,
-    agentId: actor.agentId,
-    storePath: actor.path,
-    entry: metadata,
+    agentId: memory.agentId,
+    storePath: memory.path,
+    entry: readCapturedSessionActorEntry(memory, sessionKey),
   };
 }
 
@@ -315,10 +303,17 @@ export async function prepareGitHubPublicationWorkspaceOwner(
   const target = options.sessionTarget ? { ...options.sessionTarget } : undefined;
   let snapshot: PublicationSessionRead;
   const actorScope = { ...params, storePath: target?.storePath };
-  const memory = getSessionActorStorageBinding(actorScope);
-  const binding = memory ? undefined : captureIncognitoSessionBinding(actorScope);
-  if (memory || binding) {
-    snapshot = readGitHubPublicationSession(params.sessionKey, { agentId: params.agentId });
+  const memory = captureSessionActorStorageOwner(actorScope, {
+    assertCurrent,
+    authorize: assertCurrent,
+  });
+  if (memory) {
+    snapshot = {
+      canonicalKey: params.sessionKey,
+      agentId: memory.agentId,
+      storePath: memory.path,
+      entry: readCapturedSessionActorEntry(memory, params.sessionKey),
+    };
     if (
       target &&
       (target.agentId !== params.agentId ||
@@ -571,10 +566,19 @@ export async function hasSupportedGitHubPublicationTarget(
 ): Promise<boolean> {
   assertCurrent();
   const context = captureOpenClawStateWorkerContext();
+  const memory = captureSessionActorStorageOwner(session, {
+    assertCurrent,
+    authorize: assertCurrent,
+  });
   const initial = requirePublicationSessionOwner(
     session,
-    getSessionActorStorageBinding(session) || captureIncognitoSessionBinding(session)
-      ? readGitHubPublicationSession(session.sessionKey, { agentId: session.agentId })
+    memory
+      ? {
+          canonicalKey: session.sessionKey,
+          agentId: memory.agentId,
+          storePath: memory.path,
+          entry: readCapturedSessionActorEntry(memory, session.sessionKey),
+        }
       : await loadGatewaySessionEntryReadOnlyInWorker({
           cfg: getRuntimeConfig(),
           key: session.sessionKey,

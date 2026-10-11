@@ -1,10 +1,7 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
-import {
-  publishTranscriptUpdate,
-  withTranscriptWriteTransaction,
-} from "../../config/sessions/session-accessor.js";
+import { publishTranscriptUpdate } from "../../config/sessions/session-accessor.js";
 import type { SessionTranscriptWriteScope } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { publishSessionEntryWorkerMetadataInvalidation } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import {
@@ -15,7 +12,6 @@ import { redactTranscriptMessageForStorage } from "../../config/sessions/session
 import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "../../config/sessions/session-actor-storage-result.js";
 import { restoreSessionColdTranscript } from "../../config/sessions/session-cold-storage.js";
-import { captureIncognitoSessionOperation } from "../../config/sessions/session-incognito-binding.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
@@ -30,7 +26,6 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import {
   attachSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
@@ -50,10 +45,6 @@ import type {
   WorkerTranscriptCommitApplication,
   WorkerTranscriptCommitterOptions,
 } from "./transcript-commit.js";
-import {
-  applyPreparedTranscriptCommit,
-  prepareTranscriptCommit,
-} from "./transcript-commit.kernel.js";
 import type {
   ApplyTranscriptCommitResult,
   CommittedAgentMessage,
@@ -83,10 +74,6 @@ async function applyWorkerTranscriptCommit(params: {
     expectedLifecycleRevision: params.target.expectedLifecycleRevision,
     expectedWriterRunId: params.target.expectedWriterRunId,
   });
-  const options = toDatabaseOptions(resolveSqliteTranscriptScope(target));
-  const incognito = getSessionActorStorageBinding(target)
-    ? undefined
-    : captureIncognitoSessionOperation(target);
   const assertOwned = captureOwnedTranscriptWriteAssertion(target);
   const assertCurrent = () => {
     params.assertCurrent();
@@ -146,69 +133,8 @@ async function applyWorkerTranscriptCommit(params: {
     const committed = readSessionActorStorageResult(outcome);
     applied = committed.result;
     memoryOutcome = committed.outcome;
-  } else if (incognito) {
-    const preparedMessages = prepareFresh(0);
-    if (!preparedMessages) {
-      return { ok: false, reason: "invalid-batch" };
-    }
-    const { scope: _scope, ...batch } = input;
-    const committed = await incognito.actor.sessions.transcript(
-      {
-        assertCurrent: () => {
-          incognito.authority.assertCurrent();
-          assertCurrent();
-        },
-      },
-      {
-        type: "session.workerTranscript.commit",
-        input: {
-          sessionKey: target.sessionKey,
-          sessionId: target.sessionId,
-          fence: {
-            expectedLifecycleRevision: target.expectedLifecycleRevision,
-            expectedWriterRunId: target.expectedWriterRunId,
-            expectedOwner: target.expectedOwner,
-          },
-          batch,
-          preparedMessages,
-        },
-      },
-      incognito.admissionSignal,
-      undefined,
-      ({ projectionNeedsReconcile }) => {
-        if (projectionNeedsReconcile) {
-          startSessionTranscriptIndexReconcile({
-            ...options,
-            preferredSessionId: target.sessionId,
-          });
-        }
-      },
-    );
-    applied = committed.result;
-  } else if (isIncognitoSessionKey(target.sessionKey)) {
-    // Incognito retains its process-held database until the worker-owned cutover.
-    let projectionNeedsReconcile = false;
-    applied = await withTranscriptWriteTransaction(target, (): ApplyTranscriptCommitResult => {
-      assertCurrent();
-      const nativeInput = { ...input, scope: target };
-      const plan = prepareTranscriptCommit(nativeInput);
-      if (!plan.result.ok || plan.result.messages.length === input.messages.length) {
-        return plan.result;
-      }
-      const messages = prepareFresh(plan.result.messages.length);
-      if (!messages) {
-        return { ok: false, reason: "invalid-batch" };
-      }
-      const result = applyPreparedTranscriptCommit(nativeInput, plan, messages, () => {
-        projectionNeedsReconcile = true;
-      });
-      assertCurrent();
-      return result;
-    });
-    if (projectionNeedsReconcile) {
-      startSessionTranscriptIndexReconcile({ ...options, preferredSessionId: target.sessionId });
-    }
   } else {
+    const options = toDatabaseOptions(resolveSqliteTranscriptScope(target));
     await restoreSessionColdTranscript(target, assertCurrent);
     assertCurrent();
     const execution = captureOpenClawAgentDatabaseExecution(options);

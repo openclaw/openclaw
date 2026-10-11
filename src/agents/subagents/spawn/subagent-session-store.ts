@@ -5,9 +5,10 @@ import {
   loadSessionEntryByIdReadOnly,
 } from "../../../config/sessions/session-accessor.js";
 import {
-  captureIncognitoSessionSource,
-  captureIncognitoSessionTopology,
-} from "../../../config/sessions/session-incognito-binding.js";
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+  type CapturedSessionActorStorageOwner,
+} from "../../../config/sessions/session-actor-storage-binding.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { SessionRowProjectionBinding } from "../../../gateway/session-row-projection-binding.js";
 import { getInProcessGatewayRequestContext } from "../../../plugins/runtime/gateway-request-scope.js";
@@ -15,6 +16,10 @@ import {
   isIncognitoSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../../routing/session-key.js";
+import {
+  resolveExplicitIncognitoAgentSqliteTarget,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../../../state/openclaw-agent-db.paths.js";
 
 type PersistedSessionCapabilityEntry = Pick<
   SessionEntry,
@@ -84,24 +89,63 @@ export function createSubagentSessionStore(
   prepared?: PreparedSessionCapabilityEntry,
 ): SessionCapabilityLookup {
   const readScope = { storePath, agentId, projection: "list" as const };
-  const source = captureIncognitoSessionSource();
-  const byIdSource = captureIncognitoSessionSource({ storePath, agentId });
-  const topology = source && !("kind" in source) ? captureIncognitoSessionTopology() : undefined;
-  const readActorEntry = (sessionKey: string) => {
-    source?.admissionSignal?.throwIfAborted();
-    if (!source || "kind" in source) {
-      source?.assertCurrent();
-      if (source && resolveAgentIdFromSessionKey(sessionKey) !== source.agentId) {
-        throw new Error("Session target belongs to another incognito actor");
-      }
-      return undefined;
+  const selected = getSessionActorStorageBinding({});
+  const explicit = resolveExplicitIncognitoAgentSqliteTarget(storePath, { agentId });
+  const memory = new Map<string, CapturedSessionActorStorageOwner | undefined>();
+  const authority = { assertCurrent() {}, authorize() {} };
+  const memoryOwner = (requestedAgentId: string) => {
+    if (!memory.has(requestedAgentId)) {
+      memory.set(
+        requestedAgentId,
+        captureSessionActorStorageOwner(
+          {
+            agentId: requestedAgentId,
+            sessionActor: selected,
+            storePath:
+              explicit?.agentId === requestedAgentId
+                ? explicit.path
+                : selected
+                  ? undefined
+                  : resolveIncognitoOpenClawAgentSqlitePath({
+                      agentId: requestedAgentId,
+                      env: explicit?.env,
+                    }),
+          },
+          authority,
+        ),
+      );
     }
-    source.actor.assertReadable();
-    const owner = topology?.entries.find(
-      (entry) => entry.agentId === resolveAgentIdFromSessionKey(sessionKey),
+    const captured = memory.get(requestedAgentId);
+    captured?.binding?.actor.assertReadable();
+    return captured;
+  };
+  const readActorEntry = (sessionKey: string) => {
+    const captured = memoryOwner(resolveAgentIdFromSessionKey(sessionKey));
+    const query = {
+      type: "session.entry.read" as const,
+      input: { sessionKey, projection: "list" as const },
+    };
+    return captured?.owner
+      ? captured.owner.readStorage(sessionKey, query, captured.authority)
+      : captured?.binding?.agentId === captured?.agentId
+        ? captured?.binding?.actor.storage?.readCurrent(query, captured.authority)
+        : undefined;
+  };
+  const readActorEntryById = (sessionId: string) => {
+    const captured = memoryOwner(
+      isIncognitoSessionKey(sessionId) ? resolveAgentIdFromSessionKey(sessionId) : agentId,
     );
-    owner?.assertCurrent();
-    return owner?.facts.readCapability(sessionKey);
+    return captured?.owner
+      ? captured.owner.readSessionById(sessionId, captured.authority, { currentOnly: true })
+      : captured?.binding?.agentId === captured?.agentId
+        ? captured?.binding?.actor.storage?.readCurrent(
+            {
+              type: "session.entry.readById",
+              input: { sessionId, projection: "list", currentOnly: true },
+            },
+            captured.authority,
+          )
+        : undefined;
   };
   const entries = new Map<string, SessionCapabilityEntry | undefined>();
   const ids = new Map<string, SessionCapabilityEntry | undefined>();
@@ -111,8 +155,11 @@ export function createSubagentSessionStore(
   return {
     scope: { storePath, agentId },
     get: (sessionKey) => {
-      if (source && isIncognitoSessionKey(sessionKey)) {
+      if (isIncognitoSessionKey(sessionKey)) {
         return readActorEntry(sessionKey);
+      }
+      if (explicit) {
+        return undefined;
       }
       if (!entries.has(sessionKey)) {
         if (isInternalSessionEffectsKey(sessionKey)) {
@@ -143,38 +190,23 @@ export function createSubagentSessionStore(
       if (!id) {
         return undefined;
       }
-      if (byIdSource) {
-        byIdSource.admissionSignal?.throwIfAborted();
-        if ("kind" in byIdSource) {
-          byIdSource.assertCurrent();
-          return undefined;
-        }
-        byIdSource.actor.assertReadable();
-        const candidates = byIdSource.actor.sessions
-          .deadlines()
-          .filter(({ sessionKey }) => !isInternalSessionEffectsKey(sessionKey))
-          .toSorted((left, right) =>
-            left.sessionKey < right.sessionKey ? -1 : left.sessionKey > right.sessionKey ? 1 : 0,
-          );
-        const selected =
-          candidates.find(({ sessionId }) => sessionId === id) ??
-          candidates.find(({ sessionId }) => normalizeOptionalString(sessionId) === id);
-        return selected ? byIdSource.actor.sessions.readCapability(selected.sessionKey) : undefined;
+      const actorEntry = readActorEntryById(id);
+      if (actorEntry || explicit || isIncognitoSessionKey(id)) {
+        return actorEntry?.entry;
       }
-      if (source && isIncognitoSessionKey(id)) {
-        readActorEntry(id);
+      if (isInternalSessionEffectsKey(id)) {
         return undefined;
       }
       if (!ids.has(id)) {
         let entry: SessionCapabilityEntry | undefined;
         try {
-          const selected = loadSessionEntryByIdReadOnly({
+          const row = loadSessionEntryByIdReadOnly({
             ...readScope,
             sessionId: id,
           });
-          entry = selected?.entry;
-          if (selected && !entries.has(selected.sessionKey)) {
-            entries.set(selected.sessionKey, selected.entry);
+          entry = row?.entry;
+          if (row && !entries.has(row.sessionKey)) {
+            entries.set(row.sessionKey, row.entry);
           }
         } catch {
           // Preserve the depth/key fallback for missing or unavailable stores.

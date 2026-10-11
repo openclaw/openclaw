@@ -4,15 +4,8 @@ import {
   type DatabaseFileIdentity,
   type DatabasePathIdentity,
 } from "../../infra/sqlite-worker-identity.js";
-import {
-  isIncognitoSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.paths.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureExistingOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
@@ -58,7 +51,6 @@ export type SessionTranscriptWorkerReadSource = {
 /** Retain the original physical transcript through preparation, reading and consumption. */
 export async function withSessionTranscriptReadSource<T>(
   scope: SessionTranscriptReadScope,
-  readInProcess: (scope: SessionTranscriptReadScope) => T | Promise<T>,
   readInWorker: (source: SessionTranscriptWorkerReadSource) => Promise<T>,
   signal?: AbortSignal,
   lane?: SessionHistoryWorkerLane,
@@ -75,13 +67,6 @@ export async function withSessionTranscriptReadSource<T>(
       captured.defaultAgentId,
   );
   signal?.throwIfAborted();
-  if (
-    isIncognitoSessionKey(captured.sessionKey) ||
-    (captured.storePath &&
-      isIncognitoOpenClawAgentSqlitePath(captured.storePath, { agentId, env: captured.env }))
-  ) {
-    return readInProcess(captured);
-  }
   const storePath =
     captured.storePath ?? resolveOpenClawAgentSqlitePath({ agentId, env: captured.env });
   const selected = getOwnedSessionTranscriptReader(captured);

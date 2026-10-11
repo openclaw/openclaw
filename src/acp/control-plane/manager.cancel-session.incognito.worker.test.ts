@@ -3,17 +3,17 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../../state/openclaw-state-db-readonly.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { buildAcpDatabaseSessionKey } from "../runtime/session-meta-keys.js";
-import { applyAcpSessionMutation } from "../runtime/session-meta-write.kernel.js";
-import { readAcpSessionEntry, writeAcpSessionMetaForMigration } from "../runtime/session-meta.js";
+import {
+  readAcpSessionEntryAsync,
+  upsertAcpSessionMeta,
+  writeAcpSessionMetaForMigration,
+} from "../runtime/session-meta.js";
 import { withAcpCancellationFixture } from "./manager.cancel-session.worker.test-support.js";
 
 it.each([
@@ -29,13 +29,12 @@ it.each([
     await withAcpCancellationFixture(
       async (f) => {
         const path = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: f.state.env });
-        const memory = getOpenIncognitoAgentDatabase("main", path);
+        const memory = memorySessionActorOwners.read({ agentId: "main", path });
         if (sourceKind === "incognito") {
-          expect(memory?.db.location()).toBeFalsy();
           expect(memory).toBeDefined();
           expect(fs.existsSync(path)).toBe(false);
         }
-        const originalMeta = readAcpSessionEntry(f.target)?.acp;
+        const originalMeta = (await readAcpSessionEntryAsync(f.target))?.acp;
         if (!originalMeta) {
           throw new Error("Expected canonical global ACP metadata.");
         }
@@ -116,21 +115,7 @@ it.each([
             }),
           ]);
           if (change === "clear") {
-            runOpenClawStateWriteTransaction(
-              ({ db }) =>
-                applyAcpSessionMutation(db, {
-                  agentId: "main",
-                  sessionKey: f.target.sessionKey,
-                  storageSessionKey: f.target.sessionKey,
-                  entry: {
-                    sessionId: "cancellation-session",
-                    lifecycleRevision: "cancellation-lifecycle",
-                    updatedAt: 100,
-                  },
-                  decision: { kind: "clear" },
-                }),
-              { env: f.state.env },
-            );
+            await upsertAcpSessionMeta({ ...f.target, mutate: () => null });
           } else if (change === "owner") {
             await replaceSessionEntry(f.target, {
               sessionId: "cancellation-session",
@@ -163,7 +148,7 @@ it.each([
               : [{ status: "rejected" }, { status: "rejected" }],
           );
           if (sourceKind === "incognito") {
-            expect(getOpenIncognitoAgentDatabase("main", path)).toBe(memory);
+            expect(memorySessionActorOwners.read({ agentId: "main", path })).toBe(memory);
             expect(fs.existsSync(path)).toBe(false);
           }
           expect(f.runTurn).not.toHaveBeenCalled();

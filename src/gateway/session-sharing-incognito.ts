@@ -1,49 +1,13 @@
-import { assertSessionEntryCreationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
-import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
-import {
-  captureSessionActorStorageOwner,
-  getSessionActorStorageBinding,
-  type SessionActorStorageBinding,
-} from "../config/sessions/session-actor-storage-binding.js";
-import {
-  captureIncognitoSessionBinding,
-  type IncognitoSessionBinding,
-} from "../config/sessions/session-incognito-binding.js";
-import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
+import { isIncognitoSessionKey, toAgentStoreSessionKey } from "../routing/session-key.js";
 
-export type IncognitoSessionSharingTarget = {
+type IncognitoSessionSharingTarget = {
   agentId?: string;
   sessionKey: string;
   resolved: { readSource?: { path: string }; storePath: string } | null;
   absentTarget?: { storePath: string };
 };
-
-export function captureSessionSharingIncognitoBinding(target: IncognitoSessionSharingTarget) {
-  return captureIncognitoSessionBinding({
-    agentId: target.agentId,
-    sessionKey: target.sessionKey,
-    storePath:
-      target.resolved?.readSource?.path ??
-      target.resolved?.storePath ??
-      target.absentTarget?.storePath,
-  });
-}
-
-export function captureSessionSharingActorBinding(target: IncognitoSessionSharingTarget) {
-  return isIncognitoSessionKey(target.sessionKey) ? getSessionActorStorageBinding({}) : undefined;
-}
-
-/** Production incognito stays native until acquisition supplies its explicit binding. */
-export function hasNativeIncognitoSessionSharingSource(
-  targets: readonly IncognitoSessionSharingTarget[],
-): boolean {
-  return targets.some(
-    (target) =>
-      isIncognitoSessionKey(target.sessionKey) &&
-      !captureSessionSharingActorBinding(target) &&
-      !captureSessionSharingIncognitoBinding(target),
-  );
-}
 
 export class SessionMutationFactsUnavailableError extends Error {
   constructor(options?: ErrorOptions) {
@@ -52,42 +16,44 @@ export class SessionMutationFactsUnavailableError extends Error {
   }
 }
 
-/** Current actor facts authorize effects; no native owner or creation grant is retained. */
-export function captureSessionActorMutationFacts(
-  binding: SessionActorStorageBinding,
-  canonicalKey: string,
-  allowMissing: boolean,
-  storePath?: string,
+/** Capture only existing memory state; the caller owns disclosure and effect authorization. */
+export function captureSessionSharingMemoryFacts(
+  target: IncognitoSessionSharingTarget,
+  assertCurrent: () => void,
+  allowMissing = true,
 ) {
-  const { actor, authority } = binding;
-  const sibling =
-    actor.target.sessionKey === canonicalKey
-      ? undefined
-      : captureSessionActorStorageOwner({
-          sessionActor: binding,
-          sessionKey: canonicalKey,
-          storePath,
-        });
-  const selected =
-    sibling ??
-    getSessionActorStorageBinding({ sessionActor: binding, sessionKey: canonicalKey, storePath });
-  const database = sibling ? sibling.owner?.identity : actor.target.database;
-  if ((database && database.kind !== "memory") || !selected) {
+  if (!isIncognitoSessionKey(target.sessionKey)) {
+    return undefined;
+  }
+  const authority = { assertCurrent, authorize: assertCurrent };
+  const captured = captureSessionActorStorageOwner(
+    {
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+      storePath:
+        target.resolved?.readSource?.path ??
+        target.resolved?.storePath ??
+        target.absentTarget?.storePath,
+    },
+    authority,
+  );
+  if (!captured) {
     throw new SessionMutationFactsUnavailableError();
   }
-  const { agentId, path } = selected;
+  const { agentId, path } = captured;
+  let owner = captured.owner;
+  const canonicalKey = toAgentStoreSessionKey({ agentId, requestKey: target.sessionKey });
   const location = { agentId, path };
-  const source = database && { ...location, databaseIdentity: database.incarnation };
+  const readSource = () => {
+    // A creation admission may precede its owner; pin the first owner it observes.
+    owner ??= memorySessionActorOwners.read(location);
+    return owner && { ...location, databaseIdentity: owner.identity.incarnation };
+  };
   const readCurrent = () => {
-    if (sibling) {
-      actor.assertReadable();
-      if (!sibling.owner) {
-        authority.assertCurrent();
-      }
-    }
-    const current = sibling
-      ? sibling.owner?.readSession(canonicalKey, authority)
-      : actor.snapshot(authority);
+    assertCurrent();
+    captured.binding?.actor.assertReadable();
+    const source = readSource();
+    const current = owner?.readSession(canonicalKey, captured.authority);
     if (!current?.entry || !source) {
       if (!allowMissing) {
         throw new SessionMutationFactsUnavailableError();
@@ -112,90 +78,25 @@ export function captureSessionActorMutationFacts(
   };
   return {
     location,
-    source,
-    assertCurrent(this: void) {
-      if (sibling) {
-        readCurrent();
-      } else {
-        actor.assertReadable();
-        authority.assertCurrent();
-      }
+    get source() {
+      return readSource();
     },
+    assertCurrent: () => void readCurrent(),
     readCurrent,
   };
 }
 
-/** Capture generation before storage readiness; later checks use only this actor's facts. */
-export function captureIncognitoSessionMutationFacts(
-  binding: IncognitoSessionBinding,
-  canonicalKey: string,
-  allowMissing: boolean,
-) {
-  const { actor, admissionSignal } = binding;
-  const claim = actor.sessions.captureCurrent(canonicalKey);
-  const initial = actor.sessions.readSharing(canonicalKey)?.entry;
-  let creation: SessionEntryCreationOperation | undefined;
-  const readSharing = () => {
-    if (creation) {
-      assertSessionEntryCreationPublication(creation, {
-        agentId: actor.agentId,
-        sessionKey: canonicalKey,
-        paths: new Set([actor.path]),
-        databaseIdentity: actor.identity.incarnation,
-      });
-      actor.assertCurrent();
-      const granted = actor.sessions.readCreationGrant(canonicalKey, creation);
-      if (granted) {
-        const current = granted.sharing?.entry;
-        if (
-          current?.sessionId !== initial?.sessionId ||
-          current?.lifecycleRevision !== initial?.lifecycleRevision
-        ) {
-          throw new SessionMutationFactsUnavailableError();
-        }
-        return granted.sharing;
+/** Synchronous callers receive detached facts, never a retained authority or a new owner. */
+export function readSessionSharingMemoryFacts(target: IncognitoSessionSharingTarget) {
+  let active = true;
+  try {
+    const facts = captureSessionSharingMemoryFacts(target, () => {
+      if (!active) {
+        throw new SessionMutationFactsUnavailableError();
       }
-    } else {
-      admissionSignal?.throwIfAborted();
-      actor.assertReadable();
-    }
-    claim.assertCurrent();
-    return actor.sessions.readSharing(canonicalKey);
-  };
-  return {
-    assertCurrent(this: void) {
-      readSharing();
-    },
-    bindCreation(operation: SessionEntryCreationOperation) {
-      creation = operation;
-    },
-    readCurrent(this: void) {
-      const current = readSharing();
-      if (!current?.entry) {
-        if (!allowMissing) {
-          throw new SessionMutationFactsUnavailableError();
-        }
-        return { target: null, membership: new Set<string>() };
-      }
-      const target = {
-        agentId: actor.agentId,
-        canonicalKey,
-        storeKey: canonicalKey,
-        storeKeys: [canonicalKey],
-        storePath: actor.path,
-        readSource: {
-          agentId: actor.agentId,
-          path: actor.path,
-          databaseIdentity: actor.identity.incarnation,
-        },
-        entry: current.entry,
-      };
-      return {
-        sourcePath: actor.path,
-        sourceAgentId: actor.agentId,
-        target,
-        membership: current.membership,
-      };
-    },
-  };
+    });
+    return facts && { ...facts.readCurrent(), source: facts.source, location: facts.location };
+  } finally {
+    active = false;
+  }
 }

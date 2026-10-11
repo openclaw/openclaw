@@ -12,6 +12,7 @@ import {
   createReplyOperation,
   type ReplyOperation,
 } from "../auto-reply/reply/reply-run-registry.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import type { InternalHookEvent } from "../hooks/internal-hooks.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
@@ -360,11 +361,66 @@ describe("createGatewayCloseHandler", () => {
   afterEach(() => {
     finishGatewayRestartTrace("test.finish");
     resetPluginRuntimeStateForTest();
+    memorySessionActorOwners.reset();
     vi.useRealTimers();
     if (originalRestartTraceEnv === undefined) {
       delete process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
     } else {
       process.env.OPENCLAW_GATEWAY_RESTART_TRACE = originalRestartTraceEnv;
+    }
+  });
+
+  it("retires incognito memory only after the final Gateway drains accepted cleanup", async () => {
+    const owner = memorySessionActorOwners.get({
+      agentId: "main",
+      path: "/synthetic/gateway-close/incognito-openclaw-agent.sqlite",
+    });
+    const sessionKey = "agent:main:dashboard:incognito-close";
+    const authority = { assertCurrent() {}, authorize() {} };
+    const actor = await owner.acquire(
+      { sessionKey, database: owner.identity },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    const created = await actor.storage!.mutate(
+      {
+        type: "session.entry.create",
+        input: { entry: { sessionId: "private-session", updatedAt: 1, incognito: true } },
+      },
+      authority,
+    );
+    expect(created.kind).toBe("committed");
+    const draining = createDeferredCore();
+    const release = createDeferredCore();
+    let finalClose: Promise<void> | undefined;
+    try {
+      await createGatewayCloseHandler({
+        pluginMetadata: {
+          beginClose() {},
+          async close(_onFinal, retireRegistry) {
+            return (await retireRegistry?.()) ?? { cleanupCount: 0, failures: [] };
+          },
+        },
+      })();
+      expect(actor.snapshot(authority)?.entry?.sessionId).toBe("private-session");
+      finalClose = createGatewayCloseHandler({
+        async stopScheduler() {
+          draining.resolve();
+          await release.promise;
+        },
+      })();
+      await draining.promise;
+      expect(actor.snapshot(authority)?.entry?.sessionId).toBe("private-session");
+      release.resolve();
+      await finalClose;
+      expect(memorySessionActorOwners.read(owner)).toBeUndefined();
+      expect(() => actor.snapshot(authority)).toThrow("closed");
+      expect(
+        memorySessionActorOwners.get(owner).readSession(sessionKey, authority),
+      ).toBeUndefined();
+    } finally {
+      release.resolve();
+      await finalClose;
+      await actor.release();
     }
   });
 

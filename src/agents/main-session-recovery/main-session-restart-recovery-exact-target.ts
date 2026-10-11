@@ -4,8 +4,7 @@ import {
   isMainRestartRecoveryCandidate,
 } from "../../config/sessions/restart-recovery-state.js";
 import { loadExactSessionEntry } from "../../config/sessions/session-accessor.js";
-import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { ExpectedRestartRecoveryTarget } from "./main-session-restart-recovery-shared.js";
 
@@ -41,27 +40,18 @@ function matchesExpectedRecoveryTarget(
   );
 }
 
-/** Retain only the original actor and finite live recovery predicates across admission waits. */
+/** Retain the memory owner and current recovery predicates across admission waits. */
 export function captureExpectedRestartRecoveryCurrent(params: ExpectedRecoveryRead): () => boolean {
   const expected = {
     ...params.expected,
     claim: params.expected.claim && { ...params.expected.claim },
   };
   const target = { ...expected, storePath: params.storePath };
-  const source = captureIncognitoSessionSource(target);
-  if (source && "kind" in source) {
-    return () => {
-      source.assertCurrent();
-      return false;
-    };
-  }
+  const source = captureSessionEntryMetadataRead(target, () => {});
   if (source) {
-    const claim = source.actor.sessions.captureCurrent(target.sessionKey);
     return () => {
-      source.admissionSignal?.throwIfAborted();
-      claim.assertCurrent();
-      const current = source.actor.sessions.readSteering(target.sessionKey);
-      return matchesExpectedRecoveryTarget(current, expected, current?.hasRecoveryClaim === true);
+      const current = source.readCurrent();
+      return matchesExpectedRecoveryTarget(current, expected, hasMainSessionRecoveryClaim(current));
     };
   }
   return () => {
@@ -80,10 +70,10 @@ export async function loadExpectedRestartRecoveryTarget(
     storePath: params.storePath,
     readConsistency: "latest" as const,
   };
-  const source = captureIncognitoSessionSource(target);
+  const source = captureSessionEntryMetadataRead(target, () => {});
   const exact = source ? undefined : loadExactSessionEntry(target);
   const entry = source
-    ? await readSessionEntryReadOnlyInWorker(target)
+    ? source.readCurrent()
     : exact?.sessionKey === target.sessionKey
       ? exact.entry
       : undefined;

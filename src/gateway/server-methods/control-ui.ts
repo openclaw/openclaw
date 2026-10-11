@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveConfiguredGitHubHost } from "../../agents/github-host.js";
@@ -12,7 +11,7 @@ import {
   prepareSubagentSessionListReadCache,
 } from "../../agents/subagents/registry/subagent-registry-state.js";
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import { captureSessionActorStorageOwner } from "../../config/sessions/session-actor-storage-binding.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
@@ -283,78 +282,50 @@ async function prepareCheckDetailsSession(
   sessionKey: string,
   context: GatewayRequestContext,
   client: GatewayClient | null,
+  assertRequestCurrent: () => void,
 ): Promise<ControlUiSessionPrTarget | null> {
   const sourceCfg = context.getRuntimeConfig();
   const sourceRequest = resolveRequestedGlobalAgentId(sourceCfg, sessionKey);
   if (!sourceRequest.ok) {
     return null;
   }
-  const binding = captureIncognitoSessionSource({ sessionKey, agentId: sourceRequest.agentId });
-  if (binding && "kind" in binding) {
-    binding.assertCurrent();
-    return null;
-  }
-  const claim = binding?.actor.sessions.captureCurrent(sessionKey);
   const assertRoutingCurrent = captureSessionMutationRouting(sourceCfg);
-  const preparedEntry =
-    binding &&
-    (await binding.actor.sessions.read(
-      {
-        assertCurrent() {
-          binding.admissionSignal?.throwIfAborted();
-          claim?.assertCurrent();
-          assertRoutingCurrent(context.getRuntimeConfig());
-        },
-      },
-      { sessionKey },
-      binding.admissionSignal,
-    ));
-  preparedEntry?.snapshot.assertCurrent();
-  const preparedMedia = binding?.actor.sessions.readMedia(sessionKey);
+  const assertCurrent = () => {
+    assertRequestCurrent();
+    assertRoutingCurrent(context.getRuntimeConfig());
+  };
+  const memory = captureSessionActorStorageOwner(
+    { sessionKey, agentId: sourceRequest.agentId },
+    { assertCurrent, authorize: assertCurrent },
+  );
   const readSelected = () => {
     const cfg = context.getRuntimeConfig();
     const requested = resolveRequestedGlobalAgentId(cfg, sessionKey);
     if (!requested.ok) {
       return undefined;
     }
-    if (binding) {
-      binding.admissionSignal?.throwIfAborted();
-      claim?.assertCurrent();
-      assertRoutingCurrent(cfg);
-      const entry = preparedEntry?.entry && {
-        ...preparedEntry.entry,
-        pendingWorktree: preparedMedia?.pendingWorktree,
-        pendingProjectGitUrl: preparedMedia?.pendingProjectGitUrl,
-      };
-      const sharing = binding.actor.sessions.readSharing(sessionKey)?.entry;
-      const media = binding.actor.sessions.readMedia(sessionKey);
+    if (memory) {
+      const owner = memory.owner;
+      const current = owner?.readSession(sessionKey, memory.authority);
+      const entry = current?.entry;
       const entryFilter = createSessionListEntryFilter({ client, cfg });
       if (
+        !owner ||
         !entry ||
-        !sharing ||
-        !media ||
-        requested.agentId !== binding.actor.agentId ||
-        sharing.sessionId !== entry.sessionId ||
-        sharing.lifecycleRevision !== entry.lifecycleRevision ||
-        media.repositoryWorkspaceId !== entry.repositoryWorkspaceId ||
-        media.worktreeId !== entry.worktree?.id ||
-        media.spawnedCwd !== entry.spawnedCwd ||
-        media.spawnedWorkspaceDir !== entry.spawnedWorkspaceDir ||
-        !isDeepStrictEqual(media.pendingWorktree, entry.pendingWorktree) ||
-        media.pendingProjectGitUrl !== entry.pendingProjectGitUrl ||
-        (entryFilter && !entryFilter(sessionKey, sharing))
+        requested.agentId !== memory.agentId ||
+        (entryFilter && !entryFilter(sessionKey, entry))
       ) {
         return undefined;
       }
       return {
         cfg,
-        agentId: binding.actor.agentId,
+        agentId: memory.agentId,
         canonicalKey: sessionKey,
-        storePath: binding.actor.path,
+        storePath: memory.path,
         readSource: {
-          agentId: binding.actor.agentId,
-          path: binding.actor.path,
-          databaseIdentity: binding.actor.identity.incarnation,
+          agentId: memory.agentId,
+          path: memory.path,
+          databaseIdentity: owner.identity.incarnation,
         },
         entry,
       };
@@ -570,7 +541,9 @@ export function createControlUiHandlers(
           : undefined;
         const binding = client
           ? ((await reader?.()) ?? null)
-          : await prepareCheckDetailsSession(parsed.sessionKey, context, client);
+          : await prepareCheckDetailsSession(parsed.sessionKey, context, client, () =>
+              signal?.throwIfAborted(),
+            );
         if (!binding) {
           throw new gitHubPublicApi.ControlUiGitHubError(404, "Session CI details unavailable");
         }

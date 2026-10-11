@@ -224,18 +224,14 @@ async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWor
   const prepared = expectedDatabase
     ? readOpenClawAgentDatabaseIdentity({ db: expectedDatabase })
     : undefined;
-  if (prepared && typeof prepared.identity !== "string") {
-    throw new Error("Agent Worker requires its existing file owner");
-  }
-  const expectedIdentity =
-    prepared && typeof prepared.identity === "string"
-      ? {
-          kind: "file" as const,
-          physicalIdentity: prepared.identity,
-          nativeLocation: prepared.filename,
-          birthtime: prepared.birthtime,
-        }
-      : undefined;
+  const expectedIdentity = prepared
+    ? {
+        kind: "file" as const,
+        physicalIdentity: prepared.identity,
+        nativeLocation: prepared.filename,
+        birthtime: prepared.birthtime,
+      }
+    : undefined;
   const moduleUrl = new URL(worker.moduleUrl).href;
   const input = structuredClone(worker.input);
   const state = captureOpenClawStateDatabaseReadAdmission(

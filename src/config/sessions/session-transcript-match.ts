@@ -1,10 +1,8 @@
 import path from "node:path";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import {
   matchesTranscriptEvent,
   type SessionTranscriptEventMatch,
 } from "../../sessions/transcript-visible-record.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -18,16 +16,11 @@ import {
 } from "./session-accessor.sqlite-read.js";
 import {
   prepareSqliteTranscriptReadScope,
-  resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
+import { captureSessionActorTranscriptRead } from "./session-actor-transcript-read.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
-import { captureIncognitoSessionHistoryBinding } from "./session-incognito-binding.js";
-import {
-  readIncognitoSessionHistory,
-  type IncognitoSessionHistoryBinding,
-} from "./session-incognito-history-read.js";
 import type { SessionTranscriptEventMatchRequest } from "./session-transcript-worker-read.types.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
@@ -68,15 +61,10 @@ export function findTranscriptEventMatchingInDatabase(
 export async function findTranscriptEvent(
   scope: SessionTranscriptReadScope,
   match: SessionTranscriptEventMatch,
-  suppliedIncognito?: IncognitoSessionHistoryBinding,
 ): Promise<{ event: TranscriptEvent } | undefined> {
-  const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryBinding(scope);
-  if (incognito) {
-    const result = await readIncognitoSessionHistory(incognito, scope, (target) => ({
-      type: "session.history.match",
-      input: { ...target, match },
-    }));
-    return result.result;
+  const memory = captureSessionActorTranscriptRead(scope);
+  if (memory) {
+    return memory.missing ? undefined : memory.read("session.history.match", { match });
   }
   const captured = {
     ...scope,
@@ -84,15 +72,6 @@ export async function findTranscriptEvent(
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
   const selection = { ...match };
-  if (isIncognitoSessionKey(captured.sessionKey)) {
-    // A process-owned in-memory store cannot be reopened in another worker.
-    const target = resolveSqliteTranscriptReadScope(captured);
-    const opened = withOpenClawAgentDatabaseReadOnly(
-      (database) => findTranscriptEventMatchingInDatabase(database, { target, match: selection }),
-      toDatabaseOptions(target),
-    );
-    return opened.found ? opened.value : undefined;
-  }
   const context = captureOpenClawStateWorkerContext({ env: captured.env });
   const assertStateCurrent = () => {
     context.maintenanceScope?.assertAdmission();

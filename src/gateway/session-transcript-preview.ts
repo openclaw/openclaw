@@ -1,22 +1,12 @@
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.js";
-import { readRecentSessionTranscriptHistoryEvents } from "../config/sessions/session-accessor.sqlite-history-events.js";
 import {
   resolveSqliteScope,
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { prepareSessionTranscriptReadTargetCore } from "../config/sessions/session-accessor.transcript-read-target.js";
-import { resolveSessionTranscriptReadTarget } from "../config/sessions/session-accessor.transcript-target.js";
-import { authorizeSessionFacts } from "../config/sessions/session-incognito-admission.js";
-import {
-  captureIncognitoSessionHistoryBinding,
-  withIncognitoSessionActor,
-} from "../config/sessions/session-incognito-binding.js";
-import {
-  prepareIncognitoSessionHistoryRead,
-  type IncognitoSessionHistoryBinding,
-} from "../config/sessions/session-incognito-history-read.js";
+import { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
@@ -24,74 +14,23 @@ import {
   captureSessionTranscriptTargetBinding,
   type CapturedSessionTranscriptTargetBinding,
 } from "../config/sessions/transcript-target-binding.js";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../state/openclaw-agent-db.paths.js";
 import { buildSessionPreviewItems } from "./session-display-projection.js";
-import {
-  readSessionDisplayPreviewItems,
-  readBoundedSessionPreviewItemsAsync,
-} from "./session-transcript-preview-reader.js";
-import { toTranscriptReadScope } from "./session-transcript-read-target.js";
+import { readBoundedSessionPreviewItemsAsync } from "./session-transcript-preview-reader.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
 
-/** Durable previews share the history reader; incognito SQLite stays with its process owner. */
+/** Previews use the selected history backend and retain the existing model-context projection. */
 export async function readSessionPreviewItemsFromTranscriptAsync(
   scope: SessionTranscriptReadScope,
   maxItems: number,
   maxChars: number,
   view: "display" | "model-context" = "display",
-  suppliedIncognito?: IncognitoSessionHistoryBinding,
 ): Promise<SessionPreviewItem[]> {
-  const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryBinding(scope);
-  if (incognito) {
-    const { actor, authority, target } = prepareIncognitoSessionHistoryRead(incognito, scope);
-    const claim = actor.sessions.captureCurrent(target.sessionKey);
-    const history: typeof actor.sessions.history = (managerAuthority, command, signal, onRead) =>
-      actor.sessions.history(
-        {
-          assertCurrent() {
-            managerAuthority.assertCurrent();
-            authority.assertCurrent();
-          },
-          authorize(stage, facts) {
-            authorizeSessionFacts(managerAuthority, stage, facts);
-            authorizeSessionFacts(authority, stage, facts);
-          },
-        },
-        command,
-        signal,
-        onRead,
-      );
-    const modelTarget = captureSessionTranscriptTargetBinding({
-      agentId: actor.agentId,
-      storePath: actor.path,
-      sessionKey: target.sessionKey,
-      sessionId: target.sessionId,
-      ...(scope.env ? { env: scope.env } : {}),
-    });
-    const items = await actor.sessions.withSharedState(async () => {
-      const preparedItems =
-        view === "display"
-          ? (
-              await actor.sessions.history(authority, {
-                type: "session.history.preview",
-                input: { ...target, maxItems, maxChars },
-              })
-            ).items
-          : await withIncognitoSessionActor(
-              { ...actor, sessions: { ...actor.sessions, history } },
-              () => readSessionModelPreviewItems(modelTarget, maxItems, maxChars),
-            );
-      authority.assertCurrent();
-      claim.authorize(authority, "commit");
-      return preparedItems;
-    });
-    authority.assertCurrent();
-    claim.authorize(authority, "commit");
-    actor.assertReadable();
-    return items;
+  const memory = captureSessionActorTranscriptRead(scope);
+  if (memory) {
+    if (memory.missing) return [];
+    return view === "display"
+      ? (await memory.read("session.history.preview", { maxItems, maxChars })).items
+      : readSessionModelPreviewItems(memory.target, maxItems, maxChars);
   }
   const target = prepareSessionTranscriptReadTargetCore(scope);
   if (view === "model-context") {
@@ -119,13 +58,6 @@ export async function readSessionPreviewItemsFromTranscriptAsync(
   };
   const resolved = resolveSqliteTranscriptReadScope(readScope);
   const options = toDatabaseOptions(resolved);
-  const databasePath = resolveOpenClawAgentSqlitePath(options);
-  if (isIncognitoOpenClawAgentSqlitePath(databasePath, options)) {
-    const transcript = resolveSessionTranscriptReadTarget(readScope);
-    return readSessionDisplayPreviewItems(maxItems, maxChars, (limits) =>
-      readRecentSessionTranscriptHistoryEvents(toTranscriptReadScope(transcript), limits),
-    );
-  }
   // Qualify the key with the bound logical agent without discovering the physical store again.
   const entryValidationKey = target.entryValidationScope
     ? resolveSqliteScope({

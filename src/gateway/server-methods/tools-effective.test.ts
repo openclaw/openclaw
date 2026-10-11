@@ -2,11 +2,13 @@
 // caching behavior, delivery context, and policy filtering.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { McpToolCatalog } from "../../agents/agent-bundle-mcp-types.js";
 import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { toolsEffectiveHandlers, testing } from "./tools-effective.js";
 
 type InventoryModule = typeof import("../../agents/tools-effective-inventory.js");
@@ -339,6 +341,11 @@ function expectPayloadNotice(respond: ReturnType<typeof vi.fn>, id: string) {
 }
 
 describe("tools.effective handler", () => {
+  afterEach(() => {
+    memorySessionActorOwners.reset();
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     for (const mock of Object.values(runtimeMocks)) {
@@ -388,6 +395,47 @@ describe("tools.effective handler", () => {
       "invalid tools.effective params",
     );
     expect(runtimeMocks.loadSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it("uses memory session facts and refuses inventory after its captured owner closes", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/effective-tools");
+    const sessionKey = "agent:main:dashboard:incognito-tools";
+    const owner = memorySessionActorOwners.get({
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    });
+    const actor = await owner.acquire(
+      { sessionKey, database: owner.identity },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    try {
+      expect(
+        (
+          await actor.storage!.mutate(
+            {
+              type: "session.entry.create",
+              input: { entry: { sessionId: "private-tools", updatedAt: 1, incognito: true } },
+            },
+            { assertCurrent() {}, authorize() {} },
+          )
+        ).kind,
+      ).toBe("committed");
+      const first = createInvokeParams({ sessionKey });
+      await first.invoke();
+      expect(firstRespondCall(first.respond)?.[0]).toBe(true);
+      expect(resolveEffectiveToolInventoryArg()?.sessionId).toBe("private-tools");
+      expect(runtimeMocks.loadSessionEntry).not.toHaveBeenCalled();
+      testing.resetToolsEffectiveCacheForTest();
+      runtimeMocks.resolveEffectiveToolInventory.mockImplementationOnce(async () => {
+        memorySessionActorOwners.closeDatabase(owner);
+        return makeCoreInventory();
+      });
+      const second = createInvokeParams({ sessionKey });
+      await second.invoke();
+      expect(firstRespondCall(second.respond)?.[0]).toBe(false);
+    } finally {
+      await actor.release();
+    }
   });
 
   it("rejects unknown session keys", async () => {

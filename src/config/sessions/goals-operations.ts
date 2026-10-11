@@ -49,16 +49,13 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import {
-  captureIncognitoSessionOperation,
-  publishIncognitoSessionEntry,
-} from "./session-incognito-binding.js";
+  captureSessionActorStorageOwner,
+  withSessionActorStorage,
+} from "./session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import {
-  acceptSessionSourceValidation,
   composeSessionSourceAssertion,
-  prepareSessionSourceAuthority,
-  releaseSessionSourceAuthorities,
   type SessionSourceAssertion,
 } from "./session-source-authority.js";
 import { mergeSessionEntry, type SessionEntry, type SessionGoal } from "./types.js";
@@ -206,118 +203,59 @@ export async function mutateSessionGoal(
       assertCurrent?: SessionSourceAssertion;
     },
 ): Promise<SessionTranscriptTurnMutationResult & { sessionEntry?: SessionEntry }> {
-  const memory = getSessionActorStorageBinding(options);
+  const assertCurrent = () => options.assertCurrent?.();
+  const authority = { assertCurrent, authorize: assertCurrent };
+  const memory = captureSessionActorStorageOwner(options, authority);
   if (memory) {
-    let authorityFailure: unknown;
-    const outcome = await memory.actor.storage!.mutate(
-      {
-        type: "session.goal.mutate",
-        input: {
-          sessionKey: memory.actor.target.sessionKey,
-          expectedSessionId: options.expectedSessionId,
-          operation: options.operation,
-        },
-      },
-      {
-        ...memory.authority,
-        authorize(stage, facts, publication) {
-          try {
-            memory.authority.authorize(stage, facts, publication);
-            options.assertCurrent?.();
-          } catch (error) {
-            authorityFailure = error;
-            throw error;
-          }
-        },
-      },
-    );
-    if (outcome.kind === "rolled-back") {
-      if (authorityFailure instanceof Error) {
-        throw authorityFailure;
-      }
-      if (outcome.error.code) {
-        throw new SessionGoalOperationError(outcome.error.code, outcome.error.message);
-      }
-      throw Object.assign(new Error(outcome.error.message), { name: outcome.error.name });
-    }
-    if (outcome.failure) {
-      throw Object.assign(new Error(outcome.failure.message), { name: outcome.failure.name });
-    }
-    const { previous: _previous, ...result } = outcome.value;
-    return result;
-  }
-  const incognito = captureIncognitoSessionOperation(options);
-  if (incognito) {
-    const { actor, admissionSignal } = incognito;
-    const input = structuredClone({
-      sessionKey: resolveSqliteScope({ ...options, agentId: actor.agentId, storePath: actor.path })
-        .sessionKey,
-      expectedSessionId: options.expectedSessionId,
-      operation: options.operation,
-    });
-    return actor.sessions.withSharedState(async () => {
-      const source = await prepareSessionSourceAuthority(options.assertCurrent);
-      try {
-        if (
-          source.nativeSource ||
-          source.hasOpaqueCheck ||
-          source.checks.some(
-            ({ predicate }) =>
-              predicate.source.path !== actor.path ||
-              predicate.source.agentId !== actor.agentId ||
-              predicate.source.databaseIdentity !== actor.identity.incarnation,
-          )
-        ) {
-          throw new Error(
-            "Incognito Goal mutations require source authority prepared for their actor",
-          );
-        }
-        const authority = {
-          assertCurrent() {
-            incognito.authority.assertCurrent();
-            (source.assertPreparedCurrent ?? source.assertCurrent)();
-          },
-        };
-        admissionSignal?.throwIfAborted();
-        const committed = await actor.sessions.transcript(
-          authority,
+    const result = await withSessionActorStorage(
+      options,
+      { lifetime: { assertCurrent, assertReadable: assertCurrent }, authority: memory.authority },
+      async (binding) => {
+        let authorityFailure: unknown;
+        const outcome = await binding.actor.storage!.mutate(
           {
             type: "session.goal.mutate",
             input: {
-              ...input,
-              sessionId: input.expectedSessionId,
-              fence: {},
-              sources: source.checks.map(({ predicate }) => predicate),
+              sessionKey: binding.actor.target.sessionKey,
+              expectedSessionId: options.expectedSessionId,
+              operation: options.operation,
             },
           },
-          undefined,
-          undefined,
-          (result) => {
-            if ("refusedOwnerSource" in result) {
-              return;
-            }
-            const { previous, sessionEntry } = result;
-            if (sessionEntry) {
-              publishIncognitoSessionEntry(actor, input.sessionKey, previous, sessionEntry);
-            }
-          },
-          undefined,
-          (_refused, validation) => {
-            acceptSessionSourceValidation(source, validation);
-            authority.assertCurrent();
+          {
+            ...binding.authority,
+            assertCurrent() {
+              try {
+                binding.authority.assertCurrent();
+              } catch (error) {
+                authorityFailure = error;
+                throw error;
+              }
+            },
+            authorize(stage, facts, publication) {
+              try {
+                binding.authority.authorize(stage, facts, publication);
+              } catch (error) {
+                authorityFailure = error;
+                throw error;
+              }
+            },
           },
         );
-        if ("refusedOwnerSource" in committed) {
-          const refused = committed.refusedOwnerSource;
-          source.checks[refused.index]?.refuse(refused.facts);
-          throw new Error("Goal source refusal omitted its prepared assertion");
+        if (outcome.kind === "rolled-back" && authorityFailure instanceof Error) {
+          throw authorityFailure;
         }
-        const { previous: _previous, ...result } = committed;
-        return result;
-      } finally {
-        await releaseSessionSourceAuthorities([source]);
-      }
-    });
+        const committed = readSessionActorStorageResult(outcome);
+        const { previous: _previous, ...receipt } = committed;
+        return receipt;
+      },
+    );
+    if (!result) {
+      throw new SessionGoalOperationError(
+        "session-rebound",
+        "Session changed; refresh before changing its Goal.",
+      );
+    }
+    return result;
   }
   const resolved = captureLifecycleDatabaseScope(resolveSqliteScope(options));
   const databaseOptions = toDatabaseOptions(resolved);
@@ -343,7 +281,7 @@ export async function mutateSessionGoal(
         return result;
       };
       // The outer FIFO captures the physical store before waiting and retains preparation order.
-      // Incognito, maintenance, and opaque Gateway/SDK guards keep their native atomicity.
+      // Maintenance and opaque Gateway/SDK guards keep their native atomicity.
       if (
         !isMainThread ||
         !supportsOpenClawAgentDatabaseExecution(databaseOptions) ||

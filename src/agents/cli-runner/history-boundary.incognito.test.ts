@@ -1,69 +1,73 @@
-import "../../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
-import { afterAll, beforeAll, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterEach, expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
-import {
-  withIncognitoSessionActor,
-  withIncognitoSessionBinding,
-} from "../../config/sessions/session-incognito-binding.js";
-import { createDeferredCore } from "../../shared/deferred.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import { runWithSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
-import {
-  openIncognitoTestActor,
-  useIncognitoActorProbe,
-  useIncognitoNoHostSql,
-} from "../../state/openclaw-agent-execution-incognito.test-support.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { sessionTranscriptHasContent } from "../command/attempt-execution.helpers.js";
-import { resolveSession } from "../command/session.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { persistCliRunBlock } from "./cli-run-transcript.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { hasCliSessionTranscript, loadCliSessionHistoryMessages } from "./session-history.js";
 import type { PreparedCliRunContext } from "./types.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterAll);
-const authority = { assertCurrent() {} };
-const probe = useIncognitoActorProbe();
-let actor: IncognitoAgentDatabaseExecution;
-let env: NodeJS.ProcessEnv;
-beforeAll(async () => {
-  env = { OPENCLAW_STATE_DIR: dirs.make("cli-history-actor-") };
-  actor = await openIncognitoTestActor(env, authority);
-});
-afterAll(async () => {
-  await actor?.close();
-});
-useIncognitoNoHostSql();
+vi.mock("node:sqlite", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:sqlite")>()),
+  DatabaseSync: vi.fn(function () {
+    throw new Error("Memory CLI history opened SQLite");
+  }),
+}));
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
+  Worker: vi.fn(function () {
+    throw new Error("Memory CLI history allocated a worker");
+  }),
+}));
+const authority = { assertCurrent() {}, authorize() {} };
+const env = { OPENCLAW_STATE_DIR: "/synthetic/cli" };
+afterEach(() => memorySessionActorOwners.reset());
 
 async function create(name: string) {
+  const path = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
+  const owner = memorySessionActorOwners.get({ agentId: "main", path });
   const target = {
     agentId: "main",
     sessionKey: `agent:main:dashboard:incognito-${name}`,
     sessionId: name,
-    storePath: actor.path,
+    storePath: path,
   };
-  await actor.sessions.create(authority, {
-    sessionKey: target.sessionKey,
-    entry: {
-      sessionId: name,
-      lifecycleRevision: "initial",
-      incognito: true,
-      updatedAt: Date.now(),
-      sessionStartedAt: Date.now(),
-      permissionMode: "full",
-      thinkingLevel: "high",
+  const actor = await owner.acquire(
+    { database: owner.identity, sessionKey: target.sessionKey },
+    {
+      assertCurrent() {},
+      assertReadable() {},
     },
-  });
-  return target;
+  );
+  const created = await actor.storage!.mutate(
+    {
+      type: "session.entry.create",
+      input: {
+        entry: {
+          sessionId: name,
+          lifecycleRevision: "initial",
+          incognito: true,
+          updatedAt: Date.now(),
+          sessionStartedAt: Date.now(),
+          permissionMode: "full",
+          thinkingLevel: "high",
+        },
+      },
+    },
+    authority,
+  );
+  expect(created.kind).toBe("committed");
+  return { target, binding: { actor, authority, agentId: "main", path } };
 }
 
 it("prepares private CLI history and refuses an unattributed append at execution", async () => {
-  const target = await create("history");
+  const { target } = await create("history");
   const admission = prepareSystemAgentRunAdmission({}, "actor-cli-run", "main", "history-test");
   try {
     const params: PreparedCliRunContext["params"] = {
@@ -78,7 +82,7 @@ it("prepares private CLI history and refuses an unattributed append at execution
       workspaceDir: env.OPENCLAW_STATE_DIR!,
       timeoutMs: 1000,
     };
-    await withIncognitoSessionActor(actor, async () => {
+    {
       const writer = await prepareCliHistoryBoundary(params, {
         credential: { type: "token", provider: "test-cli", token: "synthetic-account" },
       });
@@ -115,28 +119,21 @@ it("prepares private CLI history and refuses an unattributed append at execution
       const manager = await SessionManager.openAsync(target);
       await manager.appendMessageAsync(makeUserMessage("Different writer", 3));
       expect(() => writer.assertReadable()).toThrow("CLI history authority changed");
-    });
+    }
   } finally {
     admission.close();
   }
 });
 
-it("resolves exact command overrides and records a blocked CLI turn on the selected actor", async () => {
-  const target = await create("command");
-  await withIncognitoSessionActor(actor, async () => {
-    const cfg = { agents: { defaults: {} }, session: { store: actor.path } };
-    const resolved = await resolveSession({ cfg, ...target });
-    expect(resolved).toMatchObject({
-      sessionId: target.sessionId,
-      isNewSession: false,
-      persistedThinking: "high",
-      sessionEntry: { permissionMode: "full" },
-    });
+it("records a redacted blocked CLI turn on the selected actor", async () => {
+  const { target, binding } = await create("command");
+  await runWithSessionActorStorage(binding, async () => {
+    const cfg = { agents: { defaults: {} }, session: { store: target.storePath } };
     await persistCliRunBlock(
       {
         ...target,
         config: cfg,
-        sessionEntry: resolved.sessionEntry,
+        sessionEntry: binding.actor.snapshot(authority)?.entry,
         sessionTarget: target,
         sessionFile: target.sessionKey,
         runId: "blocked-cli-run",
@@ -152,71 +149,5 @@ it("resolves exact command overrides and records a blocked CLI turn on the selec
     expect(history[0]).toMatchObject({ role: "user" });
     expect(JSON.stringify(history)).toContain("Policy blocked this request");
     expect(JSON.stringify(history)).not.toContain("Private rejected content");
-  });
-});
-
-it("does not accept command preparation after cancellation during an actor read", async () => {
-  const target = await create("cancelled-command");
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const abort = new AbortController();
-  const stop = probe.observe(async (type) => {
-    if (type === "session.entry.read") {
-      entered.resolve();
-      await release.promise;
-    }
-  });
-  const resolving = withIncognitoSessionActor(actor, () =>
-    resolveSession({
-      cfg: { agents: { defaults: {} }, session: { store: actor.path } },
-      ...target,
-      signal: abort.signal,
-    }),
-  );
-  const rejected = expect(resolving).rejects.toThrow("command cancelled");
-  try {
-    await entered.promise;
-    abort.abort(new Error("command cancelled"));
-    release.resolve();
-    await rejected;
-  } finally {
-    release.resolve();
-    stop();
-    await Promise.allSettled([resolving]);
-  }
-});
-
-it("keeps selected absence distinct from a released command actor", async () => {
-  const missingEnv = { OPENCLAW_STATE_DIR: dirs.make("cli-absent-actor-") };
-  const sessionKey = "agent:main:dashboard:incognito-missing";
-  const missingTarget = {
-    agentId: "main",
-    sessionKey,
-    sessionId: "missing",
-    storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: missingEnv }),
-  };
-  await withIncognitoSessionBinding(
-    { kind: "absent", agentId: "main", env: missingEnv, authority },
-    async () => {
-      const resolved = await resolveSession({
-        cfg: {
-          agents: { defaults: {} },
-          session: { store: missingTarget.storePath },
-        },
-        sessionKey,
-      });
-      expect(resolved.sessionEntry).toBeUndefined();
-      expect(await hasCliSessionTranscript({ sessionTarget: missingTarget })).toBe(false);
-      expect(await loadCliSessionHistoryMessages({ sessionTarget: missingTarget })).toEqual([]);
-      expect(await sessionTranscriptHasContent(missingTarget)).toBe(false);
-      expect(captureOpenClawAgentDatabaseExecution.listIncognito(missingEnv)).toEqual([]);
-    },
-  );
-  const target = await create("rebound-command");
-  const borrowed = await openIncognitoTestActor(env, authority);
-  await withIncognitoSessionBinding({ actor: borrowed }, async () => {
-    const cfg = { agents: { defaults: {} }, session: { store: actor.path } };
-    await borrowed.release();
-    await expect(resolveSession({ cfg, ...target })).rejects.toThrow("reference is released");
   });
 });

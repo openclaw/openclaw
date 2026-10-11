@@ -69,26 +69,25 @@ the read and must not be treated as an absent session.
 
 The synchronous `readAcpSessionEntry` and
 `getAcpSessionManager().resolveSession()` contracts shipped in `v2026.9.4`
-remain available for existing consumers of that compatibility export. They are
-deprecated for runtime use. Ordinary ACP manager and Gateway callers use
-`readAcpSessionEntryAsync` and `getAcpSessionManager().resolveSessionAsync()`.
-Discord and Telegram startup binding cleanup retain their existing synchronous
-reader until conditional deletion can validate metadata at the mutation owner.
-Their inactive incognito composition accepts a prepared session reader whose
-current-source assertion reaches the binding transaction and commit grants.
-The preparation retains the original actor revision and ACP metadata publication
-fence until cleanup releases it. The local `prepareAcpSessionEntryRead` helper captures an existing private actor
-binding and supplies that retained reader; it returns `undefined` without a binding.
-Discord and Telegram startup cleanup use it by default. Ordinary production
-acquisition stays native until atomic incognito activation; guarded durable
-cleanup remains separate work.
+remain available for durable sessions and are deprecated for runtime use.
+Incognito targets reject synchronous access with `IncognitoSessionSyncAccessError`;
+use `readAcpSessionEntryAsync` and
+`getAcpSessionManager().resolveSessionAsync()` instead. The asynchronous path
+acquires the existing memory session actor and joins global ACP metadata through
+the shared-state worker. It does not create a missing incognito session.
+
+Discord and Telegram startup cleanup use `prepareAcpSessionEntryRead` for
+incognito targets. Its prepared reader retains the selected memory owner and
+carries current caller authority through conditional binding deletion. Closing
+the session ends that authority; cleanup does not reopen the retired native
+incognito database.
+
 `IncognitoSessionEndedError` and `IncognitoSessionSyncAccessError`, exposed through
 the local `openclaw/plugin-sdk/acp-runtime` facade, must propagate through cleanup and status
 probes. Use `rethrowIncognitoSessionError(error)` before treating other failures
 as an absent session or an uncertain probe; it also recognizes nested refusals.
-Removing the synchronous contracts
-requires a separately announced breaking SDK release. Incognito reads retain
-their existing native in-memory owner until that owner's worker migration.
+Removing the synchronous contracts for durable sessions requires a separately
+announced breaking SDK release.
 
 ### Session reset freshness
 

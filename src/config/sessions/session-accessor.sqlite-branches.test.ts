@@ -39,6 +39,8 @@ import {
 } from "./session-accessor.sqlite-message-cut.test-support.js";
 import * as transcriptWatermark from "./session-accessor.sqlite-transcript-watermark-read.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import * as coldStorage from "./session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
@@ -696,20 +698,56 @@ describe("SQLite session branches", () => {
     expect(branchReads()).toBe(2);
   });
 
-  it("lists process-only incognito branches without opening a worker", async () => {
+  it("lists current memory branches after writes and leaves missing sessions absent", async () => {
     const { scope } = await createSession({ incognito: true });
     const branchReads = trackBranchSummaryReads();
-    await expect(listSessionBranches(scope)).resolves.toMatchObject({
-      status: "ok",
-      branches: expect.arrayContaining([
-        expect.objectContaining({
-          active: true,
-          leafEntryId: "assistant-2",
-          headline: "second answer",
-        }),
-      ]),
+    const memory = captureSessionActorStorageOwner(scope, { assertCurrent() {}, authorize() {} });
+    if (!memory?.owner) {
+      throw new Error("Expected fixture memory owner");
+    }
+    const sqlite = vi.spyOn(sqliteRuntime, "requireNodeSqlite").mockImplementation(() => {
+      throw new Error("Memory branch listing opened SQLite");
     });
-    expect(branchReads()).toBe(0);
+    try {
+      await expect(listSessionBranches(scope)).resolves.toMatchObject({
+        status: "ok",
+        branches: expect.arrayContaining([
+          expect.objectContaining({
+            active: true,
+            leafEntryId: "assistant-2",
+            headline: "second answer",
+          }),
+        ]),
+      });
+      await appendTranscriptMessage(scope, {
+        eventId: "assistant-3",
+        parentId: "assistant-2",
+        now: Date.parse("2026-07-18T00:00:07.000Z"),
+        message: { role: "assistant", content: "fresh memory answer" },
+      });
+      await expect(listSessionBranches(scope)).resolves.toMatchObject({
+        status: "ok",
+        branches: expect.arrayContaining([
+          expect.objectContaining({
+            active: true,
+            leafEntryId: "assistant-3",
+            headline: "fresh memory answer",
+          }),
+        ]),
+      });
+      await expect(
+        listSessionBranches({
+          ...scope,
+          sessionKey: "agent:main:dashboard:incognito-missing",
+        }),
+      ).resolves.toEqual({ status: "missing-session" });
+      memorySessionActorOwners.closeDatabase(memory);
+      await expect(listSessionBranches(scope)).resolves.toEqual({ status: "missing-session" });
+      expect(sqlite).not.toHaveBeenCalled();
+      expect(branchReads()).toBe(0);
+    } finally {
+      sqlite.mockRestore();
+    }
   });
 
   it("summarizes a large shared branch graph without repeated path walks", async () => {

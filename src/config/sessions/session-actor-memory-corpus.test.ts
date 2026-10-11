@@ -4,9 +4,17 @@ import {
   statSessionEntrySync,
 } from "../../../packages/memory-host-sdk/src/host/session-files.js";
 import { readSessionResetRecallCutoff } from "../../../packages/memory-host-sdk/src/host/session-reset-recall-read.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { SessionActorAuthority } from "./session-actor-contract.js";
-import { createMemorySessionActorOwner } from "./session-actor-memory.js";
-import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import {
+  acquireSessionActorStorage,
+  runWithSessionActorStorage,
+} from "./session-actor-storage-binding.js";
+import {
+  readSessionTranscriptCorpusInWorker,
+  resolveMemorySessionTargetsInWorker,
+} from "./session-transcript-inventory-runtime.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:sqlite")>()),
@@ -23,16 +31,18 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
 
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
+const env = { OPENCLAW_STATE_DIR: "/synthetic/memory-corpus" };
 const scope = {
   agentId: "main",
   sessionId: "before-reset",
   sessionKey: "agent:main:dashboard:incognito-memory-corpus",
-  storePath: "/synthetic/memory-corpus",
+  storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+  env,
 };
-const owners: ReturnType<typeof createMemorySessionActorOwner>[] = [];
+const owners: Array<{ agentId: string; path: string }> = [];
 afterEach(() => {
   for (const owner of owners.splice(0)) {
-    owner.close();
+    memorySessionActorOwners.closeDatabase(owner);
   }
 });
 const message = (id: string, text: string) => ({
@@ -43,19 +53,23 @@ const message = (id: string, text: string) => ({
   message: { role: "user", content: text },
 });
 
-async function fixture() {
-  const owner = createMemorySessionActorOwner({ agentId: scope.agentId, path: scope.storePath });
-  owners.push(owner);
-  const acquire = () =>
-    owner.acquire({ database: owner.identity, sessionKey: scope.sessionKey }, lifetime);
-  const actor = await acquire();
+async function fixture(target = scope) {
+  const { sessionId: _sessionId, ...acquisition } = target;
+  owners.push({ agentId: target.agentId, path: target.storePath });
+  const initial = await acquireSessionActorStorage(acquisition, {
+    lifetime,
+    authority,
+    create: true,
+  });
+  if (!initial) throw new Error("Memory creation did not select the actor");
+  const actor = initial.actor;
   const created = await actor.storage!.mutate(
     {
       type: "session.entry.create",
       input: {
-        entry: { sessionId: scope.sessionId, updatedAt: 1 },
+        entry: { sessionId: target.sessionId, updatedAt: 1 },
         transcriptEvents: [
-          { type: "session", id: scope.sessionId, version: 3, cwd: "/synthetic" },
+          { type: "session", id: target.sessionId, version: 3, cwd: "/synthetic" },
           message("old", "Previous discussion"),
           { type: "reset", id: "reset", parentId: "old", firstKeptEntryId: "old" },
           message("new", "Current discussion"),
@@ -65,12 +79,12 @@ async function fixture() {
     authority,
   );
   expect(created.kind).toBe("committed");
-  return { actor, acquire };
+  return { actor };
 }
 
 describe("Memory export from the session actor", () => {
   it("projects retained snapshots and reset cutoff through the host facade without native storage", async () => {
-    const { actor, acquire } = await fixture();
+    const { actor } = await fixture();
     const expected = await actor.storage!.read(
       { type: "session.entry.read", input: {} },
       authority,
@@ -86,22 +100,68 @@ describe("Memory export from the session actor", () => {
         )
       ).kind,
     ).toBe("committed");
-    const current = await acquire();
+    const entry = await buildSessionEntry(scope.sessionKey, scope);
+    expect(entry?.content).toBe("User: Previous discussion\nUser: Current discussion");
+    expect(await readSessionResetRecallCutoff(scope)).toEqual({
+      state: "valid",
+      cutoffLine: 2,
+    });
+    expect(await readSessionResetRecallCutoff({ ...scope, sessionId: "after-reset" })).toEqual({
+      state: "absent",
+    });
+    expect(() => statSessionEntrySync(scope.sessionKey, scope)).toThrow("buildSessionEntry");
+  });
+
+  it("reads another agent's memory inventory and leaves an absent explicit owner absent", async () => {
+    const { actor } = await fixture();
+    const other = {
+      ...scope,
+      agentId: "other",
+      sessionId: "other-window",
+      sessionKey: "agent:other:dashboard:incognito-other",
+      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "other", env }),
+    };
+    await fixture(other);
     await runWithSessionActorStorage(
-      { actor: current, authority, agentId: scope.agentId, path: scope.storePath },
+      { actor, authority, agentId: scope.agentId, path: scope.storePath },
       async () => {
-        const entry = await buildSessionEntry(scope.sessionKey, scope);
-        expect(entry?.content).toBe("User: Previous discussion\nUser: Current discussion");
-        expect(await readSessionResetRecallCutoff(scope)).toEqual({
-          state: "valid",
-          cutoffLine: 2,
-        });
-        expect(await readSessionResetRecallCutoff({ ...scope, sessionId: "after-reset" })).toEqual({
-          state: "absent",
-        });
-        expect(() => statSessionEntrySync(scope.sessionKey, scope)).toThrow("buildSessionEntry");
+        expect((await buildSessionEntry(other.sessionKey, other))?.content).toContain(
+          "Current discussion",
+        );
+        const entries = await readSessionTranscriptCorpusInWorker(
+          {
+            cfg: {},
+            env,
+            normalizedAgentId: other.agentId,
+            storePath: other.storePath,
+            isSharedFixedStore: false,
+            artifactDirs: [],
+          },
+          {},
+          async () => {
+            throw new Error("Memory inventory tried to read archive files");
+          },
+        );
+        expect(entries).toMatchObject([{ agentId: "other", sessionId: "other-window" }]);
       },
     );
+    const missing = {
+      ...scope,
+      agentId: "absent",
+      sessionKey: "agent:absent:dashboard:incognito-absent",
+      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "absent", env }),
+    };
+    expect(await buildSessionEntry(missing.sessionKey, missing)).toBeNull();
+    expect(
+      await resolveMemorySessionTargetsInWorker({
+        agentId: missing.agentId,
+        storePath: missing.storePath,
+        sessionIds: [missing.sessionId],
+      }),
+    ).toMatchObject([{ resolution: "unresolved" }]);
+    expect(
+      memorySessionActorOwners.read({ agentId: missing.agentId, path: missing.storePath }),
+    ).toBeUndefined();
   });
 
   it("blocks the next transcript disclosure when permission is revoked by a consumer callback", async () => {

@@ -233,40 +233,6 @@ describe("SQLite report payload selection", () => {
     });
   });
 
-  it("preserves native incognito reports and refuses an unrelated file-source restriction", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const native = { ...scope, sessionKey: "agent:main:dashboard:incognito-reports" };
-      await upsertSessionEntryCore(native, { sessionId: native.sessionId, updatedAt: 1 });
-      await replaceTranscriptEvents(native, [
-        { type: "session", id: native.sessionId, version: CURRENT_SESSION_VERSION },
-      ]);
-      const report = {
-        kind: "custom" as const,
-        customTypes: ["status"],
-        selectReport: () => ({ customType: "status", content: "native report", display: true }),
-      };
-      await expect(appendSessionTranscriptReport(native, report)).resolves.toEqual({
-        ok: true,
-        value: undefined,
-      });
-      const before = await loadTranscriptEvents(native);
-      await expect(
-        appendSessionTranscriptReport(native, report, {
-          sessionEntryCurrent: {
-            source: {
-              agentId: scope.agentId,
-              path: state.path("foreign.sqlite"),
-              databaseIdentity: "foreign",
-              sessionKey: native.sessionKey,
-            },
-            assertCurrent: () => {},
-          },
-        }),
-      ).rejects.toThrow("A file session source cannot authorize a process-held transcript report");
-      expect(await loadTranscriptEvents(native)).toEqual(before);
-    });
-  });
-
   it("fences worker abort fallbacks and preserves each run's authoritative answer", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const db = await seedReports();

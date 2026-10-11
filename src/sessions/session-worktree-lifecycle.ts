@@ -146,7 +146,10 @@ export async function restoreSessionWorktree(params: {
     ...requestedScope,
     env: { ...(requestedScope.env ?? process.env), ...context.environment },
   };
-  const metadata = captureSessionEntryMetadataRead(scope);
+  const metadata = captureSessionEntryMetadataRead(scope, () => {
+    params.commitGuard?.();
+    params.assertRestoreAllowed?.();
+  });
   const accept = captureWorktreeRegistryReadGuard(context, "session-owner");
   const record = await readRegistryWorktree(context, id);
   const assertWorktreeCurrent = accept(record);

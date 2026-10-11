@@ -9,8 +9,11 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../config/io.js";
+import {
+  captureSessionActorStorageOwner,
+  type CapturedSessionActorStorageOwner,
+} from "../config/sessions/session-actor-storage-binding.js";
 import type { PaginatedSessionHistory } from "../config/sessions/session-history-types.js";
-import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -160,23 +163,6 @@ export async function handleSessionHistoryHttpRequest(
   }
 
   const canonicalKey = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
-  let selected: Result<ReturnType<typeof captureIncognitoSessionSource>, unknown>;
-  let assertSourceCurrent = () => {};
-  try {
-    const source = captureIncognitoSessionSource({ sessionKey: canonicalKey });
-    if (source && !("kind" in source)) {
-      const claim = source.actor.sessions.captureCurrent(canonicalKey);
-      assertSourceCurrent = () => {
-        source.admissionSignal?.throwIfAborted();
-        source.actor.assertReadable();
-        claim.assertCurrent();
-      };
-    }
-    selected = ok(source);
-  } catch (error) {
-    selected = err(error);
-  }
-
   // Session history intentionally uses the shared-secret HTTP trust model:
   // token/password bearer auth grants default operator scopes so simple API key
   // callers can read their own history without a scope header.
@@ -189,23 +175,28 @@ export async function handleSessionHistoryHttpRequest(
   if (!authResult) {
     return true;
   }
-  if (!selected.ok) {
-    throw selected.error;
-  }
-  const source = selected.value;
-  assertSourceCurrent();
-  const serve = () =>
-    serveAuthorizedSessionHistory(
-      req,
-      res,
-      opts,
-      url,
-      source ? canonicalKey : sessionKey,
-      authResult,
-      source,
-      assertSourceCurrent,
-    );
-  return source && !("kind" in source) ? source.actor.sessions.withSharedState(serve) : serve();
+  const source = captureSessionActorStorageOwner(
+    { sessionKey: canonicalKey },
+    {
+      assertCurrent() {
+        if (res.destroyed || res.writableEnded) throw new Error("Session history response closed");
+      },
+    },
+  );
+  const assertSourceCurrent = () => {
+    source?.authority.assertCurrent();
+    source?.owner?.assertCurrent();
+  };
+  return serveAuthorizedSessionHistory(
+    req,
+    res,
+    opts,
+    url,
+    source ? canonicalKey : sessionKey,
+    authResult,
+    source,
+    assertSourceCurrent,
+  );
 }
 
 async function serveAuthorizedSessionHistory(
@@ -215,7 +206,7 @@ async function serveAuthorizedSessionHistory(
   url: URL,
   sessionKey: string,
   authResult: NonNullable<Awaited<ReturnType<typeof authorizeScopedGatewayHttpRequestOrReply>>>,
-  source: ReturnType<typeof captureIncognitoSessionSource>,
+  source: CapturedSessionActorStorageOwner | undefined,
   assertSourceCurrent: () => void,
 ): Promise<boolean> {
   const { cfg, requestAuth, operatorScopes } = authResult;
@@ -223,29 +214,15 @@ async function serveAuthorizedSessionHistory(
   let entry: ReturnType<typeof resolveCanonicalSessionEntryFromStoreKeys>;
   try {
     if (source) {
-      if ("kind" in source) {
-        source.assertCurrent();
-        sendJson(res, 404, {
-          ok: false,
-          error: { type: "not_found", message: `Session not found: ${sessionKey}` },
-        });
-        return true;
-      }
-      const { actor, admissionSignal } = source;
-      const read = await actor.sessions.read(
-        { assertCurrent: assertSourceCurrent },
-        { sessionKey },
-        admissionSignal,
-      );
       assertSourceCurrent();
-      entry = read.entry;
+      entry = source.owner?.readSession(sessionKey, source.authority)?.entry;
       target = {
-        agentId: actor.agentId,
+        agentId: source.agentId,
         canonicalKey: sessionKey,
-        storePath: actor.path,
+        storePath: source.path,
         storeKeys: [sessionKey],
         store: entry ? { [sessionKey]: entry } : {},
-        readSource: { agentId: actor.agentId, path: actor.path },
+        readSource: { agentId: source.agentId, path: source.path },
       };
     } else {
       target = resolveGatewaySessionStoreTargetWithStore({
@@ -459,7 +436,7 @@ async function serveAuthorizedSessionHistory(
       ...projectHistory(snapshot, presentation),
     });
     // Send the entire requested page before bounding private live state.
-    // Cursor refreshes reread SQLite, so their next page remains complete.
+    // Cursor refreshes reread the owner, so their next page remains complete.
     sseState.retainRecentMessages(MAX_SESSION_HISTORY_LIMIT);
   }
 

@@ -8,10 +8,7 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { sessionChangeAffectsStoredRow } from "../../sessions/session-row-facts.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
-import type {
-  AgentDatabaseExecutionFileIdentity,
-  AgentDatabaseIncognitoIdentity,
-} from "../../state/openclaw-agent-execution-contract.js";
+import type { AgentDatabaseExecutionFileIdentity } from "../../state/openclaw-agent-execution-contract.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
 import {
   readPreparedSessionEntryChange,
@@ -37,9 +34,6 @@ export type SessionActorEntryFacts = Pick<
   };
 
 type FileTarget = SessionActorTarget & { database: AgentDatabaseExecutionFileIdentity };
-type EphemeralTarget = SessionActorTarget & {
-  database: AgentDatabaseIncognitoIdentity;
-};
 type ReplicaCell = {
   target: SessionActorTarget;
   snapshot?: SessionActorHotState;
@@ -370,16 +364,11 @@ export function retainSessionActorEntryFacts(
 }
 
 /** Handles retain their own authority; complete physical postimages survive handle release. */
-export function createSessionActorReplica(
-  params: { lifetime: SessionActorLifetime } & (
-    | { target: FileTarget; currentWriteToken?: never; currentGeneration: () => string | undefined }
-    | {
-        target: EphemeralTarget;
-        currentWriteToken: (state: SessionActorHotState) => string | undefined;
-        currentGeneration?: never;
-      }
-  ),
-) {
+export function createSessionActorReplica(params: {
+  lifetime: SessionActorLifetime;
+  target: FileTarget;
+  currentGeneration: () => string | undefined;
+}) {
   ensureReplicaSubscription();
   const target = freezeJsonSnapshot(structuredClone(params.target));
   const key = targetKey(target);
@@ -399,18 +388,13 @@ export function createSessionActorReplica(
   };
   const generation = (): string | undefined => {
     try {
-      return target.database.kind === "file"
-        ? params.currentGeneration?.()
-        : target.database.incarnation;
+      return params.currentGeneration();
     } catch {
       return undefined;
     }
   };
   const currentToken = (state: SessionActorHotState): string | undefined => {
     const database = target.database;
-    if (database.kind !== "file") {
-      return params.currentWriteToken?.(state);
-    }
     try {
       const identity = readDatabasePathIdentitySync(database.nativeLocation);
       if (

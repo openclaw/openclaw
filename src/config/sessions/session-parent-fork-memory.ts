@@ -1,11 +1,18 @@
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import type { ForkSessionFromParentTranscriptParams } from "./session-accessor.types.js";
+import type {
+  ForkSessionEntryFromParentTargetParams,
+  ForkSessionEntryFromParentTargetResult,
+  ForkSessionFromParentTranscriptParams,
+} from "./session-accessor.types.js";
 import {
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
+  withSessionActorStorage,
   type SessionActorStorageBinding,
 } from "./session-actor-storage-binding.js";
 import type { SessionActorStorageAuthority } from "./session-actor-storage-contract.js";
+import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
+import type { ParentForkEntryPatch } from "./session-parent-fork.types.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 
 /** Read the selected source owner without creating a parent or a staging transcript. */
@@ -64,4 +71,49 @@ export async function readMemoryParentForkSource(
       await actor.release();
     }
   }
+}
+
+export function forkMemorySessionEntryFromParent(
+  params: ForkSessionEntryFromParentTargetParams,
+  patch?: ParentForkEntryPatch,
+): Promise<ForkSessionEntryFromParentTargetResult> | undefined {
+  const assertCurrent = () => params.commitGuard?.();
+  const authority = { assertCurrent, authorize() {} };
+  const scope = { ...params, sessionKey: params.parentTarget.canonicalKey };
+  if (!captureSessionActorStorageOwner(scope, authority)) {
+    return undefined;
+  }
+  return withSessionActorStorage(
+    scope,
+    {
+      authority,
+      lifetime: { assertCurrent, assertReadable: assertCurrent },
+    },
+    async (memory) => {
+      const { cliBackendSupportsSessionFork } = await import("../../agents/cli-backends.js");
+      const {
+        commitGuard: _guard,
+        patch: callback,
+        skipPatch,
+        skipForkWhen,
+        decisionSkipPatch,
+        ...data
+      } = params;
+      return readSessionActorStorageResult(
+        await memory.actor.storage.mutate(
+          {
+            type: "session.parentFork.commit",
+            input: {
+              kind: "entry",
+              params: structuredClone(data),
+              patch: patch && structuredClone(patch),
+              supportsCliFork: cliBackendSupportsSessionFork,
+              callbacks: { patch: callback, skipPatch, skipForkWhen, decisionSkipPatch },
+            },
+          },
+          memory.authority,
+        ),
+      );
+    },
+  ).then((result) => result ?? { status: "missing-parent" });
 }

@@ -176,65 +176,51 @@ it.each(["ok", "error"] as const)(
   },
 );
 
-it.each(["file", "ephemeral"] as const)(
-  "keeps an aborted %s worker reservation until settlement and reports it once",
-  async (kind) => {
-    const { options, clock, warnings } = fixture();
-    const target =
-      kind === "file"
-        ? options
-        : {
-            target: {
-              kind: "ephemeral" as const,
-              handle: "synthetic-private-handle",
-              incarnation: "synthetic-private-incarnation",
-            },
-            assertCurrent: () => {},
-          };
-    const release = createDeferred();
-    const controller = new AbortController();
-    const reason = new Error("synthetic-private-abort");
-    const order: string[] = [];
-    const first = runOpenClawAgentWorkerWrite(
-      target,
-      async () => {
-        order.push("holder");
-        await release.promise;
-        controller.signal.throwIfAborted();
-      },
-      undefined,
-      controller.signal,
-    );
-    const failed = expect(first).rejects.toBe(reason);
-    const next = runOpenClawAgentWorkerWrite(target, async () => {
-      order.push("follower");
-    });
-    try {
-      controller.abort(reason);
-      expect(order).toEqual(["holder"]);
-      clock.now = 1_000;
-      release.resolve();
-      await failed;
-      await next;
-      expect(order).toEqual(["holder", "follower"]);
-      expect(warnings).toEqual([
-        [
-          expect.objectContaining({
-            operation: "worker",
-            outcome: "error",
-            writerExecutionMs: 1_000,
-            reentrant: false,
-          }),
-          "slow agent database reservation",
-        ],
-      ]);
-      expect(JSON.stringify(warnings)).not.toContain("synthetic-private");
-    } finally {
-      release.resolve();
-      await Promise.allSettled([first, next]);
-    }
-  },
-);
+it("keeps an aborted worker reservation until settlement and reports it once", async () => {
+  const { options, clock, warnings } = fixture();
+  const release = createDeferred();
+  const controller = new AbortController();
+  const reason = new Error("synthetic-private-abort");
+  const order: string[] = [];
+  const first = runOpenClawAgentWorkerWrite(
+    options,
+    async () => {
+      order.push("holder");
+      await release.promise;
+      controller.signal.throwIfAborted();
+    },
+    undefined,
+    controller.signal,
+  );
+  const failed = expect(first).rejects.toBe(reason);
+  const next = runOpenClawAgentWorkerWrite(options, async () => {
+    order.push("follower");
+  });
+  try {
+    controller.abort(reason);
+    expect(order).toEqual(["holder"]);
+    clock.now = 1_000;
+    release.resolve();
+    await failed;
+    await next;
+    expect(order).toEqual(["holder", "follower"]);
+    expect(warnings).toEqual([
+      [
+        expect.objectContaining({
+          operation: "worker",
+          outcome: "error",
+          writerExecutionMs: 1_000,
+          reentrant: false,
+        }),
+        "slow agent database reservation",
+      ],
+    ]);
+    expect(JSON.stringify(warnings)).not.toContain("synthetic-private");
+  } finally {
+    release.resolve();
+    await Promise.allSettled([first, next]);
+  }
+});
 
 it("reports each ordered-read reservation across an awaited read without reporting reentrant borrowing", async () => {
   const { options, clock, warnings } = fixture();

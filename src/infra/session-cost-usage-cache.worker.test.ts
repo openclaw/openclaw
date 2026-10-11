@@ -9,16 +9,11 @@ import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { maybeRepairLegacyRuntimeFiles } from "../commands/doctor-usage-cost-cache.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import {
-  createSessionEntryWithTranscript,
-  persistSessionTranscriptTurn,
-} from "../config/sessions/session-accessor.js";
 import { createWorkerPlacementSessionEvidenceResolver } from "../gateway/server-worker-placement-session-evidence.js";
 import { createWorkerSessionPlacementStore } from "../gateway/worker-environments/placement-store.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
@@ -312,123 +307,6 @@ it("refreshes and loads usage without executing cache SQL on the caller", async 
         observer.mockRestore();
       }
     }
-  });
-});
-
-it("retains the process-held incognito cache without creating its sentinel file", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const agentId = "usage-incognito";
-    const databasePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId });
-    const sessionId = "incognito-usage";
-    const scope = {
-      agentId,
-      sessionKey: `agent:${agentId}:dashboard:incognito-usage`,
-      storePath: databasePath,
-      env: state.env,
-    };
-    await createSessionEntryWithTranscript(
-      scope,
-      () => ({ ok: true, entry: { incognito: true as const, sessionId, updatedAt: 1 } }),
-      { cwd: state.workspaceDir },
-    );
-    await persistSessionTranscriptTurn(
-      { ...scope, sessionId },
-      {
-        messages: [
-          {
-            message: {
-              role: "assistant",
-              content: "incognito usage",
-              timestamp: Date.parse("2026-09-18T00:00:00Z"),
-              usage: { input: 7, output: 3, totalTokens: 10, cost: { total: 1 } },
-            },
-          },
-        ],
-        touchSessionEntry: false,
-      },
-    );
-    const sessionFile = formatSqliteSessionFileMarker({
-      agentId,
-      sessionId,
-      storePath: databasePath,
-    });
-    const prepared = prepareUsageCostWorker({
-      agentId,
-      databasePath,
-      storePath: databasePath,
-      sessionFiles: [sessionFile],
-    });
-    const pricingFingerprint = await resolveUsageCostPricingFingerprint(
-      undefined,
-      prepared.agentDir,
-    );
-    expect(
-      await runUsageCostWorker(prepared, {
-        kind: "refresh",
-        sessionFiles: [sessionFile],
-      }),
-    ).toMatchObject({ kind: "refresh" });
-    expect(
-      await runUsageCostWorker(prepared, {
-        kind: "sessions",
-        pricingFingerprint,
-        sessions: [{ sessionId, sessionFile }],
-        dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
-      }),
-    ).toMatchObject({
-      kind: "sessions",
-      summaries: [{ sessionId, sessionFile, totalTokens: 10, totalCost: 1 }],
-      cacheStatus: { status: "fresh", cachedFiles: 1 },
-    });
-    const { db } = openOpenClawAgentDatabase({ agentId, path: databasePath, env: state.env });
-    for (const changes of [1, Number.POSITIVE_INFINITY]) {
-      let changed = 0;
-      // oxlint-disable-next-line typescript/unbound-method -- The observer forwards the pool receiver.
-      const run = WorkerTaskPool.prototype.run;
-      const observer = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(function (
-        this: WorkerTaskPool<unknown, unknown>,
-        input: WorkerTaskInput<unknown>,
-        options: WorkerTaskOptions<unknown>,
-      ) {
-        const onRequest = options.onRequest;
-        if (!onRequest) {
-          return run.call(this, input, options);
-        }
-        return run.call(this, input, {
-          ...options,
-          onRequest: (value, context) => {
-            if (changed < changes && isRecord(value) && value.kind === "memory-cache-body") {
-              db.prepare(`UPDATE cache_entries SET
-                value_json = json_set(value_json, '$.scannedAt', json_extract(value_json, '$.scannedAt') + 1),
-                updated_at = updated_at + 1 WHERE scope = 'session-cost-usage-rollup-v3'`).run();
-              changed++;
-            }
-            return onRequest(value, context);
-          },
-        });
-      });
-      try {
-        const reading = runUsageCostWorker(prepared, {
-          kind: "sessions",
-          pricingFingerprint,
-          sessions: [{ sessionId, sessionFile }],
-          dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
-        });
-        if (changes === 1) {
-          await expect(reading).resolves.toMatchObject({
-            summaries: [{ totalTokens: 10, totalCost: 1 }],
-            cacheStatus: { status: "fresh", cachedFiles: 1 },
-          });
-          expect(changed).toBe(1);
-        } else {
-          await expect(reading).rejects.toMatchObject({ code: "unavailable" });
-          expect(changed).toBe(3);
-        }
-      } finally {
-        observer.mockRestore();
-      }
-    }
-    await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
 

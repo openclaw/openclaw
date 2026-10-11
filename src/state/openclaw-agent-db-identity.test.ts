@@ -15,7 +15,6 @@ import {
   isOpenClawAgentDatabaseOpen,
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
-  resolveIncognitoOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
@@ -154,10 +153,8 @@ it("releases only one warm claim while revoking its retained copies", () => {
   expect(database.db.isOpen).toBe(true);
 });
 
-it.each([false, true])("does not reuse a reopened connection claim, incognito=%s", (incognito) => {
-  const databasePath = incognito
-    ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env })
-    : path.join(directory, "agent.sqlite");
+it("does not reuse a reopened connection claim", () => {
+  const databasePath = path.join(directory, "agent.sqlite");
   expect(retainOpenClawAgentDatabaseReadOnly({ agentId: "main", env, path: databasePath })).toEqual(
     {
       found: false,
@@ -172,11 +169,5 @@ it.each([false, true])("does not reuse a reopened connection claim, incognito=%s
   expect(claim.incarnation).not.toBe(replacement.incarnation);
   expect(claim.isCurrent()).toBe(false);
   expect(replacement.isCurrent()).toBe(true);
-  if (incognito) {
-    expect(claim.identity).not.toBe(replacement.identity);
-    expect(fs.existsSync(databasePath)).toBe(false);
-    expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([]);
-  } else {
-    expect(claim.identity).toBe(replacement.identity);
-  }
+  expect(claim.identity).toBe(replacement.identity);
 });

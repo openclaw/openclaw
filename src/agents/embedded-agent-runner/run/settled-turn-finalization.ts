@@ -4,7 +4,6 @@ import {
   setReplyPayloadMetadata,
   type ReplyPayloadMetadata,
 } from "../../../auto-reply/reply-payload.js";
-import { captureSessionWriterDeliveryRead } from "../../../auto-reply/reply/session-writer-delivery-authority.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import {
   SessionTranscriptWriterClaimReboundError,
@@ -381,13 +380,7 @@ function resolveSessionWriterDeliveryAuthority(input: {
   ) {
     return undefined;
   }
-  const readCurrentSession = captureSessionWriterDeliveryRead({
-    agentId: target?.agentId ?? input.attempt.agentId,
-    sessionKey,
-    storePath: target?.storePath,
-  });
   return {
-    ...(readCurrentSession ? { readCurrentSession } : {}),
     ...(target?.agentId || input.attempt.agentId
       ? { agentId: target?.agentId ?? input.attempt.agentId }
       : {}),

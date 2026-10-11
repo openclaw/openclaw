@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import { runWithSessionActorStorage } from "../../../config/sessions/session-actor-storage-binding.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { createInitialSubagentSession } from "./subagent-spawn-session-patch.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
@@ -19,28 +20,33 @@ vi.mock("./subagent-spawn.runtime.js", async () => ({
   ...(await import("../../../config/sessions/session-accessor.sqlite-entry.js")),
 }));
 
-afterEach(() => memorySessionActorOwners.reset());
+afterEach(() => {
+  memorySessionActorOwners.reset();
+  vi.unstubAllEnvs();
+});
 
-it.each(["main", "research"])(
-  "creates a child in the selected %s memory owner and preserves parent lineage",
-  async (targetAgentId) => {
+it.each([
+  { targetAgentId: "main", bound: true },
+  { targetAgentId: "research", bound: true },
+  { targetAgentId: "research", bound: false },
+])(
+  "creates a child with lineage in the $targetAgentId memory owner (bound=$bound)",
+  async ({ targetAgentId, bound }) => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/spawn");
     const parentKey = "agent:main:dashboard:incognito-spawn-parent";
     const childKey = `agent:${targetAgentId}:dashboard:incognito-spawn-child`;
     const parent = memorySessionActorOwners.get({
       agentId: "main",
-      path: "/synthetic/spawn/agents/main/sessions/incognito.sqlite",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
     });
-    const childOwner =
-      targetAgentId === "main"
-        ? parent
-        : memorySessionActorOwners.get({
-            agentId: targetAgentId,
-            path: `/synthetic/spawn/agents/${targetAgentId}/sessions/incognito.sqlite`,
-          });
+    const childPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: targetAgentId });
     // The selected parent namespace must not capture another state root's matching agent.
     const foreign = memorySessionActorOwners.get({
       agentId: targetAgentId,
-      path: `/synthetic/foreign/agents/${targetAgentId}/sessions/incognito.sqlite`,
+      path: resolveIncognitoOpenClawAgentSqlitePath({
+        agentId: targetAgentId,
+        env: { OPENCLAW_STATE_DIR: "/synthetic/foreign" },
+      }),
     });
     const actor = await parent.acquire(
       { database: parent.identity, sessionKey: parentKey },
@@ -65,25 +71,26 @@ it.each(["main", "research"])(
       authority,
     );
     expect(initialized.kind).toBe("committed");
-    const result = await runWithSessionActorStorage(
-      { actor, authority, agentId: "main", path: parent.path },
-      () =>
-        createInitialSubagentSession({
-          cfg: {},
-          requesterAgentId: "main",
-          targetAgentId,
-          requesterInternalKey: parentKey,
-          childSessionKey: childKey,
-          incognito: true,
-          expectedParentSessionId: "parent-session",
-          creationPolicy: { actor: { type: "agent", id: "main" } },
-          completionOwnerSessionKey: parentKey,
-          modelPatch: {},
-          collect: false,
-        }),
-    );
+    const create = () =>
+      createInitialSubagentSession({
+        cfg: {},
+        requesterAgentId: "main",
+        targetAgentId,
+        requesterInternalKey: parentKey,
+        childSessionKey: childKey,
+        incognito: true,
+        expectedParentSessionId: "parent-session",
+        creationPolicy: { actor: { type: "agent", id: "main" } },
+        completionOwnerSessionKey: parentKey,
+        modelPatch: {},
+        collect: false,
+      });
+    const result = await (bound
+      ? runWithSessionActorStorage({ actor, authority, agentId: "main", path: parent.path }, create)
+      : create());
+    const childOwner = memorySessionActorOwners.read({ agentId: targetAgentId, path: childPath });
     expect(result.status).toBe("ok");
-    expect(childOwner.readSession(childKey, authority)?.entry).toMatchObject({
+    expect(childOwner?.readSession(childKey, authority)?.entry).toMatchObject({
       incognito: true,
       spawnedBy: parentKey,
       parentSessionKey: parentKey,

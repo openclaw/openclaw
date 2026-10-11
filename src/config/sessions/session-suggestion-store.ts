@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
-  type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { sessionMetadataExpectedEntryMatches } from "./session-accessor.sqlite-owner.js";
@@ -30,12 +29,8 @@ function assertSuggestionExpectedEntry(
   database: OpenClawAgentDatabase,
   sessionKey: string,
   expectedEntry: SessionMetadataExpectedEntry | undefined,
-  options: OpenClawAgentDatabaseOptions,
 ): void {
-  if (
-    expectedEntry &&
-    !sessionMetadataExpectedEntryMatches(database, sessionKey, expectedEntry, options)
-  ) {
+  if (expectedEntry && !sessionMetadataExpectedEntryMatches(database, sessionKey, expectedEntry)) {
     throw new SessionWorkStartInvalidatedError("session changed before suggestion mutation");
   }
 }
@@ -63,7 +58,7 @@ export function addSessionSuggestion(
   };
   runOpenClawAgentWriteTransaction(
     (database) => {
-      assertSuggestionExpectedEntry(database, sessionKey, params.expectedEntry, options);
+      assertSuggestionExpectedEntry(database, sessionKey, params.expectedEntry);
       return addSessionSuggestionInDatabase(database, sessionKey, {
         suggestion,
         expectedSessionId: params.expectedSessionId,
@@ -84,7 +79,7 @@ export function claimSessionSuggestionDispatch(
   const { sessionKey } = resolved;
   return runOpenClawAgentWriteTransaction(
     (database) => {
-      assertSuggestionExpectedEntry(database, sessionKey, params.expectedEntry, options);
+      assertSuggestionExpectedEntry(database, sessionKey, params.expectedEntry);
       return claimSessionSuggestionDispatchInDatabase(database, sessionKey, params);
     },
     options,
@@ -115,7 +110,7 @@ export function finalizeSessionSuggestionClaim(
   const { sessionKey } = resolved;
   return runOpenClawAgentWriteTransaction(
     (database) => {
-      assertSuggestionExpectedEntry(database, sessionKey, params.expectedEntry, options);
+      assertSuggestionExpectedEntry(database, sessionKey, params.expectedEntry);
       return finalizeSessionSuggestionClaimInDatabase(database, sessionKey, params);
     },
     options,

@@ -13,7 +13,6 @@ import { buildRestartRecoveryExpectedState } from "../../config/sessions/session
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
-import { withNativeIncognitoTurnCompletion } from "./agent-runner-completion.native.js";
 import type { AgentTurnCompletion } from "./agent-runner-completion.types.js";
 import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
 import { retainReplyOperationUntilComplete } from "./reply-run-registry.state.js";
@@ -49,20 +48,6 @@ export async function withAgentTurnCompletion<T>(
   };
   assertCurrent();
   retainReplyOperationUntilComplete(operation);
-  const native = await withNativeIncognitoTurnCompletion(
-    {
-      agentId: params.agentId,
-      storePath,
-      sessionKey,
-      writer,
-      assertCurrent,
-      publish: (published) => params.publish(published),
-    },
-    consume,
-  );
-  if (native) {
-    return native.value;
-  }
   const result = await withSessionActor(
     { agentId: params.agentId, storePath, sessionKey },
     { assertCurrent, assertReadable: assertCurrent },
@@ -130,7 +115,7 @@ export async function withAgentTurnCompletion<T>(
               {
                 commandId: randomUUID(),
                 phaseId: `complete:${operationKey}`,
-                expected: snapshot.version,
+                expected: actor.target.database.kind === "memory" ? undefined : snapshot.version,
                 reducers,
                 bookkeeping: {
                   sessionId: expected.sessionId,

@@ -2272,7 +2272,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/config/sessions/session-sqlite-target.ownership.test.ts",
   "src/config/sessions/session-sqlite-target.worker.test.ts",
   "src/config/sessions/session-transcript-projection-rebuild.test.ts",
-  "src/config/sessions/session-transcript-reconcile-memory.test.ts",
   "src/config/sessions/session-transcript-reconcile.admission.test.ts",
   "src/config/sessions/session-transcript-reconcile.imports.test.ts",
   "src/config/sessions/session-transcript-reconcile.lease.test.ts",

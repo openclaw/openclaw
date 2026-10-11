@@ -23,6 +23,8 @@ import {
   SessionTranscriptProjectionUnavailableError,
 } from "../../config/sessions/session-accessor.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import * as historyReaders from "../../config/sessions/session-transcript-worker-readers.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
@@ -247,45 +249,70 @@ describe("chat delivery watermark preparation", () => {
   });
 
   it.each([false, true])(
-    "keeps watermark and current-session SQLite with their owner (incognito=%s)",
+    "keeps watermark and current-session reads off the Gateway thread (incognito=%s)",
     async (incognito) => {
       await withOpenClawTestState({ label: "chat-watermark-owner" }, async () => {
-        const { dispatch, append } = await createReplyTranscriptFixture(
-          incognito ? "agent:main:dashboard:incognito-watermark" : undefined,
-        );
-        await dispatch.runAgentMediaTranscript(
-          { run: async (operation) => operation() },
-          async () => {
-            const startingSql = observeHostDataSql();
-            try {
-              dispatch.captureAgentTranscriptStart();
-              expect(
-                startingSql.queries.filter((query) =>
+        const sessionKey = "agent:main:dashboard:incognito-watermark";
+        const run = async () => {
+          const { dispatch, append } = await createReplyTranscriptFixture(
+            incognito ? sessionKey : undefined,
+          );
+          await dispatch.runAgentMediaTranscript(
+            { run: async (operation) => operation() },
+            async () => {
+              const startingSql = observeHostDataSql();
+              try {
+                dispatch.captureAgentTranscriptStart();
+                expect(
+                  startingSql.queries.filter((query) =>
+                    /\bfrom\s+"?session_(?:nodes|participants)\b/i.test(query),
+                  ),
+                ).toEqual([]);
+              } finally {
+                startingSql.restore();
+              }
+              await append("answer", { role: "assistant", content: "Committed answer." });
+              const sql = observeHostDataSql();
+              try {
+                expect(await dispatch.resolveReplyDelivery()).toBe("delivered");
+                const watermarks = sql.queries.filter(
+                  (query) =>
+                    query.includes('from "transcript_events"') &&
+                    query.includes('from "transcript_rewrite_watermarks"'),
+                );
+                expect(watermarks).toEqual([]);
+                const sessionReads = sql.queries.filter((query) =>
                   /\bfrom\s+"?session_(?:nodes|participants)\b/i.test(query),
-                ),
-              ).toEqual([]);
-            } finally {
-              startingSql.restore();
-            }
-            await append("answer", { role: "assistant", content: "Committed answer." });
-            const sql = observeHostDataSql();
-            try {
-              expect(await dispatch.resolveReplyDelivery()).toBe("delivered");
-              const watermarks = sql.queries.filter(
-                (query) =>
-                  query.includes('from "transcript_events"') &&
-                  query.includes('from "transcript_rewrite_watermarks"'),
-              );
-              expect(watermarks.length > 0).toBe(incognito);
-              const sessionReads = sql.queries.filter((query) =>
-                /\bfrom\s+"?session_(?:nodes|participants)\b/i.test(query),
-              );
-              expect(sessionReads.length > 0).toBe(incognito);
-            } finally {
-              sql.restore();
-            }
-          },
-        );
+                );
+                expect(sessionReads).toEqual([]);
+              } finally {
+                sql.restore();
+              }
+            },
+          );
+        };
+        if (incognito) {
+          await withSessionActorStorage(
+            { sessionKey, agentId: "main" },
+            {
+              create: true,
+              lifetime: { assertCurrent() {}, assertReadable() {} },
+              authority: { assertCurrent() {}, authorize() {} },
+            },
+            async (binding) => {
+              try {
+                await run();
+              } finally {
+                memorySessionActorOwners.closeSession(
+                  { agentId: binding.agentId, path: binding.path },
+                  sessionKey,
+                );
+              }
+            },
+          );
+        } else {
+          await run();
+        }
       });
     },
   );

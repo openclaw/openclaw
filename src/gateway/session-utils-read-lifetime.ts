@@ -1,20 +1,14 @@
-import path from "node:path";
 import { getRuntimeConfig } from "../config/io.js";
 import { captureSessionEntryRead } from "../config/sessions/session-accessor.sqlite-entry-read-lifetime.js";
 import type { SessionEntryReadScope } from "../config/sessions/session-accessor.types.js";
 import type { SessionActorHotState } from "../config/sessions/session-actor-contract.js";
-import {
-  captureSessionActorStorageOwner,
-  getSessionActorStorageBinding,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { attachSessionEntrySnapshots } from "../config/sessions/session-entry-snapshot-values.js";
-import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { isOpenClawAgentDatabasePathCurrent } from "../state/openclaw-agent-db-identity.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import {
   findCanonicalStoreMatch,
@@ -29,10 +23,6 @@ function captureMemoryRead(params: {
   env?: NodeJS.ProcessEnv;
   projection?: SessionEntryReadScope["projection"];
 }) {
-  const binding = getSessionActorStorageBinding({});
-  if (!binding) {
-    return undefined;
-  }
   const cfg = params.cfg ?? getRuntimeConfig();
   const { canonicalKey, agentId } = resolveSessionStoreIdentity({
     cfg,
@@ -42,31 +32,34 @@ function captureMemoryRead(params: {
   if (!isIncognitoSessionKey(canonicalKey)) {
     return undefined;
   }
-  const requestedPath =
-    params.env && resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: params.env });
-  const captured = captureSessionActorStorageOwner({
-    agentId,
-    storePath: requestedPath,
-    sessionActor: binding,
-  });
-  const storePath =
-    captured?.path ??
-    resolveIncognitoOpenClawAgentSqlitePath({
-      agentId,
-      env: { OPENCLAW_STATE_DIR: path.resolve(binding.path, "../../../..") },
-    });
+  const captured = captureSessionActorStorageOwner(
+    { agentId, sessionKey: canonicalKey, env: params.env },
+    { assertCurrent() {}, authorize() {} },
+  );
+  if (!captured) {
+    throw new Error("Incognito session read requires a memory owner selection");
+  }
+  const { binding, authority, owner, path: storePath } = captured;
+  const assertCurrent = () => {
+    if (binding) {
+      binding.actor.assertReadable();
+    } else {
+      owner?.assertCurrent();
+    }
+    authority.assertCurrent();
+  };
   const read = () => {
     let snapshot: SessionActorHotState | undefined;
-    if (binding.actor.target.sessionKey === canonicalKey) {
-      snapshot = binding.actor.snapshot(binding.authority);
+    if (binding?.actor.target.sessionKey === canonicalKey) {
+      snapshot = binding.actor.snapshot(authority);
     } else {
-      binding.actor.assertReadable();
-      snapshot = captured?.owner.readSession(canonicalKey, binding.authority);
+      binding?.actor.assertReadable();
+      snapshot = owner?.readSession(canonicalKey, authority);
     }
     return snapshot?.entry && attachSessionEntrySnapshots(snapshot.entry, {}, params.projection);
   };
   return {
-    binding,
+    assertCurrent,
     read,
     loaded() {
       const entry = read();
@@ -115,86 +108,22 @@ export async function withGatewaySessionEntryReadOnly<T>(
           throw new Error("Session entry read is no longer retained");
         }
         params.assertActive?.();
-        memory.binding.actor.assertReadable();
-        memory.binding.authority.assertCurrent();
+        memory.assertCurrent();
       });
     } finally {
       active = false;
     }
   }
-  const binding = captureIncognitoSessionSource({
-    agentId: params.agentId,
-    sessionKey: params.key,
-    env: params.env,
-  });
-  if (!binding) {
-    const loaded = loadGatewaySessionEntryReadOnly(
-      params.key,
-      { agentId: params.agentId, env: params.env, projection: params.projection },
-      params.cfg,
-    );
-    if (params.excludeInternalEffects) {
-      omitInternalSessionEffectsEntries(loaded.store, loaded.storeKeys);
-      loaded.entry = findCanonicalStoreMatch(loaded.store, loaded.storeKeys)?.entry;
-    }
-    return consume(loaded, () => params.assertActive?.());
+  const loaded = loadGatewaySessionEntryReadOnly(
+    params.key,
+    { agentId: params.agentId, env: params.env, projection: params.projection },
+    params.cfg,
+  );
+  if (params.excludeInternalEffects) {
+    omitInternalSessionEffectsEntries(loaded.store, loaded.storeKeys);
+    loaded.entry = findCanonicalStoreMatch(loaded.store, loaded.storeKeys)?.entry;
   }
-  const { agentId, canonicalKey } = resolveSessionStoreIdentity({
-    cfg: params.cfg,
-    sessionKey: params.key,
-    agentId: params.agentId,
-  });
-  const owner = "kind" in binding ? binding : binding.actor;
-  captureIncognitoSessionSource({
-    agentId,
-    sessionKey: canonicalKey,
-    storePath: owner.path,
-    env: params.env,
-  });
-  const assertCurrent = () => {
-    params.assertActive?.();
-    binding.admissionSignal?.throwIfAborted();
-    if ("kind" in binding) {
-      binding.assertCurrent();
-    } else {
-      binding.actor.assertReadable();
-    }
-  };
-  const run = async () => {
-    assertCurrent();
-    const entry =
-      "kind" in binding
-        ? undefined
-        : (
-            await binding.actor.sessions.read(
-              { assertCurrent },
-              { sessionKey: canonicalKey },
-              binding.admissionSignal,
-            )
-          ).entry;
-    assertCurrent();
-    const store = entry ? { [canonicalKey]: entry } : {};
-    if (params.excludeInternalEffects) {
-      omitInternalSessionEffectsEntries(store, [canonicalKey]);
-    }
-    const result = await consume(
-      {
-        cfg: params.cfg,
-        agentId,
-        canonicalKey,
-        storePath: owner.path,
-        storeKeys: [canonicalKey],
-        store,
-        entry: store[canonicalKey],
-        legacyKey: undefined,
-        readSource: { agentId, path: owner.path },
-      },
-      assertCurrent,
-    );
-    assertCurrent();
-    return result;
-  };
-  return "kind" in binding ? run() : binding.actor.sessions.withSharedState(run);
+  return consume(loaded, () => params.assertActive?.());
 }
 
 /** Retain the selected row and physical owner through asynchronous metadata preparation. */
@@ -213,8 +142,7 @@ export function retainGatewaySessionEntryReadOnly(
         return false;
       }
       try {
-        memory.binding.actor.assertReadable();
-        memory.binding.authority.assertCurrent();
+        memory.assertCurrent();
         return true;
       } catch {
         return false;

@@ -21,7 +21,10 @@ import {
 } from "../config/sessions/paths.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { listSessionTranscriptArchivesReadOnly } from "../config/sessions/session-accessor.sqlite-history.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import {
+  captureSessionActorStorageOwner,
+  withSessionActorStorage,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
   listDurableSqliteTargetPathsForSessionStorePath,
@@ -38,11 +41,6 @@ import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveRealpathOrAbsolute } from "./boundary-path.js";
 import { hasErrnoCode } from "./errno.js";
-import {
-  readIncognitoUsageTranscript,
-  captureUsageCostIncognitoBinding,
-  type UsageCostIncognitoBinding,
-} from "./session-cost-usage-incognito.js";
 import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
 
 const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
@@ -360,38 +358,46 @@ export async function resolveUsageCostTranscriptFiles(
 
 export async function* readTranscriptRecords(
   filePath: string,
-  incognito?: UsageCostIncognitoBinding,
 ): AsyncGenerator<Record<string, unknown>> {
   const marker = parseSqliteSessionFileMarker(filePath);
-  if (incognito && !marker) {
-    throw new Error("Usage actor transcript requires its captured SQLite marker");
-  }
   if (marker) {
-    const memory = getSessionActorStorageBinding(marker);
+    const signal = getAsyncWorkSignal();
+    const authority = {
+      assertCurrent: () => signal?.throwIfAborted(),
+      authorize() {},
+    };
+    const memory = captureSessionActorStorageOwner(marker, authority);
     let events: unknown[];
     if (memory) {
-      const rows = await memory.actor.storage!.read(
-        {
-          type: "session.usage.snapshot",
-          input: { sessionIds: [marker.sessionId], includeEvents: true },
-        },
-        memory.authority,
-      );
-      events = (rows[0]?.events ?? []).map(({ eventJson }): unknown => JSON.parse(eventJson));
-    } else if (incognito) {
-      events = await readIncognitoUsageTranscript(incognito, marker);
+      events =
+        (await withSessionActorStorage(
+          marker,
+          {
+            authority: memory.authority,
+            lifetime: {
+              assertCurrent: () => memory.authority.assertCurrent(),
+              assertReadable: () => memory.authority.assertCurrent(),
+            },
+          },
+          async (binding) => {
+            const rows = await binding.actor.storage.read(
+              {
+                type: "session.usage.snapshot",
+                input: { sessionIds: [marker.sessionId], includeEvents: true },
+              },
+              binding.authority,
+            );
+            return (rows[0]?.events ?? []).map(({ eventJson }): unknown => JSON.parse(eventJson));
+          },
+        )) ?? [];
     } else {
       events = await loadTranscriptEvents(marker);
     }
     for (const event of selectVisibleTranscriptEvents(events)) {
-      incognito?.actor.assertCurrent();
-      incognito?.authority.assertCurrent();
       if (isRecord(event)) {
         yield event;
       }
     }
-    incognito?.actor.assertCurrent();
-    incognito?.authority.assertCurrent();
     return;
   }
   // Durable byte-offset scans own their checkpoint reader. Diagnostic history
@@ -411,10 +417,9 @@ export async function* readTranscriptRecords(
 
 export async function* readTranscriptRecordsBestEffort(
   filePath: string,
-  incognito?: UsageCostIncognitoBinding,
 ): AsyncGenerator<Record<string, unknown>> {
   try {
-    yield* readTranscriptRecords(filePath, incognito);
+    yield* readTranscriptRecords(filePath);
   } catch (error) {
     if (parseSqliteSessionFileMarker(filePath)) {
       throw error;
@@ -428,7 +433,6 @@ export async function resolveUsageSessionSource(input: {
   sessionId?: string;
   sessionFile?: string;
   agentId: string;
-  incognito?: UsageCostIncognitoBinding;
   sessionTarget?: {
     agentId: string;
     sessionId: string;
@@ -436,7 +440,7 @@ export async function resolveUsageSessionSource(input: {
     storePath: string;
   };
 }): Promise<{ sessionFile: string; entry?: SessionEntry } | undefined> {
-  const params = { ...input, incognito: captureUsageCostIncognitoBinding(input) };
+  const params = input;
   const signal = getAsyncWorkSignal();
   const assertCurrent = () => signal?.throwIfAborted();
   assertCurrent();
@@ -458,48 +462,33 @@ export async function resolveUsageSessionSource(input: {
     ) {
       return undefined;
     }
-    const memory = getSessionActorStorageBinding({ agentId, sessionKey, storePath });
+    const authority = { assertCurrent, authorize() {} };
+    const memory = captureSessionActorStorageOwner({ agentId, sessionKey, storePath }, authority);
     if (memory) {
-      const entry = await memory.actor.storage!.read(
-        { type: "session.entry.read", input: {} },
-        memory.authority,
+      return withSessionActorStorage(
+        { agentId, sessionKey, storePath },
+        {
+          authority: memory.authority,
+          lifetime: { assertCurrent, assertReadable: assertCurrent },
+        },
+        async (binding) => {
+          const entry = await binding.actor.storage.read(
+            { type: "session.entry.read", input: {} },
+            binding.authority,
+          );
+          if (entry && entry.sessionId !== targetSessionId) {
+            return undefined;
+          }
+          return {
+            entry,
+            sessionFile: formatSqliteSessionFileMarker({
+              agentId,
+              sessionId: targetSessionId,
+              storePath: binding.path,
+            }),
+          };
+        },
       );
-      if (entry && entry.sessionId !== targetSessionId) {
-        return undefined;
-      }
-      return {
-        entry,
-        sessionFile: formatSqliteSessionFileMarker({
-          agentId,
-          sessionId: targetSessionId,
-          storePath: memory.path,
-        }),
-      };
-    }
-    if (params.incognito) {
-      const { actor, authority } = params.incognito;
-      const selected = params.incognito.target;
-      if (
-        actor.agentId !== agentId ||
-        actor.path !== path.resolve(storePath) ||
-        (selected && (selected.sessionKey !== sessionKey || selected.sessionId !== targetSessionId))
-      ) {
-        throw new Error("Usage session source belongs to another actor");
-      }
-      params.incognito.retainSource?.(sessionKey);
-      const read = await actor.sessions.read(authority, { sessionKey }, signal);
-      if (read.entry && read.entry.sessionId !== targetSessionId) {
-        return undefined;
-      }
-      read.claim.assertCurrent();
-      return {
-        entry: read.entry,
-        sessionFile: formatSqliteSessionFileMarker({
-          agentId,
-          sessionId: targetSessionId,
-          storePath: actor.path,
-        }),
-      };
     }
     return withSessionEntryReadOnlyInWorker(
       { agentId, sessionKey, storePath, projection: "list" },

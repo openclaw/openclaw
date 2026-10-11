@@ -21,8 +21,7 @@ import {
   loadSessionEntryReadOnly,
   type SessionAccessScope,
 } from "../../config/sessions/session-accessor.js";
-import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import { captureMemoryExactSessionReader } from "../../config/sessions/session-accessor.memory-exact-read.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   getSessionEntryAsync,
@@ -99,69 +98,51 @@ async function runWithSessionWorkAdmission<T>(
   run: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
   const params = { ...input };
-  const source = captureIncognitoSessionSource(params);
-  if (source && !("kind" in source)) {
-    return source.actor.sessions.withSharedState(() => runAdmittedWork());
-  }
-  return runAdmittedWork();
+  const memory = captureMemoryExactSessionReader(params, () => params.signal?.throwIfAborted());
+  const initialEntry = memory
+    ? memory.read(params.sessionKey, "list")
+    : getSessionEntry({
+        storePath: params.storePath,
+        sessionKey: params.sessionKey,
+        readConsistency: "latest",
+      });
+  const lifecycleAbortController = new AbortController();
+  const admission = await beginSessionWorkAdmission({
+    scope: params.storePath,
+    identities: [params.sessionKey, initialEntry?.sessionId],
+    signal: params.signal,
+    onInterrupt: () =>
+      lifecycleAbortController.abort(
+        new Error("Agent work interrupted by a session lifecycle change."),
+      ),
+    assertAllowed: () => {
+      const currentEntry = memory
+        ? memory.read(params.sessionKey, "list")
+        : getSessionEntry({
+            storePath: params.storePath,
+            sessionKey: params.sessionKey,
+            readConsistency: "latest",
+          });
+      const changed = initialEntry
+        ? !currentEntry || currentEntry.sessionId !== initialEntry.sessionId
+        : Boolean(currentEntry);
+      if (changed) {
+        throw session.createSessionWorkStartChangedError(params.sessionKey);
+      }
+      const startError = session.resolveSessionWorkStartError(params.sessionKey, currentEntry);
+      if (startError) {
+        throw new Error(startError);
+      }
+    },
+  });
 
-  async function runAdmittedWork(): Promise<T> {
-    // Capture native identity before yielding so queued work cannot adopt a replacement.
-    const initialEntry = source
-      ? await readSessionEntryReadOnlyInWorker({
-          storePath: params.storePath,
-          sessionKey: params.sessionKey,
-          readConsistency: "latest",
-        })
-      : getSessionEntry({
-          storePath: params.storePath,
-          sessionKey: params.sessionKey,
-          readConsistency: "latest",
-        });
-    const lifecycleAbortController = new AbortController();
-    const admission = await beginSessionWorkAdmission({
-      scope: params.storePath,
-      identities: [params.sessionKey, initialEntry?.sessionId],
-      signal: params.signal,
-      onInterrupt: () =>
-        lifecycleAbortController.abort(
-          new Error("Agent work interrupted by a session lifecycle change."),
-        ),
-      assertAllowed: () => {
-        source?.admissionSignal?.throwIfAborted();
-        if (source && "kind" in source) {
-          source.assertCurrent();
-        }
-        const currentEntry = source
-          ? "kind" in source
-            ? undefined
-            : source.actor.sessions.readSharing(params.sessionKey)?.entry
-          : getSessionEntry({
-              storePath: params.storePath,
-              sessionKey: params.sessionKey,
-              readConsistency: "latest",
-            });
-        const changed = initialEntry
-          ? !currentEntry || currentEntry.sessionId !== initialEntry.sessionId
-          : Boolean(currentEntry);
-        if (changed) {
-          throw session.createSessionWorkStartChangedError(params.sessionKey);
-        }
-        const startError = session.resolveSessionWorkStartError(params.sessionKey, currentEntry);
-        if (startError) {
-          throw new Error(startError);
-        }
-      },
-    });
-
-    try {
-      const signal = params.signal
-        ? AbortSignal.any([params.signal, lifecycleAbortController.signal])
-        : lifecycleAbortController.signal;
-      return await admission.run(async () => await run(signal));
-    } finally {
-      admission.release();
-    }
+  try {
+    const signal = params.signal
+      ? AbortSignal.any([params.signal, lifecycleAbortController.signal])
+      : lifecycleAbortController.signal;
+    return await admission.run(async () => await run(signal));
+  } finally {
+    admission.release();
   }
 }
 

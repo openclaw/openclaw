@@ -1,7 +1,9 @@
 import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
 import { finishFailedGatewayHttpResponse } from "./http-common.js";
 import { HTTP_IMAGE_MAX_BYTES } from "./http-image-response.js";
@@ -43,7 +45,7 @@ const AVATAR_REFERENCE = "/state/media/inbound/channel-avatar.png";
 function avatarEntry(reference = AVATAR_REFERENCE) {
   return {
     delivery: {
-      kind: "external",
+      kind: "external" as const,
       route: { channel: "discord", target: { to: "user:1" } },
       context: { channel: "discord", to: "user:1" },
       origin: { provider: "discord", to: "user:1", avatar: reference },
@@ -84,6 +86,11 @@ describe("handleChannelAvatarHttpRequest", () => {
     });
   });
 
+  afterEach(() => {
+    memorySessionActorOwners.reset();
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
     authorityCurrent = true;
     mocks.authorize
@@ -112,6 +119,68 @@ describe("handleChannelAvatarHttpRequest", () => {
 
   const avatarRoute = (sessionKey: string) =>
     `http://127.0.0.1:${port}${buildControlUiChannelAvatarUrl("", sessionKey, "test-revision")}`;
+
+  it("serves current memory avatars and refuses bytes after the captured owner closes", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/channel-avatar");
+    const owner = memorySessionActorOwners.get({
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    });
+    const sessionKey = "agent:main:dashboard:incognito-avatar";
+    const authority = { assertCurrent() {}, authorize() {} };
+    const actor = await owner.acquire(
+      { sessionKey, database: owner.identity },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    const release = createDeferredCore();
+    let pending: Promise<Response> | undefined;
+    try {
+      const created = await actor.storage!.mutate(
+        {
+          type: "session.entry.create",
+          input: {
+            entry: { ...avatarEntry(), sessionId: "private-avatar", updatedAt: 1, incognito: true },
+          },
+        },
+        authority,
+      );
+      expect(created.kind).toBe("committed");
+      const initial = await fetch(avatarRoute(sessionKey));
+      expect(Buffer.from(await initial.arrayBuffer())).toEqual(PNG_BYTES);
+      expect(mocks.loadEntry).not.toHaveBeenCalled();
+      const patch = await actor.storage!.mutate(
+        {
+          type: "session.entry.patch",
+          input: {
+            operation: {
+              kind: "fields",
+              patch: avatarEntry("/state/media/inbound/new-private-avatar.png"),
+            },
+          },
+        },
+        authority,
+      );
+      expect(patch.kind).toBe("committed");
+      const reading = createDeferredCore();
+      mocks.readMedia.mockImplementationOnce(async () => {
+        reading.resolve();
+        await release.promise;
+        return { buffer: PNG_BYTES };
+      });
+      pending = fetch(avatarRoute(sessionKey));
+      await reading.promise;
+      memorySessionActorOwners.closeDatabase(owner);
+      release.resolve();
+      const response = await pending;
+      expect(response.status).not.toBe(200);
+      expect(response.headers.get("content-type")).not.toBe("image/png");
+      await response.arrayBuffer();
+    } finally {
+      release.resolve();
+      await pending;
+      await actor.release();
+    }
+  });
 
   it("rejects revoked authority while channel avatar bytes are loading", async () => {
     const reading = createDeferredCore();

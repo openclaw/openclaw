@@ -9,7 +9,7 @@ import {
   applySessionEntryReplacements,
   loadExactSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import { preparePhysicalSessionStorePath } from "../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isTrustedMessageActionTurnIngress } from "../../gateway/message-action-turn-capability.js";
@@ -179,21 +179,11 @@ type ResumeMainSessionParams = {
 export async function resumeMainSession(
   params: ResumeMainSessionParams,
 ): Promise<MainSessionResumeResult> {
-  const source = captureIncognitoSessionSource(params);
-  const claim =
-    source && !("kind" in source)
-      ? source.actor.sessions.captureCurrent(params.sessionKey)
-      : undefined;
+  const source = captureSessionEntryMetadataRead(params, () => {});
   const isCurrent = () => {
-    if (source && "kind" in source) {
-      source.assertCurrent();
-      return false;
-    }
-    source?.admissionSignal?.throwIfAborted();
-    claim?.assertCurrent();
     return (
       (source
-        ? source.actor.sessions.readCapability(params.sessionKey)?.sessionId
+        ? source.readCurrent()?.sessionId
         : loadExactSessionEntry({ ...params, readConsistency: "latest" })?.entry.sessionId) ===
       params.entry.sessionId
     );
@@ -221,22 +211,13 @@ async function resumeMainSessionWithinAdmission(
     return "skipped";
   }
   const harnessCompletion = params.entry.restartRecoveryHarnessCompletion;
-  const source = captureIncognitoSessionSource(params);
-  const claim =
-    source && !("kind" in source)
-      ? source.actor.sessions.captureCurrent(params.sessionKey)
-      : undefined;
+  const source = captureSessionEntryMetadataRead(params, () => {});
   const taskRemainsOwed = () => {
     params.assertCompletionCurrent?.();
     if (!harnessCompletion) {
       return true;
     }
-    if (source && "kind" in source) {
-      source.assertCurrent();
-      return false;
-    }
-    claim?.assertCurrent();
-    const entry = source ? source.actor.sessions.readSteering(params.sessionKey) : params.entry;
+    const entry = source ? source.readCurrent() : params.entry;
     return Boolean(entry && getOwedHarnessCompletionTask(harnessCompletion, entry));
   };
   if (!taskRemainsOwed()) {

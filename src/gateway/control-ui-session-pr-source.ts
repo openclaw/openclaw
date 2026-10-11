@@ -1,18 +1,11 @@
 import path from "node:path";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import {
-  captureIncognitoSessionBinding,
-  withIncognitoSessionActor,
-} from "../config/sessions/session-incognito-binding.js";
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { captureSessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { createOpenClawAgentDatabaseClaim } from "../state/openclaw-agent-db-identity.js";
-import {
-  agentDatabaseLifecycle,
-  isIncognitoOpenClawAgentDatabase,
-  retainAgentDatabase,
-} from "../state/openclaw-agent-db-lifecycle.js";
 import { registerOpenClawAgentDatabaseSyncResource } from "../state/openclaw-agent-db-resources.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 
@@ -22,72 +15,44 @@ export async function withControlUiSessionPrSource<T>(
   operation: (assertCurrent: () => void, sourceIdentity: string) => Promise<T>,
 ): Promise<T> {
   const target = { agentId: normalizeAgentId(source.agentId), path: path.resolve(source.path) };
-  const memory = getSessionActorStorageBinding({
+  const selected = getSessionActorStorageBinding({
     agentId: target.agentId,
     storePath: target.path,
   });
-  if (memory) {
+  if (selected) {
     const assertCurrent = () => {
-      memory.authority.assertCurrent();
-      memory.actor.assertReadable();
+      selected.authority.assertCurrent();
+      selected.actor.assertReadable();
     };
-    return operation(assertCurrent, JSON.stringify(memory.actor.target.database));
-  }
-  const binding = captureIncognitoSessionBinding({
-    agentId: target.agentId,
-    storePath: target.path,
-  });
-  if (binding) {
-    return withIncognitoSessionActor(
-      binding.actor,
-      async () => {
-        const assertCurrent = () => {
-          binding.admissionSignal?.throwIfAborted();
-          binding.actor.assertReadable();
-        };
-        assertCurrent();
-        const result = await operation(
-          assertCurrent,
-          `incognito:${binding.actor.identity.incarnation}`,
-        );
-        assertCurrent();
-        return result;
-      },
-      binding.admissionSignal,
-    );
+    return operation(assertCurrent, JSON.stringify(selected.actor.target.database));
   }
   const unregister: Array<() => void> = [];
   let active = true;
-  let releaseNative = () => {};
   const changed = () => new Error("Session PR source changed or closed. Retry the request.");
   try {
     let paths: string[];
     let assertSource: () => void;
     let sourceIdentity: string;
     if (isIncognitoOpenClawAgentSqlitePath(target.path, target)) {
-      // Borrow the already selected native owner without opening or querying SQLite.
-      const database = agentDatabaseLifecycle.databases.get(target.path);
-      if (
-        !database?.db.isOpen ||
-        database.agentId !== target.agentId ||
-        !isIncognitoOpenClawAgentDatabase(database)
-      ) {
-        throw changed();
-      }
-      releaseNative = retainAgentDatabase(database.db);
-      const claim = createOpenClawAgentDatabaseClaim(database, releaseNative);
-      releaseNative = claim.release;
-      sourceIdentity = `incognito:${claim.incarnation}`;
-      paths = [target.path];
-      assertSource = () => {
-        claim.assertCurrent();
-        if (
-          agentDatabaseLifecycle.databases.get(target.path) !== database ||
-          !isIncognitoOpenClawAgentDatabase(database)
-        ) {
+      const assertActive = () => {
+        if (!active) {
           throw changed();
         }
       };
+      const captured = captureSessionActorStorageOwner(
+        { agentId: target.agentId, storePath: target.path },
+        { assertCurrent: assertActive, authorize: assertActive },
+      );
+      const owner = captured?.owner;
+      if (!captured || !owner) {
+        throw changed();
+      }
+      const assertCurrent = () => {
+        captured.authority.assertCurrent();
+        owner.assertCurrent();
+      };
+      assertCurrent();
+      return await operation(assertCurrent, JSON.stringify(owner.identity));
     } else {
       const candidate = captureSessionStoreReadCandidate(target.path);
       const identity = readDatabasePathIdentitySync(candidate.path);
@@ -112,7 +77,9 @@ export async function withControlUiSessionPrSource<T>(
           revoke: () => {
             active = false;
           },
-          close: () => releaseNative(),
+          close: () => {
+            active = false;
+          },
         }),
       );
     }
@@ -129,6 +96,5 @@ export async function withControlUiSessionPrSource<T>(
     for (const release of unregister.toReversed()) {
       release();
     }
-    releaseNative();
   }
 }

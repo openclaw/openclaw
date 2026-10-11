@@ -1,12 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { isMainThread } from "node:worker_threads";
-import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import type { SessionTranscriptWriteScope } from "./session-accessor.sqlite-contract.js";
 import {
   captureLifecycleDatabaseScope,
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
-  type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
 import {
@@ -14,9 +12,13 @@ import {
   rewriteTranscriptMessageAtAnchor,
 } from "./session-accessor.sqlite-transcript-message-rewrite.js";
 import type { SessionTranscriptAccessScope } from "./session-accessor.types.js";
+import {
+  captureSessionActorStorageOwner,
+  withSessionActorStorage,
+} from "./session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import type { SessionEntryReadSource } from "./session-entry-read-source.types.js";
-import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { executeSessionMessageRewriteOperation } from "./session-message-rewrite-domain.js";
 import type {
   SessionMessageRewriteCommitted,
@@ -32,59 +34,73 @@ import {
 
 /** Bundled pure preparation; opaque public callbacks retain their transaction-local adapter. */
 async function rewritePreparedTranscriptMessage<T>(params: {
-  scope: ResolvedTranscriptScope;
+  scope: SessionTranscriptWriteScope;
+  readSource?: SessionEntryReadSource;
   target: SessionMessageRewriteSelection["target"];
   expectedEntry?: SessionMessageRewriteSelection["expectedEntry"];
   prepare(message: unknown): T | undefined;
   assertCurrent?: () => void;
 }): Promise<{ generation: string; messageId: string; message: T } | null> {
-  const scope = captureLifecycleDatabaseScope(params.scope);
+  const requested = params.readSource
+    ? { ...params.scope, agentId: params.readSource.agentId, storePath: params.readSource.path }
+    : params.scope;
+  const assertCurrent = () => params.assertCurrent?.();
+  const authority = { assertCurrent, authorize: assertCurrent };
+  if (captureSessionActorStorageOwner(requested, authority)) {
+    const captured = await withSessionActorStorage(
+      requested,
+      { authority, lifetime: { assertCurrent, assertReadable: assertCurrent } },
+      async (memory) => {
+        const scope = {
+          ...requested,
+          agentId: memory.agentId,
+          storePath: memory.path,
+          sessionId:
+            requested.sessionId ?? memory.actor.snapshot(memory.authority)?.entry?.sessionId,
+        };
+        if (!scope.sessionId) {
+          return { result: null };
+        }
+        const input = {
+          scope: { ...scope, sessionId: scope.sessionId },
+          target: params.target,
+          expectedEntry: params.expectedEntry,
+        };
+        const expected = await memory.actor.storage.read(
+          { type: "session.rewrite.prepare", input },
+          memory.authority,
+        );
+        assertCurrent();
+        if (!expected) {
+          return { result: null };
+        }
+        const message = params.prepare(expected.event.message);
+        const committed = readSessionActorStorageResult(
+          await memory.actor.storage.mutate(
+            { type: "session.rewrite.commit", input: { ...input, expected, message } },
+            memory.authority,
+          ),
+        );
+        // SAFETY: This invocation's typed preparer is the only source of the replacement message.
+        return {
+          result: committed.result as { generation: string; messageId: string; message: T } | null,
+        };
+      },
+    );
+    if (!captured) {
+      throw new SessionTranscriptWriterClaimReboundError();
+    }
+    return captured.result;
+  }
+  const scope = captureLifecycleDatabaseScope(
+    resolveSqliteTranscriptScope(requested, params.readSource),
+  );
   const database = { ...toDatabaseOptions(scope), path: scope.path };
   const selection = structuredClone({
     scope,
     target: params.target,
     expectedEntry: params.expectedEntry,
   });
-  const incognito = captureIncognitoSessionOperation({ ...scope, storePath: scope.path });
-  if (incognito) {
-    const { actor } = incognito;
-    const authority = {
-      assertCurrent() {
-        incognito.authority.assertCurrent();
-        params.assertCurrent?.();
-      },
-    };
-    const input = {
-      sessionKey: scope.sessionKey,
-      sessionId: scope.sessionId,
-      fence: {},
-      target: selection.target,
-      expectedEntry: selection.expectedEntry,
-    };
-    return actor.sessions.withSharedState(async () => {
-      const expected = await actor.sessions.transcript(
-        authority,
-        {
-          type: "session.rewrite.prepare",
-          input,
-        },
-        incognito.admissionSignal,
-      );
-      authority.assertCurrent();
-      if (!expected) {
-        return null;
-      }
-      const message = params.prepare(expected.event.message);
-      authority.assertCurrent();
-      incognito.admissionSignal?.throwIfAborted();
-      const { result } = await actor.sessions.transcript(authority, {
-        type: "session.rewrite.commit",
-        input: { ...input, expected, message },
-      });
-      // SAFETY: This invocation's typed preparer is the only source of the replacement message.
-      return result as { generation: string; messageId: string; message: T } | null;
-    });
-  }
   return await runSessionEntryWorkerOperation<
     SessionMessageRewriteCommitted,
     { generation: string; messageId: string; message: T } | null
@@ -140,13 +156,7 @@ export async function rewritePreparedTranscriptMessageAtAnchor<T>(
     "assertCurrent" | "expectedEntry"
   > & { active?: "exact" | "sequence"; assertNativeCurrent?: () => void } = {},
 ) {
-  const scope = resolveSqliteTranscriptScope(anchor);
-  if (
-    !isMainThread ||
-    (!captureIncognitoSessionOperation(anchor) &&
-      !supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(scope)))
-  ) {
-    // Process-held incognito and native maintenance retain their current transaction owner.
+  if (!isMainThread) {
     return rewriteTranscriptMessageAtAnchor(anchor, (message) => {
       options.assertCurrent?.();
       options.assertNativeCurrent?.();
@@ -165,7 +175,7 @@ export async function rewritePreparedTranscriptMessageAtAnchor<T>(
   }
   return rewritePreparedTranscriptMessage({
     ...options,
-    scope,
+    scope: anchor,
     target: { kind: "anchor", anchor, active: options.active },
     prepare,
   });
@@ -178,12 +188,8 @@ export async function rewritePreparedAssistantTranscriptMessageForRun(params: {
   expectedLifecycleRevision: SessionLifecycleRevisionExpectation;
   rewriteMessage(message: Record<string, unknown>): Record<string, unknown>;
 }): Promise<{ messageId: string } | null> {
-  const resolved = resolveSqliteTranscriptScope(params.scope, params.readSource);
-  if (
-    !isMainThread ||
-    (!captureIncognitoSessionOperation(params.scope) &&
-      !supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(resolved)))
-  ) {
+  if (!isMainThread) {
+    const resolved = resolveSqliteTranscriptScope(params.scope, params.readSource);
     return rewriteAssistantTranscriptMessageForRun(
       params,
       params.readSource ? resolved : undefined,
@@ -200,7 +206,8 @@ export async function rewritePreparedAssistantTranscriptMessageForRun(params: {
     throw new SessionTranscriptWriterClaimReboundError();
   }
   const result = await rewritePreparedTranscriptMessage({
-    scope: resolved,
+    scope: params.scope,
+    readSource: params.readSource,
     target: { kind: "terminal-assistant", runId: params.runId },
     expectedEntry: {
       lifecycleRevision: params.expectedLifecycleRevision ?? null,

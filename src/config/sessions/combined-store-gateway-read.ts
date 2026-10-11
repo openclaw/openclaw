@@ -1,11 +1,9 @@
+import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { prepareAgentDatabaseDeletionSnapshotRead } from "../../state/agent-deletion-journal.read.js";
-import {
-  readOpenClawAgentDatabaseRegistryToken,
-  readOpenIncognitoAgentDatabaseGeneration,
-} from "../../state/openclaw-agent-db.js";
+import { readOpenClawAgentDatabaseRegistryToken } from "../../state/openclaw-agent-db.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -17,10 +15,7 @@ import {
 } from "./combined-store-gateway.js";
 import { storeTargetKey } from "./combined-store-paths.js";
 import type { SessionEntrySummary } from "./session-accessor.types.js";
-import {
-  captureIncognitoSessionTopology,
-  withIncognitoSessionStoreEntries,
-} from "./session-incognito-binding.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import {
   assertSessionStoreReadCandidate,
   captureSessionStoreCandidateIdentities,
@@ -36,20 +31,19 @@ export async function loadCombinedSessionStoreForGatewayCoreAsync(
   opts: Omit<GatewaySessionStoreOptions, "loadEntries" | "onStoreLoaded"> = {},
 ): Promise<GatewayCombinedSessionStore> {
   const ambientStateDir = resolveStateDir(process.env);
-  const topology = opts.includeIncognito === false ? undefined : captureIncognitoSessionTopology();
-  const env = cloneEnvWithPlatformSemantics(opts.discovery?.env ?? topology?.env ?? process.env);
+  const selected =
+    opts.includeIncognito === false
+      ? undefined
+      : captureSessionActorStorageOwner({ env: opts.discovery?.env });
+  const env = cloneEnvWithPlatformSemantics(
+    opts.discovery?.env ??
+      (selected
+        ? { ...process.env, OPENCLAW_STATE_DIR: path.resolve(selected.path, "../../../..") }
+        : process.env),
+  );
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
-  if (topology && env.OPENCLAW_STATE_DIR !== resolveStateDir(topology.env)) {
-    throw new Error("Combined discovery belongs to another incognito state root");
-  }
   const options = { ...opts, ...(opts.discovery && { discovery: { ...opts.discovery, env } }) };
-  const captured = { env, ambientStateDir };
-  const result = topology
-    ? withIncognitoSessionStoreEntries(
-        (stores) => loadCombinedSessionStore(cfg, options, captured, stores),
-        options.projection ?? "list",
-      )
-    : loadCombinedSessionStore(cfg, options, captured);
+  const result = loadCombinedSessionStore(cfg, options, { env, ambientStateDir });
   return result.then((value) => {
     if (resolveStateDir(process.env) !== ambientStateDir) {
       throw new Error("Session stores changed while preparing the listing. Retry the request.");
@@ -63,11 +57,6 @@ async function loadCombinedSessionStore(
   cfg: OpenClawConfig,
   options: Omit<GatewaySessionStoreOptions, "loadEntries" | "onStoreLoaded">,
   captured: { env: NodeJS.ProcessEnv; ambientStateDir: string },
-  incognitoStores?: readonly {
-    agentId: string;
-    storePath: string;
-    entries: SessionEntrySummary[];
-  }[],
 ): Promise<GatewayCombinedSessionStore> {
   const { env, ambientStateDir } = captured;
   const read = async (
@@ -75,20 +64,7 @@ async function loadCombinedSessionStore(
     readOptions: typeof options,
     capturedIdentities: ReturnType<typeof captureSessionStoreCandidateIdentities>,
   ): Promise<GatewayCombinedSessionStore> => {
-    const prepared = prepareCombinedSessionStore(
-      config,
-      incognitoStores ? { ...readOptions, includeIncognito: false } : readOptions,
-    );
-    if (incognitoStores) {
-      prepared.targets = {
-        ...prepared.targets,
-        incognitoTargets: incognitoStores.filter(
-          (store) =>
-            !prepared.targets.requestedAgentId ||
-            store.agentId === prepared.targets.requestedAgentId,
-        ),
-      };
-    }
+    const prepared = prepareCombinedSessionStore(config, readOptions);
     const identities = prepared.reads.map(
       ({ storeTarget }) =>
         capturedIdentities.get(storeTarget.storePath) ??
@@ -96,7 +72,6 @@ async function loadCombinedSessionStore(
     );
     // Preparation can refresh registry discovery; retain its resulting topology generation.
     const registryToken = readOpenClawAgentDatabaseRegistryToken();
-    const incognitoGeneration = readOpenIncognitoAgentDatabaseGeneration();
     // Windows environment proxies cannot cross the worker boundary.
     const transferEnv = { ...env, OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR };
     return await withSessionHistoryWorkerDatabases(
@@ -129,24 +104,13 @@ async function loadCombinedSessionStore(
         }
         if (
           resolveStateDir(process.env) !== ambientStateDir ||
-          registryToken !== readOpenClawAgentDatabaseRegistryToken() ||
-          (!incognitoStores && incognitoGeneration !== readOpenIncognitoAgentDatabaseGeneration())
+          registryToken !== readOpenClawAgentDatabaseRegistryToken()
         ) {
           throw new Error("Session stores changed while preparing the listing. Retry the request.");
         }
-        // The merger rechecks admission and reads process-local incognito handles at consumption.
-        return mergeCombinedSessionStore(
-          config,
-          readOptions,
-          prepared,
-          (target) =>
-            expectDefined(entries.get(storeTargetKey(target)), "prepared session entries"),
-          incognitoStores &&
-            ((target) =>
-              expectDefined(
-                incognitoStores.find((store) => store.storePath === target.storePath),
-                "captured actor",
-              ).entries),
+        // Memory entries are read once, when the complete listing is assembled.
+        return mergeCombinedSessionStore(config, readOptions, prepared, (target) =>
+          expectDefined(entries.get(storeTargetKey(target)), "prepared session entries"),
         );
       },
     );

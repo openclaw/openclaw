@@ -12,7 +12,6 @@ import { captureSqliteReaderOwner, type SqliteReaderOwner } from "./sqlite-reade
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import {
   SQLITE_WORKER_PREPARE_COMMAND,
-  type SqliteWorkerEphemeralTarget,
   type SqliteWorkerPreparedBackend,
 } from "./sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
@@ -88,9 +87,9 @@ function waitForFile(file: string): Promise<void> {
 
 export function createSqliteWorkerBackend(
   input: FixtureOpenInput | undefined,
-  context: { databasePath: string; target?: SqliteWorkerEphemeralTarget },
+  context: { databasePath: string },
 ): SqliteWorkerPreparedBackend<FixtureOperations> {
-  return createFixtureBackend(input, context.target ? ":memory:" : context.databasePath, false);
+  return createFixtureBackend(input, context.databasePath, false);
 }
 
 export function openExistingSqliteWorkerBackend(

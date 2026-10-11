@@ -1,12 +1,13 @@
 import { isDeepStrictEqual } from "node:util";
-import { ok } from "@openclaw/normalization-core/result";
 import { getRuntimeConfig } from "../config/config.js";
 import { retainPreparedSessionEntryPredicate } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import {
+  acquireSessionActorStorage,
+  captureSessionActorStorageOwner,
+  runWithSessionActorStorage,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { captureSessionEntryCurrentRead } from "../config/sessions/session-entry-current-runtime.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
-import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
@@ -65,92 +66,96 @@ export async function withGatewayWorkerSessionAdmission<T>(
 ): Promise<T> {
   const getConfig = params.getConfig ?? getRuntimeConfig;
   const scope = params.identity;
-  const memory = getSessionActorStorageBinding(scope);
+  const assertCallerCurrent = () => {
+    params.signal?.throwIfAborted();
+    params.authorize?.();
+  };
+  const authority = { assertCurrent: assertCallerCurrent, authorize: assertCallerCurrent };
+  const namespace = captureSessionActorStorageOwner(scope, authority);
+  const memory =
+    namespace &&
+    (await acquireSessionActorStorage(scope, {
+      authority,
+      lifetime: { assertCurrent: assertCallerCurrent, assertReadable: assertCallerCurrent },
+    }));
+  if (namespace && !memory) {
+    throw new WorkerPlacementAdmissionTargetError("Worker session source is unavailable; retry.");
+  }
   if (memory) {
-    const entry = memory.actor.snapshot(memory.authority)?.entry;
-    if (
-      !entry ||
-      entry.sessionId !== scope.sessionId ||
-      entry.archivedAt !== undefined ||
-      (params.expectedEntry && entry.lifecycleRevision !== params.expectedEntry.lifecycleRevision)
-    ) {
-      throw new WorkerPlacementAdmissionTargetError("Worker session source is unavailable; retry.");
-    }
-    const fields = [
-      ...new Set<keyof SessionEntry>([
-        "sessionId",
-        "lifecycleRevision",
-        "archivedAt",
-        ...(params.retainEntryFields ?? []),
-      ]),
-    ];
-    const controller = new AbortController();
-    const signal = params.signal
-      ? AbortSignal.any([params.signal, controller.signal])
-      : controller.signal;
-    let active = true;
-    const assertCurrent = () => {
-      if (!active) {
-        throw new WorkerPlacementAdmissionTargetError(
-          "Worker session admission scope was released.",
-        );
-      }
-      params.signal?.throwIfAborted();
-      params.authorize?.();
-      const current = memory.actor.snapshot(memory.authority)?.entry;
-      if (!current || fields.some((field) => !isDeepStrictEqual(current[field], entry[field]))) {
-        throw new WorkerPlacementAdmissionTargetError(
-          "Session changed during worker admission; retry.",
-        );
-      }
-      return current;
-    };
-    const admission = await beginSessionWorkAdmission({
-      scope: memory.path,
-      identities: [scope.sessionKey, scope.sessionId, ...(params.target?.storeKeys ?? [])],
-      onInterrupt: (reason) => controller.abort(reason),
-      signal,
-      assertAllowed: assertCurrent,
-    });
     try {
-      return await admission.run(() =>
-        run({
-          target: {
-            agentId: memory.agentId,
-            canonicalKey: scope.sessionKey,
-            storePath: memory.path,
-            storeKeys: params.target?.storeKeys ?? [scope.sessionKey],
-          },
-          entry,
-          assertCurrent,
+      const entry = memory.actor.snapshot(memory.authority)?.entry;
+      if (
+        !entry ||
+        entry.sessionId !== scope.sessionId ||
+        entry.archivedAt !== undefined ||
+        (params.expectedEntry && entry.lifecycleRevision !== params.expectedEntry.lifecycleRevision)
+      ) {
+        throw new WorkerPlacementAdmissionTargetError(
+          "Worker session source is unavailable; retry.",
+        );
+      }
+      const fields = [
+        ...new Set<keyof SessionEntry>([
+          "sessionId",
+          "lifecycleRevision",
+          "archivedAt",
+          ...(params.retainEntryFields ?? []),
+        ]),
+      ];
+      const controller = new AbortController();
+      const signal = params.signal
+        ? AbortSignal.any([params.signal, controller.signal])
+        : controller.signal;
+      let active = true;
+      const assertCurrent = () => {
+        if (!active) {
+          throw new WorkerPlacementAdmissionTargetError(
+            "Worker session admission scope was released.",
+          );
+        }
+        params.signal?.throwIfAborted();
+        params.authorize?.();
+        const current = memory.actor.snapshot(memory.authority)?.entry;
+        if (!current || fields.some((field) => !isDeepStrictEqual(current[field], entry[field]))) {
+          throw new WorkerPlacementAdmissionTargetError(
+            "Session changed during worker admission; retry.",
+          );
+        }
+        return current;
+      };
+      let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+      try {
+        admission = await beginSessionWorkAdmission({
+          scope: memory.path,
+          identities: [scope.sessionKey, scope.sessionId, ...(params.target?.storeKeys ?? [])],
+          onInterrupt: (reason) => controller.abort(reason),
           signal,
-          onCommitted: () => {},
-        }),
-      );
+          assertAllowed: assertCurrent,
+        });
+        return await admission.run(() =>
+          runWithSessionActorStorage(memory, () =>
+            run({
+              target: {
+                agentId: memory.agentId,
+                canonicalKey: scope.sessionKey,
+                storePath: memory.path,
+                storeKeys: params.target?.storeKeys ?? [scope.sessionKey],
+              },
+              entry,
+              assertCurrent,
+              signal,
+              onCommitted: () => {},
+            }),
+          ),
+        );
+      } finally {
+        active = false;
+        admission?.release();
+      }
     } finally {
-      active = false;
-      admission.release();
+      await memory.actor.release();
     }
   }
-  const actorBinding = captureIncognitoSessionBinding(scope);
-  const metadata = captureSessionEntryMetadataRead(scope);
-  const actorClaim = actorBinding?.actor.sessions.captureCurrent(scope.sessionKey);
-  const readEntry: typeof withSessionEntryReadOnlyInWorker = actorBinding
-    ? (input, assertCurrent, consume) =>
-        actorBinding.actor.sessions.withSharedState(async () => {
-          const read = await actorBinding.actor.sessions.read(
-            { assertCurrent },
-            { sessionKey: input.sessionKey },
-            actorBinding.admissionSignal,
-          );
-          assertCurrent();
-          return consume(ok(read.entry), {
-            kind: "incognito",
-            incognito: actorBinding,
-            assertCurrent: metadata!.assertCurrent,
-          });
-        })
-    : withSessionEntryReadOnlyInWorker;
   const configuredRoute = resolveSessionStorePathForScope(scope, getConfig());
   const configuredPath = params.target?.storePath ?? configuredRoute;
   const binding = captureSessionTranscriptTargetBinding({ ...scope, storePath: configuredPath });
@@ -194,7 +199,6 @@ export async function withGatewayWorkerSessionAdmission<T>(
     }
   };
   const assertRoutingCurrent = () => {
-    actorClaim?.assertCurrent();
     // Stop cancels execution, not the authority to settle already-committed cleanup.
     // Caller revocation and source currency still fence every authorized side effect.
     params.signal?.throwIfAborted();
@@ -216,7 +220,7 @@ export async function withGatewayWorkerSessionAdmission<T>(
     });
     return await admission.run(() =>
       racePromiseWithAbortSignal(
-        readEntry(
+        withSessionEntryReadOnlyInWorker(
           binding,
           () => {
             // Prepared writes compose caller authority separately from the retained reader.
@@ -284,7 +288,7 @@ export async function withGatewayWorkerSessionAdmission<T>(
             const completed = createDeferredCore();
             const unregister = registerOpenClawAgentDatabaseAsyncResource({
               agentId: owner.scope?.databaseAgentId ?? scope.agentId,
-              path: owner.scope?.storePath ?? owner.incognito?.actor.path ?? configuredPath,
+              path: owner.scope?.storePath ?? configuredPath,
               revoke: () => controller.abort(new Error("Worker session source was revoked")),
               close: () => completed.promise,
             });
@@ -301,13 +305,7 @@ export async function withGatewayWorkerSessionAdmission<T>(
               assertRouteCurrent();
               owner.assertCurrent();
               source.assertSourceCurrent();
-              if (
-                metadata
-                  ? !matches(metadata.readCurrent())
-                  : retained
-                    ? !retained.isCurrent()
-                    : changed
-              ) {
+              if (retained ? !retained.isCurrent() : changed) {
                 throw new WorkerPlacementAdmissionTargetError(
                   "Session changed during worker admission; retry.",
                 );
@@ -371,7 +369,7 @@ export async function withGatewayWorkerSessionAdmission<T>(
             const target = {
               agentId: scope.agentId,
               canonicalKey: scope.sessionKey,
-              storePath: owner.scope?.storePath ?? owner.incognito?.actor.path ?? configuredPath,
+              storePath: owner.scope?.storePath ?? configuredPath,
               storeKeys: params.target?.storeKeys ?? [scope.sessionKey],
             };
             try {
@@ -411,8 +409,6 @@ export function createGatewayWorkerDispatchAdmission(
     // The requested acknowledgment can release the RPC while dispatch still owns setup.
     const releaseCaller = retainGatewayDeviceRevocation(authorize);
     try {
-      const memory = getSessionActorStorageBinding(identity);
-      const actorBinding = memory ? undefined : captureIncognitoSessionBinding(identity);
       const admit = async () => {
         // v2026.9.8 Gateway contexts accept opaque dispatch/move authorization callbacks.
         const sourceAuthorize = captureExternalSessionCommitGuard(authorize);
@@ -452,7 +448,7 @@ export function createGatewayWorkerDispatchAdmission(
           (source) => run(source.signal, source.assertCurrent),
         );
       };
-      return await (actorBinding ? actorBinding.actor.sessions.withSharedState(admit) : admit());
+      return await admit();
     } finally {
       releaseCaller?.();
     }

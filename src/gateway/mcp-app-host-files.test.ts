@@ -7,6 +7,9 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import { fetchMcpAppView, getMcpAppViewLease } from "../agents/mcp-ui-resource.js";
 import { testing as viewTesting } from "../agents/mcp-ui-resource.test-support.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   acceptGatewayDeviceSourceAuthority,
   captureGatewayDeviceRevocation,
@@ -191,9 +194,70 @@ afterEach(() => {
     dispose();
   }
   viewTesting.clearViewStore();
+  memorySessionActorOwners.reset();
+  vi.unstubAllEnvs();
 });
 
 describe("registered MCP App host-file routes", () => {
+  it("keeps memory file handles after their opening RPC and refuses them after owner closure", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", state.root);
+    const memoryKey = "agent:main:dashboard:incognito-file";
+    const owner = memorySessionActorOwners.get({
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    });
+    const actor = await owner.acquire(
+      { sessionKey: memoryKey, database: owner.identity },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    try {
+      expect(
+        (
+          await actor.storage!.mutate(
+            {
+              type: "session.entry.create",
+              input: { entry: { sessionId: state.sessionId, updatedAt: 1, incognito: true } },
+            },
+            { assertCurrent() {}, authorize() {} },
+          )
+        ).kind,
+      ).toBe("committed");
+      const opening = new AbortController();
+      const assertOpeningCurrent = () => opening.signal.throwIfAborted();
+      const file = await runWithSessionActorStorage(
+        {
+          actor,
+          agentId: "main",
+          path: owner.path,
+          authority: { assertCurrent: assertOpeningCurrent, authorize: assertOpeningCurrent },
+        },
+        () =>
+          prepareMcpAppHostFile(
+            { ...options({}), signal: opening.signal },
+            { sessionKey: memoryKey, agentId: "main", path: "part.stl" },
+          ),
+      );
+      runtime.sessionKey = memoryKey;
+      getMcpAppViewLease(viewId, runtime)!.hostFile = file;
+      opening.abort();
+      const result = await invoke("mcp.app.readResource", {
+        sessionKey: memoryKey,
+        uri: file.resourceUri,
+        _meta: { "openai/resource": { representation: "text" } },
+      });
+      expect(result[0]).toBe(true);
+      expect(result[1].contents[0].text).toBe("solid original");
+      memorySessionActorOwners.closeDatabase(owner);
+      const closed = await invoke("mcp.app.readResource", {
+        sessionKey: memoryKey,
+        uri: file.resourceUri,
+      });
+      expect(closed[0]).toBe(false);
+    } finally {
+      await actor.release();
+    }
+  });
+
   it("mints opaque URIs and serves explicit text/blob representations without host paths", async () => {
     expect(uri.startsWith("openclaw-file://")).toBe(true);
     expect(uri).not.toContain("part.stl");

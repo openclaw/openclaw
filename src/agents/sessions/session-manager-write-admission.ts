@@ -6,7 +6,6 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { isTranscriptMessageAppendCurrentTail } from "../../config/sessions/session-accessor.sqlite-transcript-append-result.js";
 import { prepareTranscriptMessageAppendForWorker } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
-import { appendTranscriptMessageSnapshotSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import type { SessionManagerIncognitoDatabase } from "../../config/sessions/session-manager-write-contract.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
@@ -24,7 +23,6 @@ import {
 import type { Message } from "../../llm/types.js";
 import { captureLoggingRedactionPatternGuard } from "../../logging/config.js";
 import { getSecretRedactionRegistryRevision } from "../../logging/secret-redaction-registry.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
@@ -50,8 +48,7 @@ import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import type { SessionManagerCore } from "./session-manager-core.js";
 import {
   captureSessionManagerIncognitoBinding,
-  captureSessionManagerIncognitoAdmissionAssertion,
-  withRetainedSessionManagerIncognitoActor,
+  withSessionManagerMemoryActor,
   withSessionManagerMemoryBinding,
   installSessionManagerIncognitoBinding,
 } from "./session-manager-incognito-scope.js";
@@ -133,9 +130,6 @@ export async function withSessionManagerWrite<T>(
     assertOwner?.();
     assertTranscript();
   };
-  const options = toDatabaseOptions(resolveSqliteReadScope(identity));
-  options.env = captureSessionTranscriptStorageEnvironment(options.env ?? process.env);
-  options.path = resolveOpenClawAgentSqlitePath(options);
   const incognitoBinding = captureSessionManagerIncognitoBinding(identity, manager);
   const assertManager = () => {
     if (!sameSessionTranscriptTargetBinding(identity, manager.getSessionTarget())) {
@@ -143,85 +137,44 @@ export async function withSessionManagerWrite<T>(
     }
     assertCurrent();
   };
-  if (incognitoBinding && "kind" in incognitoBinding) {
+  if (incognitoBinding) {
     const queues = detachedWriterQueues.get(manager) ?? new Map<string, StoreWriterQueue>();
     detachedWriterQueues.set(manager, queues);
     return trackAsyncWork(() =>
-      incognitoBinding.actor.withPhase(
-        "session-manager.write",
-        { assertCurrent, authorize() {} },
-        async ({ actor }) => {
-          const storage = actor.storage!;
-          const selected = { ...incognitoBinding, actor, storage };
-          const database = createSessionManagerMemoryDatabase(selected);
-          return runQueuedStoreWrite({
-            queues,
-            storePath: "session",
-            label: "memory session write admission",
-            reentrant: true,
-            fn: () =>
-              withSessionManagerMemoryBinding(manager, selected, async () => {
-                assertManager();
-                try {
-                  return await write({ database, options: selected.database, assertCurrent });
-                } finally {
-                  const next = manager.getSessionTarget();
-                  if (
-                    next &&
-                    next.sessionKey === identity.sessionKey &&
-                    next.sessionId !== identity.sessionId
-                  ) {
-                    const replacement = await storage.acquire(next.sessionKey);
-                    installSessionManagerIncognitoBinding(manager, {
-                      ...incognitoBinding,
-                      actor: replacement,
-                      storage: replacement.storage!,
-                      target: next,
-                    });
+      withSessionManagerMemoryActor(incognitoBinding, true, async (selected) => {
+        if (!selected) throw new Error("Session manager lost its memory owner");
+        return selected.actor.withPhase(
+          "session-manager.write",
+          { assertCurrent, authorize() {} },
+          async ({ actor }) => {
+            const active = { ...selected, actor, storage: actor.storage! };
+            const database = createSessionManagerMemoryDatabase(active);
+            return runQueuedStoreWrite({
+              queues,
+              storePath: "session",
+              label: "memory session write admission",
+              reentrant: true,
+              fn: () =>
+                withSessionManagerMemoryBinding(manager, active, async () => {
+                  assertManager();
+                  try {
+                    return await write({ database, options: active.database, assertCurrent });
+                  } finally {
+                    const next = manager.getSessionTarget();
+                    if (next?.sessionKey === identity.sessionKey) {
+                      installSessionManagerIncognitoBinding(manager, { ...selected, target: next });
+                    }
                   }
-                }
-              }),
-          });
-        },
-      ),
+                }),
+            });
+          },
+        );
+      }),
     );
   }
-  if (incognitoBinding) {
-    captureSessionManagerIncognitoAdmissionAssertion(incognitoBinding)();
-    const actor = incognitoBinding.actor;
-    const database: SessionManagerIncognitoDatabase = {
-      path: actor.path,
-      identity: { incarnation: actor.identity.incarnation },
-      async withMetadata(assertMetadataCurrent, operation, controls) {
-        const { withSessionMetadataWorker } = await runInDetachedAsyncContext(
-          () => import("./session-manager-metadata-runtime.js"),
-        );
-        return withSessionMetadataWorker(
-          options,
-          actor,
-          assertMetadataCurrent,
-          operation,
-          controls,
-        );
-      },
-    };
-    // Retain the original incarnation before yielding; no actor lookup or native fallback follows.
-    return await trackAsyncWork(() =>
-      actor.sessions.withSharedState(() =>
-        withRetainedSessionManagerIncognitoActor(manager, () =>
-          runOpenClawAgentWriteAdmission(
-            options,
-            () => {
-              actor.assertCurrent();
-              assertManager();
-              return write({ database, options, assertCurrent });
-            },
-            true,
-          ),
-        ),
-      ),
-    );
-  }
+  const options = toDatabaseOptions(resolveSqliteReadScope(identity));
+  options.env = captureSessionTranscriptStorageEnvironment(options.env ?? process.env);
+  options.path = resolveOpenClawAgentSqlitePath(options);
   // A tool's cancellation race or a void extension callback can return first.
   // Its existing runtime owner must still retain the admitted write.
   return await trackAsyncWork(() =>
@@ -294,20 +247,18 @@ export async function appendSessionTranscriptNote(
       ),
     );
   }
-  if (isIncognitoSessionKey(captured.sessionKey)) {
-    // Released unbound SDK callers retain the native incognito adapter.
+  if (captureSessionManagerIncognitoBinding(captured)) {
     return await withSessionManagerWrite(
       { getSessionTarget: () => captured, getSessionId: () => captured.sessionId },
       async (admission) => {
         const actor = admission && !("db" in admission.database) ? admission.database : undefined;
-        const redactionRevision = actor ? getSecretRedactionRegistryRevision() : undefined;
-        const redactionCurrent = actor
-          ? captureLoggingRedactionPatternGuard(append.config?.logging?.redactPatterns)
-          : undefined;
-        const prepared = actor ? prepareTranscriptMessageAppendForWorker(append) : undefined;
-        if (prepared) {
-          Object.freeze(prepared.persistedMessage);
-        }
+        if (!actor || !admission) throw new Error("Missing memory session write admission");
+        const redactionRevision = getSecretRedactionRegistryRevision();
+        const redactionCurrent = captureLoggingRedactionPatternGuard(
+          append.config?.logging?.redactPatterns,
+        );
+        const prepared = prepareTranscriptMessageAppendForWorker(append);
+        Object.freeze(prepared.persistedMessage);
         const assertPrepared = () => {
           admission?.assertCurrent();
           if (getSecretRedactionRegistryRevision() !== redactionRevision || !redactionCurrent?.()) {
@@ -315,28 +266,24 @@ export async function appendSessionTranscriptNote(
           }
         };
         const { env: _env, ...scope } = captured;
-        const receipt =
-          actor && admission && prepared
-            ? await receiveSessionManagerCommit("session.transcript.appendMessage", async () =>
-                (await import("./session-manager-metadata-runtime.js")).withSessionMetadataWorker(
-                  admission.options,
-                  actor,
-                  assertPrepared,
-                  (worker) =>
-                    worker.execute({
-                      type: "session.transcript.appendMessage",
-                      input: {
-                        scope: { ...scope, storePath: actor.path },
-                        messageJson: prepared.messageJson,
-                        cwd: append.cwd,
-                      },
-                    }),
-                ),
-              )
-            : {
-                value: { snapshot: appendTranscriptMessageSnapshotSync(captured, append) },
-                failure: undefined,
-              };
+        const receipt = await receiveSessionManagerCommit(
+          "session.transcript.appendMessage",
+          async () =>
+            (await import("./session-manager-metadata-runtime.js")).withSessionMetadataWorker(
+              admission.options,
+              actor,
+              assertPrepared,
+              (worker) =>
+                worker.execute({
+                  type: "session.transcript.appendMessage",
+                  input: {
+                    scope: { ...scope, storePath: actor.path },
+                    messageJson: prepared.messageJson,
+                    cwd: append.cwd,
+                  },
+                }),
+            ),
+        );
         const snapshot = receipt.value.snapshot;
         if (!snapshot.ok) {
           throw new Error("Session transcript message was not persisted", {
@@ -347,25 +294,23 @@ export async function appendSessionTranscriptNote(
         if (!result) {
           throw new Error("Session transcript message was not persisted");
         }
-        if (actor) {
-          try {
-            if (receipt.failure) {
-              throw receipt.failure;
-            }
-            assertPrepared();
-          } catch (cause) {
-            throw new SessionTranscriptMessageCommittedError(
-              result.messageId,
-              cause,
-              captured,
-              snapshot.value.after,
-              snapshot.value.lifecycleRevision,
-            );
+        try {
+          if (receipt.failure) {
+            throw receipt.failure;
           }
+          assertPrepared();
+        } catch (cause) {
+          throw new SessionTranscriptMessageCommittedError(
+            result.messageId,
+            cause,
+            captured,
+            snapshot.value.after,
+            snapshot.value.lifecycleRevision,
+          );
         }
         return {
           messageId: result.messageId,
-          message: result.message ?? prepared!.persistedMessage,
+          message: result.message ?? prepared.persistedMessage,
           appended: result.appended,
           currentTail: isTranscriptMessageAppendCurrentTail(snapshot.value),
         };

@@ -10,8 +10,12 @@ import {
 } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.entry.js";
 import { resolveSqliteSessionKey } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+  readCapturedSessionActorEntries,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { assertSessionEntryPatchAuthority } from "../config/sessions/session-entry-patch-authority.js";
-import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -193,75 +197,25 @@ export function createPluginSessionOwnership(
   const readOwnershipEntry = (
     params: Parameters<PluginRuntime["agent"]["session"]["getSessionEntry"]>[0],
   ) => {
-    const source = captureIncognitoSessionSource(params);
-    if (!source) {
-      return registryParams.runtime.agent.session.getSessionEntry(params);
-    }
-    if ("kind" in source) {
-      return undefined;
-    }
-    const key = resolveSqliteSessionKey(params.sessionKey, source.actor.agentId);
-    const sharing = source.actor.sessions.readSharing(key)?.entry;
-    if (!sharing) {
-      return undefined;
-    }
-    const policy = source.actor.sessions.readCapability(key);
-    return {
-      ...sharing,
-      pluginOwnerId: policy?.pluginOwnerId,
-      agentHarnessId: policy?.agentHarnessId,
-      agentRuntimeOverride: policy?.agentRuntimeOverride,
-    };
+    const memory = captureSessionActorStorageOwner(params, {
+      assertCurrent: assertRuntimeOwnerCurrent,
+      authorize: assertRuntimeOwnerCurrent,
+    });
+    return memory
+      ? readCapturedSessionActorEntry(
+          memory,
+          resolveSqliteSessionKey(params.sessionKey, memory.agentId),
+        )
+      : registryParams.runtime.agent.session.getSessionEntry(params);
   };
   const listOwnershipEntries = (params: { agentId?: string; storePath?: string }) => {
-    const ambient = params.storePath ? undefined : captureIncognitoSessionSource();
-    const source = captureIncognitoSessionSource(
-      ambient
-        ? { ...params, storePath: "kind" in ambient ? ambient.path : ambient.actor.path }
-        : params,
-    );
-    if (!source) {
-      return registryParams.runtime.agent.session.listSessionEntries({ ...params, readOnly: true });
-    }
-    if ("kind" in source) {
-      return [];
-    }
-    return source.actor.sessions.deadlines().flatMap(({ sessionKey }) => {
-      const entry = readOwnershipEntry({ ...params, sessionKey, storePath: source.actor.path });
-      return entry ? [{ sessionKey, entry }] : [];
+    const memory = captureSessionActorStorageOwner(params, {
+      assertCurrent: assertRuntimeOwnerCurrent,
+      authorize: assertRuntimeOwnerCurrent,
     });
-  };
-  const withPreparedSessionOwnership = async <T>(
-    params: { agentId?: string; storePath?: string; sessionKey?: string; sessionFile?: string },
-    run: () => Promise<T>,
-  ): Promise<T> => {
-    const marker = params.sessionFile && parseSqliteSessionFileMarker(params.sessionFile);
-    const target = marker ? { ...params, ...marker } : params;
-    const ambient =
-      !target.sessionKey && !target.storePath ? captureIncognitoSessionSource() : undefined;
-    const source = captureIncognitoSessionSource(
-      ambient
-        ? { ...target, storePath: "kind" in ambient ? ambient.path : ambient.actor.path }
-        : target,
-    );
-    if (!source || "kind" in source) {
-      return await run();
-    }
-    return source.actor.sessions.withSharedState(async () => {
-      const assertCurrent = () => {
-        assertRuntimeOwnerCurrent();
-        source.admissionSignal?.throwIfAborted();
-        source.actor.assertReadable();
-      };
-      // Publish exact ownership facts once; final guards consume their live postimages.
-      await source.actor.sessions.list(
-        { assertCurrent },
-        { projection: "list" },
-        source.admissionSignal,
-      );
-      assertCurrent();
-      return await run();
-    });
+    return memory
+      ? readCapturedSessionActorEntries(memory, "list")
+      : registryParams.runtime.agent.session.listSessionEntries({ ...params, readOnly: true });
   };
   const resolveStoredSessionOwnershipTarget = (params: {
     agentId?: string;
@@ -432,7 +386,7 @@ export function createPluginSessionOwnership(
     }
     const ownershipAgentId = sessionKeyAgentId ?? normalizedAgentId;
     // Embedded runs accept one exact key. Carry its resolved store into the
-    // keyless ID/file scan so incognito ownership stays in the process-held DB.
+    // keyless ID/file scan so incognito ownership stays in its memory namespace.
     const ownershipStorePath =
       sessionKey && sessionKeyAgentId
         ? resolveSessionStorePathForScope({
@@ -608,7 +562,6 @@ export function createPluginSessionOwnership(
     }
   };
   return {
-    withPreparedSessionOwnership,
     createSessionEntry: async (
       session: PluginSessionRuntime,
       params: Parameters<PluginSessionRuntime["createSessionEntry"]>[0],

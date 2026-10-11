@@ -96,14 +96,11 @@ export function createSessionActorWorker(
     const current = physicalIdentity();
     const requested = target.database;
     const matches =
-      current.kind === "file" && requested.kind === "file"
-        ? current.physicalIdentity === requested.physicalIdentity &&
-          current.birthtime === requested.birthtime &&
-          current.nativeLocation === requested.nativeLocation
-        : current.kind === "ephemeral" &&
-          requested.kind === "ephemeral" &&
-          current.handle === requested.handle &&
-          current.incarnation === requested.incarnation;
+      current.kind === "file" &&
+      requested.kind === "file" &&
+      current.physicalIdentity === requested.physicalIdentity &&
+      current.birthtime === requested.birthtime &&
+      current.nativeLocation === requested.nativeLocation;
     if (closed || !matches) {
       throw new Error("Session actor lost its physical database owner");
     }
@@ -262,11 +259,7 @@ export function createSessionActorWorker(
             ) {
               throw new Error("Session actor requires managed transaction settlement");
             }
-            if (context.captureCommitReceipt) {
-              context.captureCommitReceipt(opened.db, accepted);
-            } else {
-              deferSqliteWorkerCommitReceipt(opened.db, accepted);
-            }
+            deferSqliteWorkerCommitReceipt(opened.db, accepted);
             const turn =
               value && "kind" in value && value.kind === "session-turn"
                 ? value

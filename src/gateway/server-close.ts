@@ -8,6 +8,7 @@ import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-run
 import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/session-suspension.js";
 import { closeSwarmScheduler } from "../agents/subagents/swarm/swarm-scheduler.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { closeSessionTranscriptReconcileWorkerPool } from "../config/sessions/session-transcript-reconcile-pool.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
@@ -551,6 +552,7 @@ async function closeGatewayResources(
               );
               await measureCloseStep("metadata-retirement", retire);
               await measureCloseStep("retirement-cleanup", () => cleanupWork.runWhenIdle(() => {}));
+              await measureCloseStep("incognito-sessions", () => memorySessionActorOwners.reset());
               // Releasing agent leases still writes shared state; keep its owner alive until then.
               await measureCloseStep("agent-databases", closeOpenClawAgentDatabasesAsync);
               await measureCloseStep("debug-proxy", () =>

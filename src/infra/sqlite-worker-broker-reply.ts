@@ -101,9 +101,7 @@ function prepareSqliteWorkerOperationAdmission(
   assertDispatchable: () => void,
   assertCurrentJob: () => void,
 ) {
-  const databasePath = actor?.target
-    ? undefined
-    : (job.request.stateDatabasePath ?? actor?.databasePath);
+  const databasePath = job.request.stateDatabasePath ?? actor?.databasePath;
   if (!job.createAdmission && !databasePath) {
     return undefined;
   }

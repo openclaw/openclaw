@@ -339,6 +339,7 @@ describe("repository workspace result ownership", () => {
         const access = await resolveRepositoryWorkspaceAccess(
           loadGatewaySessionEntryReadOnly(sessionTarget.sessionKey),
           context,
+          authorize,
         );
         if (access?.kind !== "active") {
           throw new Error("Expected live repository editor access");

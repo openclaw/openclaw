@@ -133,9 +133,7 @@ export class SqliteWorkerBroker {
     custody: SqliteWorkerOpenCustody = {},
   ): Promise<SqliteWorkerStore<Operations> | undefined> {
     try {
-      if (!options.target) {
-        validateSqliteWorkerDatabaseLocator(options.databasePath);
-      }
+      validateSqliteWorkerDatabaseLocator(options.databasePath);
     } catch (error) {
       return Promise.reject(toErrorObject(error, "SQLite worker database locator is invalid"));
     }
@@ -165,7 +163,7 @@ export class SqliteWorkerBroker {
       .open(
         sqliteWorkerRequestBytes(snapshot.input, snapshot.stateContext, snapshot.preparation),
         () =>
-          runWithSqliteDatabaseAdmissionTurn(snapshot.target ? [] : [snapshot.databasePath], () =>
+          runWithSqliteDatabaseAdmissionTurn([snapshot.databasePath], () =>
             this.openAdmitted<Operations>(snapshot, client),
           ),
         snapshot.signal,
@@ -187,19 +185,16 @@ export class SqliteWorkerBroker {
     const { databasePath, inputHash, identity, key } =
       await prepareSqliteWorkerDatabaseAdmission(options);
     options.assertCurrent?.();
-    if (!options.target) {
-      assertStateDatabaseAccessAllowed(options.stateDatabasePath ?? databasePath, {
-        maintenanceScope: options.maintenanceScope,
-      });
-    }
+    assertStateDatabaseAccessAllowed(options.stateDatabasePath ?? databasePath, {
+      maintenanceScope: options.maintenanceScope,
+    });
     const input = options.input;
-    const admittedPaths = identity
-      ? captureSqliteWorkerAdmissionPaths(databasePath, identity, this.actors.values())
-      : new Set<string>();
-    if (
-      options.existingOnly &&
-      (options.target ? !this.actors.has(key) : !key.startsWith("file:"))
-    ) {
+    const admittedPaths = captureSqliteWorkerAdmissionPaths(
+      databasePath,
+      identity,
+      this.actors.values(),
+    );
+    if (options.existingOnly && !key.startsWith("file:")) {
       this.clients.delete(client);
       return undefined;
     }
@@ -230,9 +225,6 @@ export class SqliteWorkerBroker {
         // Another opener won; reread identity and authority after retiring the unused carrier.
         return this.openAdmitted({ ...options, runtimePreparation: undefined }, client);
       }
-      if (options.target && actor.databasePath !== databasePath) {
-        throw new Error("Ephemeral SQLite handle belongs to another namespace");
-      }
       assertSqliteWorkerActorReusable(actor, moduleUrl, inputHash, options.stateContext);
       if (options.onNativeLost) {
         (actor.nativeLostObservers ??= new Set()).add(options.onNativeLost);
@@ -253,7 +245,6 @@ export class SqliteWorkerBroker {
       }
       const nativeStopped = createDeferredCore();
       actor = {
-        target: options.target,
         ...(options.onNativeLost ? { nativeLostObservers: new Set([options.onNativeLost]) } : {}),
         runtimeGeneration: options.runtimeGeneration,
         nativeStopped: nativeStopped.promise,
@@ -285,13 +276,12 @@ export class SqliteWorkerBroker {
           actor: actor.id,
           moduleUrl,
           databasePath,
-          ...(options.target ? { target: options.target } : {}),
           ...(options.createAdmission
             ? { openAdmission: "input" as const }
             : options.createOpenAdmission
               ? { openAdmission: "identity" as const }
               : {}),
-          ...(options.existingOnly && !options.target ? { existingIdentity: key } : {}),
+          ...(options.existingOnly ? { existingIdentity: key } : {}),
           input,
           ...(options.preparation ? { preparation: options.preparation } : {}),
           ...(runtimeNeedsTypeScriptLoader(modulePath)
@@ -308,9 +298,6 @@ export class SqliteWorkerBroker {
         },
       ).then(async () => {
         opening.initialized = true;
-        if (!identity) {
-          return;
-        }
         const physical = await resolveOpenedSqliteWorkerIdentity(databasePath, identity, (id) => {
           const existing = this.actors.get(id);
           return existing !== undefined && existing !== opening;

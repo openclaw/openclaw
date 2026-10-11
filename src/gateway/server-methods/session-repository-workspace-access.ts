@@ -19,18 +19,22 @@ type Operation = WorkspaceInspectionInput["operation"];
 /** Repository identity never resolves through the Gateway's local workspace defaults. */
 export async function resolveRepositoryWorkspaceAccess(
   loaded: LoadedSession,
-  context?: GatewayRequestContext,
+  context: GatewayRequestContext | undefined,
+  assertCallerCurrent: () => void,
 ) {
   const entry = loaded.entry;
   const workspaceId = entry?.repositoryWorkspaceId;
   if (!workspaceId) {
     return undefined;
   }
-  const metadata = captureSessionEntryMetadataRead({
-    agentId: loaded.agentId,
-    sessionKey: loaded.canonicalKey,
-    storePath: loaded.storePath,
-  });
+  const metadata = captureSessionEntryMetadataRead(
+    {
+      agentId: loaded.agentId,
+      sessionKey: loaded.canonicalKey,
+      storePath: loaded.storePath,
+    },
+    assertCallerCurrent,
+  );
   const store = getSessionRepositoryWorkspaceStore();
   const prepared = await store.prepare(workspaceId);
   const repository = prepared.current();

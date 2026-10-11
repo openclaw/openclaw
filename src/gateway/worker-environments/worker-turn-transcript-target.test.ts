@@ -4,11 +4,11 @@ import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { withIncognitoSessionActor } from "../../config/sessions/session-incognito-binding.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import * as agentDatabase from "../../state/openclaw-agent-db.js";
-import { openIncognitoTestActor } from "../../state/openclaw-agent-execution-incognito.test-support.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -18,6 +18,7 @@ import {
 } from "./worker-turn-transcript-target.js";
 
 afterEach(() => {
+  memorySessionActorOwners.reset();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -26,63 +27,74 @@ it.each([false, true])(
   "uses the selected actor for worker admission and refuses a changed window (%s)",
   async (replaceWindow) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const actor = await openIncognitoTestActor(state.env, { assertCurrent() {} });
+      const owner = memorySessionActorOwners.get({
+        agentId: "main",
+        path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+      });
       const target = {
         agentId: "main",
         sessionKey: "agent:main:dashboard:incognito-worker-target",
         sessionId: "worker-target",
-        storePath: actor.path,
+        storePath: owner.path,
         expectedLifecycleRevision: "original",
       };
-      await actor.sessions.create(
-        { assertCurrent() {} },
-        {
-          sessionKey: target.sessionKey,
-          entry: {
-            sessionId: target.sessionId,
-            updatedAt: Date.now(),
-            lifecycleRevision: "original",
-            incognito: true,
-          },
-        },
+      const actor = await owner.acquire(
+        { database: owner.identity, sessionKey: target.sessionKey },
+        { assertCurrent() {}, assertReadable() {} },
       );
-      const observer = observeHostDataSql();
-      try {
-        await withIncognitoSessionActor(actor, async () => {
-          const source = captureWorkerTurnTranscriptSource(target);
-          const run = vi.fn(async () => {
-            source();
-            expect(resolveWorkerTurnTranscriptTarget({ ...target, sessionTarget: target })).toEqual(
-              target,
-            );
-            return "settled";
-          });
-          const result = withWorkerTurnTranscriptDatabase(
-            { ...target, sessionTarget: target },
+      expect(
+        (
+          await actor.storage!.mutate(
             {
-              assertCurrent() {},
-              prepareAuthority: async () => {
-                if (replaceWindow) {
-                  await patchSessionEntryCore(target, () => ({ lifecycleRevision: "replacement" }));
-                }
-                return { isCurrent: () => true, release() {} };
+              type: "session.entry.create",
+              input: {
+                entry: {
+                  sessionId: target.sessionId,
+                  updatedAt: Date.now(),
+                  lifecycleRevision: "original",
+                  incognito: true,
+                },
               },
             },
-            run,
+            { assertCurrent() {}, authorize() {} },
+          )
+        ).kind,
+      ).toBe("committed");
+      const observer = observeHostDataSql();
+      try {
+        const source = captureWorkerTurnTranscriptSource(target);
+        const run = vi.fn(async () => {
+          source();
+          expect(resolveWorkerTurnTranscriptTarget({ ...target, sessionTarget: target })).toEqual(
+            target,
           );
-          if (replaceWindow) {
-            await expect(result).rejects.toThrow("transcript identity is no longer current");
-            expect(run).not.toHaveBeenCalled();
-            expect(source).toThrow("generation is no longer current");
-          } else {
-            await expect(result).resolves.toBe("settled");
-            expect(run).toHaveBeenCalledOnce();
-          }
+          return "settled";
         });
+        const result = withWorkerTurnTranscriptDatabase(
+          { ...target, sessionTarget: target },
+          {
+            assertCurrent() {},
+            prepareAuthority: async () => {
+              if (replaceWindow) {
+                await patchSessionEntryCore(target, () => ({ lifecycleRevision: "replacement" }));
+              }
+              return { isCurrent: () => true, release() {} };
+            },
+          },
+          run,
+        );
+        if (replaceWindow) {
+          await expect(result).rejects.toThrow("transcript identity is no longer current");
+          expect(run).not.toHaveBeenCalled();
+          expect(source).toThrow("transcript identity is no longer current");
+        } else {
+          await expect(result).resolves.toBe("settled");
+          expect(run).toHaveBeenCalledOnce();
+        }
         expect(observer.queries).toEqual([]);
       } finally {
         observer.restore();
-        await actor.close();
+        await actor.release();
       }
     });
   },

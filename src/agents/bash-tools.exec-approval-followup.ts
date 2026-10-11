@@ -12,7 +12,10 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sleepWithAbort } from "@openclaw/retry";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
-import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { getGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
@@ -138,8 +141,8 @@ function isExecApprovalFollowupDirectDeliveryStale(params: {
   sessionKey: string | undefined;
   expectedSessionId: string | undefined;
   sessionStore: string | undefined;
-  source: ReturnType<typeof captureIncognitoSessionSource>;
-  assertSessionCurrent?: () => void;
+  source: ReturnType<typeof captureSessionActorStorageOwner>;
+  expectedLifecycleRevision?: string;
 }): boolean {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   const expectedSessionId = normalizeOptionalString(params.expectedSessionId);
@@ -149,15 +152,12 @@ function isExecApprovalFollowupDirectDeliveryStale(params: {
   try {
     if (params.source) {
       const source = params.source;
-      params.assertSessionCurrent?.();
-      source.admissionSignal?.throwIfAborted();
-      if ("kind" in source) {
-        source.assertCurrent();
-        return true;
-      }
-      source.actor.assertReadable();
-      const entry = source.actor.sessions.readSharing(sessionKey)?.entry;
-      return !entry || entry.sessionId !== expectedSessionId;
+      const entry = readCapturedSessionActorEntry(source, sessionKey);
+      return (
+        !entry ||
+        entry.sessionId !== expectedSessionId ||
+        entry.lifecycleRevision !== params.expectedLifecycleRevision
+      );
     }
     const storePath = resolveSessionStorePathCore(normalizeOptionalString(params.sessionStore), {
       agentId: params.agentId ?? resolveAgentIdFromSessionKey(sessionKey),
@@ -421,11 +421,14 @@ export async function sendExecApprovalFollowup(
 ): Promise<boolean> {
   const sessionKey = params.sessionKey?.trim();
   const source = sessionKey
-    ? captureIncognitoSessionSource({ agentId: params.agentId, sessionKey })
+    ? captureSessionActorStorageOwner(
+        { agentId: params.agentId, sessionKey },
+        { assertCurrent() {}, authorize() {} },
+      )
     : undefined;
-  const assertSessionCurrent =
-    source && !("kind" in source) && sessionKey
-      ? source.actor.sessions.captureCurrent(sessionKey).assertCurrent
+  const expectedLifecycleRevision =
+    source && sessionKey
+      ? readCapturedSessionActorEntry(source, sessionKey)?.lifecycleRevision
       : undefined;
   // Trimmed text only classifies empty/denied results; the raw text is what reaches the
   // agent so command whitespace survives the follow-up.
@@ -530,7 +533,7 @@ export async function sendExecApprovalFollowup(
       expectedSessionId: params.expectedSessionId,
       sessionStore: params.sessionStore,
       source,
-      assertSessionCurrent,
+      expectedLifecycleRevision,
     })
   ) {
     emitDiagnosticEvent({

@@ -14,20 +14,14 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { prepareSessionTranscriptReadTargetCore } from "../config/sessions/session-accessor.transcript-read-target.js";
 import { resolveSessionTranscriptReadTarget } from "../config/sessions/session-accessor.transcript-target.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
+import { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
 import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
-import { captureIncognitoSessionHistoryBinding } from "../config/sessions/session-incognito-binding.js";
-import {
-  readIncognitoSessionHistory,
-  type IncognitoSessionHistoryBinding,
-} from "../config/sessions/session-incognito-history-read.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../state/openclaw-agent-db.paths.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { projectSessionDisplayMessage } from "./session-display-projection.js";
 import { sqliteMessageEventWithSeq } from "./session-transcript-entry-message.js";
 import { toTranscriptReadScope } from "./session-transcript-read-target.js";
@@ -157,6 +151,23 @@ export function readSessionTitleFieldsFromTranscript(
   input: SessionTranscriptReadScope,
   opts?: SessionTitleReadOptions,
 ): SessionTitleFields {
+  const memory = captureSessionActorStorageOwner(input, { assertCurrent() {} });
+  if (memory) {
+    const key =
+      input.sessionKey ??
+      memory.owner?.readSessionById(input.sessionId, memory.authority)?.sessionKey;
+    const command = {
+      type: "session.history.title" as const,
+      input: { sessionId: input.sessionId, includeInterSession: opts?.includeInterSession },
+    };
+    const result =
+      memory.binding?.actor.target.sessionKey === key
+        ? memory.binding.actor.storage!.readCurrent(command, memory.authority)
+        : key
+          ? memory.owner?.readStorage(key, command, memory.authority)
+          : undefined;
+    return result?.fields ?? { ...EMPTY_SESSION_TITLE_FIELDS };
+  }
   const target = resolveSessionTranscriptReadTarget(input);
   try {
     const scope = { ...toTranscriptReadScope(target), ...(input.env ? { env: input.env } : {}) };
@@ -262,15 +273,16 @@ export function readSessionTitleFieldsFromTranscript(
 export async function readSessionTitleFieldsFromTranscriptAsync(
   scope: SessionTranscriptReadScope,
   opts?: { includeInterSession?: boolean },
-  suppliedIncognito?: IncognitoSessionHistoryBinding,
 ): Promise<SessionTitleFields> {
-  const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryBinding(scope);
-  if (incognito) {
-    const result = await readIncognitoSessionHistory(incognito, scope, (target) => ({
-      type: "session.history.title",
-      input: { ...target, includeInterSession: opts?.includeInterSession },
-    }));
-    return result.fields;
+  const memory = captureSessionActorTranscriptRead(scope);
+  if (memory) {
+    return memory.missing
+      ? { ...EMPTY_SESSION_TITLE_FIELDS }
+      : (
+          await memory.read("session.history.title", {
+            includeInterSession: opts?.includeInterSession,
+          })
+        ).fields;
   }
   const target = prepareSessionTranscriptReadTargetCore(scope);
   const readScope: SessionTranscriptReadScope = {
@@ -284,9 +296,6 @@ export async function readSessionTitleFieldsFromTranscriptAsync(
   const resolved = resolveSqliteTranscriptReadScope(readScope);
   const options = toDatabaseOptions(resolved);
   const databasePath = resolveOpenClawAgentSqlitePath(options);
-  if (isIncognitoOpenClawAgentSqlitePath(databasePath, options)) {
-    return readSessionTitleFieldsFromTranscript(readScope, opts);
-  }
   const admission = resolveSessionTranscriptReadFence(resolved);
   const { withSessionHistoryWorkerDatabase } =
     await import("../config/sessions/session-transcript-worker-runtime.js");

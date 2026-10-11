@@ -17,17 +17,14 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  readExactSessionEntryRow,
-  writeSessionEntry,
-} from "./session-accessor.sqlite-entry-store.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import type { SessionActorAuthority, SessionActorOperations } from "./session-actor-contract.js";
 import { createDurableSessionActorFactory } from "./session-actor-durable.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { createSessionActorReplica } from "./session-actor-replica.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
 import { createSessionActor, type SessionActorTransport } from "./session-actor.js";
 import { createSessionActorWorker } from "./session-actor.worker.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
@@ -42,40 +39,43 @@ vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMa
 
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
 
-it("keeps production incognito acquisition on its native owner without creating a memory actor", async () => {
+it("acquires existing incognito input from memory without opening a database", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = {
       agentId: "main",
       path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
       env,
     };
-    const sessionKey = "agent:main:dashboard:incognito-declined";
-    const owner = runOpenClawAgentWriteTransaction((opened) => {
-      writeSessionEntry(opened, sessionKey, {
-        sessionId: "native-session",
-        updatedAt: 1,
-        incognito: true,
-      });
-      return opened;
-    }, database);
-    const actor = await acquireSessionInputActor(
-      {
-        agentId: database.agentId,
-        storePath: database.path,
-        env,
-        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-      },
-      { assertCurrent() {}, assertReadable() {} },
-    );
-    expect(actor).toBeUndefined();
+    const sessionKey = "agent:main:dashboard:incognito-actor";
+    const scope = { ...database, storePath: database.path, sessionKey };
+    const target = { ...scope, target: { canonicalKey: sessionKey, storeKeys: [sessionKey] } };
+    const lifetime = { assertCurrent() {}, assertReadable() {} };
+    expect(await acquireSessionInputActor(target, lifetime)).toBeUndefined();
     expect(memorySessionActorOwners.read(database)).toBeUndefined();
-    expect(getOpenClawAgentDatabaseIfOpen(database)).toBe(owner);
-    expect(readExactSessionEntryRow(owner, sessionKey)?.entry).toMatchObject({
-      sessionId: "native-session",
-      updatedAt: 1,
-      incognito: true,
-    });
-    expect(captureOpenClawAgentDatabaseExecution.listIncognito(env)).toEqual([]);
+    const created = await acquireSessionActorStorage(scope, { lifetime, authority, create: true });
+    expect(created).toBeDefined();
+    try {
+      await created!.actor.storage.mutate(
+        {
+          type: "session.entry.create",
+          input: {
+            entry: { sessionId: "memory-session", updatedAt: 1, incognito: true },
+          },
+        },
+        authority,
+      );
+      const acquired = await acquireSessionInputActor(target, lifetime);
+      expect(acquired?.actor.target.database.kind).toBe("memory");
+      try {
+        expect(acquired?.actor.snapshot(authority)?.entry?.sessionId).toBe("memory-session");
+      } finally {
+        await acquired?.actor.release();
+      }
+      expect(getOpenClawAgentDatabaseIfOpen(database)).toBeUndefined();
+    } finally {
+      await created?.actor.release();
+      memorySessionActorOwners.closeDatabase(database);
+    }
   });
 });
 

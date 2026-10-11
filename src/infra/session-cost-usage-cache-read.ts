@@ -7,7 +7,7 @@ import { isTransientSqliteError } from "./unhandled-rejections.js";
 export type SessionCostUsageCacheRead = { kind: "usage-refresh-lock" };
 export type SessionCostUsageCacheReadResult = { kind: "usage-refresh-lock"; value: string | null };
 
-/** File-backed calls belong to the transcript worker; incognito retains its process-held owner. */
+/** File-backed calls belong to the transcript worker. */
 export function readSessionCostUsageCache(
   options: OpenClawAgentDatabaseOptions,
   request: SessionCostUsageCacheRead,

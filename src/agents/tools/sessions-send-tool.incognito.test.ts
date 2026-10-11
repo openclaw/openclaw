@@ -4,14 +4,15 @@ import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { isSessionEntryDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import { withIncognitoSessionActor } from "../../config/sessions/session-incognito-binding.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import {
+  runWithSessionActorStorage,
+  type SessionActorStorageBinding,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
-import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { openIncognitoTestActor } from "../../state/openclaw-agent-execution-incognito.test-support.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -20,7 +21,8 @@ import { createSessionConversationTestRegistry } from "../../test-utils/session-
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { createSessionsSendTool } from "./sessions-send-tool.js";
 
-const authority = { assertCurrent() {} };
+const authority = { assertCurrent() {}, authorize() {} };
+const lifetime = { assertCurrent() {}, assertReadable() {} };
 const targetKey = "agent:research:dashboard:durable-target";
 const actorKey = "agent:main:dashboard:incognito-send-requester";
 const nativeKey = "agent:native:dashboard:incognito-send-requester";
@@ -30,7 +32,9 @@ const config = {
   tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
 } satisfies OpenClawConfig;
 let state: OpenClawTestState;
-let actor: Awaited<ReturnType<typeof openIncognitoTestActor>>;
+let actor: SessionActorStorageBinding;
+const owners: ReturnType<typeof memorySessionActorOwners.get>[] = [];
+const handles: SessionActorStorageBinding[] = [];
 
 beforeAll(async () => {
   state = await createOpenClawTestState({ scenario: "minimal", label: "sessions-send-incognito" });
@@ -40,30 +44,47 @@ beforeAll(async () => {
     { agentId: "research", sessionKey: targetKey },
     { sessionId: "durable-target", lifecycleRevision: "target-generation", updatedAt: 1 },
   );
-  await replaceSessionEntry(
-    { agentId: "native", sessionKey: nativeKey },
-    {
-      sessionId: "native-requester",
-      lifecycleRevision: "native-generation",
-      updatedAt: 1,
-      spawnDepth: 1,
-      incognito: true,
-    },
-  );
-  actor = await openIncognitoTestActor(state.env, authority);
-  await actor.sessions.create(authority, {
-    sessionKey: actorKey,
-    entry: {
-      sessionId: "actor-requester",
-      lifecycleRevision: "actor-generation",
-      updatedAt: 1,
-      spawnDepth: 1,
-      incognito: true,
-    },
-  });
+  for (const [agentId, sessionKey, sessionId] of [
+    ["main", actorKey, "actor-requester"],
+    ["native", nativeKey, "native-requester"],
+  ] as const) {
+    const owner = memorySessionActorOwners.get({
+      agentId,
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: state.env }),
+    });
+    owners.push(owner);
+    const handle = await owner.acquire({ database: owner.identity, sessionKey }, lifetime);
+    const binding = { actor: handle, authority, agentId, path: owner.path };
+    handles.push(binding);
+    expect(
+      await handle.storage!.mutate(
+        {
+          type: "session.entry.create",
+          input: {
+            entry: {
+              sessionId,
+              lifecycleRevision: "actor-generation",
+              updatedAt: 1,
+              spawnDepth: 1,
+              incognito: true,
+            },
+          },
+        },
+        authority,
+      ),
+    ).toMatchObject({ kind: "committed" });
+    if (agentId === "main") {
+      actor = binding;
+    }
+  }
 });
 afterAll(async () => {
-  await actor?.close();
+  for (const binding of handles) {
+    await binding.actor.release();
+  }
+  for (const owner of owners) {
+    memorySessionActorOwners.closeDatabase(owner);
+  }
   await state.cleanup();
 });
 
@@ -109,9 +130,7 @@ it.each([
   async ({ owner, change }) => {
     const requesterKey = owner === "bound" ? actorKey : nativeKey;
     const requesterAgent = owner === "bound" ? "main" : "native";
-    const beforeActors = captureOpenClawAgentDatabaseExecution
-      .listIncognito(state.env)
-      .map((entry) => entry.identity.incarnation);
+    const beforeOwners = memorySessionActorOwners.list();
     const requesterSql: string[] = [];
     const observers = (["get", "all", "iterate", "run"] as const).map((method) => {
       const original = StatementSync.prototype[method];
@@ -162,7 +181,7 @@ it.each([
       });
     try {
       const result = await work.run(() =>
-        owner === "bound" ? withIncognitoSessionActor(actor, send) : send(),
+        owner === "bound" ? runWithSessionActorStorage(actor, send) : send(),
       );
       await work.drain();
       expect(reachedAdmission).toBe(true);
@@ -185,27 +204,13 @@ it.each([
           }),
         ],
       ]);
-      if (owner === "bound") {
-        expect(requesterSql).toEqual([]);
-        expect(getOpenIncognitoAgentDatabase("main", actor.path)).toBeUndefined();
-      } else {
-        expect(
-          getOpenIncognitoAgentDatabase(
-            "native",
-            resolveIncognitoOpenClawAgentSqlitePath({ agentId: "native", env: state.env }),
-          ),
-        ).toBeDefined();
-      }
-      expect(
-        captureOpenClawAgentDatabaseExecution
-          .listIncognito(state.env)
-          .map((entry) => entry.identity.incarnation),
-      ).toEqual(beforeActors);
+      expect(requesterSql).toEqual([]);
+      expect(memorySessionActorOwners.list()).toEqual(beforeOwners);
     } finally {
       await work.drain();
       observers.forEach((observer) => observer.mockRestore());
       if (change !== "none") {
-        await withIncognitoSessionActor(actor, () =>
+        await runWithSessionActorStorage(actor, () =>
           replaceSessionEntry(
             { agentId: "main", sessionKey: actorKey },
             {

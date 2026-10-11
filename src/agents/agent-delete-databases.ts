@@ -1,4 +1,5 @@
 import path from "node:path";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
@@ -228,14 +229,14 @@ export async function prepareAgentDeleteDatabases(
     }
     await closeOpenClawAgentDatabaseByPathAsync(databasePath, agentId);
   }
-  // Incognito has no registry row or files, but retained statements must also be retired.
+  // Incognito has no registry row or files; deleting its agent discards the memory owner.
   if (deletion) {
     await deletion.assertCurrentAsync();
   }
-  await closeOpenClawAgentDatabaseByPathAsync(
-    resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: options.env }),
+  memorySessionActorOwners.closeDatabase({
     agentId,
-  );
+    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: options.env }),
+  });
   const databasePaths = [...registeredDatabasePaths].filter((pathname) =>
     resolveSqliteDatabaseFilePaths(pathname).every(
       (filePath) =>

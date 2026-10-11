@@ -1,7 +1,10 @@
 import type { AgentRuntimeRestrictionErrorDetails } from "../../../packages/gateway-protocol/src/agent-runtime-restriction-error-details.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveSessionEntry } from "../../config/sessions/session-accessor.sqlite-exact-read.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -182,18 +185,19 @@ export function assertAgentHarnessExecutionEnvironment(
     sessionKey: params.sessionKey,
   });
   const source = params.sessionKey
-    ? captureIncognitoSessionSource({
-        agentId,
-        sessionKey: params.sessionKey,
-        storePath: params.config?.session?.store
-          ? resolveSessionStorePathCore(params.config.session.store, { agentId })
-          : undefined,
-      })
+    ? captureSessionActorStorageOwner(
+        {
+          agentId,
+          sessionKey: params.sessionKey,
+          storePath: params.config?.session?.store
+            ? resolveSessionStorePathCore(params.config.session.store, { agentId })
+            : undefined,
+        },
+        { assertCurrent() {}, authorize() {} },
+      )
     : undefined;
   const entry = source
-    ? "kind" in source
-      ? undefined
-      : source.actor.sessions.readPolicy(params.sessionKey!)
+    ? readCapturedSessionActorEntry(source, params.sessionKey!)
     : params.sessionKey
       ? resolveSessionEntry(
           {

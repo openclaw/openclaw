@@ -11,9 +11,13 @@ import type {
   SessionTranscriptReadScope,
   SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.types.js";
-import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
+import {
+  acquireSessionActorStorage,
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+  runWithSessionActorStorage,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import type { SessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
-import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../../config/sessions/session-store-owner.js";
 import {
   captureOwnedTranscriptWriteAssertion,
@@ -253,7 +257,6 @@ function captureCliBlockFallbackWrite(
 ) {
   const identity = { ...target };
   const memory = getSessionActorStorageBinding(identity);
-  const incognito = memory ? undefined : captureIncognitoSessionBinding(identity);
   const env = cloneEnvWithPlatformSemantics(process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const readScope = { ...identity, env } satisfies SessionTranscriptReadScope;
@@ -282,34 +285,6 @@ function captureCliBlockFallbackWrite(
       }
     };
     return { readScope: { ...identity, storePath: memory.path }, assertCurrent };
-  }
-  if (incognito) {
-    const { actor } = incognito;
-    const claim = actor.sessions.captureCurrent(identity.sessionKey);
-    const cliWriter = getCliHistoryWriter({ ...identity, storePath: actor.path });
-    const { lifecycleRevision, activeWriterRunId } = expectedEntry;
-    const assertCurrent = () => {
-      assertOwnedWrite();
-      cliWriter?.assertCurrent();
-      incognito.admissionSignal?.throwIfAborted();
-      actor.assertCurrent();
-      claim.assertCurrent();
-      const current = actor.sessions.readSteering(identity.sessionKey);
-      if (
-        !current ||
-        current.sessionId !== identity.sessionId ||
-        current.lifecycleRevision !== lifecycleRevision ||
-        current.activeWriterRunId !== activeWriterRunId ||
-        (fence?.expectedLifecycleRevision !== undefined &&
-          current.lifecycleRevision !== fence.expectedLifecycleRevision) ||
-        (fence?.expectedWriterRunId !== undefined &&
-          current.activeWriterRunId !== fence.expectedWriterRunId)
-      ) {
-        throw new SessionTranscriptWriterClaimReboundError();
-      }
-    };
-    assertCurrent();
-    return { readScope: { ...identity, storePath: actor.path }, assertCurrent };
   }
   const { normalizedKey } = resolveSessionEntrySelection(readScope, { readOnly: true });
   let source: SessionEntryReadSource | undefined;
@@ -410,7 +385,14 @@ export async function persistCliRunBlock(
           config: params.config,
           sessionKey,
         });
-      const memory = getSessionActorStorageBinding({ sessionKey, agentId });
+      const assertCallerCurrent = () => {
+        params.abortSignal?.throwIfAborted();
+        params.assertCurrent?.();
+      };
+      const memorySource = captureSessionActorStorageOwner(
+        { sessionKey, agentId, storePath: targetStorePath ?? params.storePath },
+        { assertCurrent: assertCallerCurrent, authorize() {} },
+      );
       const sessionTarget = {
         ...(params.sessionTarget ?? {
           agentId,
@@ -418,43 +400,66 @@ export async function persistCliRunBlock(
           sessionKey,
           storePath:
             params.storePath ??
-            memory?.path ??
+            memorySource?.path ??
             resolveSessionStorePathCore(params.config?.session?.store, {
               agentId,
             }),
         }),
       };
-      const persistedEntry = await patchSessionEntryCore(
-        sessionTarget,
-        (entry, patchContext) => {
-          if (patchContext.existingEntry && entry.sessionId !== sessionTarget.sessionId) {
-            return null;
-          }
-          return {
-            sessionId: sessionTarget.sessionId,
-            updatedAt: Date.now(),
-          };
-        },
-        {
-          fallbackEntry: params.sessionEntry
-            ? undefined
-            : { sessionId: sessionTarget.sessionId, updatedAt: Date.now() },
-          skipMaintenance: true,
-        },
-      );
-      if (persistedEntry?.sessionId !== sessionTarget.sessionId) {
-        // Skip only this stale blocked-message write; the outer runner still returns blocked.
+      const memory = memorySource
+        ? await acquireSessionActorStorage(sessionTarget, {
+            create: !params.sessionEntry,
+            lifetime: { assertCurrent: assertCallerCurrent, assertReadable: assertCallerCurrent },
+            authority: { assertCurrent: assertCallerCurrent, authorize() {} },
+          })
+        : undefined;
+      if (memorySource && !memory) {
         return;
       }
-      const write = captureCliBlockFallbackWrite(sessionTarget, persistedEntry);
-      const { restoreSessionColdTranscript } =
-        await import("../../config/sessions/session-cold-storage.js");
-      await restoreSessionColdTranscript(write.readScope, write.assertCurrent);
-      await withSessionTranscriptWriteAssertion(write.readScope, write.assertCurrent, async () => {
-        const manager = await SessionManager.openAsync(write.readScope);
-        write.assertCurrent();
-        await manager.appendMessageAsync(redactedUserMessage);
-      });
+      const persist = async () => {
+        const persistedEntry = await patchSessionEntryCore(
+          sessionTarget,
+          (entry, patchContext) => {
+            if (patchContext.existingEntry && entry.sessionId !== sessionTarget.sessionId) {
+              return null;
+            }
+            return {
+              sessionId: sessionTarget.sessionId,
+              updatedAt: Date.now(),
+            };
+          },
+          {
+            fallbackEntry: params.sessionEntry
+              ? undefined
+              : { sessionId: sessionTarget.sessionId, updatedAt: Date.now() },
+            skipMaintenance: true,
+          },
+        );
+        if (persistedEntry?.sessionId !== sessionTarget.sessionId) {
+          // Skip only this stale blocked-message write; the outer runner still returns blocked.
+          return;
+        }
+        const write = captureCliBlockFallbackWrite(sessionTarget, persistedEntry);
+        if (!memory) {
+          const { restoreSessionColdTranscript } =
+            await import("../../config/sessions/session-cold-storage.js");
+          await restoreSessionColdTranscript(write.readScope, write.assertCurrent);
+        }
+        await withSessionTranscriptWriteAssertion(
+          write.readScope,
+          write.assertCurrent,
+          async () => {
+            const manager = await SessionManager.openAsync(write.readScope);
+            write.assertCurrent();
+            await manager.appendMessageAsync(redactedUserMessage);
+          },
+        );
+      };
+      try {
+        await (memory ? runWithSessionActorStorage(memory, persist) : persist());
+      } finally {
+        await memory?.actor.release();
+      }
       return;
     }
     const target = sessionManager.getSessionTarget();

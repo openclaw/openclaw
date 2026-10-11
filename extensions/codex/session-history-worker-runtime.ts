@@ -10,11 +10,9 @@ import {
   resolveRuntimeWorkerUrl,
   WorkerTaskPool,
 } from "openclaw/plugin-sdk/process-runtime";
-import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
-import {
-  runCodexHistoryWorkerInput,
-  type CodexHistoryWorkerInput,
-  type CodexHistoryWorkerResult,
+import type {
+  CodexHistoryWorkerInput,
+  CodexHistoryWorkerResult,
 } from "./session-history.worker.js";
 import {
   codexHistoryRejectionReason,
@@ -116,10 +114,7 @@ export async function projectCodexSettledHistoryInWorker(
             physicalSource,
             evidence,
           };
-          // Legacy process-held incognito cannot be reopened in another worker.
-          const result = isIncognitoSessionKey(captured.sessionKey)
-            ? await runCodexHistoryWorkerInput(input)
-            : await historyReads.run(input, { timeoutMs: 60_000, signal });
+          const result = await historyReads.run(input, { timeoutMs: 60_000, signal });
           return { value: result.result, version: result.version };
         },
         signal,

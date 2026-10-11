@@ -15,7 +15,6 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
-  resolveIncognitoOpenClawAgentSqlitePath,
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
 import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
@@ -359,38 +358,30 @@ it("checks lost database ownership before consulting the initiating caller again
   expect(f.leases()).toEqual([]);
 });
 
-it.each([false, true])(
-  "keeps warm operation denial local without another native check (incognito=%s)",
-  async (incognito) => {
-    const f = fixture();
-    const options = incognito
-      ? {
-          ...f.options,
-          path: resolveIncognitoOpenClawAgentSqlitePath(f.options),
+it("keeps warm operation denial local without another native check", async () => {
+  const f = fixture();
+  const options = f.options;
+  const database = openOpenClawAgentDatabase(options);
+  const check = vi.spyOn(integrity, "assertSqliteIntegrityInWorker");
+  const refused = new Error("warm caller retired");
+  let allowed = true;
+  const work = own(
+    withOpenClawAgentDatabaseAsync(
+      options,
+      () => "forbidden",
+      () => {
+        if (!allowed) {
+          throw refused;
         }
-      : f.options;
-    const database = openOpenClawAgentDatabase(options);
-    const check = vi.spyOn(integrity, "assertSqliteIntegrityInWorker");
-    const refused = new Error("warm caller retired");
-    let allowed = true;
-    const work = own(
-      withOpenClawAgentDatabaseAsync(
-        options,
-        () => "forbidden",
-        () => {
-          if (!allowed) {
-            throw refused;
-          }
-        },
-      ),
-    );
-    allowed = false;
-    await expect(work).rejects.toBe(refused);
-    expect(getOpenClawAgentDatabaseIfOpen(options)).toBe(database);
-    expect(database.db.isOpen).toBe(true);
-    expect(check).not.toHaveBeenCalled();
-  },
-);
+      },
+    ),
+  );
+  allowed = false;
+  await expect(work).rejects.toBe(refused);
+  expect(getOpenClawAgentDatabaseIfOpen(options)).toBe(database);
+  expect(database.db.isOpen).toBe(true);
+  expect(check).not.toHaveBeenCalled();
+});
 
 it("does not treat a database-owner failure as a repairable integrity verdict", async () => {
   const f = fixture(true);

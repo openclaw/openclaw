@@ -1,8 +1,5 @@
-import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentPathWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { prepareSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { SessionEntryReadScope } from "./session-accessor.types.js";
@@ -16,10 +13,10 @@ import type {
 } from "./session-actor-contract.js";
 import { createSessionActorFactory } from "./session-actor-durable.js";
 import {
-  getSessionActorStorageBinding,
+  captureSessionActorStorageOwner,
+  acquireSessionActorStorage,
   runWithSessionActorStorage,
 } from "./session-actor-storage-binding.js";
-import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
 
 /** Reprepare only an explicitly refused version, never an uncertain accepted write. */
 export async function runSessionActorCommand<Value>(
@@ -49,57 +46,20 @@ export async function withSessionActor<T>(
 ): Promise<T | undefined> {
   lifetime.assertAdmission?.();
   lifetime.assertCurrent();
-  const memory = getSessionActorStorageBinding(input);
+  const authority = {
+    assertCurrent: () => lifetime.assertCurrent(),
+    authorize: () => lifetime.assertCurrent(),
+  };
+  const memory = captureSessionActorStorageOwner(input, authority);
   if (memory) {
-    const actor = await memory.actor.storage!.acquire(input.sessionKey, lifetime);
-    try {
-      return await runWithSessionActorStorage({ ...memory, actor }, () => consume(actor));
-    } finally {
-      await actor.release();
-    }
-  }
-  const source = captureIncognitoSessionSource(input);
-  if (source && "kind" in source) {
-    return undefined;
-  }
-  if (source) {
-    const execution = await captureOpenClawAgentDatabaseExecution({
-      kind: "ephemeral",
-      agentId: source.actor.agentId,
-      env: { OPENCLAW_STATE_DIR: path.resolve(source.actor.path, "../../../..") },
-      authority: {
-        assertCurrent() {
-          lifetime.assertCurrent();
-          source.actor.assertCurrent();
-        },
-      },
-      existingOnly: true,
-      signal: source.admissionSignal,
-    });
-    if (!execution) {
+    const binding = await acquireSessionActorStorage(input, { lifetime, authority });
+    if (!binding) {
       return undefined;
     }
     try {
-      if (!isDeepStrictEqual(execution.identity, source.actor.identity)) {
-        throw new Error("Session actor acquisition changed its incognito owner");
-      }
-      const actor = await execution.sessionActors.acquire(
-        { database: source.actor.identity, sessionKey: input.sessionKey },
-        {
-          ...lifetime,
-          assertAdmission() {
-            lifetime.assertAdmission?.();
-            source.admissionSignal?.throwIfAborted();
-          },
-        },
-      );
-      try {
-        return await consume(actor);
-      } finally {
-        await actor.release();
-      }
+      return await runWithSessionActorStorage(binding, () => consume(binding.actor));
     } finally {
-      await execution.release();
+      await binding.actor.release();
     }
   }
   const scope = await prepareSqliteScope(input);
@@ -123,9 +83,6 @@ export async function withSessionActor<T>(
     ...database,
     path: identity.canonicalPath,
   }).acquire(target, lifetime);
-  if ("kind" in actor) {
-    return undefined;
-  }
   try {
     return await consume(actor);
   } finally {

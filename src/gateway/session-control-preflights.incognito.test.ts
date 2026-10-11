@@ -1,14 +1,10 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
-import assert from "node:assert/strict";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
-import {
-  withIncognitoSessionActor,
-  withIncognitoSessionBinding,
-} from "../config/sessions/session-incognito-binding.js";
-import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { environmentsSessionHandlers } from "./server-methods/environments.session.js";
@@ -20,30 +16,36 @@ import type { SessionActivitySummaryService } from "./session-activity-summaries
 import * as sharing from "./session-sharing.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
-const authority = { assertCurrent() {} };
+const authority = { assertCurrent() {}, authorize() {} };
 const cfg = { agents: { entries: { main: {}, absent: {} } } };
-let actor: IncognitoAgentDatabaseExecution;
+const sessionKey = "agent:main:dashboard:incognito-preflight";
+let location: { agentId: string; path: string };
 let env: NodeJS.ProcessEnv;
 
 beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: tempDirs.make("incognito-control-preflights-") };
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
   setRuntimeConfigSnapshot(cfg, cfg);
-  const opened = await captureOpenClawAgentDatabaseExecution({
-    kind: "ephemeral",
+  location = {
     agentId: "main",
-    env,
-    authority,
-  });
-  assert(opened);
-  actor = opened;
-  await actor.sessions.create(authority, {
-    sessionKey: "agent:main:dashboard:incognito-preflight",
-    entry: { sessionId: "private-preflight", updatedAt: 1, incognito: true },
-  });
+    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+  };
+  const created = await withSessionActorStorage(
+    { agentId: "main", sessionKey, storePath: location.path, env },
+    { create: true, authority, lifetime: { assertCurrent() {}, assertReadable() {} } },
+    ({ actor }) =>
+      actor.storage.mutate(
+        {
+          type: "session.entry.create",
+          input: { entry: { sessionId: "private-preflight", updatedAt: 1, incognito: true } },
+        },
+        authority,
+      ),
+  );
+  expect(created?.kind).toBe("committed");
 });
-afterAll(async () => {
-  await actor?.close();
+afterAll(() => {
+  memorySessionActorOwners.closeDatabase(location);
   clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
@@ -61,46 +63,35 @@ function request(method: string, params: Record<string, unknown>): GatewayReques
   };
 }
 
-async function withSource<T>(
-  source: "unbound" | "actor" | "absent",
-  run: (sessionKey: string) => Promise<T>,
-) {
-  const agentId = source === "absent" ? "absent" : "main";
-  const consume = () => run(`agent:${agentId}:dashboard:incognito-preflight`);
-  if (source === "actor") {
-    return withIncognitoSessionActor(actor, consume);
-  }
-  if (source === "absent") {
-    return withIncognitoSessionBinding({ kind: "absent", agentId, env, authority }, consume);
-  }
-  return consume();
-}
-
-it.each(["unbound", "actor", "absent"] as const)(
+it.each(["main", "absent"] as const)(
   "refuses private provider continuation before session acquisition (%s)",
-  async (source) => {
+  async (agentId) => {
     const target = vi.spyOn(sharing, "resolveSessionSharingTarget");
     const sql = observeMainThreadSql();
     try {
-      await withSource(source, async (sessionKey) => {
-        const options = request("sessions.providerReview.continue", {
-          sessionKey,
-          sessionId: "private-preflight",
-          reviewId: "private-review",
-          idempotencyKey: "private-run",
-        });
-        await sessionProviderReviewHandlers[options.req.method]!(options);
-        expect(options.respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            code: "INVALID_REQUEST",
-            message:
-              "Could not continue this chat. Refresh its current findings before trying again.",
-          }),
-        );
+      const options = request("sessions.providerReview.continue", {
+        sessionKey: `agent:${agentId}:dashboard:incognito-preflight`,
+        sessionId: "private-preflight",
+        reviewId: "private-review",
+        idempotencyKey: "private-run",
       });
+      await sessionProviderReviewHandlers[options.req.method]!(options);
+      expect(options.respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message:
+            "Could not continue this chat. Refresh its current findings before trying again.",
+        }),
+      );
       expect(target).not.toHaveBeenCalled();
+      expect(
+        memorySessionActorOwners.read({
+          agentId: "absent",
+          path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "absent", env }),
+        }),
+      ).toBeUndefined();
       sql.expectIdle();
     } finally {
       target.mockRestore();
@@ -110,28 +101,26 @@ it.each(["unbound", "actor", "absent"] as const)(
 );
 
 it.each(["create", "status", "destroy"] as const)(
-  "refuses private attached-environment %s before native session reads",
+  "refuses private attached-environment %s without SQL",
   async (action) => {
     const sql = observeMainThreadSql();
     try {
-      await withSource("actor", async (sessionKey) => {
-        const options = request(`environments.session.${action}`, {
-          sessionKey,
-          ...(action === "create"
-            ? { profileId: "development", idempotencyKey: "private-environment" }
-            : {}),
-          ...(action === "destroy" ? { environmentId: "private-environment" } : {}),
-        });
-        await environmentsSessionHandlers[options.req.method]!(options);
-        expect(options.respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            code: "INVALID_REQUEST",
-            message: "A persistent conversation is required for an attached environment",
-          }),
-        );
+      const options = request(`environments.session.${action}`, {
+        sessionKey,
+        ...(action === "create"
+          ? { profileId: "development", idempotencyKey: "private-environment" }
+          : {}),
+        ...(action === "destroy" ? { environmentId: "private-environment" } : {}),
       });
+      await environmentsSessionHandlers[options.req.method]!(options);
+      expect(options.respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: "A persistent conversation is required for an attached environment",
+        }),
+      );
       sql.expectIdle();
     } finally {
       sql.restore();
@@ -151,21 +140,19 @@ it("reports private activity recaps unavailable without acquiring a source or sc
   const target = vi.spyOn(sharing, "resolveSessionSharingTarget");
   const sql = observeMainThreadSql();
   try {
-    await withSource("actor", async (sessionKey) => {
-      const options = request("sessions.activitySummary.ensure", {
-        sessions: [{ key: sessionKey }],
-      });
-      options.context.sessionActivitySummaries = service;
-      await sessionActivitySummaryHandlers[options.req.method]!(options);
-      expect(options.respond).toHaveBeenCalledWith(true, {
-        sessions: [
-          {
-            key: sessionKey,
-            agentId: "main",
-            activitySummary: { state: "unavailable", canEnsure: true },
-          },
-        ],
-      });
+    const options = request("sessions.activitySummary.ensure", {
+      sessions: [{ key: sessionKey }],
+    });
+    options.context.sessionActivitySummaries = service;
+    await sessionActivitySummaryHandlers[options.req.method]!(options);
+    expect(options.respond).toHaveBeenCalledWith(true, {
+      sessions: [
+        {
+          key: sessionKey,
+          agentId: "main",
+          activitySummary: { state: "unavailable", canEnsure: true },
+        },
+      ],
     });
     expect(ensure).not.toHaveBeenCalled();
     expect(target).not.toHaveBeenCalled();

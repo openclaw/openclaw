@@ -3,6 +3,7 @@ import { vi } from "vitest";
 import { getRuntimeConfig } from "../../config/io.js";
 import { prepareQualifiedSessionEntryTarget } from "../../config/sessions/session-accessor.entry.js";
 import {
+  appendTranscriptMessage,
   appendTranscriptMessageSync,
   publishTranscriptUpdate,
   replaceSessionEntry,
@@ -51,7 +52,15 @@ export async function createReplyTranscriptFixture(
     return persisted;
   };
   const append = async (messageId: string, message: Record<string, unknown>, parentId?: string) => {
-    const persisted = appendSync(messageId, message, parentId);
+    const persisted = attachSessionTranscriptRunId(message, runId);
+    const result = await appendTranscriptMessage(scope, {
+      eventId: messageId,
+      message: persisted,
+      ...(parentId ? { parentId } : {}),
+    });
+    if (!result?.ok) {
+      throw new Error("Expected committed receipt fixture message");
+    }
     // Tool-bearing assistant updates intentionally have no top-level runId.
     await publishTranscriptUpdate(scope, { message: persisted, messageId });
   };

@@ -23,7 +23,8 @@ import {
   type ConversationReadInvocationOrigin,
 } from "../channels/plugins/conversation-read-origin.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -32,6 +33,7 @@ import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
@@ -378,16 +380,26 @@ async function invokeGatewayToolWithSignal(
     const authorizationError = authorizeNested();
     const nestedSource =
       nestedSessionKey &&
-      captureIncognitoSessionSource({ sessionKey: nestedSessionKey, agentId: targetAgentId });
-    if (nestedSource && !("kind" in nestedSource)) {
-      const claim = nestedSource.actor.sessions.captureCurrent(nestedSessionKey!);
+      captureSessionEntryMetadataRead(
+        { sessionKey: nestedSessionKey, agentId: targetAgentId },
+        () => {
+          params.signal.throwIfAborted();
+          params.assertInvocationCurrent?.();
+        },
+      );
+    if (nestedSource) {
+      const initial = nestedSource.readCurrent();
       sessionChecks.push(() => {
-        nestedSource.admissionSignal?.throwIfAborted();
-        nestedSource.actor.assertReadable();
-        claim.assertCurrent();
+        const current = nestedSource.readCurrent();
         const error = authorizeNested(getRuntimeConfig());
-        if (error) {
-          throw new SessionMutationAuthorizationChangedError(error);
+        if (
+          error ||
+          current?.sessionId !== initial?.sessionId ||
+          current?.lifecycleRevision !== initial?.lifecycleRevision
+        ) {
+          throw new SessionMutationAuthorizationChangedError(
+            error ?? errorShape(ErrorCodes.FORBIDDEN, "Target session changed; retry the request"),
+          );
         }
       });
     }
@@ -531,63 +543,53 @@ export async function invokeGatewayTool(
     ? AbortSignal.any([params.signal, requestAbort.signal])
     : requestAbort.signal;
   try {
-    const source = captureIncognitoSessionSource({
-      sessionKey: normalizeSessionKeyPreservingOpaquePeerIds(
-        normalizeOptionalString(params.input.sessionKey) ?? "main",
-      ),
-      agentId: normalizeOptionalString(params.input.agentId),
-    });
-    const target = source
-      ? resolveSessionTarget({ cfg: params.cfg, input: params.input })
-      : undefined;
-    if (source && target?.ok) {
-      if ("kind" in source) {
-        source.assertCurrent();
-        return {
+    const target = resolveSessionTarget({ cfg: params.cfg, input: params.input });
+    if (target.ok && isIncognitoSessionKey(target.sessionKey)) {
+      const assertSourceCurrent = () => {
+        signal.throwIfAborted();
+        params.assertInvocationCurrent?.();
+      };
+      return (
+        (await withSessionActorStorage(
+          target,
+          {
+            lifetime: { assertCurrent: assertSourceCurrent, assertReadable: assertSourceCurrent },
+            authority: { assertCurrent: assertSourceCurrent, authorize: assertSourceCurrent },
+          },
+          ({ actor, authority }) => {
+            const entry = actor.snapshot(authority)?.entry;
+            const assertCurrent = () => {
+              const current = actor.snapshot(authority)?.entry;
+              if (
+                current?.sessionId !== entry?.sessionId ||
+                current?.lifecycleRevision !== entry?.lifecycleRevision ||
+                current?.permissionMode !== entry?.permissionMode ||
+                current?.spawnedCwd !== entry?.spawnedCwd ||
+                current?.spawnedWorkspaceDir !== entry?.spawnedWorkspaceDir ||
+                current?.spawnedBy !== entry?.spawnedBy
+              ) {
+                throw new SessionMutationAuthorizationChangedError(
+                  errorShape(
+                    ErrorCodes.FORBIDDEN,
+                    "Session tool policy changed; retry the request",
+                  ),
+                );
+              }
+            };
+            return invokeGatewayToolWithSignal({
+              ...params,
+              signal,
+              preparedSession: { entry },
+              assertInvocationCurrent: assertCurrent,
+            });
+          },
+        )) ?? {
           ok: false,
           status: 404,
           toolName: normalizeOptionalString(params.input.name ?? params.input.tool) ?? "",
           error: { type: "not_found", message: `Session not found: ${target.sessionKey}` },
-        };
-      }
-      const { actor } = source;
-      const claim = actor.sessions.captureCurrent(target.sessionKey);
-      const assertSourceCurrent = () => {
-        signal.throwIfAborted();
-        source.admissionSignal?.throwIfAborted();
-        params.assertInvocationCurrent?.();
-        actor.assertReadable();
-        claim.assertCurrent();
-      };
-      return await actor.sessions.withSharedState(async () => {
-        const { entry } = await actor.sessions.read(
-          { assertCurrent: assertSourceCurrent },
-          { sessionKey: target.sessionKey },
-          signal,
-        );
-        assertSourceCurrent();
-        const assertCurrent = () => {
-          assertSourceCurrent();
-          const media = actor.sessions.readMedia(target.sessionKey);
-          const capability = actor.sessions.readCapability(target.sessionKey);
-          if (
-            media?.permissionMode !== entry?.permissionMode ||
-            media?.spawnedCwd !== entry?.spawnedCwd ||
-            media?.spawnedWorkspaceDir !== entry?.spawnedWorkspaceDir ||
-            capability?.spawnedBy !== entry?.spawnedBy
-          ) {
-            throw new SessionMutationAuthorizationChangedError(
-              errorShape(ErrorCodes.FORBIDDEN, "Session tool policy changed; retry the request"),
-            );
-          }
-        };
-        return invokeGatewayToolWithSignal({
-          ...params,
-          signal,
-          preparedSession: { entry },
-          assertInvocationCurrent: assertCurrent,
-        });
-      });
+        }
+      );
     }
     return await invokeGatewayToolWithSignal({ ...params, signal });
   } finally {

@@ -1,5 +1,5 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import {
   runWithSessionActorStorage,
@@ -42,7 +42,9 @@ const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
 const cfg = { agents: { entries: { main: {} } } };
 const owners: ReturnType<typeof memorySessionActorOwners.get>[] = [];
+beforeEach(() => vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/sharing"));
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const owner of owners.splice(0)) {
     memorySessionActorOwners.closeDatabase(owner);
   }
@@ -60,9 +62,9 @@ async function fixture() {
   return { owner, actor, storage: actor.storage, binding };
 }
 
-it("prepares missing sharing facts and reads committed creation and membership without native grants", async () => {
+it("prepares unbound sharing facts and observes committed creation and membership without SQLite", async () => {
   const { owner, storage, binding } = await fixture();
-  const prepared = await runWithSessionActorStorage(binding, async () => ({
+  const prepared = {
     facts: await prepareSessionMutationFacts({
       cfg,
       sessionKey,
@@ -74,7 +76,7 @@ it("prepares missing sharing facts and reads committed creation and membership w
       { agentId: "main", canonicalKey: sessionKey, storeKey: sessionKey, storePath: binding.path },
       () => authority.assertCurrent(),
     ),
-  }));
+  };
   try {
     expect(prepared.facts.readCurrent(cfg).target).toBeNull();
     expect(prepared.source.target).toBeNull();
@@ -123,11 +125,11 @@ it("prepares missing sharing facts and reads committed creation and membership w
           },
           sessionKey,
         }),
-      ).toThrow("another owner");
+      ).toThrow("another state root");
     });
     owner.closeSession(sessionKey);
-    expect(() => prepared.facts.readCurrent(cfg)).toThrow(/closed/);
-    expect(() => prepared.source.assertCurrent()).toThrow(/closed/);
+    expect(prepared.facts.readCurrent(cfg).target).toBeNull();
+    expect(prepared.source.target).toBeNull();
   } finally {
     prepared.facts.release();
     prepared.read.release();
@@ -136,7 +138,7 @@ it("prepares missing sharing facts and reads committed creation and membership w
   expect(() => prepared.source.assertCurrent()).toThrow("no longer retained");
 });
 
-it("reads sibling and batch sharing from the captured owner after leaving the actor scope", async () => {
+it("reads unbound sibling and batch sharing from the captured owner", async () => {
   const { binding, owner, storage } = await fixture();
   const siblingKey = "agent:main:dashboard:incognito-memory-sharing-sibling";
   const sibling = await storage.acquire(siblingKey);
@@ -150,7 +152,7 @@ it("reads sibling and batch sharing from the captured owner after leaving the ac
     },
     authority,
   );
-  const prepared = await runWithSessionActorStorage(binding, async () => {
+  const prepared = await (async () => {
     const scope = { agentId: "main", sessionKey: siblingKey, storePath: binding.path };
     expect(
       await sibling.storage!.mutate(
@@ -202,7 +204,7 @@ it("reads sibling and batch sharing from the captured owner after leaving the ac
         () => authority.assertCurrent(),
       ),
     };
-  });
+  })();
   try {
     await sibling.storage.mutate(
       {
@@ -224,7 +226,7 @@ it("reads sibling and batch sharing from the captured owner after leaving the ac
   }
 });
 
-it.each(["chat.send", "sessions.dispatch"] as const)(
+it.each(["chat.send", "sessions.dispatch", "sessions.move"] as const)(
   "retains memory sharing for %s and refuses revoked incognito access at the effect",
   async (method) => {
     const { binding, storage } = await fixture();
@@ -239,23 +241,21 @@ it.each(["chat.send", "sessions.dispatch"] as const)(
     context.getRuntimeConfig = () => cfg;
     context.getCommittedRuntimeConfig = () => cfg;
     const client = sharingPolicyClient({ scopes: ["operator.admin"] });
-    const result = await runWithSessionActorStorage(binding, () =>
-      resolveSessionMutationAuthorizationAsync({
-        client,
-        method,
-        requestParams:
-          method === "chat.send"
-            ? { sessionKey, agentId: "main" }
-            : { key: sessionKey, agentId: "main" },
-        expectedTarget: {
-          agentId: "main",
-          sessionKey,
-          sessionId: "authorized-memory",
-          storePath: binding.path,
-        },
-        context,
-      }),
-    );
+    const result = await resolveSessionMutationAuthorizationAsync({
+      client,
+      method,
+      requestParams:
+        method === "chat.send"
+          ? { sessionKey, agentId: "main" }
+          : { key: sessionKey, agentId: "main" },
+      expectedTarget: {
+        agentId: "main",
+        sessionKey,
+        sessionId: "authorized-memory",
+        storePath: binding.path,
+      },
+      context,
+    });
     expect(result.error).toBeNull();
     if (!result.authorization) {
       throw new Error("Missing sharing authorization");

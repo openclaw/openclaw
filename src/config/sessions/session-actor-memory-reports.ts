@@ -9,6 +9,10 @@ import type {
 } from "./session-accessor.sqlite-transcript-reports.types.js";
 import type { SessionTranscriptWriteLockAccessorContext } from "./session-accessor.types.js";
 import { createSessionActorMemoryEvents } from "./session-actor-memory-events.js";
+import {
+  prepareSessionActorMemoryMessageRewrite,
+  commitSessionActorMemoryMessageRewrite,
+} from "./session-actor-memory-message-rewrite.js";
 import { createSessionActorMemoryMessages } from "./session-actor-memory-messages.js";
 import type {
   SessionActorMemoryReportsCommand,
@@ -17,6 +21,8 @@ import type {
 } from "./session-actor-memory-reports-contract.js";
 import type { SessionActorMemoryStorageContext } from "./session-actor-memory-storage-context.js";
 import { commitSessionActorMemoryWorkerTranscript } from "./session-actor-memory-worker-transcript.js";
+import { projectManuallyCompactedSessionEntry } from "./session-manual-compact-entry.js";
+import { selectManualCompactTranscriptLines } from "./session-manual-compact-selection.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import { projectSessionTranscriptReportFacts } from "./session-transcript-report-facts.js";
 import {
@@ -31,6 +37,7 @@ import { canonicalizeTranscriptEventMedia } from "./transcript-event-media.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import { selectVisibleTranscriptEvents } from "./transcript-visible-events.js";
+import { SessionWorkStartChangedError } from "./work-start-error.js";
 
 type Operations = SessionActorMemoryReportsReads & SessionActorMemoryReportsWrites;
 export function executeSessionActorMemoryReportCommand<Key extends keyof Operations>(
@@ -95,6 +102,14 @@ export function executeSessionActorMemoryReportCommand(
   const commit = (committed: boolean, extra: Partial<TranscriptReportCommit> = {}) =>
     ok({ committed, projectionNeedsReconcile: false, ...extra });
   switch (command.type) {
+    case "session.event.append": {
+      const { eventJson } = command.input;
+      const event: unknown = JSON.parse(eventJson);
+      if (isRecord(event) && event.type === "message") {
+        throw new Error("Raw event append cannot write transcript messages");
+      }
+      return events.appendRaw(event, {}, eventJson).appended;
+    }
     case "session.transcript.messageFacts": {
       const facts: Awaited<
         ReturnType<SessionTranscriptWriteLockAccessorContext["readMessageFacts"]>
@@ -125,6 +140,10 @@ export function executeSessionActorMemoryReportCommand(
       }
       return { version: events.version(), facts };
     }
+    case "session.rewrite.prepare":
+      return prepareSessionActorMemoryMessageRewrite(context, command.input);
+    case "session.rewrite.commit":
+      return commitSessionActorMemoryMessageRewrite(context, command.input);
     case "session.report.prepare":
       return ok({
         facts: selectTranscriptReport(branch(), readEvent, command.input.selection),
@@ -244,6 +263,46 @@ export function executeSessionActorMemoryReportCommand(
         );
       }
       return { kind: "session-transcript-correction", generation: events.version().generation };
+    }
+    case "session.transcript.manualCompact": {
+      if (command.input.sources?.length) {
+        const sourceValidation = context.validateSources(command.input.sources);
+        context.admit("transaction", {
+          kind: "session-manual-compact-validated",
+          sourceValidation,
+        });
+        if (sourceValidation.refusedSource) {
+          throw new SessionWorkStartChangedError("Session changed before compaction. Retry.");
+        }
+      }
+      const selected = selectManualCompactTranscriptLines(
+        state.events.map((row) => row.eventJson),
+        command.input.maxLines,
+      );
+      if (selected.result.compacted) {
+        const original = new Map(
+          state.events.flatMap((row) =>
+            isRecord(row.event) && typeof row.event.id === "string"
+              ? [[row.event.id, row] as const]
+              : [],
+          ),
+        );
+        events.replaceRows(
+          selected.lines.map((eventJson, rawSeq) => {
+            const event: unknown = JSON.parse(eventJson);
+            return {
+              ...(isRecord(event) && typeof event.id === "string"
+                ? original.get(event.id)
+                : undefined),
+              rawSeq,
+              eventJson,
+              event,
+            };
+          }),
+        );
+        state.hot.entry = projectManuallyCompactedSessionEntry(entry, command.input.nowMs);
+      }
+      return selected.result;
     }
     case "session.workerTranscript.commit":
       return commitSessionActorMemoryWorkerTranscript(context, command.input);

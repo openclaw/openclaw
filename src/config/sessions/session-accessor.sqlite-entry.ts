@@ -47,7 +47,7 @@ import {
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionEntryListScope, SessionEntryReadScope } from "./session-accessor.types.js";
-import { patchSessionActorEntry } from "./session-actor-entry-adapter.js";
+import { patchSessionActorEntryInScope } from "./session-actor-entry-adapter.js";
 import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
 import { readSessionEntryPatchPredicate } from "./session-entry-patch-guard.js";
@@ -70,7 +70,6 @@ import type {
 import { buildInboundSessionCreationStamp } from "./session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
-import { patchIncognitoSessionEntry } from "./session-incognito-entry-patch.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
@@ -256,10 +255,12 @@ async function patchSessionEntryInScope(
   options: SqliteSessionEntryPatchOptions,
   databaseAgentId?: string,
 ): Promise<SessionEntry | null> {
-  const memory = getSessionActorStorageBinding(scope);
-  if (memory) {
-    return patchSessionActorEntry(memory, { update, options, sessionKey: scope.sessionKey });
-  }
+  const memory = await patchSessionActorEntryInScope(scope, {
+    update,
+    options,
+    sessionKey: scope.sessionKey,
+  });
+  if (memory) return memory.entry;
   const resolved = resolveSqliteScope(scope);
   if (databaseAgentId) {
     resolved.databaseAgentId = databaseAgentId;
@@ -312,14 +313,11 @@ async function patchSessionEntryTargetInScope(
   update: SqliteSessionEntrySnapshotPatchParams["update"],
   options: SqliteSessionEntryPatchOptions,
 ): Promise<SessionEntry | null> {
-  const memory = getSessionActorStorageBinding({ ...scope, sessionKey: scope.target.canonicalKey });
-  if (memory) {
-    return patchSessionActorEntry(memory, {
-      update,
-      options,
-      sessionKey: scope.target.canonicalKey,
-    });
-  }
+  const memory = await patchSessionActorEntryInScope(
+    { ...scope, sessionKey: scope.target.canonicalKey },
+    { update, options, sessionKey: scope.target.canonicalKey },
+  );
+  if (memory) return memory.entry;
   const source = scope.readSource;
   const resolved: ResolvedSqliteScope = source
     ? {
@@ -367,8 +365,6 @@ async function patchSqliteSessionEntrySnapshot(
     databaseOptions,
     databasePath,
     targetIdentity,
-    incognito,
-    incognitoBinding,
     useWorker,
     ensureIdentitySource,
     assertCapturedSource,
@@ -433,31 +429,10 @@ async function patchSqliteSessionEntrySnapshot(
   };
   const withDatabase = <T>(operation: () => T | Promise<T>) => {
     assertCurrent?.();
-    return !incognito && !getOpenClawAgentDatabaseIfOpen(databaseOptions)
+    return !getOpenClawAgentDatabaseIfOpen(databaseOptions)
       ? withOpenClawAgentDatabaseRuntime(databaseOptions, operation, assertCurrent)
       : operation();
   };
-  if (incognitoBinding) {
-    const result = await patchIncognitoSessionEntry({
-      ...incognitoBinding,
-      sessionKey,
-      selection: params.selection,
-      assertCurrent() {
-        assertCurrent?.();
-        options.workerGuard?.assertCurrent?.();
-      },
-      assertCommitAllowed: () => {
-        options.assertCommitAllowed?.();
-        options.workerGuard?.assertMutationAllowed?.();
-      },
-      shouldCommit: options.shouldCommit,
-      source: options.workerGuard?.source,
-      prepare,
-      onCommitted: options.onCommitted,
-      onCommittedSource: options.onCommittedSource,
-    });
-    return result.entry;
-  }
   let wrote = false;
   const workerPatch = (preparedSource?: PreparedSessionSourceAuthority) =>
     patchSessionEntryInWorker({

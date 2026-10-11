@@ -8,7 +8,7 @@ import {
   type SessionsDiffResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../config/io.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { loadCheckoutDiff } from "../../sessions/session-diff.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { startSlowRequestDiagnostics } from "../slow-request-diagnostics.js";
@@ -59,7 +59,11 @@ export async function loadSessionDiff(
       if (!entry?.sessionId || !storePath || !agentId) {
         return empty("unknown_session");
       }
-      const repository = await resolveRepositoryWorkspaceAccess({ ...loaded, agentId }, context);
+      const repository = await resolveRepositoryWorkspaceAccess(
+        { ...loaded, agentId },
+        context,
+        assertCurrent,
+      );
       assertCurrent();
       if (repository) {
         if (repository.kind === "stored") {
@@ -138,11 +142,7 @@ export const sessionsDiffHandlers: GatewayRequestHandlers = {
       return;
     }
     const read =
-      requestedAgent.agentId &&
-      captureIncognitoSessionSource({
-        sessionKey: params.sessionKey,
-        agentId: requestedAgent.agentId,
-      })
+      requestedAgent.agentId && isIncognitoSessionKey(params.sessionKey)
         ? retainSessionScopedRead(options, params.sessionKey, requestedAgent.agentId, {
             requireMaterialized: true,
           })

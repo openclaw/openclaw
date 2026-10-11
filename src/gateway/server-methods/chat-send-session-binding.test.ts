@@ -18,10 +18,8 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import {
-  listSessionReactions,
-  setSessionReactionAsync,
-} from "../../config/sessions/session-reaction-store.js";
+import { setSessionReactionAsync } from "../../config/sessions/session-reaction-store.js";
+import { listSessionReactions } from "../../config/sessions/session-reaction-store.test-support.js";
 import {
   addSessionMember,
   removeSessionMember,
