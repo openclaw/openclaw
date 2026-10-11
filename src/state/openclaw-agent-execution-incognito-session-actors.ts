@@ -61,7 +61,6 @@ export function createIncognitoSessionActorFactory(params: {
   assertOutsideGrant(this: void): void;
   assertBorrowed(this: void): void;
   assertReferenceCurrent(this: void): void;
-  assertRetainedCurrent(this: void): void;
   withGrant<T>(this: void, operation: () => T): T;
   retain<T>(this: void, operation: () => Promise<T>): Promise<T>;
   run<T>(
@@ -82,7 +81,6 @@ export function createIncognitoSessionActorFactory(params: {
     assertOutsideGrant,
     assertBorrowed,
     assertReferenceCurrent,
-    assertRetainedCurrent,
     withGrant,
     retain,
     run,
@@ -151,7 +149,6 @@ export function createIncognitoSessionActorFactory(params: {
               { assertCurrent: assertActorCurrent },
               (scope) =>
                 operation({
-                  captureGeneration: () => ({ assertCurrent: assertRetainedCurrent }),
                   async execute(command) {
                     try {
                       const result = await scope.execute(command);

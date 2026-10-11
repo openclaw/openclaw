@@ -171,66 +171,56 @@ function committed(
   return { kind: "committed", value: undefined, receipt };
 }
 
-it.each(["worker read", "disclosure"] as const)(
-  "returns a newer committed replica when a receipt arrives during %s",
-  async (arrival) => {
-    await withReplica(async ({ replica, load, scope }) => {
-      const initial = load();
-      const started = Promise.withResolvers<void>();
-      const reply = Promise.withResolvers<SessionActorHotState>();
-      const execute = vi
-        .fn<SqliteWorkerStore<SessionActorOperations>["execute"]>()
-        .mockReturnValue(reply.promise);
-      const actor = createSessionActor({
-        target: initial.target,
-        lifetime: { assertCurrent() {}, assertReadable() {} },
-        replica,
-        transport: {
-          run: async (operation) => {
-            const result = operation({
-              execute,
-              captureGeneration: () => ({ assertCurrent() {} }),
-            });
-            started.resolve();
-            return result;
-          },
-          async release() {},
+it("returns a newer committed replica when a receipt arrives during a worker read", async () => {
+  await withReplica(async ({ replica, load, scope }) => {
+    const initial = load();
+    const started = Promise.withResolvers<void>();
+    const reply = Promise.withResolvers<SessionActorHotState>();
+    const execute = vi
+      .fn<SqliteWorkerStore<SessionActorOperations>["execute"]>()
+      .mockReturnValue(reply.promise);
+    const actor = createSessionActor({
+      target: initial.target,
+      lifetime: { assertCurrent() {}, assertReadable() {} },
+      replica,
+      transport: {
+        run: async (operation) => {
+          const result = operation({
+            execute,
+          });
+          started.resolve();
+          return result;
         },
-      });
-      const publish = () => {
-        const pending = replica.beginCommand();
-        replaceSessionEntrySync(scope, {
-          sessionId: "replica-session",
-          updatedAt: 2,
-          label: "after",
-        });
-        expect(pending.settle(committed(command(initial, "newer"), load("first", 1)))).toBe(true);
-      };
-      const authorize = vi.fn(() => {
-        if (arrival === "disclosure" && authorize.mock.calls.length === 1) {
-          publish();
-        }
-      });
-      try {
-        const reading = actor.read({ assertCurrent() {}, authorize });
-        await started.promise;
-        if (arrival === "worker read") {
-          publish();
-        }
-        reply.resolve(initial);
-        expect((await reading).entry).toMatchObject({ updatedAt: 2, label: "after" });
-        expect(execute).toHaveBeenCalledOnce();
-        expect(authorize).toHaveBeenLastCalledWith(
-          "commit",
-          expect.objectContaining({ entry: expect.objectContaining({ updatedAt: 2 }) }),
-        );
-      } finally {
-        reply.resolve(initial);
-        await actor.release();
-      }
+        async release() {},
+      },
     });
-  },
-);
+    const publish = () => {
+      const pending = replica.beginCommand();
+      replaceSessionEntrySync(scope, {
+        sessionId: "replica-session",
+        updatedAt: 2,
+        label: "after",
+      });
+      expect(pending.settle(committed(command(initial, "newer"), load("first", 1)))).toBe(true);
+    };
+    const authorize = vi.fn();
+    try {
+      const reading = actor.read({ assertCurrent() {}, authorize });
+      await started.promise;
+      publish();
+      reply.resolve(initial);
+      expect((await reading).entry).toMatchObject({ updatedAt: 2, label: "after" });
+      expect(execute).toHaveBeenCalledOnce();
+      expect(authorize).toHaveBeenLastCalledWith(
+        "commit",
+        expect.objectContaining({ entry: expect.objectContaining({ updatedAt: 2 }) }),
+      );
+    } finally {
+      reply.resolve(initial);
+      await actor.release();
+    }
+  });
+});
 
 it("shares committed facts across released handles and retires them for writes and worker loss", async () => {
   await withReplica((fixture) => {

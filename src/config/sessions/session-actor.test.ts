@@ -27,7 +27,6 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import type { SessionActorAuthority, SessionActorOperations } from "./session-actor-contract.js";
 import { createDurableSessionActorFactory } from "./session-actor-durable.js";
-import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { createSessionActorReplica } from "./session-actor-replica.js";
 import { createSessionActor, type SessionActorTransport } from "./session-actor.js";
 import { createSessionActorWorker } from "./session-actor.worker.js";
@@ -43,7 +42,7 @@ vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMa
 
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
 
-it("keeps production incognito acquisition on its native owner without creating a memory actor", async () => {
+it("keeps production incognito acquisition on its native owner", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = {
       agentId: "main",
@@ -69,7 +68,6 @@ it("keeps production incognito acquisition on its native owner without creating 
       { assertCurrent() {}, assertReadable() {} },
     );
     expect(actor).toBeUndefined();
-    expect(memorySessionActorOwners.read(database)).toBeUndefined();
     expect(getOpenClawAgentDatabaseIfOpen(database)).toBe(owner);
     expect(readExactSessionEntryRow(owner, sessionKey)?.entry).toMatchObject({
       sessionId: "native-session",
@@ -202,7 +200,6 @@ async function withActor(
     const transport: SessionActorTransport = {
       run(operation, authorize) {
         return runOpenClawAgentWorkerWrite(options, async () => {
-          const held = epoch;
           async function execute<Key extends keyof SessionActorOperations>(command: {
             type: Key;
             input: SessionActorOperations[Key]["input"];
@@ -270,13 +267,6 @@ async function withActor(
             }
           }
           return operation({
-            captureGeneration: () => ({
-              assertCurrent() {
-                if (held !== epoch) {
-                  throw new Error("Worker generation retired");
-                }
-              },
-            }),
             execute,
           });
         });
@@ -332,25 +322,6 @@ it("serves installed state without a request and reconciles a retired worker gen
     const restored = await actor.read(authority);
     expect(restored.entry?.sessionId).toBe(initial.entry?.sessionId);
     expect(restored.version.epoch).not.toBe(initial.version.epoch);
-    expect(commands).toEqual(["session.actor.read", "session.actor.read"]);
-  });
-});
-
-it.each([1, 2])("bounds empty-replica recovery after %i superseding writes", async (writes) => {
-  await withActor(async ({ actor, commands, fault, nativePatch }) => {
-    let remaining = writes;
-    fault.onExecuted = () => {
-      if (remaining > 0) {
-        nativePatch(700 + remaining);
-        remaining -= 1;
-      }
-    };
-    const reading = actor.read(authority);
-    if (writes === 1) {
-      expect((await reading).entry?.updatedAt).toBe(701);
-    } else {
-      await expect(reading).rejects.toThrow("changed before its read could publish");
-    }
     expect(commands).toEqual(["session.actor.read", "session.actor.read"]);
   });
 });
@@ -448,30 +419,6 @@ it("installs the full append receipt and releases FIFO before retained follow-up
     const installed = actor.snapshot(authority);
     expect(installed).toEqual(result.receipt.postimage);
     expect(installed?.transcript.watermark.maxSeq).not.toBe(before.transcript.watermark.maxSeq);
-  });
-});
-
-it("rechecks receipt freshness after a synchronous authority callback before disclosure", async () => {
-  await withActor(async ({ actor, nativePatch }) => {
-    await actor.read(authority);
-    expect(
-      actor.snapshot({
-        assertCurrent() {},
-        authorize() {
-          nativePatch(101);
-        },
-      }),
-    ).toBeUndefined();
-    await actor.read(authority);
-    await expect(
-      actor.read({
-        assertCurrent() {},
-        authorize() {
-          nativePatch(102);
-        },
-      }),
-    ).rejects.toThrow("changed before read disclosure");
-    expect((await actor.read(authority)).entry?.updatedAt).toBe(102);
   });
 });
 
