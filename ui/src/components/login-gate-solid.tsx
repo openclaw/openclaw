@@ -171,7 +171,7 @@ function LoginForm(
         <label for="login-gate-url">{t("login.gatewayUrl")}</label>
         <input
           id="login-gate-url"
-          inputMode="url"
+          inputmode="url"
           autocapitalize="none"
           autocorrect="off"
           autocomplete="off"

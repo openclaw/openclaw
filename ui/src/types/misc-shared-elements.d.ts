@@ -1,13 +1,11 @@
 import "@solidjs/web";
 import "../components/assistant-panel-content.ts";
 import "../components/home-session.runtime.ts";
-import "../components/modal-dialog.ts";
 import "../components/resizable-divider.ts";
 import "../components/tooltip.ts";
 import "../lib/toast.ts";
 import "../pages/custodian/custodian-surface.ts";
 import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
-import type { MascotMood } from "../components/mascot-pose.ts";
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -17,18 +15,6 @@ declare module "@solidjs/web" {
       Properties<HTMLElementTagNameMap[Tag]>;
 
     interface IntrinsicElements {
-      "openclaw-modal-dialog": MiscElementAttributes<"openclaw-modal-dialog"> &
-        Partial<
-          Pick<
-            HTMLElementTagNameMap["openclaw-modal-dialog"],
-            "label" | "description" | "open" | "manual"
-          >
-        > & {
-          "onModal-cancel"?: EventHandlerUnion<
-            HTMLElementTagNameMap["openclaw-modal-dialog"],
-            CustomEvent<null>
-          >;
-        };
       "resizable-divider": Omit<MiscElementAttributes<"resizable-divider">, "onResize"> & {
         "prop:measureRatio"?: HTMLElementTagNameMap["resizable-divider"]["measureRatio"];
         "prop:measureSize"?: HTMLElementTagNameMap["resizable-divider"]["measureSize"];
@@ -45,8 +31,6 @@ declare module "@solidjs/web" {
           CustomEvent<null>
         >;
       };
-      "openclaw-mascot": HTMLAttributes<HTMLElement> &
-        Properties<{ mood: MascotMood; size: number; tease: boolean }>;
       "openclaw-assistant-panel-content": MiscElementAttributes<"openclaw-assistant-panel-content"> & {
         "prop:sessionContext"?: HTMLElementTagNameMap["openclaw-assistant-panel-content"]["sessionContext"];
         "prop:context"?: HTMLElementTagNameMap["openclaw-assistant-panel-content"]["context"];

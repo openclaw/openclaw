@@ -64,7 +64,7 @@ export function AssistantPanelView(props: {
       <header class="rail-header assistant-panel-header" onMouseDown={beginNativeWindowDrag}>
         <div class="assistant-panel-title">
           <openclaw-mascot
-            prop:mood={
+            mood={
               state().destination === "custodian" && state().props.store?.sending
                 ? "thinking"
                 : "idle"

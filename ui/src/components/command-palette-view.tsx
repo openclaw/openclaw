@@ -478,7 +478,7 @@ function OpenPalette(props: { readProps: () => CommandPaletteProps }) {
     <>
       <openclaw-modal-dialog
         class="cmd-palette-overlay palette"
-        prop:label={t("palette.placeholder")}
+        label={t("palette.placeholder")}
         style={COMMAND_PALETTE_DIALOG_STYLE}
         onModal-cancel={(event: Event) => {
           if (current().composing || current().mentionMenu.open) {
