@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createEffect, createMemo, For, onCleanup, Show, untrack } from "solid-js";
 import { SYSTEM_AGENT_ID } from "../../../../src/system-agent/agent-id.js";
-import { MarkdownBlocks } from "../../components/markdown-blocks.ts";
+import { MarkdownBlocks } from "../../components/markdown-blocks-owner.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
 import { handleMarkdownTableInteraction } from "../../components/markdown-tables.ts";
 import { OptionCard } from "../../components/option-card.tsx";
