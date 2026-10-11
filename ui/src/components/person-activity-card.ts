@@ -30,8 +30,8 @@ import { personActivityLink, type PersonActivityRouting } from "./person-activit
 import "./elapsed-time.ts";
 import "./viewer-facepile.ts";
 
-type ScopedSession = { row: GatewaySessionRow; agentId: string };
-type PersonCardInput = {
+export type ScopedSession = { row: GatewaySessionRow; agentId: string };
+export type PersonCardInput = {
   user: PresenceViewer;
   sessionData: PersonActivityData | undefined;
   watchAgentId: string;
@@ -42,7 +42,7 @@ type PersonCardInput = {
 };
 
 /** Loaded, caller-visible roster facts, paired with their owning list scope. */
-function loadedPresenceSessions(input: PersonCardInput): Map<string, ScopedSession> {
+export function loadedPresenceSessions(input: PersonCardInput): Map<string, ScopedSession> {
   const sessions = new Map<string, ScopedSession>();
   for (const row of input.sessionData?.sessionsResult?.sessions ?? []) {
     const agentId = parseAgentSessionKey(row.key)?.agentId ?? row.agentId ?? input.watchAgentId;
@@ -54,7 +54,7 @@ function loadedPresenceSessions(input: PersonCardInput): Map<string, ScopedSessi
   return sessions;
 }
 
-function sessionIdentity(key: string, agentId: string, input: PersonCardInput): string {
+export function sessionIdentity(key: string, agentId: string, input: PersonCardInput): string {
   const scope = parseAgentSessionKey(key)?.agentId ?? normalizeAgentId(agentId);
   const canonical = canonicalUiSessionKeyForPersistence(
     {

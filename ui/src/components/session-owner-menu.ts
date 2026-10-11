@@ -108,6 +108,16 @@ export class SessionOwnerMenu {
     };
   }
 
+  get snapshot() {
+    return {
+      ...this.ownerOptions(),
+      searchGeneration: this.searchGeneration,
+      connected: Boolean(this.connection.capture()),
+      loading: this.profiles.status === TaskStatus.PENDING,
+      error: this.profiles.status === TaskStatus.ERROR ? this.profiles.error : undefined,
+    };
+  }
+
   get multipleOwners(): boolean {
     return this.ownerOptions().owners.length > 1;
   }

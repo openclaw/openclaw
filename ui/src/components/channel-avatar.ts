@@ -42,3 +42,9 @@ class ChannelAvatar extends OpenClawLightDomContentsElement {
 if (!customElements.get("openclaw-channel-avatar")) {
   customElements.define("openclaw-channel-avatar", ChannelAvatar);
 }
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-channel-avatar": ChannelAvatar;
+  }
+}
