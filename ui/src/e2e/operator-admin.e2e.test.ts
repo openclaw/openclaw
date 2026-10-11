@@ -434,8 +434,9 @@ suite.define(() => {
       const fileEditor = page.locator(".agent-file-textarea");
       await expect.poll(() => fileEditor.inputValue()).toBe("# Main agent\n");
       await expect.poll(() => fileEditor.isDisabled()).toBe(true);
-      // Exercise the ordinary input handler even with a dirty, read-only draft.
+      // Bypass only the DOM disabled state to exercise the owner's permission guard.
       await fileEditor.evaluate((element: HTMLTextAreaElement) => {
+        element.disabled = false;
         element.value = "# Mutated\n";
         element.dispatchEvent(new Event("input", { bubbles: true }));
       });
@@ -449,7 +450,10 @@ suite.define(() => {
       await page.getByRole("button", { name: "Close preview", exact: true }).click();
       const fileSave = page.locator(".agent-file-actions button").filter({ hasText: "Save" });
       await expect.poll(() => fileSave.isDisabled()).toBe(true);
-      await fileSave.dispatchEvent("click");
+      await fileSave.evaluate((element: HTMLButtonElement) => {
+        element.disabled = false;
+      });
+      await fileSave.click();
       expect(await gateway.getRequests("agents.files.set")).toHaveLength(0);
 
       await page.goto(`${suite.server.baseUrl}settings/agents/main/skills`);

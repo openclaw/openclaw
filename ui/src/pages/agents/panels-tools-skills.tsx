@@ -13,7 +13,6 @@ import type {
   ToolsEffectiveEntry,
   ToolsEffectiveResult,
 } from "../../api/types.ts";
-import { LitContent } from "../../components/solid/lit-content.tsx";
 import {
   SettingsSection,
   SettingsRow,
@@ -34,6 +33,7 @@ import {
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
 import { AgentPanelAction, renderAgentPanelFacts } from "./panel-ui.tsx";
 import { resolveToolAvailability, renderToolPolicyDetails } from "./tool-access-diagnostics.tsx";

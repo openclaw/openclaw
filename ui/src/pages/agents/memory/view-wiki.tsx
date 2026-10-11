@@ -7,7 +7,7 @@ import { pathDisplayName } from "../../../lib/path-display.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { WikiImportInsights, WikiOverview } from "./dreaming.ts";
 import { DiaryEmpty, DreamingAction, formatCompactDateTime } from "./view-shared.tsx";
-import type { DreamingProps, DreamingViewState } from "./view.tsx";
+import type { DreamingProps, DreamingViewState } from "./view-types.ts";
 
 function formatWikiCount(
   kind: "page" | "claimRow" | "openQuestion" | "contradiction",

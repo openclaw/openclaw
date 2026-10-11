@@ -38,5 +38,5 @@ export const page = definePage({
       agentsList: rawAgentsList ? selectableAgentsList(rawAgentsList) : null,
     };
   },
-  component: () => import("./agents-page.tsx"),
+  component: () => import("./agents-page.ts"),
 });

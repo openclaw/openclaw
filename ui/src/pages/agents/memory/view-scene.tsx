@@ -1,9 +1,9 @@
 import { createMemo, For } from "solid-js";
 import { lobsterPetSeed } from "../../../components/lobster-pet-contract.ts";
 import { createLobsterPetLook, renderLobsterSvg } from "../../../components/lobster-pet-look.ts";
-import { LitContent } from "../../../components/solid/lit-content.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import type { DreamingProps } from "./view.tsx";
+import { LitContent } from "../../../lit/solid-bridge.ts";
+import type { DreamingProps } from "./view-types.ts";
 
 const DREAM_PHASES = ["light", "deep", "rem"] as const;
 

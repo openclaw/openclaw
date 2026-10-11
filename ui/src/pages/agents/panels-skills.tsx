@@ -1,7 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { For, createMemo } from "solid-js";
 import type { SkillStatusReport } from "../../api/types.ts";
-import { LitContent } from "../../components/solid/lit-content.tsx";
 import {
   SettingsSection,
   SettingsRow,
@@ -18,6 +17,7 @@ import {
   isWorkshopSkill,
   renderSkillStatusChips,
 } from "../../lib/skills-shared.ts";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
 import { AgentPanelAction } from "./panel-ui.tsx";
 

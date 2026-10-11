@@ -4,7 +4,7 @@ import { createMemo, For, untrack } from "solid-js";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { DreamingEntry } from "./dreaming.ts";
 import { DreamingAction, formatCompactDateTime } from "./view-shared.tsx";
-import type { DreamingProps } from "./view.tsx";
+import type { DreamingProps } from "./view-types.ts";
 
 const DREAM_ACTIONS = [
   ["dedupeDiary", "onDedupeDreamDiary", "canDedupeDreamDiary"],

@@ -7,7 +7,6 @@ import type {
 } from "../../api/types.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { renderCronJobsPagination } from "../../components/cron-jobs-pagination.ts";
-import { LitContent } from "../../components/solid/lit-content.tsx";
 import {
   SettingsEmpty,
   SettingsRow,
@@ -26,6 +25,7 @@ import {
   formatNextRun,
 } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import { AgentPanelAction } from "./panel-ui.tsx";
 import { renderAgentContextSection } from "./panels-overview.tsx";
 

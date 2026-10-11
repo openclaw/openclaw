@@ -1,6 +1,8 @@
 import { render, spread, type JSX } from "@solidjs/web";
+import { nothing, render as renderLit } from "lit";
 import {
   createComponent,
+  createEffect,
   createRenderEffect,
   createSignal,
   flush,
@@ -9,6 +11,22 @@ import {
 } from "solid-js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
+
+/** Keep the remaining stateless Lit helpers inside their own DOM owner. */
+export function LitContent(props: { content: () => unknown }) {
+  const host = document.createElement("span");
+  host.style.display = "contents";
+  createEffect(
+    () => props.content(),
+    (content) => {
+      renderLit(content, host, { host });
+    },
+  );
+  onCleanup(() => {
+    renderLit(nothing, host).setConnected(false);
+  });
+  return host;
+}
 
 type Property<T> = {
   default: T;

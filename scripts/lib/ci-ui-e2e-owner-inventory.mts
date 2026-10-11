@@ -254,6 +254,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     [
       "ui/src/components/select-picker.ts",
       "ui/src/components/settings-save-indicator.ts",
+      "ui/src/pages/agents/agents-page.ts",
       "ui/src/pages/agents/agents-page.tsx",
       "ui/src/pages/agents/agents-page-state.ts",
     ],
@@ -1260,6 +1261,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["agents-home", "agents", "chat", "config"],
     [
       "ui/src/components/select-picker.ts",
+      "ui/src/pages/agents/agents-page.ts",
       "ui/src/pages/agents/agents-page.tsx",
       "ui/src/pages/agents/agents-page-state.ts",
     ],
@@ -1543,6 +1545,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     [
       "ui/src/components/agent-select-registration.ts",
       "ui/src/components/modal-dialog.ts",
+      "ui/src/pages/agents/agents-page.ts",
       "ui/src/pages/agents/agents-page.tsx",
       "ui/src/pages/agents/agents-page-state.ts",
     ],

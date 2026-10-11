@@ -1,4 +1,3 @@
-import { html } from "lit";
 import { createEffect, createMemo, onCleanup, untrack, useContext } from "solid-js";
 import { shellLayoutOwnerForHost } from "../../app/shell-layout-owner.ts";
 import { ShellLayoutProvider } from "../../app/shell-layout-traits-solid.tsx";
@@ -57,7 +56,3 @@ export const AgentsPage = defineSolidBridge<{ routeData: AgentsRouteData | undef
   },
   { properties: { routeData: { default: undefined, attribute: false } } },
 );
-
-export const header = true;
-export const render = (data: AgentsRouteData | undefined) =>
-  html`<openclaw-agents-page .routeData=${data}></openclaw-agents-page>`;

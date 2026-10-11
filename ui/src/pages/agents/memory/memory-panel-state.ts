@@ -14,9 +14,12 @@ import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { currentConfigObject } from "../../../lib/config/config-state-model.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
-import { ControllerHost, viewState } from "../../../lib/reactive/controller-host.ts";
 import { GatewayPageController } from "../../../lit/gateway-page-controller.ts";
-import { SubscriptionsController } from "../../../lit/subscriptions-controller.ts";
+import {
+  ControllerHost,
+  SubscriptionsController,
+  viewState,
+} from "../../../lit/subscriptions-controller.ts";
 import {
   canCallDreamingMethod,
   copyDreamingArchivePath,

@@ -4,22 +4,22 @@ import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { handleCopyButton } from "../../components/copy-button.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
-import { LitContent } from "../../components/solid/lit-content.tsx";
 import {
   SettingsEmpty,
   SettingsSection,
   SettingsNavRow,
   LearnMoreLink,
 } from "../../components/solid/settings-ui.tsx";
+import { buildAgentContext } from "../../lib/agents/display.ts";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
-import { buildAgentContext } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import {
   currentConfigObject,
   type RuntimeConfigState,
 } from "../../lib/config/config-state-model.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import type { AgentConfigActions } from "./config-actions.tsx";
 import { AgentMemoryPanel } from "./memory/memory-panel.tsx";
 import { AgentFiles } from "./panels-files.tsx";

@@ -19,7 +19,6 @@ import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view
 import { renderModelPicker } from "../../components/model-picker.ts";
 import "../../components/tooltip.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status-state.ts";
-import { LitContent } from "../../components/solid/lit-content.tsx";
 import { PanelRefreshStatus as PanelRefreshNotice } from "../../components/solid/panel-refresh-status.tsx";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import {
@@ -36,10 +35,11 @@ import {
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
-import { ControllerHost } from "../../lib/reactive/controller-host.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { uploadsEnabled } from "../../lib/uploads.ts";
+import { LitContent } from "../../lit/solid-bridge.ts";
+import { ControllerHost } from "../../lit/subscriptions-controller.ts";
 import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
 import { renderAgentPanelFacts } from "./panel-ui.tsx";
 

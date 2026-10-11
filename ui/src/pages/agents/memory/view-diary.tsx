@@ -1,16 +1,16 @@
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { createMemo, For, Show, untrack } from "solid-js";
 import { renderHubTabs } from "../../../components/hub-tabs.ts";
-import { LitContent } from "../../../components/solid/lit-content.tsx";
 import { MarkdownHtml } from "../../../components/solid/markdown-html.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { LitContent } from "../../../lit/solid-bridge.ts";
 import { DiaryEmpty, DreamingAction } from "./view-shared.tsx";
+import type { DreamingProps } from "./view-types.ts";
 import {
   ImportedInsightsContent,
   renderWikiPreviewOverlay,
   WikiOverviewContent,
 } from "./view-wiki.tsx";
-import type { DreamingProps } from "./view.tsx";
 
 type DiaryEntry = {
   date: string;
