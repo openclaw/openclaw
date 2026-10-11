@@ -13,6 +13,45 @@ const DEPRECATED_SESSION_COMPAT = {
 export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
   REPLY_TOOL_AUTHORITY_COMPAT_RECORD,
   {
+    code: "github-publication-native-callbacks",
+    ...DEPRECATED_SESSION_COMPAT,
+    introduced: "2026-08-19",
+    deprecated: "2026-10-09",
+    warningStarts: "2026-10-09",
+    replacement:
+      "Use requestForSessionV2 and requestForClaimV2 with the host-provided GitHubPublicationRequesterV2, and requestPersonalForSessionV2 and confirmPersonalV2 with PersonalGitHubSessionActionV2. Await deferClaimPreparationAsync, deferOrphanedRequestsAsync, listUnreportedResultsAsync, and markReportedAsync. On githubOAuthService.personal, await cancelAuthorizationAsync and disconnectAsync. Legacy callbacks retain their native ordering and synchronous mutations commit before return; these forms will be removed in the next Plugin SDK major.",
+    docsPath: "/plugins/sdk-migration/how-to-migrate#await-github-publication-operations",
+    surfaces: [
+      "GatewayRequestHandlerOptions.context.githubPublicationService.requestForSession",
+      "GatewayRequestHandlerOptions.context.githubPublicationService.requestForClaim",
+      "GatewayRequestHandlerOptions.context.githubPublicationService.requestPersonalForSession",
+      "GatewayRequestHandlerOptions.context.githubPublicationService.confirmPersonal",
+      "GatewayRequestHandlerOptions.context.githubPublicationService.deferClaimPreparation",
+      "GatewayRequestHandlerOptions.context.githubPublicationService.deferOrphanedRequests",
+      "GatewayRequestHandlerOptions.context.githubPublicationService.listUnreportedResults",
+      "GatewayRequestHandlerOptions.context.githubPublicationService.markReported",
+      "GatewayRequestHandlerOptions.context.githubOAuthService.personal.cancelAuthorization",
+      "GatewayRequestHandlerOptions.context.githubOAuthService.personal.disconnect",
+      "GitHubPublicationRequester",
+      "GitHubPublicationRequesterPolicy",
+      "PersonalGitHubSessionAction",
+      "getPluginRuntimeGatewayRequestScope().context.githubPublicationService",
+      "getPluginRuntimeGatewayRequestScope().context.githubOAuthService.personal",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations naming the V2 or Async replacement; one shared runtime DEP_PLUGIN_SDK warning per plugin and github-publication family per process, including bounded unscoped SDK use",
+    ],
+    tests: [
+      "src/plugin-sdk/gateway-placement-compat.test.ts",
+      "src/state/github-publication.worker.test.ts",
+      "src/gateway/github-publication-admission.test.ts",
+      "src/gateway/server-methods/users-github.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "GitHub publication adds required V2 requester capabilities and worker-owned request, lifecycle, execution, recovery, and reporting commands. Released callbacks and synchronous coordinator methods remain compatible through the next Plugin SDK major. Personal connection cancellation and disconnection add awaited worker methods while retaining their released synchronous contracts; schemas, stored data, retention, and update behavior are unchanged.",
+  },
+  {
     code: "session-store-opaque-mutations",
     ...DEPRECATED_SESSION_COMPAT,
     introduced: "2026-09-08",

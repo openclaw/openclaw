@@ -277,7 +277,7 @@ suite.define(() => {
             ),
           ).toBe("Observatory");
           expect(bootstrapRequests).toBe(0);
-          await sidebar.getByText("Observatory", { exact: true }).waitFor();
+          await sidebar.getByRole("button", { name: /^Observatory ·/u }).waitFor();
         }
         if (profile === "matching") {
           await expectOwnMessageAlignment(page);

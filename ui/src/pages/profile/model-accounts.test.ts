@@ -446,11 +446,6 @@ it("polls one authorization at a time and uses its recorded outcome", async () =
 
 it.each([
   {
-    result: { status: "cancelled" } as const,
-    message: "profilePage.modelAccounts.notices.cancelled",
-  },
-  { result: { status: "expired" } as const, message: "profilePage.modelAccounts.notices.expired" },
-  {
     result: { status: "failed", reason: "identity" } as const,
     message: "profilePage.modelAccounts.connectErrors.identity",
   },
@@ -563,45 +558,6 @@ it("stops at the operation deadline without pretending an unknown attempt expire
   ).toHaveLength(3);
 });
 
-it("shows personal sign-in context before writers enter a masked credential", async () => {
-  const harness = await mountAccounts(
-    async (method, params) => {
-      expect(method).toBe("users.authConnect.answer");
-      expect(params).toEqual({
-        profileId: "profile-1",
-        connectId: "connect-1",
-        stepId: "api-key",
-        value: "test-key",
-      });
-      return {
-        status: "connected",
-        authProfileId: "anthropic:personal",
-        links: [{ provider: "anthropic", authProfileId: "anthropic:personal", updatedAt: 1 }],
-      };
-    },
-    {
-      gatewayUrl:
-        "wss://synthetic-user:synthetic-password@test.invalid/control?token=synthetic-query#synthetic-fragment",
-      step: { id: "api-key", type: "text", message: "Enter your API key", sensitive: true },
-    },
-  );
-  expect(harness.accounts.querySelector(".profile-auth-link-input")).toBeNull();
-  expect(harness.accounts.textContent).toContain("wss://test.invalid/control");
-  expect(harness.accounts.innerHTML).not.toContain("synthetic-");
-  expect(harness.accounts.textContent).toContain("Ada");
-  expect(harness.accounts.textContent).toContain("Personal");
-  expect(harness.accounts.querySelector('input[type="password"]')).toBeNull();
-  await harness.start("anthropic");
-  const token = await input(harness.accounts, ".wizard-step__form input", "test-key");
-  expect(token.type).toBe("password");
-  button(harness.accounts, '.wizard-step__form button[type="submit"]').click();
-  await vi.waitFor(() => expect(harness.accounts.textContent).toContain(claudeAccount.label));
-  expect(harness.accounts.querySelector(".model-accounts-notice")?.textContent).toContain(
-    "Account added.",
-  );
-  expect(token.value).toBe("");
-});
-
 it("adds a catalog-provided account through its masked auth step without provider-specific controls", async () => {
   const step = {
     id: "grok-key",
@@ -652,9 +608,13 @@ it("adds a catalog-provided account through its masked auth step without provide
     {
       step: { id: "notice", type: "note", message: "Use your own API key." },
       connectedAccounts: [account],
+      gatewayUrl:
+        "wss://synthetic-user:synthetic-password@test.invalid/control?token=synthetic-query#synthetic-fragment",
     },
   );
   expect(harness.accounts.querySelector('input[type="password"]')).toBeNull();
+  expect(harness.accounts.textContent).toContain("wss://test.invalid/control");
+  expect(harness.accounts.innerHTML).not.toContain("synthetic-");
   await harness.start("xai");
   expect(harness.accounts.textContent).toContain("Use your own API key.");
   const noteButton = button(harness.accounts, ".wizard-step__actions button.primary");

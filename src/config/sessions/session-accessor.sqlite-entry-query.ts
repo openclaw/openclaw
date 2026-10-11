@@ -15,10 +15,8 @@ import { hasSqliteSessionOwnerColumns } from "./session-accessor.sqlite-owner-pr
 import { selectSessionEntryRows } from "./session-accessor.sqlite-status.js";
 import { canonicalSessionValidationQuery } from "./session-canonical-key.js";
 import type { CanonicalSessionValidationRow } from "./session-canonical-row.js";
-import {
-  sessionEntrySnapshotColumnsForKeys,
-  type SessionEntryProjection,
-} from "./session-entry-snapshots.js";
+import type { SessionEntryProjection } from "./session-entry-snapshot-values.js";
+import { sessionEntrySnapshotColumnsForKeys } from "./session-entry-snapshots.js";
 import type { ResolvedSessionEntryRow } from "./session-entry-storage.types.js";
 
 function cacheSessionEntryQuery<Row extends ResolvedSessionEntryRow["row"]>(
@@ -121,6 +119,6 @@ export function selectReadableSessionEntryRows(
     ? selectSessionEntryRows(database, projection).select(["current_session_id", "updated_at"])
     : getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
         .selectFrom("session_nodes")
-        .selectAll()
+        .selectAll("session_nodes")
         .select(sessionEntrySnapshotColumnsForKeys(undefined, projection));
 }

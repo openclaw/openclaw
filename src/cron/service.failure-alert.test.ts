@@ -25,6 +25,105 @@ function withAlerts(run: AlertParams[1], options: Omit<AlertParams[0], "schedule
 }
 
 describe("CronService failure alerts", () => {
+  it("alerts once for blocked local-provider runs and recovers without repair or backoff", async () => {
+    const error = "Local provider unavailable at http://127.0.0.1:11434 (private diagnostic)";
+    const blocked = {
+      status: "skipped" as const,
+      error,
+      diagnostics: {
+        entries: [
+          {
+            ts: Date.now(),
+            source: "model-preflight" as const,
+            severity: "warn" as const,
+            message: error,
+          },
+        ],
+      },
+    };
+    await withAlerts(
+      async ({ cron, sendCronFailureAlert, runCronFailureRepair, runIsolatedAgentJob, addJob }) => {
+        const job = await addJob("local report", {
+          delivery: createTelegramDelivery(),
+          owner: { sessionKey: "agent:main:owner" },
+        });
+        for (let count = 1; count <= 3; count++) {
+          vi.setSystemTime(cron.getJob(job.id)!.state.nextRunAtMs!);
+          await expect(cron.run(job.id, "due")).resolves.toEqual({ ok: true, ran: true });
+          expect(sendCronFailureAlert).toHaveBeenCalledTimes(count < 2 ? 0 : 1);
+          expect(cron.getJob(job.id)).toMatchObject({
+            enabled: true,
+            state: {
+              lastRunStatus: "skipped",
+              lastError: error,
+              consecutiveErrors: 0,
+              consecutiveSkipped: count,
+              nextRunAtMs: Date.now() + 60_000,
+            },
+          });
+        }
+        const alert = alertCallArg(sendCronFailureAlert);
+        expect(alert.text).toContain("local model provider is unreachable");
+        expect(alert.text).toContain("Start the provider or check its configured endpoint");
+        expect(alert.text).not.toContain("private diagnostic");
+        expect(runCronFailureRepair).not.toHaveBeenCalled();
+
+        vi.setSystemTime(Date.now() + 3_600_000);
+        await cron.run(job.id, "due");
+        expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+        runIsolatedAgentJob.mockResolvedValue({
+          ...blocked,
+          error: "Local provider unavailable at http://127.0.0.1:1234",
+        });
+        await cron.run(job.id, "force");
+        expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
+
+        runIsolatedAgentJob.mockResolvedValue({ status: "ok", delivered: true });
+        await cron.run(job.id, "force");
+        expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
+        expect(cron.getJob(job.id)?.state.failureAlertIncident).toBeUndefined();
+        expect(cron.getJob(job.id)?.state.lastFailureAlertAtMs).toBeUndefined();
+        expect(runCronFailureRepair).not.toHaveBeenCalled();
+      },
+      { failureAlert: undefined, runResult: blocked },
+    );
+  });
+
+  it.each(["job opt-out", "global opt-out", "ordinary skip"] as const)(
+    "keeps %s silent with the default skipped-alert policy",
+    async (scenario) => {
+      await withAlerts(
+        async ({ cron, sendCronFailureAlert, runCronFailureRepair, addJob }) => {
+          const job = await addJob("silent skip", {
+            delivery: createTelegramDelivery(),
+            ...(scenario === "job opt-out" ? { failureAlert: false as const } : {}),
+          });
+          await cron.run(job.id, "force");
+          await cron.run(job.id, "force");
+          expect(sendCronFailureAlert).not.toHaveBeenCalled();
+          expect(runCronFailureRepair).not.toHaveBeenCalled();
+        },
+        {
+          failureAlert: scenario === "global opt-out" ? { enabled: false } : undefined,
+          runResult: {
+            status: "skipped",
+            error: "unavailable",
+            diagnostics: {
+              entries: [
+                {
+                  ts: Date.now(),
+                  source: scenario === "ordinary skip" ? "cron-preflight" : "model-preflight",
+                  severity: "warn",
+                  message: "unavailable",
+                },
+              ],
+            },
+          },
+        },
+      );
+    },
+  );
+
   it("groups delivery failures with the job cooldown without an after gate", async () => {
     await withAlerts(
       async ({ cron, sendCronFailureAlert, runIsolatedAgentJob, addJob }) => {

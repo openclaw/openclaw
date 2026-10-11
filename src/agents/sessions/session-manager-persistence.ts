@@ -5,7 +5,10 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
 import type { SessionMetadataWorkerOperations } from "../../config/sessions/session-manager-write-contract.js";
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
-import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
+import {
+  captureSessionTranscriptQuestionAnswers,
+  resolveSessionTranscriptReadFence,
+} from "../../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import {
   captureSessionTranscriptTargetBinding,
@@ -79,6 +82,14 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
       throw new Error("Asynchronous session writes must own their transaction");
     }
     const initialWriter = this.initialTranscriptWriter;
+    const admission = resolveSessionTranscriptReadFence(captured);
+    const questionAnswers = message?.validateTurn
+      ? captureSessionTranscriptQuestionAnswers(
+          { path: captured.storePath },
+          captured.sessionId,
+          admission?.entryId,
+        )
+      : undefined;
     const assertOwned = captureOwnedTranscriptWriteAssertion(identity);
     const assertBinding = () => {
       const current = this.persistenceTarget;
@@ -95,8 +106,8 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
       assertNavigation?.();
       initialWriter?.assertActive();
       assertOwned();
+      questionAnswers?.assertCurrent();
     };
-    const admission = resolveSessionTranscriptReadFence(captured);
     const persistCompaction = getSessionCompactionPersistenceAsync(this);
     if (entry.type === "compaction" && persistCompaction) {
       if (this.persistenceHeaderPending) {
@@ -186,6 +197,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
                 loadedVersion,
                 limits: this.boundedContextLimits,
                 admission,
+                questionAnswers: questionAnswers?.answers,
               },
             },
             ...(this.persistenceHeaderPending || (initialWriter && !initialWriter.committedFence)
@@ -413,6 +425,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
                         loadedVersion: this.transcriptVersion,
                         limits: this.boundedContextLimits,
                         admission,
+                        questionAnswers: questionAnswers?.answers,
                       },
                     }
                   : {}),

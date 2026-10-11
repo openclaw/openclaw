@@ -123,17 +123,6 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
         /\.(?:md|markdown)$/i.test(props.label))
     );
   };
-  type Source = {
-    src: string;
-    identity: string;
-    size: number | undefined;
-    plain: boolean;
-    mime: string;
-    label: string;
-    retry: number;
-    html: boolean;
-  };
-  let previous: Source | undefined;
   const sourceInput = createMemo(
     () => ({
       src: props.src,
@@ -156,7 +145,7 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
         before.retry === after.retry,
     },
   );
-  createEffect(sourceInput, (current) => {
+  createEffect(sourceInput, (current, previous) => {
     const policyChanged =
       !previous ||
       previous.plain !== current.plain ||
@@ -170,7 +159,6 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
       previous?.retry !== current.retry ||
       !current.src ||
       !current.identity;
-    previous = current;
     if (identityChanged) {
       setSource(false);
     }
@@ -352,22 +340,18 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
   );
 }
 
-export const ChatTextAttachment = defineSolidBridge<TextAttachmentProps>(
-  "openclaw-chat-text-attachment",
-  TextAttachment,
-  {
-    properties: {
-      plainText: { default: false },
-      actions: { default: undefined, attribute: false },
-      embedSandboxMode: { default: "scripts" },
-      src: { default: "" },
-      sourceIdentity: { default: "" },
-      label: { default: "" },
-      mimeType: { default: "" },
-      sizeBytes: { default: undefined, type: Number },
-    },
+defineSolidBridge<TextAttachmentProps>("openclaw-chat-text-attachment", TextAttachment, {
+  properties: {
+    plainText: { default: false },
+    actions: { default: undefined, attribute: false },
+    embedSandboxMode: { default: "scripts" },
+    src: { default: "" },
+    sourceIdentity: { default: "" },
+    label: { default: "" },
+    mimeType: { default: "" },
+    sizeBytes: { default: undefined, type: Number },
   },
-);
+});
 declare global {
   interface HTMLElementTagNameMap {
     "openclaw-chat-text-attachment": SolidBridgeElement<TextAttachmentProps>;

@@ -7,6 +7,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { takeControlUiElementScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI warm owner-first refresh" });
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -84,12 +85,9 @@ suite.define(() => {
       const ada = page.locator('[data-session-key="agent:main:ada"]');
       const bob = page.locator('[data-session-key="agent:main:bob"]');
       await ada.waitFor();
-      // This regression protects foreign rows in All during a warm refresh.
+      // This regression protects foreign rows during a warm refresh.
       expect(await bob.count()).toBe(0);
-      await page
-        .locator(".sidebar-navigation-scope")
-        .getByRole("button", { name: "All", exact: true })
-        .click();
+      await selectAllSidebarSessions(page);
       await bob.waitFor();
       await captureSidebar(page, "warm-before-event.png");
 

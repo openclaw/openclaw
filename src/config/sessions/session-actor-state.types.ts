@@ -12,7 +12,10 @@ import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionActorTarget = Readonly<{
-  database: AgentDatabaseExecutionFileIdentity | AgentDatabaseIncognitoIdentity;
+  database:
+    | AgentDatabaseExecutionFileIdentity
+    | AgentDatabaseIncognitoIdentity
+    | { kind: "memory"; handle: string; incarnation: string };
   sessionKey: string;
 }>;
 
@@ -25,6 +28,23 @@ export type SessionActorLifetime = {
   assertCurrent(): void;
   /** Accepted work may still settle after new disclosure has been revoked. */
   assertReadable(): void;
+};
+
+/** Entry policy and physical/version identity; transcript indexes are not authority. */
+export type SessionActorAuthorityFacts = Pick<
+  SessionActorHotState,
+  "target" | "version" | "writeToken" | "dependencySessionIds" | "entry"
+>;
+
+/** Host-owned live authority, rechecked at both synchronous admission boundaries. */
+export type SessionActorAuthority = {
+  assertCurrent(): void;
+  authorize(
+    stage: "transaction" | "commit",
+    facts: SessionActorAuthorityFacts,
+    /** Existing kernel source/custody evidence remains subject to its owner's checks. */
+    publication?: unknown,
+  ): void;
 };
 
 /** Complete hot facts. Cold/off-path payloads stay with the bounded history reader. */

@@ -524,8 +524,9 @@ These commands do not replace post-update plugin, migration or service recovery.
 Keep other package managers stopped while recovering the operation.
 
 On FreeBSD, `repair` and `retire` read process identity through the recorded
-installation's own `koffi` dependency: the live package, or the copy the
-operation retains beside it during publication. Helpers written by older
+installation's own `@openclaw/proc-safe` dependency and its FreeBSD platform
+addon: the live package, or the copy the operation retains beside it during
+publication. Helpers written by older
 updaters cannot repair or retire on FreeBSD; `status` still reports the
 operation.
 

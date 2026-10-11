@@ -24,7 +24,7 @@ const questionPanelElement = {
   loadModule: QuestionPanel.preload,
 };
 
-export const ChatQuestionCard = defineSolidBridge<CardProps>(
+defineSolidBridge<CardProps>(
   "openclaw-chat-question-card",
   (props, host) => {
     host.style.display = "contents";

@@ -26,6 +26,7 @@ export const ChatCommentPins = defineSolidBridge<ChatCommentPinsProps>(
     let mutationObserver: MutationObserver | undefined;
     let frame: number | undefined;
     let observedInner: Element | undefined;
+    let disposed = false;
     /** Source bubbles placed by the last layout; null while any pin is unplaced. */
     let anchors: HTMLElement[] | null = null;
     const inputs = createMemo(
@@ -117,27 +118,34 @@ export const ChatCommentPins = defineSolidBridge<ChatCommentPinsProps>(
     }
 
     onSettled(() => {
-      root = host.closest(".chat-thread");
-      if (root) {
-        resizeObserver = new ResizeObserver(scheduleLayout);
-        resizeObserver.observe(root);
-        mutationObserver = new MutationObserver((records) => {
-          if (records.some((record) => canMovePins(record.target))) {
-            scheduleLayout();
-          }
-        });
-        mutationObserver.observe(root, {
-          childList: true,
-          subtree: true,
-          characterData: true,
-          attributes: true,
-        });
-        root.addEventListener("scroll", scheduleLayout, { passive: true });
-        scheduleLayout();
-      }
+      // Native bridge content settles before its host is inserted by the parent.
+      queueMicrotask(() => {
+        if (disposed) {
+          return;
+        }
+        root = host.closest(".chat-thread");
+        if (root) {
+          resizeObserver = new ResizeObserver(scheduleLayout);
+          resizeObserver.observe(root);
+          mutationObserver = new MutationObserver((records) => {
+            if (records.some((record) => canMovePins(record.target))) {
+              scheduleLayout();
+            }
+          });
+          mutationObserver.observe(root, {
+            childList: true,
+            subtree: true,
+            characterData: true,
+            attributes: true,
+          });
+          root.addEventListener("scroll", scheduleLayout, { passive: true });
+          scheduleLayout();
+        }
+      });
     });
     createEffect(comments, scheduleLayout);
     onCleanup(() => {
+      disposed = true;
       resizeObserver?.disconnect();
       mutationObserver?.disconnect();
       root?.removeEventListener("scroll", scheduleLayout);

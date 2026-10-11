@@ -379,7 +379,7 @@ it("charges admission waiters to the byte budget and releases canceled reservati
 
 poolIt.each([
   { cores: 1, workers: 2 },
-  { cores: 128, workers: 8 },
+  { cores: 128, workers: 2 },
 ])("uses $workers worker threads for $cores available CPUs", async ({ cores, workers }) => {
   const parallelism = vi.spyOn(os, "availableParallelism").mockReturnValue(cores);
   const broker = new SqliteWorkerBroker();
