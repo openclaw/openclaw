@@ -8,6 +8,7 @@ it.each([
   { source: "provider", value: { source: "env", provider: "default", id: "MISSING_HEADER" } },
   { source: "remote", value: 42 },
   { source: "provider", value: null },
+  { source: "remote", value: undefined },
 ])("rejects invalid $source embedding headers before egress: $value", async ({ source, value }) => {
   const fetch = vi.spyOn(globalThis, "fetch");
   // Exercise malformed/unresolved runtime input, beyond authored config validation.

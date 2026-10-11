@@ -447,10 +447,8 @@ async function resolveGeminiEmbeddingClient(
     ["memory.search.remote.headers", remote?.headers],
   ] as const) {
     for (const [name, value] of Object.entries(source ?? {})) {
-      const header = resolveMemorySecretInputString({ value, path: `${path}.${name}` });
-      if (header) {
-        headerOverrides[name] = header;
-      }
+      headerOverrides[name] =
+        resolveMemorySecretInputString({ value: value ?? null, path: `${path}.${name}` }) ?? "";
     }
   }
   const headers: Record<string, string> = {

@@ -177,7 +177,10 @@ export async function createLmstudioEmbeddingProvider(
     ["memory.search.remote.headers", options.remote?.headers],
   ] as const) {
     for (const [name, value] of Object.entries(source ?? {})) {
-      const header = resolveMemorySecretInputString({ value, path: `${path}.${name}` });
+      const header = resolveMemorySecretInputString({
+        value: value ?? null,
+        path: `${path}.${name}`,
+      });
       if (header) {
         headerOverrides[name] = header;
       }
