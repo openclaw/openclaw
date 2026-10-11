@@ -44,11 +44,11 @@ function makeParams(
     workspaceDir: "/tmp/workspace",
     contextTokens: options?.contextTokens ?? null,
     storePath: options?.storePath,
-    provider: "openai",
-    model: "gpt-5",
+    provider: "ollama",
+    model: "qwen2.5:7b",
     thinkingCatalog:
       options?.contextTokens != null
-        ? [{ provider: "openai", id: "gpt-5", contextWindow: options.contextTokens }]
+        ? [{ provider: "ollama", id: "qwen2.5:7b", contextWindow: options.contextTokens }]
         : [],
     elevated: { allowed: false },
     resolvedThinkLevel: "off",
