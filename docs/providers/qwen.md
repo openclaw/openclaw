@@ -6,7 +6,7 @@ read_when:
 title: "Qwen"
 ---
 
-Qwen Cloud is an official external OpenClaw provider plugin with canonical id `qwen`. It targets Qwen Cloud / Alibaba DashScope Standard and Coding Plan endpoints, exposes Token Plan as `qwen-token-plan`, keeps `modelstudio` as a compatibility alias, and independently owns Alibaba's documented `bailian-token-plan` custom-provider id.
+Qwen Cloud is an official external OpenClaw provider plugin with primary id `qwen`. It targets Qwen Cloud / Alibaba DashScope Standard and Coding Plan endpoints, exposes Token Plan as `qwen-token-plan`, keeps `modelstudio` as a compatibility alias, and independently owns Alibaba's documented `bailian-token-plan` custom-provider id.
 
 | Property               | Value                                      |
 | ---------------------- | ------------------------------------------ |
@@ -80,7 +80,7 @@ Choose your plan type and follow the setup steps.
 
     <Note>
     Legacy `modelstudio-*` auth-choice ids and `modelstudio/...` model refs still
-    work as compatibility aliases, but new setup flows should prefer the canonical
+    work as compatibility aliases, but new setup flows should prefer the current
     `qwen-*` auth-choice ids and `qwen/...` model refs. If you define an exact
     custom `models.providers.modelstudio` entry with another `api` value, that
     custom provider owns `modelstudio/...` refs instead of the Qwen compatibility
@@ -129,7 +129,7 @@ Choose your plan type and follow the setup steps.
 
     <Note>
     Legacy `modelstudio-*` auth-choice ids and `modelstudio/...` model refs still
-    work as compatibility aliases, but new setup flows should prefer the canonical
+    work as compatibility aliases, but new setup flows should prefer the current
     `qwen-*` auth-choice ids and `qwen/...` model refs. If you define an exact
     custom `models.providers.modelstudio` entry with another `api` value, that
     custom provider owns `modelstudio/...` refs instead of the Qwen compatibility
@@ -171,7 +171,7 @@ Choose your plan type and follow the setup steps.
     provider. The plugin registers that id as a compatibility owner, but new
     configs should use `qwen-token-plan`. An exact custom
     `models.providers.bailian-token-plan` entry keeps ownership of its configured
-    transport and catalog; it is never merged into the canonical OpenAI catalog.
+    transport and catalog; it is never merged into the OpenAI catalog.
     </Note>
 
     <Warning>
@@ -205,7 +205,7 @@ are not converted automatically.
 | Token Plan (Team Edition)  | China  | `qwen-token-plan-cn`       | `token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`     |
 | Token Plan (Team Edition)  | Global | `qwen-token-plan`          | `token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` |
 
-The provider auto-selects the endpoint based on your auth choice. Canonical
+The provider auto-selects the endpoint based on your auth choice. Current
 choices use the `qwen-*` family; `modelstudio-*` remains compatibility-only.
 Override with a custom `baseUrl` in config.
 

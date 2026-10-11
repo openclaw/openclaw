@@ -1,5 +1,5 @@
 ---
-summary: "The architecture case for OpenClaw: a trusted gateway, untrusted execution, deterministic policy, and versioned state, compared source-by-source with single-process harnesses"
+summary: "The architecture case for OpenClaw: a trusted gateway, untrusted execution, policy enforced by code, and versioned state, compared source-by-source with single-process harnesses"
 read_when:
   - You are evaluating agent harnesses for team or enterprise use
   - You need to explain to a security team how OpenClaw differs from single-process harnesses
@@ -35,7 +35,7 @@ A good harness spans the whole range: the same product runs as a personal assist
 Seven testable properties:
 
 1. **Separated trust boundary.** Execution moves into a sandbox, a node, or a throwaway cloud machine without standing Gateway credentials; scoped worker credentials have a separate lifecycle.
-2. **Policy is code.** Denial is structural, not a request the model is asked to honor; approval paths fail closed.
+2. **Policy is code.** Denial is structural, not a request the model is asked to honor; approval paths deny requests when validation fails.
 3. **Authenticated access, bounded roles.** Inbound access is default-deny and authenticated; people hold bounded roles; the vendor states which boundaries are security and which are convenience.
 4. **Secrets have owners.** Isolatable credential failures degrade their owners; ingress-auth and invalid-configuration failures stop startup.
 5. **Versioned state, guarded upgrades.** State is schema-versioned with owned migrations; upgrades are guarded and delivered through release channels.
@@ -74,7 +74,7 @@ The public plugin SDK publishes about 150 entrypoints, held under shrink-only su
 
 ## Open standards
 
-OpenClaw adopts the protocols the ecosystem is converging on. It is an [MCP client](/tools/mcp) (Streamable HTTP, SSE, and stdio transports, with OAuth) and an [MCP server](/cli/mcp), and plugins can [ship their own MCP servers and apps](/plugins/manifest/surfaces#mcp-server-reference). Other agents reach it through the Linux Foundation [A2A 1.0 protocol](/channels/a2a) — Agent Card discovery, authenticated JSON-RPC tasks, and outbound peer messaging — and editors connect over the [Agent Client Protocol](/cli/acp), which OpenClaw also uses to [host external harnesses](/tools/acp-agents). Agents render live [A2UI widgets](/web/dashboards) on session dashboards.
+OpenClaw adopts protocols used across AI tools. It is an [MCP client](/tools/mcp) (Streamable HTTP, SSE, and stdio transports, with OAuth) and an [MCP server](/cli/mcp), and plugins can [ship their own MCP servers and apps](/plugins/manifest/surfaces#mcp-server-reference). Other agents reach it through the Linux Foundation [A2A 1.0 protocol](/channels/a2a) — Agent Card discovery, authenticated JSON-RPC tasks, and outbound peer messaging — and editors connect over the [Agent Client Protocol](/cli/acp), which OpenClaw also uses to [host external harnesses](/tools/acp-agents). Agents render live [A2UI widgets](/web/dashboards) on session dashboards.
 
 Skills follow the [AgentSkills spec](/tools/skills), plugin installs auto-detect [Agent Plugins, Codex, Claude, and Cursor bundle layouts](/plugins/bundles), and the Gateway can serve an [OpenAI-compatible API](/gateway/openai-http-api) (`/v1/chat/completions` with a documented function-tool subset, [`/v1/responses`](/gateway/openresponses-http-api), `/v1/models`, `/v1/embeddings`; disabled by default, `/v1/responses` separately enabled) so OpenAI clients can target the Gateway directly. Observability exports over [OpenTelemetry](/gateway/opentelemetry) and [Prometheus](/gateway/prometheus); gateways advertise via [Bonjour and DNS-SD](/gateway/bonjour); channels include native [Matrix](/channels/matrix), [IRC](/channels/irc), and [Nostr](/channels/nostr) protocol implementations; and releases ship with [npm provenance and verifiable artifact attestations](/reference/RELEASING).
 

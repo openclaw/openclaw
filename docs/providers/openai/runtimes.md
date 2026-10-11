@@ -13,7 +13,7 @@ sidebarTitle: "Runtimes and Codex auth"
 
 | Name you see                            | Layer             | Meaning                                                                                  |
 | --------------------------------------- | ----------------- | ---------------------------------------------------------------------------------------- |
-| `openai`                                | Provider prefix   | Canonical OpenAI model route; route facts determine the implicit runtime.                |
+| `openai`                                | Provider prefix   | Standard OpenAI model route; route facts determine the implicit runtime.                 |
 | `codex` plugin                          | Plugin            | Bundled plugin providing the native Codex app-server runtime and `/codex` chat controls. |
 | provider/model `agentRuntime.id: codex` | Agent runtime     | Force the native Codex app-server harness for matching embedded turns.                   |
 | `/codex ...`                            | Chat command set  | Bind/control Codex app-server threads from a conversation.                               |
@@ -46,7 +46,7 @@ the official HTTPS model `baseUrl` when using that proxy.
 
 An explicit `agentRuntime.id: "openclaw"` keeps a Codex-eligible route on
 OpenClaw. Explicit `agentRuntime.id: "codex"` requires a registered Codex harness;
-unsupported routes/auth fail closed, except that authored request overrides may
+unsupported routes/auth are rejected, except that authored request overrides may
 use Codex's declared exact-request OpenClaw fallback before execution. Inspect
 the completed result's actual harness when a recipe depends on native execution.
 Runtime compatibility does not establish credential type or billing: Platform API-key
@@ -68,7 +68,7 @@ models, routes, and profiles.
 
 `openclaw doctor --fix` migrates legacy `codex/*` and `openai-codex/*` model
 refs, legacy Codex auth profile ids, and legacy Codex auth-order entries to the
-canonical `openai` route. Migrated model refs receive model-scoped
+standard `openai` route. Migrated model refs receive model-scoped
 `agentRuntime.id: "codex"`; use `auth.order.openai` for new auth-order config.
 
 <Note>

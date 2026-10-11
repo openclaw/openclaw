@@ -82,7 +82,7 @@ available to that process (for example, in `~/.openclaw/.env` or via
 
 | Model ref                               | Name                                    | Input       | Context   | Max output | Notes                            |
 | --------------------------------------- | --------------------------------------- | ----------- | --------- | ---------- | -------------------------------- |
-| `deepseek/deepseek-flash`               | DeepSeek V4.1 Flash                     | text, image | 1,000,000 | 384,000    | Canonical Flash model            |
+| `deepseek/deepseek-flash`               | DeepSeek V4.1 Flash                     | text, image | 1,000,000 | 384,000    | Main Flash model                 |
 | `deepseek/deepseek-v4-flash`            | DeepSeek V4 Flash                       | text        | 1,000,000 | 384,000    | Fast V4 thinking-capable surface |
 | `deepseek/deepseek-v4-pro`              | DeepSeek V4 Pro                         | text        | 1,000,000 | 384,000    | Onboarding default               |
 | `deepseek/deepseek-v4-flash-vision-exp` | DeepSeek V4 Flash Vision (Experimental) | text, image | 1,000,000 | 384,000    | Experimental image understanding |
@@ -93,7 +93,7 @@ DeepSeek retired `deepseek-chat` and `deepseek-reasoner` on July 24, 2026 at
 to `deepseek/deepseek-v4-flash` or `deepseek/deepseek-v4-pro`.
 </Warning>
 
-OpenClaw's local costs are estimates. Canonical Flash uses DeepSeek's peak
+OpenClaw's local costs are estimates. `deepseek/deepseek-flash` uses DeepSeek's peak
 rates: $0.30 per million input tokens, $1.20 per million output tokens, and
 $0.006 per million cached input tokens. Published off-peak rates are half those amounts.
 Legacy rows retain their earlier bundled metadata. DeepSeek still accepts
@@ -105,12 +105,12 @@ authoritative for billing.
 
 For image inputs, select `deepseek/deepseek-flash`. The legacy
 `deepseek/deepseek-v4-flash-vision-exp` selection also retains image support.
-Canonical Flash accepts
+`deepseek/deepseek-flash` accepts
 PNG, JPEG, GIF, and WebP images through the same API and API key. See
 [DeepSeek vision](https://api-docs.deepseek.com/guides/vision) for image limits.
 
 <Tip>
-Canonical Flash and V4 models support DeepSeek's `thinking` control. OpenClaw also replays
+Flash and V4 models support DeepSeek's `thinking` control. OpenClaw also replays
 DeepSeek `reasoning_content` on follow-up turns so thinking sessions with tool
 calls can continue.
 Use `/think xhigh` or `/think max` with DeepSeek V4 models to request DeepSeek's
@@ -131,7 +131,7 @@ When thinking is disabled (including the UI **None** selection), OpenClaw
 sends `thinking: { type: "disabled" }` and strips replayed `reasoning_content`
 from outgoing history, keeping the session on the non-thinking DeepSeek path.
 
-Fresh onboarding selects `deepseek/deepseek-v4-pro`. To select canonical Flash:
+Fresh onboarding selects `deepseek/deepseek-v4-pro`. To select Flash:
 
 ```bash
 openclaw models set deepseek/deepseek-flash

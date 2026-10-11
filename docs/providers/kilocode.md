@@ -107,7 +107,7 @@ Any model on the gateway is addressable as `kilocode/<upstream-id>` (for example
   <Accordion title="Troubleshooting">
     - If model discovery fails, OpenClaw reports an unavailable catalog refresh. It does not replace the failed request with static rows or turn an empty response into `kilocode/kilo-auto/balanced`.
     - Confirm your API key is valid and that your Kilo account has the desired models enabled.
-    - When Gateway runs as a daemon, ensure `KILOCODE_API_KEY` is available to that process (for example in `~/.openclaw/.env` or via `env.shellEnv`).
+    - When Gateway runs as a daemon, make `KILOCODE_API_KEY` available to that process (for example in `~/.openclaw/.env` or via `env.shellEnv`).
 
   </Accordion>
 </AccordionGroup>

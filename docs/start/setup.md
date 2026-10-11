@@ -74,7 +74,7 @@ node openclaw.mjs gateway --port 18789 --verbose
 
 1. Install + launch **OpenClaw.app** (menu bar).
 2. Complete the onboarding/permissions checklist (TCC prompts).
-3. Ensure Gateway is **Local** and running (the app manages it).
+3. Check that Gateway is **Local** and running (the app manages it).
 4. Link surfaces (example: WhatsApp):
 
 ```bash

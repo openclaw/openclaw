@@ -9,7 +9,7 @@ title: "OpenAI"
 ---
 
 OpenClaw uses one provider id, `openai`, for both direct API-key auth and
-ChatGPT/Codex subscription auth. `openai/*` is the canonical model route.
+ChatGPT/Codex subscription auth. `openai/*` is the standard model route.
 For embedded agent turns with runtime policy unset or `auto`, OpenAI's route
 facts decide whether OpenClaw may select the bundled Codex app-server runtime
 implicitly. The `openai/*` prefix alone does not select a runtime.
@@ -68,7 +68,7 @@ working. Each entry points at the page that now holds the content.
 - <a id="verify-the-model-is-available" />[Verify the model is available](/providers/openai/setup#verify-the-model-is-available)
 - <a id="codex-subscription" />[Codex subscription](/providers/openai/setup#codex-subscription)
 - <a id="run-codex-oauth" />[Run Codex OAuth](/providers/openai/setup#run-codex-oauth)
-- <a id="use-the-canonical-openai-model-route" />[Use the canonical OpenAI model route](/providers/openai/setup#use-the-canonical-openai-model-route)
+- <a id="use-the-canonical-openai-model-route" />[Use the standard OpenAI model route](/providers/openai/setup#use-the-canonical-openai-model-route)
 - <a id="verify-codex-auth-is-available" />[Verify Codex auth is available](/providers/openai/setup#verify-codex-auth-is-available)
 
 **[OpenAI models](/providers/openai/models)**

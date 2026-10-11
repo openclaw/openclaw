@@ -31,7 +31,7 @@ on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#app
 
 <Steps>
   <Step title="Create a Baidu Cloud account">
-    Sign up or log in at the [Qianfan Console](https://console.bce.baidu.com/qianfan/ais/console/apiKey) and ensure you have Qianfan API access enabled.
+    Sign up or log in at the [Qianfan Console](https://console.bce.baidu.com/qianfan/ais/console/apiKey) and enable Qianfan API access.
   </Step>
   <Step title="Generate an API key">
     Create a new application or select an existing one, then generate an API key. Baidu Cloud keys use the `bce-v3/ALTAK-...` format.
@@ -125,7 +125,7 @@ Model refs use the `qianfan/` prefix (for example `qianfan/deepseek-v4-pro`).
   </Accordion>
 
   <Accordion title="Troubleshooting">
-    - Ensure your API key starts with `bce-v3/ALTAK-` and has Qianfan API access enabled in the Baidu Cloud console.
+    - Check that your API key starts with `bce-v3/ALTAK-` and has Qianfan API access enabled in the Baidu Cloud console.
     - If models are not listed, confirm your account has the Qianfan service activated.
     - Only change the base URL if you use a custom endpoint or proxy.
 

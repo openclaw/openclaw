@@ -286,7 +286,7 @@ Readiness remains false while the default or system agent database is refused,
 and the readiness response includes the admission reason. A refused optional
 agent remains isolated while healthy agents can serve requests.
 
-Missing or drifted canonical SQLite indexes are rebuilt by the schema migration
+Missing or drifted required SQLite indexes are rebuilt by the schema migration
 owner before session startup completes. Repair warnings identify the agent,
 database path, rebuilt indexes, and elapsed time. Current-schema shape refusal
 reports list all affected databases in stable path order. Missing required tables,

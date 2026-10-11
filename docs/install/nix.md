@@ -51,7 +51,7 @@ See the [nix-openclaw README](https://github.com/openclaw/nix-openclaw) for full
 
 ## Nix-mode runtime behavior
 
-When `OPENCLAW_NIX_MODE=1` is set (automatic with nix-openclaw), OpenClaw enters a deterministic mode for Nix-managed installs. Other Nix packages can set the same mode; nix-openclaw is the first-party reference.
+When `OPENCLAW_NIX_MODE=1` is set (automatic with nix-openclaw), OpenClaw uses the Nix-managed install mode. Other Nix packages can set the same mode; nix-openclaw is the first-party reference.
 
 For externally managed config without Nix, use
 [`OPENCLAW_CONFIG_READONLY=1`](/cli/config#externally-managed-config). It applies

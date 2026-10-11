@@ -123,7 +123,7 @@ The onboarding preset sets `arcee/trinity-large-thinking` as the default model.
 
 ## OpenRouter catalog
 
-OpenRouter onboarding exposes `arcee/trinity-large-preview` and `arcee/trinity-large-thinking`. OpenClaw keeps those provider-qualified model refs in config and sends OpenRouter's canonical `arcee-ai/*` runtime ids. Trinity Mini is no longer served by OpenRouter; use the direct Arcee API for that model.
+OpenRouter onboarding exposes `arcee/trinity-large-preview` and `arcee/trinity-large-thinking`. OpenClaw keeps those provider-qualified model refs in config and sends OpenRouter's `arcee-ai/*` runtime ids. Trinity Mini is no longer served by OpenRouter; use the direct Arcee API for that model.
 
 ## Supported features
 
@@ -143,7 +143,7 @@ OpenRouter onboarding exposes `arcee/trinity-large-preview` and `arcee/trinity-l
 
   <Accordion title="OpenRouter routing">
     OpenRouter uses the same `arcee/trinity-large-thinking` OpenClaw model ref.
-    OpenClaw routes it with the canonical `arcee-ai/trinity-large-thinking`
+    OpenClaw routes it with the `arcee-ai/trinity-large-thinking`
     OpenRouter runtime id. See the
     [OpenRouter provider docs](/providers/openrouter) for OpenRouter-specific
     configuration details.

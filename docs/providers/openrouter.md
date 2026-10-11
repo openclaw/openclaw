@@ -144,7 +144,7 @@ under `agents.defaults.mediaModels.image`:
 }
 ```
 
-OpenClaw sends canonical OpenRouter image requests to the dedicated image API
+OpenClaw sends standard OpenRouter image requests to the dedicated image API
 (`POST /api/v1/images`). Gemini image models additionally receive
 `aspect_ratio` and `resolution` hints, and image edits pass source images as
 `input_references`. Generated images come back as base64 (`b64_json`) with an

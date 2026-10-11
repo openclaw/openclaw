@@ -14,7 +14,7 @@ Anthropic builds the **Claude** model family. OpenClaw supports two auth routes:
 ## Choose a model route
 
 The model picker shows each Claude model once per route. API and Claude CLI are
-not interchangeable billing choices: `anthropic/*` is the canonical model
+not interchangeable billing choices: `anthropic/*` is the standard model
 identity and can run through either runtime; `claude-cli/*` selects the native
 Claude runtime explicitly. When a configured `anthropic/*` model already runs
 through Claude CLI, the picker omits its matching `claude-cli/*` entry, unless the
@@ -130,7 +130,8 @@ OpenClaw release:
     **Best for:** reusing an existing Claude CLI login without a separate API key.
 
     <Steps>
-      <Step title="Ensure Claude CLI is installed and logged in">
+      <Step title="Install Claude CLI and log in">
+        <a id="ensure-claude-cli-is-installed-and-logged-in" />
         OpenClaw communicates directly with the installed Claude Code executable.
         Verify that Claude Code is installed and up to date:
 
@@ -195,7 +196,7 @@ OpenClaw release:
         the `anthropic` provider require an explicit account selection for CLI
         forwarding. Existing sessions keep their account until you select another
         or remove its saved profile. Native-tool approvals remain under OpenClaw
-        control. Schema-valid native calls pass through OpenClaw's canonical
+        control. Schema-valid native calls pass through OpenClaw's shared
         tool policy before native approval. Isolated side-question completions
         and paired-node execution retain the supervised CLI path.
 
@@ -252,7 +253,7 @@ OpenClaw release:
 
     ### Config example
 
-    Prefer the canonical Anthropic model ref plus a CLI runtime override:
+    Prefer the standard Anthropic model ref plus a CLI runtime override:
 
     ```json5
     {
@@ -303,7 +304,7 @@ OpenClaw release:
 
 ## Use Claude Opus 5.5
 
-After setting up either auth route above, select the canonical model ref:
+After setting up either auth route above, select the standard model ref:
 
 ```bash
 openclaw models set anthropic/claude-opus-5-5
@@ -313,7 +314,7 @@ The bare `opus` alias and explicit aliases `opus-5.5` / `opus-5-5` select this m
 Fresh API and Claude CLI setup defaults to Opus 5.5; existing version-pinned
 models and authored aliases remain unchanged.
 
-For Claude CLI authentication, keep the canonical ref and select the CLI runtime:
+For Claude CLI authentication, keep the standard ref and select the CLI runtime:
 
 ```json5
 {
@@ -350,7 +351,7 @@ for model-switching and response-shape changes.
 
 ## Use Claude Sonnet 5.5
 
-After setting up either auth route above, select the canonical model ref:
+After setting up either auth route above, select the standard model ref:
 
 ```bash
 openclaw models set anthropic/claude-sonnet-5-5
@@ -361,7 +362,7 @@ this model. Fresh API and Claude CLI setup still defaults to Opus 5.5; select
 Sonnet 5.5 explicitly. Existing version-pinned models and authored aliases
 remain unchanged. Use `sonnet-5` to keep Sonnet 5.
 
-For Claude CLI authentication, keep the canonical ref and select the CLI runtime:
+For Claude CLI authentication, keep the standard ref and select the CLI runtime:
 
 ```json5
 {
@@ -408,7 +409,7 @@ for model-switching and response-shape changes.
 
 ## Use Claude Fable 5.1
 
-After setting up either auth route above, select the canonical model ref:
+After setting up either auth route above, select the standard model ref:
 
 ```bash
 openclaw models set anthropic/claude-fable-5-1

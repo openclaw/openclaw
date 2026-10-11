@@ -269,8 +269,8 @@ and [access guide](https://help.openai.com/en/articles/20001325-a-preview-of-gpt
 OpenAI's [GPT-5.6 Sol model page](https://developers.openai.com/api/docs/models/gpt-5.6-sol)
 documents the bare `openai/gpt-5.6` id as a supported alias for Sol. Fresh
 API-key and ChatGPT/Codex OAuth setup use `openai/gpt-6-astra`. Existing
-GPT-5.6 selections retain their canonical Sol identity. Run
-`openclaw doctor --fix` to rewrite persisted bare OpenAI refs to that canonical
+GPT-5.6 selections retain their full Sol identity. Run
+`openclaw doctor --fix` to rewrite persisted bare OpenAI refs to that full
 identity. The native Codex catalog can show the exact Sol, Terra, and Luna ids depending on
 workspace access. Check the current account with:
 

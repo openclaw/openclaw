@@ -61,7 +61,7 @@ If you already installed the latest version, Doctor stops before rewriting confi
 that still contains these retired keys and directs you through the same bridge.
 
 The retired same-file memory index (`meta`, `files`, and `chunks`) is also refused
-before canonical tables are created. Preserve the original state and configuration,
+before current tables are created. Preserve the original state and configuration,
 then use **`2026.9.7`** to migrate a compatible copy of that index before retrying.
 Unrelated tables with these generic names remain untouched.
 
@@ -89,7 +89,7 @@ task, flow, plugin, and channel state you need. Resolve any failed or conflictin
 imports before continuing. Doctor imports channel state only for enabled channels
 and accounts. If needed, temporarily enable those channels while the Gateway is
 stopped, rerun the bridge Doctor, then restore their previous enabled settings.
-Ensure the affected plugins are installed before running their migrations.
+Install the affected plugins before running their migrations.
 Then install the current release and restart:
 
 ```bash
@@ -239,7 +239,7 @@ updated package; the published updater and its handoff markers are unchanged.
 
 The running Gateway retains its shutdown code before an in-place update can
 replace the package's bundled files. Transcript shutdown drains captures and
-persists deterministic notes without starting optional model inference. This
+persists rule-based notes without starting optional model inference. This
 protection applies to updates **from** a release containing the shutdown fix.
 Older running Gateways, including 2026.9.6, can still fail their first shutdown
 with `ERR_MODULE_NOT_FOUND` after package replacement; installing a fixed
@@ -459,7 +459,7 @@ its `--timeout` option cannot increase this cap.
 Plugin rehearsal copies are temporary and rebuilt after interruption. Copying
 uses up to four concurrent file copies and avoids a disk flush for every file.
 If a copy fails, active copies finish before cleanup; link publication and
-verification run only after all file copies succeed. Canonical state and recovery backups
+verification run only after all file copies succeed. Stored state and recovery backups
 retain their existing durability guarantees. An older installed updater keeps
 its initial snapshot behavior until you launch an update from the newer version.
 
@@ -679,7 +679,7 @@ for compatibility.
 `--channel extended-stable` is package-only, and installation remains
 foreground-only. OpenClaw reads the public npm `extended-stable` selector,
 verifies the selected exact package, and installs that exact version. Missing
-or inconsistent registry data fails closed; it never falls back to `latest`.
+or inconsistent registry data stops the update; it never falls back to `latest`.
 If the selected version is older than the installed version, the normal
 downgrade confirmation still applies. The CLI persists the channel after a
 successful core update; a direct

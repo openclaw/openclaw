@@ -48,7 +48,7 @@ OpenClaw runtime code reads the current configuration schema only.
 We do not keep long-lived aliases or compatibility branches that silently accept old, renamed, or malformed config keys.
 
 When a config change makes existing user config invalid, the same change needs a doctor migration.
-`openclaw doctor --fix` should detect the old shape, explain it, back it up when needed, and rewrite it to the canonical format.
+`openclaw doctor --fix` should detect the old shape, explain it, back it up when needed, and rewrite it to the current format.
 Core-owned config and auth state are repaired in core doctor code; plugin-owned config is repaired by that plugin's doctor contract.
 
 ## Security
@@ -56,7 +56,7 @@ Core-owned config and auth state are repaired in core doctor code; plugin-owned 
 Security in OpenClaw is a deliberate tradeoff: strong defaults without killing capability.
 The goal is to stay powerful for real work while making risky paths explicit and operator-controlled.
 
-Canonical security policy and reporting:
+Security policy and reporting:
 
 - [`SECURITY.md`](SECURITY.md)
 
@@ -81,7 +81,7 @@ Plugins, skills, channels, and apps carry no such tax, and we want that surface 
 When our contribution rules read as hostile to a feature, re-check the layer: usually they object to where it plugs in, not to the feature existing.
 
 Recurring demand defines interfaces.
-Once several independent PRs or requests wire in the same kind of capability, the right response is a contract, not a queue of merges: land the seam in core or the SDK, port the bundled implementation onto it, and let the remaining candidates ship as plugins against it.
+Once several independent PRs or requests wire in the same kind of capability, the right response is a contract, not a queue of merges: add the shared interface in core or the SDK, update the bundled implementation to use it, and let the remaining candidates ship as plugins against it.
 
 There are two broad plugin styles:
 

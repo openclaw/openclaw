@@ -112,7 +112,7 @@ Set up OpenClaw (https://docs.openclaw.ai/install) on this VM. Use the non-inter
     openclaw gateway restart
     ```
 
-    The browser origin check is fail-closed for public hostnames. The proxy
+    The browser origin check rejects public hostnames that are not allowed. The proxy
     allowlist lets OpenClaw use nginx's overwritten `X-Forwarded-For` value
     instead of treating every request as if it originated from the loopback
     proxy. Keep this list limited to proxies you control.
