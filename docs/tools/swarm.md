@@ -343,7 +343,7 @@ it can be spawned but cannot start swarms from its own top-level sessions:
 }
 ```
 
-Collector approvals fail closed. A child never opens an operator approval
+Collectors deny actions that require approval. A child never opens an operator approval
 prompt. A tool action that would require approval is denied, and the child can
 report that denial in its result so the script can decide what to do next.
 
@@ -600,8 +600,7 @@ error. The poll remains a successful JSON result so callers can process its
 
 The call returns immediately when any requested child is already complete,
 when at least one pending child completes, when no valid pending ids remain,
-or when its timeout expires. Completed records are idempotent, so passing an
-already-completed run id returns its result again. Only the spawning session
+or when its timeout expires. Passing an already-completed run id returns the same saved result again. Only the spawning session
 or its authorized parent chain can wait on a collector.
 
 This is bounded long polling, not a busy status loop. Keep passing only the
