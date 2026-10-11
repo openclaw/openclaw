@@ -860,21 +860,4 @@ describe("OpenAI Responses continuation cache bounds", () => {
     });
     expect(previousResponseId("session-1")).toBe("resp_normal");
   });
-
-  it("does not overwrite a replacement claim created during commit serialization", () => {
-    const first = claim({});
-    let replacement: ReturnType<typeof claim>;
-    const output = {
-      ...assistantOutput,
-      toJSON() {
-        cleanupSessionResources("session-1");
-        replacement = claim({});
-        return { ...assistantOutput };
-      },
-    };
-    first?.commit(continuationState().lastRequest, { id: "resp_race", output: [output] });
-    expect(replacement).toBeDefined();
-    expect(claim({})).toBeUndefined();
-    replacement?.release();
-  });
 });

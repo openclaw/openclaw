@@ -396,7 +396,7 @@ describe("registered Gateway catalog discovery", () => {
     expect(local.skills).not.toHaveBeenCalled();
   });
 
-  it("binds bulk cursors to the terms and result set and rejects changed matches", async () => {
+  it("binds bulk cursors to terms and continues through changed matches", async () => {
     stubRegistry([plugin("one", true), plugin("two", true)]);
     const request = { keywords: ["calendar"], kinds: ["plugin"], pageSize: 1 };
     const first = await call("catalog.searchKeywords", request);
@@ -406,15 +406,14 @@ describe("registered Gateway catalog discovery", () => {
       cursor: first.result.nextCursor,
     });
     expect(wrongTerms.error?.code).toBe("INVALID_REQUEST");
-    stubRegistry([plugin("one", true)]);
+    stubRegistry([plugin("one", true), plugin("three", true)]);
     const changed = await call("catalog.searchKeywords", {
       ...request,
       cursor: first.result.nextCursor,
     });
-    expect(changed.error).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: expect.stringContaining("matches changed"),
-    });
+    expect(changed.ok).toBe(true);
+    expect(changed.result.items).toHaveLength(1);
+    expect(changed.result.items[0]?.catalog.name).toBe("three");
   });
 
   it.each([

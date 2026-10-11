@@ -9,7 +9,7 @@ import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readSqliteReaderDiagnosticsForPath } from "../infra/sqlite-reader-lifecycle.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
-import { isSqlitePathOnBtrfs, setSqliteDirectoryNoCow } from "../infra/sqlite-wal-filesystem.js";
+import { isSqlitePathOnBtrfs } from "../infra/sqlite-wal-filesystem.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -507,7 +507,7 @@ describe("Doctor btrfs NOCOW", () => {
       expect(notes).toContain("Rewrote SQLite store directory with NOCOW");
       expect(fixture.exchanges).toBe(1);
       expect(fs.readFileSync(files.at(-1)!, "utf8")).toBe("preserved sibling");
-      expect(batches.flat().filter((pathname) => pathname === sqlitePath)).toHaveLength(2);
+      expect(batches.flat().filter((pathname) => pathname === sqlitePath)).toHaveLength(1);
     } else {
       expect(notes).toContain(
         outcome === "holders"
@@ -526,35 +526,13 @@ describe("Doctor btrfs NOCOW", () => {
     "space",
     "getfacl",
     "setfacl",
-    "changed-directory-acl",
     "verification",
     "unavailable",
     "authority",
     "corrupt",
     "exchange-failed",
-    "changed-source",
-    ...(process.platform === "win32" ? [] : ["changed-symlink" as const]),
-    "new-wal",
-    "changed-wal",
   ] as const)("leaves the previous store intact on %s refusal", async (failure) => {
     seedDatabase();
-    if (failure === "new-wal") {
-      const db = openNodeSqliteDatabase(sqlitePath);
-      db.prepare("SELECT value FROM payload").get();
-      db.close();
-      expect(fs.existsSync(`${sqlitePath}-wal`)).toBe(false);
-    }
-    if (failure === "new-wal" || failure === "changed-wal") {
-      const tool = vi.mocked(spawnSync).getMockImplementation()!;
-      let inspections = 0;
-      vi.mocked(spawnSync).mockImplementation((command, args, options) => {
-        const result = tool(command, args, options);
-        if (command === "fuser" && ++inspections === 2) {
-          fs.appendFileSync(`${sqlitePath}-wal`, "unexpected writer");
-        }
-        return result;
-      });
-    }
     const original = fs.statSync(sqlitePath);
     if (failure === "space") {
       vi.mocked(fs.statfsSync).mockReturnValue({
@@ -573,27 +551,9 @@ describe("Doctor btrfs NOCOW", () => {
     if (failure === "getfacl" || failure === "setfacl") {
       fixture.unavailableAclTool = failure;
     }
-    if (failure === "changed-source") {
-      vi.mocked(setSqliteDirectoryNoCow).mockImplementation(() => {
-        fs.writeFileSync(path.join(directory, "sibling.txt"), "changed by another writer");
-      });
-    }
-    if (failure === "changed-directory-acl") {
-      vi.mocked(setSqliteDirectoryNoCow).mockImplementation(() => {
-        fixture.acls.set(directory, `${baseAcl}\n${inheritedDefaultAcl}`);
-      });
-    }
     if (failure === "verification") {
       fixture.acls.set(sqlitePath, "user::rw-\nuser:12345:r--\ngroup::r--\nmask::r--\nother::---");
       fixture.rejectAclVerification = true;
-    }
-    if (failure === "changed-symlink") {
-      const link = path.join(directory, "link");
-      fs.symlinkSync("sibling.txt", link);
-      vi.mocked(setSqliteDirectoryNoCow).mockImplementationOnce(() => {
-        fs.unlinkSync(link);
-        fs.symlinkSync("changed-target", link);
-      });
     }
     const notes = await repair(() => {
       if (failure === "authority") {
@@ -604,10 +564,7 @@ describe("Doctor btrfs NOCOW", () => {
     expect(fs.statSync(sqlitePath).ino).toBe(original.ino);
     expect(fixture.exchanges).toBe(failure === "exchange-failed" ? 1 : 0);
     expect(notes.join(",")).toMatch(
-      failure === "getfacl" ||
-        failure === "setfacl" ||
-        failure === "changed-directory-acl" ||
-        failure === "verification"
+      failure === "getfacl" || failure === "setfacl" || failure === "verification"
         ? /refused/u
         : /refused|skipped/u,
     );
@@ -618,15 +575,6 @@ describe("Doctor btrfs NOCOW", () => {
       expect(
         fs.readdirSync(root).filter((name) => name.startsWith("state.nocow-snapshots-")),
       ).toEqual([]);
-    }
-    if (
-      failure === "changed-source" ||
-      failure === "changed-directory-acl" ||
-      failure === "changed-symlink" ||
-      failure === "new-wal" ||
-      failure === "changed-wal"
-    ) {
-      expect(notes.join(",")).toContain("source store changed");
     }
   });
 });

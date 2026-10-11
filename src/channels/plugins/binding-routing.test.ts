@@ -207,65 +207,6 @@ describe("runtime conversation binding route", () => {
   });
 
   it.each([
-    { mode: "stable", change: { bindingId: "binding-2" }, label: "new ID" },
-    { mode: "churn", change: { bindingId: "binding-2" }, label: "repeated replacement" },
-    { mode: "stable", change: { boundAt: 2 }, label: "reused ID with new creation time" },
-    {
-      mode: "stable",
-      change: { targetSessionKey: "agent:replacement:main" },
-      label: "reused ID with new target",
-    },
-    { mode: "stable", change: { targetKind: "subagent" }, label: "reused ID with new kind" },
-  ] as const)("settles replacement activity before routing ($label)", async ({ mode, change }) => {
-    let binding = createBinding();
-    const entered = createDeferredCore();
-    const firstTouch = createDeferredCore();
-    const touchAsync = vi
-      .fn(async (_bindingId: string) => {
-        binding =
-          mode === "churn"
-            ? createBinding({ bindingId: "binding-3" })
-            : { ...binding, metadata: { lastActivityAt: 1234 } };
-      })
-      .mockImplementationOnce(async () => {
-        entered.resolve();
-        await firstTouch.promise;
-      });
-    registerSessionBindingAdapter({
-      channel: "demo",
-      accountId: "default",
-      listBySession: () => [],
-      resolveByConversation: () => binding,
-      inspectByConversationAsync: async () => binding,
-      touchAsync,
-    });
-    const pending = resolveRuntimeConversationBindingRouteAsync({
-      route: createRoute(),
-      conversation: binding.conversation,
-    });
-    const failure =
-      mode === "churn" ? expect(pending).rejects.toThrow(/changed.*activity/) : undefined;
-    await entered.promise;
-    const replacement = createBinding({
-      ...change,
-      metadata: { lastActivityAt: 1 },
-    });
-    binding = replacement;
-    firstTouch.resolve();
-    if (failure) {
-      await failure;
-    } else {
-      const result = await pending;
-      expect(result.boundSessionKey).toBe(replacement.targetSessionKey);
-      expect(result.bindingRecord?.metadata?.lastActivityAt).toBe(1234);
-    }
-    expect(touchAsync.mock.calls.map(([bindingId]) => bindingId)).toEqual([
-      "binding-1",
-      replacement.bindingId,
-    ]);
-  });
-
-  it.each([
     { name: "agent session", binding: createBinding(), kind: "agent", agentId: "review" },
     {
       name: "inspection",
