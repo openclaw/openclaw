@@ -10,16 +10,20 @@
  * a `warn` (min 4) clears the default `info` (min 3) console floor and prints,
  * while a `debug` (min 2) is below it and stays invisible.
  *
- * PART A — bootstrap-extra-files resolution warn (src/hooks/bundled/bootstrap-extra-files/handler.ts):
- *   A genuine non-ENOENT glob fault (the same EACCES injection handler.test.ts:167
- *   uses) makes fs.glob itself throw, so resolveExtraBootstrapPatternPaths hits its
- *   top-level outer catch and rethrows the non-ENOENT fault -> the loader records an
- *   `io` diagnostic -> the handler routes io/security to log.warn. Proven visible at
- *   the default info level; benign "missing" skips stay at log.debug and stay hidden.
- *   This drives the top-level walk-failure path in
- *   src/agents/workspace-extra-bootstrap-walker.ts (throw error -> outer catch ->
- *   loader io diagnostic), which stays a rethrow under per-match isolation; the
- *   per-matched-path branch instead records each failure without aborting the walk.
+ * PART A — extra-files glob-failure recovery warn (src/agents/workspace.ts loader,
+ * driven through src/hooks/bundled/bootstrap-extra-files/handler.ts):
+ *   A genuine non-ENOENT glob fault (an injected throwing fs.glob, the same shape
+ *   src/agents/workspace.load-extra-bootstrap-files.test.ts "recovers through the
+ *   fallback walk and warns when fs.glob fails for a non-ENOENT reason" and
+ *   src/agents/workspace.bootstrap-read-diagnostics.test.ts "falls back to a
+ *   shallow scan without entering unrelated unreadable branches" use) makes
+ *   fs.glob itself throw. resolveExtraBootstrapPatternPaths
+ *   (src/agents/workspace-extra-bootstrap-walker.ts) recovers through the fallback
+ *   directory walk and reports the original error as `nativeGlobError`; the loader
+ *   logs it as a `workspace` subsystem log.warn carrying the pattern and error, and
+ *   the readable extra file still loads (no `io` diagnostic, so no handler warn).
+ *   Proven visible at the default info level in compact and JSON console styles;
+ *   benign "missing" skips stay at log.debug and stay hidden.
  *
  * PART B — slow bootstrap-context substage breakdown (src/agents/embedded-agent-runner/run/attempt-bootstrap-prepare.ts):
  *   When bootstrap-context assembly exceeds 2000ms the runner now emits the
@@ -119,6 +123,9 @@ function invalidateConsoleSettingsCache(): void {
 // ===========================================================================
 // PART A helpers — bootstrap-extra-files resolution warn.
 // ===========================================================================
+const EXTRA_PATTERN = "packages/*/AGENTS.md";
+const INJECTED_GLOB_ERROR = "permission denied";
+
 function makeExtraFilesConfig(patterns: string[]): OpenClawConfig {
   return {
     hooks: {
@@ -372,23 +379,23 @@ async function main(): Promise<void> {
 
   const realGlob = fsp.glob;
   const throwingGlob = (() => {
-    throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+    throw Object.assign(new Error(INJECTED_GLOB_ERROR), { code: "EACCES" });
   }) as typeof fsp.glob;
 
   let injectedWarnCompact: CapturedLine[] = [];
   let injectedLinesJson: CapturedLine[] = [];
   let benignInfoLines: CapturedLine[];
   let benignDebugLines: CapturedLine[];
-  let extraLeakedAfterFault = false;
+  let extraLoadedAfterFault = false;
 
   try {
-    // CASE 1 — injected io fault, DEFAULT compact style, DEFAULT info level.
+    // CASE 1 — injected glob fault, DEFAULT compact style, DEFAULT info level.
     loggingState.overrideSettings = null;
     invalidateConsoleSettingsCache();
     // @ts-expect-error -- deliberately override the writable node:fs/promises glob
     fsp.glob = throwingGlob;
     {
-      const cfg = makeExtraFilesConfig(["packages/*/AGENTS.md"]);
+      const cfg = makeExtraFilesConfig([EXTRA_PATTERN]);
       const ctx = makeExtraFilesContext({
         workspaceDir: wsA,
         cfg,
@@ -397,12 +404,12 @@ async function main(): Promise<void> {
       });
       const lines = await captureExtraFilesHook(ctx);
       injectedWarnCompact = findWarns(lines);
-      extraLeakedAfterFault = ctx.bootstrapFiles.some(
+      extraLoadedAfterFault = ctx.bootstrapFiles.some(
         (f) => path.relative(wsA, f.path) === path.join("packages", "core", "AGENTS.md"),
       );
     }
 
-    // CASE 2 — same injected io fault, JSON console style, still DEFAULT info level.
+    // CASE 2 — same injected glob fault, JSON console style, still DEFAULT info level.
     loggingState.overrideSettings = {
       consoleStyle: "json",
     } as typeof loggingState.overrideSettings;
@@ -411,7 +418,7 @@ async function main(): Promise<void> {
       throw new Error("json-style run drifted off the default info level");
     }
     {
-      const cfg = makeExtraFilesConfig(["packages/*/AGENTS.md"]);
+      const cfg = makeExtraFilesConfig([EXTRA_PATTERN]);
       const ctx = makeExtraFilesContext({
         workspaceDir: wsA,
         cfg,
@@ -546,13 +553,13 @@ async function main(): Promise<void> {
   w(
     "driven fn:       bootstrapExtraFilesHook (REAL default export) -> loadExtraBootstrapFilesWithDiagnostics",
   );
-  w("fault inject:    node:fs/promises glob -> throw EACCES (same as handler.test.ts:167)");
+  w("fault inject:    node:fs/promises glob -> synchronous throw EACCES");
   w(
-    "also exercises:  workspace-extra-bootstrap-walker.ts non-ENOENT propagation -> loader io diagnostic",
+    "also exercises:  workspace-extra-bootstrap-walker.ts non-ENOENT recovery -> fallback walk -> loader warn",
   );
   w("");
 
-  w("-- CASE 1: injected io fault, DEFAULT compact style, DEFAULT info level --");
+  w("-- CASE 1: injected glob fault, DEFAULT compact style, DEFAULT info level --");
   w("   (what a fully-default operator terminal prints)");
   if (injectedWarnCompact.length > 0) {
     for (const line of injectedWarnCompact) {
@@ -561,11 +568,11 @@ async function main(): Promise<void> {
   } else {
     w("   (no warn captured — FAIL)");
   }
-  w(`   failed-pattern files leaked into bootstrap set: ${extraLeakedAfterFault} (expect false)`);
+  w(`   extra file recovered into bootstrap set: ${extraLoadedAfterFault} (expect true)`);
   w("");
 
-  w("-- CASE 2: same injected io fault, JSON console style, DEFAULT info level --");
-  w("   (structured operator line: message + failed count + reasons + paths + hint)");
+  w("-- CASE 2: same injected glob fault, JSON console style, DEFAULT info level --");
+  w("   (structured operator line: subsystem + message + pattern + original error)");
   const jsonWarns = findWarns(injectedLinesJson);
   let jsonFieldsOk = false;
   if (jsonWarns.length > 0) {
@@ -575,28 +582,22 @@ async function main(): Promise<void> {
     try {
       const parsed = JSON.parse(jsonWarns[0]?.text ?? "{}") as {
         level?: string;
+        subsystem?: string;
         message?: string;
-        failed?: number;
-        reasons?: { io?: number; security?: number };
-        paths?: string[];
-        hint?: string;
+        pattern?: string;
+        reason?: string;
       };
       jsonFieldsOk =
         parsed.level === "warn" &&
+        parsed.subsystem === "workspace" &&
         typeof parsed.message === "string" &&
-        parsed.message.includes("resolution failed") &&
-        parsed.failed === 1 &&
-        parsed.reasons?.io === 1 &&
-        parsed.reasons?.security === 0 &&
-        Array.isArray(parsed.paths) &&
-        parsed.paths.length === 1 &&
-        typeof parsed.hint === "string" &&
-        parsed.hint.length > 0;
+        parsed.message.includes("glob failed") &&
+        parsed.pattern === EXTRA_PATTERN &&
+        typeof parsed.reason === "string" &&
+        parsed.reason.includes(INJECTED_GLOB_ERROR);
       w(
-        `   parsed fields -> level=${parsed.level} failed=${parsed.failed} ` +
-          `reasons={io:${parsed.reasons?.io},security:${parsed.reasons?.security}} ` +
-          `paths=[${(parsed.paths ?? []).map((p) => redactWorkspace(p, redactPaths)).join(", ")}] ` +
-          `hint="${parsed.hint}"`,
+        `   parsed fields -> level=${parsed.level} subsystem=${parsed.subsystem} ` +
+          `pattern=${parsed.pattern} reason="${parsed.reason}"`,
       );
     } catch (err) {
       w(`   (warn line was not valid JSON: ${String(err)})`);
@@ -684,7 +685,12 @@ async function main(): Promise<void> {
   w("");
 
   // ------------------------------------------------------------------ verdict
-  const warnVisibleAtInfo = injectedWarnCompact.length === 1 && jsonWarns.length === 1;
+  const compactWarnText = injectedWarnCompact[0]?.text ?? "";
+  const warnVisibleAtInfo =
+    injectedWarnCompact.length === 1 &&
+    compactWarnText.includes(EXTRA_PATTERN) &&
+    compactWarnText.includes(INJECTED_GLOB_ERROR) &&
+    jsonWarns.length === 1;
   const noWarnOnBenign =
     findWarns(benignInfoLines).length === 0 &&
     benignInfoLines.length === 0 &&
@@ -703,25 +709,23 @@ async function main(): Promise<void> {
   const partAPass =
     warnVisibleAtInfo &&
     jsonFieldsOk &&
-    !extraLeakedAfterFault &&
+    extraLoadedAfterFault &&
     noWarnOnBenign &&
     benignExistsAsDebug;
   const partBPass = slowWarnVisible && slowOverThreshold && slowHasSubstages && fastStaysSilent;
   const pass = partAPass && partBPass;
 
   w("PRE-FIX CONTRAST NOTE:");
+  w("   Previously an operator at the default info console level saw NOTHING for either case — an");
   w(
-    "   Both diagnostics previously used log.debug, so at the default info console level an operator",
-  );
-  w(
-    "   saw NOTHING — a silently dropped bootstrap file (PART A) and a multi-second bootstrap-context",
+    "   fs.glob failure silently swallowed by the fallback (PART A) and a multi-second bootstrap-context",
   );
   w("   stall with no trace (PART B). The visible warn lines above are this PR's effect.");
   w("");
-  w("-- PART A (extra-files resolution warn) --");
+  w("-- PART A (extra-files glob-failure recovery warn) --");
   w(`  fault warn visible at DEFAULT info level:        ${warnVisibleAtInfo ? "YES" : "NO"}`);
-  w(`  structured fields present (io/paths/hint):       ${jsonFieldsOk ? "YES" : "NO"}`);
-  w(`  faulted files kept OUT of bootstrap set:         ${!extraLeakedAfterFault ? "YES" : "NO"}`);
+  w(`  structured fields present (pattern/reason):      ${jsonFieldsOk ? "YES" : "NO"}`);
+  w(`  extra file recovered via fallback walk:          ${extraLoadedAfterFault ? "YES" : "NO"}`);
   w(`  benign skip stays silent at info (no over-warn): ${noWarnOnBenign ? "YES" : "NO"}`);
   w(`  benign diagnostic exists as debug-only:          ${benignExistsAsDebug ? "YES" : "NO"}`);
   w(`  PART A:                                          ${partAPass ? "PASS" : "FAIL"}`);

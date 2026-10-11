@@ -1169,7 +1169,19 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
     }
     try {
       if (hasGlobPattern(pattern)) {
-        const { matches, failures } = await resolveExtraBootstrapPatternPaths(resolvedDir, pattern);
+        const { matches, failures, nativeGlobError } = await resolveExtraBootstrapPatternPaths(
+          resolvedDir,
+          pattern,
+        );
+        // fs.glob failed but the fallback walk recovered the pattern: warn so the
+        // fault stays visible without dropping the files that did load.
+        if (nativeGlobError !== undefined) {
+          workspaceLogger.warn("Extra bootstrap glob failed; used fallback directory walk.", {
+            pattern,
+            reason: nativeGlobError,
+            consoleMessage: `Extra bootstrap glob failed; used fallback directory walk: pattern=${pattern} reason=${nativeGlobError}`,
+          });
+        }
         for (const match of matches) {
           resolvedPaths.add(path.resolve(resolvedDir, match));
         }

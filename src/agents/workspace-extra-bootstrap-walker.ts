@@ -13,9 +13,10 @@
  * capability fallback resolves the same pattern with a local Minimatch directory
  * walk there, so a configured glob still loads its files instead of throwing
  * into the loader's `io` diagnostic and dropping the whole configured set. The
- * fallback triggers only when the API is unavailable — a real fs.glob error
- * still surfaces — and its matches pass through the same realpath containment
- * filter as the fs.glob path.
+ * same walk also recovers a non-ENOENT fs.glob failure: the resolver reports the
+ * original error as `nativeGlobError` so the loader can warn, while readable
+ * matches still load. Fallback matches pass through the same realpath
+ * containment filter as the fs.glob path.
  */
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
@@ -315,9 +316,12 @@ type ExtraBootstrapMatchFailure = { path: string; detail: string };
 // Resolver result: readable matches plus per-match canonicalization failures.
 // The failures list preserves the specific unreadable matched paths so the
 // loader reports each individually rather than collapsing a whole pattern.
+// `nativeGlobError` is set when fs.glob failed for a non-ENOENT reason and the
+// matches came from the fallback walk instead.
 export type ExtraBootstrapResolution = {
   matches: string[];
   failures: ExtraBootstrapMatchFailure[];
+  nativeGlobError?: string;
 };
 
 // Resolve a glob pattern to workspace-relative POSIX paths, keeping only matches
@@ -339,21 +343,12 @@ export async function resolveExtraBootstrapPatternPaths(
   }
   const matches = new Set<string>();
   const failures: ExtraBootstrapMatchFailure[] = [];
-  // Capability branch: fs.glob is the matcher wherever it exists; the local walk
-  // keeps configured patterns resolving where it is absent. Narrow by design — it
-  // switches on the missing API only and never swallows a real fs.glob error.
-  // fs.glob gets the configured pattern unchanged: its matcher already folds
-  // backslashes, and a leading `./` changes how it treats symlinks under `**`.
-  const matchSource =
-    typeof fs.glob === "function"
-      ? fs.glob(pattern, { cwd: workspaceDir })
-      : walkFallbackMatches(workspaceDir, normalizedPattern);
-  try {
-    // Single async pass. fs.glob resolves `..` (a globstar parent steps above
-    // cwd) and follows literal-named directory symlinks out of the tree; the
-    // realpath containment filter drops any match that escapes the workspace so
-    // those never enter the prompt. The fallback walk yields the same shape and
-    // shares this filter.
+  // Single async pass over one match source. fs.glob resolves `..` (a globstar
+  // parent steps above cwd) and follows literal-named directory symlinks out of
+  // the tree; the realpath containment filter drops any match that escapes the
+  // workspace so those never enter the prompt. The fallback walk yields the same
+  // shape and shares this filter.
+  const collect = async (matchSource: AsyncIterable<string>) => {
     for await (const relativeMatch of matchSource) {
       const absolute = path.resolve(workspaceDir, relativeMatch);
       let realpath: string;
@@ -381,16 +376,37 @@ export async function resolveExtraBootstrapPatternPaths(
         matches.add(toPortableMatchPath(relativeMatch));
       }
     }
+  };
+  // Capability branch: the local walk keeps configured patterns resolving where
+  // fs.glob is absent.
+  if (typeof fs.glob !== "function") {
+    await collect(walkFallbackMatches(workspaceDir, normalizedPattern));
+    return { matches: [...matches], failures };
+  }
+  try {
+    // fs.glob gets the configured pattern unchanged: its matcher already folds
+    // backslashes, and a leading `./` changes how it treats symlinks under `**`.
+    // The call sits inside the try so a synchronous throw is recovered too.
+    await collect(fs.glob(pattern, { cwd: workspaceDir }));
   } catch (error) {
     // fs.glob walks past per-entry read failures (an unreadable subtree is
     // skipped, not thrown), so a throw here is a top-level failure. A missing
-    // cwd (ENOENT) legitimately means "no matches". Every other failure must
-    // surface: the loader turns the rethrow into an operator-visible "io"
-    // diagnostic, instead of silently dropping every configured bootstrap file.
+    // cwd (ENOENT) legitimately means "no matches".
     // SAFETY: Node fs failures carry an ErrnoException-shaped `code`; the cast only reads that property.
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { matches: [...matches], failures };
     }
+    // Any other failure falls back to the local walk so readable bootstrap files
+    // still load; partial fs.glob results are discarded so the fallback owns the
+    // whole answer. The loader logs `nativeGlobError` as a warning.
+    matches.clear();
+    failures.length = 0;
+    await collect(walkFallbackMatches(workspaceDir, normalizedPattern));
+    return {
+      matches: [...matches],
+      failures,
+      nativeGlobError: error instanceof Error ? error.message : String(error),
+    };
   }
   return { matches: [...matches], failures };
 }

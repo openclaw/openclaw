@@ -4,6 +4,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
 import { loadExtraBootstrapFilesWithDiagnostics } from "./workspace.js";
 
 // Run `body` with fs.promises.glob hidden so the pattern resolver takes its
@@ -43,6 +45,8 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    loggingState.rawConsole = null;
+    resetLogger();
   });
 
   async function loadExtraBootstrapFileList(dir: string, extraPatterns: string[]) {
@@ -74,29 +78,25 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     return contained.toSorted();
   };
 
-  it("surfaces an io diagnostic when fs.glob fails for a non-ENOENT reason", async () => {
-    // F1: fs.glob walks past per-entry failures, so a thrown error is a real
-    // top-level failure. Any non-ENOENT failure must surface as an
-    // operator-visible `io` diagnostic instead of silently dropping every
-    // configured bootstrap file (the pre-fix behavior gated the rethrow behind a
-    // strict-read flag, so a normal load returned [] with no diagnostic).
+  it("recovers through the fallback walk and warns when fs.glob fails for a non-ENOENT reason", async () => {
+    // A thrown fs.glob error is a top-level failure, but readable bootstrap files
+    // must still load: the resolver recovers through the fallback directory walk
+    // and the loader logs the original error as a workspace warning instead of an
+    // `io` diagnostic. The readable fixture distinguishes recovery from a silent
+    // empty result.
     const workspaceDir = await createWorkspaceDir("glob-io-failure");
-    const globError = Object.assign(new Error("simulated glob failure"), { code: "EIO" });
-    const globSpy = vi.spyOn(fs, "glob").mockImplementation((() => {
-      throw globError;
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "agents", "utf-8");
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+    const warn = vi.fn();
+    loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+    vi.spyOn(fs, "glob").mockImplementation((() => {
+      throw Object.assign(new Error("simulated glob failure"), { code: "EIO" });
     }) as unknown as typeof fs.glob);
 
-    try {
-      const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
-        "**/AGENTS.md",
-      ]);
-      expect(files).toHaveLength(0);
-      expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0]?.reason).toBe("io");
-      expect(diagnostics[0]?.detail).toContain("simulated glob failure");
-    } finally {
-      globSpy.mockRestore();
-    }
+    const result = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, ["**/AGENTS.md"]);
+    expect(result.files.map((file) => file.path)).toEqual([path.join(workspaceDir, "AGENTS.md")]);
+    expect(result.diagnostics).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("simulated glob failure"));
   });
 
   it("surfaces a per-match io diagnostic keyed to the matched path when its realpath fails (non-ENOENT)", async () => {
