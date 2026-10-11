@@ -22,6 +22,10 @@ import {
   rejectUnavailableProfileConnect,
   resolveGatewayConnectPolicyFailure,
 } from "./connect-admission.js";
+import {
+  bindGatewayConnectOperatorAccess,
+  prepareGatewayConnectOperatorAccess,
+} from "./connect-operator-access.js";
 import type {
   DeviceAuthorizedGatewayConnect,
   GatewayConnectPhaseContext,
@@ -78,6 +82,14 @@ export function createGatewayConnectProfileLifecycle(
         Object.assign(registered.authenticatedUserProfile, profile);
       } else {
         registered.authenticatedUserProfile = profile;
+      }
+      // Deferred profiles attach after admission skipped operator access; without it,
+      // accepted runs carry no grant and publication rejects their requester.
+      if (registered.internal?.operatorAccessAuthority === undefined) {
+        prepareGatewayConnectOperatorAccess(registered);
+        if (!bindGatewayConnectOperatorAccess(context, registered)) {
+          return;
+        }
       }
       prepareGatewayRecipientProfile(registered, { identity: prepared.recipient });
       attachGatewayLocalUserIngress(registered, prepareIngress(profile));
