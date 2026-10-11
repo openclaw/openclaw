@@ -17,6 +17,7 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
   patchSessionEntryCore: updateSessionEntry,
   loadSessionEntry,
 }));
+// mock-isolation: Title orchestration tests supply transcript reads without starting workers.
 vi.mock("./session-transcript-title-reader.js", () => ({
   readSessionTitleFieldsFromTranscript,
   readSessionTitleFieldsFromTranscriptAsync: readSessionTitleFieldsFromTranscript,
