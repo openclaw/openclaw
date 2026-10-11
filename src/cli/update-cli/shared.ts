@@ -16,10 +16,6 @@ import {
   type UpdateFailureFact,
 } from "../../infra/update-failure-facts.js";
 import {
-  createFreeBsdPkgOwnershipInspection,
-  type FreeBsdPkgOwnershipInspection,
-} from "../../infra/update-freebsd-pkg-ownership.js";
-import {
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
   detectGlobalInstallManagerByPresence,
@@ -38,6 +34,10 @@ import {
 } from "../../infra/update-runner-install-surface.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import {
+  createSystemPackageOwnershipInspection,
+  type SystemPackageOwnershipInspection,
+} from "../../infra/update-system-package-ownership.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -512,11 +512,11 @@ export async function resolveGlobalManager(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
   timeoutMs: number;
-  pkgOwnership?: FreeBsdPkgOwnershipInspection;
+  pkgOwnership?: SystemPackageOwnershipInspection;
   serviceUnitTarget?: string;
 }): Promise<GlobalInstallManager> {
   await (
-    params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(params.timeoutMs)
+    params.pkgOwnership ?? createSystemPackageOwnershipInspection(params.timeoutMs)
   ).assertUnowned(params.root);
   if (params.installKind !== "git") {
     if (await resolveBrewOpenClawPath(params.root)) {

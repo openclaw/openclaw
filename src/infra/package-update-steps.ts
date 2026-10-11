@@ -39,10 +39,6 @@ import {
   type PackagePostInstallVerifier,
 } from "./package-update-verification-step.js";
 import { createUpdateFailureFact } from "./update-failure-facts.js";
-import {
-  createFreeBsdPkgOwnershipInspection,
-  FreeBsdPkgOwnershipError,
-} from "./update-freebsd-pkg-ownership.js";
 import { readBuiltGatewayBuildId, type GitRuntimeIdentity } from "./update-git-runtime.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
 import {
@@ -61,6 +57,10 @@ import { readPackageManagerProbeValue } from "./update-npm-prefix.js";
 import type { UpdateRecovery } from "./update-recovery.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import type { UpdateStepResult } from "./update-step-result.js";
+import {
+  createSystemPackageOwnershipInspection,
+  SystemPackageOwnershipError,
+} from "./update-system-package-ownership.js";
 
 type PackageUpdateStepsResult = {
   localOverrides?: LocalPackageOverridesResult;
@@ -185,14 +185,12 @@ export async function runGlobalPackageUpdateSteps(params: {
     if (admission) {
       return await packageUpdateFailure(admission);
     }
-    if (process.platform === "freebsd") {
-      if (!params.installTarget.packageRoot) {
-        throw new FreeBsdPkgOwnershipError("pkg-ownership-unavailable", "paths");
-      }
-      const inspection = createFreeBsdPkgOwnershipInspection(params.timeoutMs);
-      await inspection.assertUnowned(params.packageRoot);
-      await inspection.assertUnowned(params.installTarget.packageRoot);
+    if (process.platform === "freebsd" && !params.installTarget.packageRoot) {
+      throw new SystemPackageOwnershipError("ownership-unavailable", "paths");
     }
+    const inspection = createSystemPackageOwnershipInspection(params.timeoutMs);
+    await inspection.assertUnowned(params.packageRoot);
+    await inspection.assertUnowned(params.installTarget.packageRoot);
     const npmPreflight = resolveNpmLifecyclePolicyGate(params.installTarget);
     if (npmPreflight.error) {
       return await packageUpdateFailure({
@@ -701,7 +699,7 @@ export async function runGlobalPackageUpdateSteps(params: {
     if (error instanceof PackageUpdateActivationError) {
       throw error.cause;
     }
-    if (error instanceof FreeBsdPkgOwnershipError) {
+    if (error instanceof SystemPackageOwnershipError) {
       throw error;
     }
     const failedStep = await classifyPackageUpdatePermissionFailure(

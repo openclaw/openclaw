@@ -28,15 +28,16 @@ beforeEach(() => {
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("FreeBSD pkg RPC admission", () => {
+describe("system package RPC admission", () => {
   it.each([
-    { ownership: "owned", managed: false },
-    { ownership: "owned", managed: true },
-    { ownership: "unknown", managed: false },
-    { ownership: "unknown", managed: true },
-  ])(
+    { ownership: "owned", managed: false, platform: "linux", manager: "pacman" },
+    { ownership: "owned", managed: false, platform: "freebsd", manager: "pkg" },
+    { ownership: "owned", managed: true, platform: "freebsd", manager: "pkg" },
+    { ownership: "unknown", managed: false, platform: "freebsd", manager: "pkg" },
+    { ownership: "unknown", managed: true, platform: "freebsd", manager: "pkg" },
+  ] as const)(
     "refuses $ownership pkg ownership before campaign or handoff (managed=$managed)",
-    async ({ ownership, managed }) => {
+    async ({ ownership, managed, platform, manager }) => {
       mockGlobalInstallSurface();
       detectRespawnSupervisorMock.mockReturnValue(managed ? "systemd" : null);
       const query = vi
@@ -47,21 +48,23 @@ describe("FreeBSD pkg RPC admission", () => {
             ownership === "unknown" ? { code: 1 } : {},
           ),
         );
-      await withMockedPlatform("freebsd", async () => {
+      await withMockedPlatform(platform, async () => {
         const response = expectDefined(await captureUpdateRunPayload(), "update response");
-        const reason = ownership === "owned" ? "pkg-owned-install" : "pkg-ownership-unavailable";
+        const reason = `${manager}-${ownership === "owned" ? "owned-install" : "ownership-unavailable"}`;
         expect(response).toMatchObject({
           ok: false,
           message: expect.stringContaining(
             ownership === "owned"
-              ? "Update it through pkg"
+              ? manager === "pkg"
+                ? "Update it through pkg"
+                : "pacman -Syu"
               : "Restore access to the active pkg database",
           ),
-          result: { status: "error", reason },
+          result: { status: ownership === "owned" ? "skipped" : "error", reason },
           restart: null,
         });
         expect(getUpdateRun(response.runId)).toMatchObject({
-          status: "failed",
+          status: ownership === "owned" ? "skipped" : "failed",
           reason,
           origin: { nextAction: response.message },
         });
@@ -74,7 +77,7 @@ describe("FreeBSD pkg RPC admission", () => {
     },
   );
 
-  it.each(["linux", "darwin", "win32"] as const)(
+  it.each(["darwin", "win32"] as const)(
     "preserves %s update admission without a pkg query",
     async (platform) => {
       // Platform simulation does not change the real ledger's SQLite VFS.

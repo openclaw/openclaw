@@ -47,6 +47,7 @@ function gitUpdateParams(root: string): Parameters<typeof updateGitInstall>[0] {
 
 async function withPackageRoots(
   run: (base: string, requested: string, managed: string) => Promise<void>,
+  platform: NodeJS.Platform = "freebsd",
 ) {
   await withTestDir({ prefix: "openclaw-update-pkg-" }, async (base) => {
     const requested = path.join(base, "requested", "lib", "node_modules", "openclaw");
@@ -67,16 +68,23 @@ async function withPackageRoots(
       },
       async () => {
         mockSystemAccountHome();
-        await withMockedPlatform("freebsd", () => run(base, requested, managed));
+        await withMockedPlatform(platform, () => run(base, requested, managed));
       },
     );
   });
 }
 
 describe("FreeBSD pkg update admission", () => {
-  it.each(["owned", "unknown", "unowned"])(
-    "admits the requested root before package-manager probes (%s)",
-    async (ownership) => {
+  it.each([
+    { platform: "freebsd", manager: "pkg", ownership: "owned" },
+    { platform: "freebsd", manager: "pkg", ownership: "unknown" },
+    { platform: "freebsd", manager: "pkg", ownership: "unowned" },
+    { platform: "linux", manager: "pacman", ownership: "owned" },
+    { platform: "linux", manager: "pacman", ownership: "unknown" },
+    { platform: "linux", manager: "pacman", ownership: "unowned" },
+  ] as const)(
+    "admits $manager roots before npm discovery ($ownership)",
+    async ({ platform, manager, ownership }) => {
       await withPackageRoots(async (_base, root) => {
         const command = vi.spyOn(exec, "runCommandWithTimeout").mockResolvedValue({
           stdout: `${path.dirname(root)}\n`,
@@ -102,11 +110,11 @@ describe("FreeBSD pkg update admission", () => {
           expect(command).toHaveBeenCalled();
         } else {
           await expect(admission).rejects.toMatchObject({
-            reason: ownership === "owned" ? "pkg-owned-install" : "pkg-ownership-unavailable",
+            reason: `${manager}-${ownership === "owned" ? "owned-install" : "ownership-unavailable"}`,
           });
           expect(command).not.toHaveBeenCalled();
         }
-      });
+      }, platform);
     },
   );
 
