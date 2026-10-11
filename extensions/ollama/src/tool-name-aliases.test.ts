@@ -213,7 +213,7 @@ it("preserves the system prompt while appending wire names and translating tool 
   await (await createOllamaStreamFn(model.baseUrl)(model, input)).result();
   const request = readRequest();
   expect(request.messages[0].content).toBe(
-    `${input.systemPrompt}\n## Tool wire names\nUse these function names for the tools referenced in instructions; arguments and tool IDs are unchanged:\nls: use openclaw_ls\ntool_call: use openclaw_tool_call`,
+    `${input.systemPrompt}\n## Tool wire names\nUse these function names for the tools referenced in instructions; arguments and tool IDs are unchanged:\nls: use openclaw_ls\ntool_call: use openclaw_tool_call\nInvoke deferred tools only through openclaw_tool_call with {"id":"<catalog ID or name>","args":{<tool parameters>}}. Never call a deferred name or tool_call directly.`,
   );
   expect(request.tools).toContainEqual({
     type: "function",
