@@ -637,6 +637,8 @@ export type SessionProfileInvolvement = {
 };
 
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Bounded durable-question ownership excludes either run from generic restart replay. */
+  durableQuestionOwners?: import("./session-question-recovery-owner.js").DurableQuestionRecoveryOwner[];
   /** Personal discovery state, never participation, attribution, or sharing authority. */
   profileInvolvement?: { key: string; profiles: Record<string, SessionProfileInvolvement> };
   /** Transcript-wide account provenance; native binding replacement must not replace it. */
@@ -662,7 +664,7 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
   /** Original host-admitted operator basis, owned by the exact restart source claim. */
-  restartRecoveryOperatorSource?: import("../../gateway/operator-run-recovery-source.js").RestartRecoveryOperatorSource;
+  restartRecoveryOperatorSource?: import("../../gateway/operator-run-recovery-source.schema.js").RestartRecoveryOperatorSource;
   mainRestartRecovery?: MainRestartRecoveryState;
 };
 

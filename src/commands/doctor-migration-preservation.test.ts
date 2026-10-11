@@ -8,6 +8,7 @@ import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-p
 import { captureUpdateRecoveryBaseline } from "../infra/update-recovery-baseline-capture.js";
 import { resolveCapturedRegistryPath } from "../infra/update-recovery-path.js";
 import * as pluginResources from "../plugins/doctor-contract-registry.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import * as agentRegistry from "../state/openclaw-agent-db-registry.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "../state/openclaw-agent-schema-v24.test-support.js";
@@ -198,7 +199,9 @@ it("binds semantic preservation to original backups across a partial migration a
         const partialResult = await migrate();
         registration.mockRestore();
         expect(partialResult.warnings.join("\n")).toContain("fixture registration interrupted");
-        expect(externalDatabase.prepare("PRAGMA user_version").get()?.user_version).toBe(25);
+        expect(externalDatabase.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
         const registryVersions = () =>
           openOpenClawStateDatabase()
             .db.prepare(
@@ -222,8 +225,63 @@ it("binds semantic preservation to original backups across a partial migration a
         });
         const retry = await migrate();
         expect(retry.warnings).toEqual([]);
-        expect(externalDatabase.prepare("PRAGMA user_version").get()?.user_version).toBe(25);
-        expect(registryVersions()).toEqual([24, 25]);
+        expect(externalDatabase.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
+        expect(registryVersions()).toEqual([24, OPENCLAW_AGENT_SCHEMA_VERSION]);
+        openOpenClawStateDatabase()
+          .db.prepare(
+            "UPDATE agent_databases SET schema_version = 25 WHERE agent_id = ? AND schema_version = ?",
+          )
+          .run("external", OPENCLAW_AGENT_SCHEMA_VERSION);
+        const staleRegistration = (await capture("witness-stale-registration")).ref;
+        await expect(
+          inspectDoctorMigrationPreservation({ original, candidate: staleRegistration }),
+        ).rejects.toThrow(/Registry schema version/u);
+        openOpenClawStateDatabase()
+          .db.prepare(
+            "UPDATE agent_databases SET schema_version = ? WHERE agent_id = ? AND schema_version = 25",
+          )
+          .run(OPENCLAW_AGENT_SCHEMA_VERSION, "external");
+        const admittedState = openOpenClawStateDatabase();
+        const registryWitness = captureOpenClawMigrationWitness(
+          admittedState.db,
+          { role: "global" },
+          {
+            sourcePath: admittedState.path,
+            agents: [
+              {
+                agentId: "external",
+                path: external,
+                requireRegistration: true,
+                expectedSchemaVersion: 26,
+              },
+            ],
+            phase: "candidate",
+            resolvePath: (value) => (value === externalAlias ? external : value),
+          },
+        );
+        const missingTarget = {
+          ...registryWitness,
+          tables: registryWitness.tables.map((table) =>
+            table.registryRows
+              ? {
+                  ...table,
+                  registryRows: table.registryRows.map(
+                    ({ store, locator, schemaVersion, sha256 }) => ({
+                      store,
+                      locator,
+                      schemaVersion,
+                      sha256,
+                    }),
+                  ),
+                }
+              : table,
+          ),
+        };
+        expect(() =>
+          assertOpenClawMigrationWitnessPreserved(registryWitness, missingTarget),
+        ).toThrow();
         expect(await fs.readFile(backupPath)).toEqual(backupBytes);
         expect(await fs.readFile(original.manifestPath)).toEqual(originalBytes);
         const candidate = (await capture("witness-migrated")).ref;

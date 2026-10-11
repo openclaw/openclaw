@@ -7,6 +7,66 @@ read_when:
 title: "Storage changes and release preflight"
 ---
 
+## Proposed durable ordinary questions
+
+This is a preparatory design for issue #167266. Maintainer acceptance of the
+persistent contract is pending; this section records a proposal, not an accepted
+storage decision. The implementing PR must link acceptance before merge.
+
+The storage prerequisite installs dormant custody APIs and migration support.
+It does not register or resume durable questions in production. Gateway admission,
+restart replay exclusion, and channel recovery activate in the dependent integration.
+
+The canonical per-agent database would own `session_questions` in schema 26.
+Registration stores the immutable question, original absolute deadline, exact
+session generation, original producer authorization reference, and delivery
+provenance. Settlement commits the first terminal result and the owed
+continuation together. Retrying a lost acknowledgement returns that original
+receipt; it cannot replace the answer or renew the deadline.
+
+Continuation admission claims one exact native run in the same worker transaction.
+Recovery can offer unclaimed owed work, but a previously admitted run becomes
+interrupted rather than being repeated. Current policy must authorize the original
+private source before admission; stored references do not confer authority.
+Blocked or interrupted results retain their saved answer and direct the user to
+an explicit new turn. Reset or deletion retires the old generation atomically.
+Private current-generation ownership facts prevent ordinary restart recovery from
+replaying any retained asking run or continuation after its question receipt is
+pruned. Registration and admission retain unresolved custody and every exact native
+recovery reference. They remove an ownership fact only when custody is finished
+and no native reference remains. The list is bounded at 4,096; registration refuses
+visibly if retained references fill that bound, without evicting exclusion proof.
+
+The proposed retention is 24 hours after settled, blocked, or interrupted custody.
+Pending, owed, and claimed questions are not removed merely because of age or
+capacity. Registration refuses visibly at 4,096 total retained active or recent terminal
+records per agent; it does not silently evict obligations. Original deadlines remain
+absolute across restart. Incognito questions remain process-local.
+
+Synchronous legacy and Doctor entry mutations cannot reset or delete a generation
+with retained durable question ownership. They fail before the first mutation and
+must use the asynchronous owning session lifecycle writer; ordinary synchronous
+writes without durable custody keep their existing behavior. Worker-owned reset
+and deletion retire unresolved questions in the same native transaction. Reusing
+an expired question ID is refused while native recovery still references its old
+ownership; a new question must use a new ID.
+
+Schema 25 databases require the existing offline Doctor migration owner, while
+Gateway writers are stopped. Migration installs the required table and indexes and
+publishes both version markers as 26 in one native transaction. Historical schema
+targets below 26 exclude this representation. Older schema-25 binaries must refuse
+the upgraded database: ignoring a new session marker would permit unsafe automatic
+replay. There is no package-only downgrade. Before upgrading, create and verify a
+WAL-aware full backup; rollback restores the complete pre-upgrade backup with its
+matching binary while the Gateway is stopped. Schema conversion back to 25 and
+selective removal of durable obligations are unsupported.
+
+Acceptance must cover custody and restart visibility, retained authorization and
+delivery provenance, the 24-hour terminal retention and capacity refusal, reset
+and deletion behavior, the global schema boundary, and backup-based rollback.
+Migration and native-worker tests are evidence for the candidate; they do not
+substitute for acceptance of these persistent semantics.
+
 ## Canonical writer validation
 
 The per-agent session writer owns row validity under the single Gateway writer
@@ -2589,3 +2649,5 @@ without `preflight-agent` remain unsupported; installing a newer CLI elsewhere
 does not make those payloads compatible. Runtime/package identity and serving
 health are separate checks from database compatibility. A successful read-only
 preflight does not authorize checkpoint replay or replacement of live databases.
+
+Durable question aliases cannot currently be relocated by synchronous or worker canonicalization. The relocation is refused before destination writes or transcript and membership rehoming, preserving the original native recovery fences. A separately accepted transfer owner is required to support that operation; aliases without durable question ownership retain their existing behavior.

@@ -204,8 +204,11 @@ export function isSqliteWorkerError(
   }
 }
 
-/** Unknown native outcomes remain terminal through canonical cause and cleanup envelopes. */
-export function hasSqliteWorkerOutcomeUnknown(error: unknown): boolean {
+/** Recognize selected canonical worker codes through safe cause and cleanup envelopes. */
+export function hasSqliteWorkerErrorCode(
+  error: unknown,
+  codes: readonly SqliteWorkerError["code"][],
+): boolean {
   const pending: unknown[] = [error];
   const seen = new Set<unknown>();
   while (pending.length > 0) {
@@ -215,7 +218,9 @@ export function hasSqliteWorkerOutcomeUnknown(error: unknown): boolean {
     }
     seen.add(current);
     if (
-      Object.getOwnPropertyDescriptor(current, retainedWorkerErrorCode)?.value === "outcome-unknown"
+      codes.some(
+        (code) => Object.getOwnPropertyDescriptor(current, retainedWorkerErrorCode)?.value === code,
+      )
     ) {
       return true;
     }
@@ -259,4 +264,9 @@ export function hasSqliteWorkerOutcomeUnknown(error: unknown): boolean {
     }
   }
   return false;
+}
+
+/** Unknown outcomes retain their existing canonical envelope classification. */
+export function hasSqliteWorkerOutcomeUnknown(error: unknown): boolean {
+  return hasSqliteWorkerErrorCode(error, ["outcome-unknown"]);
 }

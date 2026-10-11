@@ -4,6 +4,8 @@ import type { MaterializedSessionStateDeletePlan } from "./session-accessor.sqli
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import {
+  assertQuestionAliasRelocation,
+  assertQuestionLifecycleWorker,
   deleteLegacySessionEntryRows,
   deleteSessionEntryRows,
   readExactSessionEntryRow,
@@ -102,6 +104,22 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
     }
     return shouldRemove;
   });
+  const preservedKeys = new Set(projected.upsertedEntries.map((upsert) => upsert.sessionKey));
+  for (const removal of validatedRemovals) {
+    if (!preservedKeys.has(removal.sessionKey)) {
+      const relocated = projected.upsertedEntries.some(
+        (upsert) =>
+          upsert.sessionKey !== removal.sessionKey &&
+          (removal.expectedEntry.sessionId === upsert.entry.sessionId ||
+            removal.expectedEntry.sessionId === upsert.entry.previousSessionId),
+      );
+      if (relocated) {
+        assertQuestionAliasRelocation(removal.expectedEntry);
+      } else {
+        assertQuestionLifecycleWorker(removal.expectedEntry);
+      }
+    }
+  }
   const archivedTranscripts = deleteMaterializedSessionStatePlans(
     database,
     removalPlans,

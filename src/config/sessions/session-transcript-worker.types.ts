@@ -28,13 +28,11 @@ import type {
   SessionCleanupReadInput,
   SessionCleanupReadResult,
 } from "./cleanup-service-read.types.js";
-import type { ConversationDeliveryRecord } from "./conversation-delivery-store.types.js";
 import type {
   ConversationRowsWorkerInput,
   ConversationRecord,
 } from "./conversation-registry.types.js";
 import type { ArchivedSessionEvictionBatch } from "./disk-budget.types.js";
-import type { SessionGoalOperationLookupResult } from "./goals-operations.types.js";
 import type {
   SessionPendingArchivesWorkerInput,
   SessionArchivePruningWorkerInput,
@@ -60,7 +58,6 @@ import type {
   SessionMaintenanceReadResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import type { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
-import type { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
 import type { SessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 import type {
   SessionAccessScope,
@@ -166,9 +163,9 @@ import type {
   SessionUsageCacheWorkerInput,
 } from "./session-transcript-worker-read.types.js";
 import type {
-  ConversationDeliveryWorkerInput,
-  SessionGoalOperationReceiptWorkerInput,
-  SessionPendingInputReceiptsWorkerInput,
+  SessionTranscriptReceiptWorkerInput,
+  SessionTranscriptReceiptWorkerValues,
+  SessionTranscriptReceiptReaders,
 } from "./session-transcript-worker-receipts.types.js";
 
 export type {
@@ -343,12 +340,10 @@ export type SessionHistoryWorkerInput =
   | SessionMembershipFactsWorkerInput
   | SessionProgressCardWorkerInput
   | PendingInputHistoryWorkerInput
-  | SessionPendingInputReceiptsWorkerInput
+  | SessionTranscriptReceiptWorkerInput
   | PendingInputSourceWorker.Input
   | HarnessCompletionSourceWorker.Input
-  | SessionGoalOperationReceiptWorkerInput
   | ConversationRowsWorkerInput
-  | ConversationDeliveryWorkerInput
   | SessionEntryListWorkerInput
   | SessionEntryReadWorkerInput
   | SessionRuntimeTargetWorkerInput
@@ -386,7 +381,8 @@ export type SessionHistoryWorkerPreparedInput =
   PreparedHistoryInput<SessionHistoryDatabaseWorkerInput>;
 
 export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValues &
-  SessionTranscriptHydrationWorkerValues & {
+  SessionTranscriptHydrationWorkerValues &
+  SessionTranscriptReceiptWorkerValues & {
     "session-retirement-read": {
       kind: "session-retirement-read";
       result: SessionRetirementReadResult;
@@ -424,7 +420,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     };
     "cli-process-history": ChatHistoryDisplayResult;
     "conversation-rows": { kind: "conversation-rows"; rows: ConversationRecord[] };
-    "conversation-delivery": { kind: "conversation-delivery"; record?: ConversationDeliveryRecord };
+
     prewarm: { kind: "prewarm" };
     "session-pending-archives": { kind: "session-pending-archives"; pending: boolean };
     "lifecycle-artifact-plan": LifecycleArtifactCleanupWorkerResult;
@@ -467,20 +463,14 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     "session-suggestions": { kind: "session-suggestions"; suggestions: StoredSessionSuggestion[] };
     "session-membership-facts": SessionMembershipFacts;
     "session-progress-card": { kind: "session-progress-card"; card: ProgressCard | null };
-    "goal-operation-receipt": {
-      kind: "goal-operation-receipt";
-      result: SessionGoalOperationLookupResult;
-    };
+
     "session-pending-input-source": PendingInputSourceWorker.Value;
     "session-harness-completion-source": HarnessCompletionSourceWorker.Value;
     "session-pending-input-history": {
       kind: "session-pending-input-history";
       snapshot: PendingInputHistorySnapshot;
     };
-    "session-pending-input-receipts": {
-      kind: "session-pending-input-receipts";
-      receipts: ReturnType<typeof listSessionPendingInputReceipts>;
-    };
+
     "session-entry-list": SessionEntryListWorkerResult;
     "session-store-projection": SessionStoreProjectionWorkerResult;
     "session-store-summary": {
@@ -551,7 +541,8 @@ type CancellableSessionHistoryReader<
 > = (input: Omit<Input, "kind" | "database">, signal?: AbortSignal) => Promise<Value>;
 
 export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
-  SessionTranscriptHydrationReaders & {
+  SessionTranscriptHydrationReaders &
+  SessionTranscriptReceiptReaders & {
     readRetirement: CancellableSessionHistoryReader<
       SessionRetirementReadWorkerInput,
       SessionRetirementReadResult
@@ -685,24 +676,14 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readSuggestions: SessionHistoryReader<SessionSuggestionsWorkerInput, StoredSessionSuggestion[]>;
     readMembershipFacts: SessionHistoryReader<SessionMembershipFactsWorkerInput>;
     readProgressCard: SessionHistoryReader<SessionProgressCardWorkerInput, ProgressCard | null>;
-    readConversationDelivery: SessionHistoryReader<
-      ConversationDeliveryWorkerInput,
-      ConversationDeliveryRecord | undefined
-    >;
-    readGoalOperationReceipt: SessionHistoryReader<
-      SessionGoalOperationReceiptWorkerInput,
-      SessionGoalOperationLookupResult
-    >;
+
     readPendingInputSource: PendingInputSourceWorker.Reader;
     readHarnessCompletionSource: HarnessCompletionSourceWorker.Reader;
     readPendingInputHistory: SessionHistoryReader<
       PendingInputHistoryWorkerInput,
       PendingInputHistorySnapshot
     >;
-    readPendingInputReceipts: SessionHistoryReader<
-      SessionPendingInputReceiptsWorkerInput,
-      ReturnType<typeof listSessionPendingInputReceipts>
-    >;
+
     readVoiceSessions: SessionHistoryReader<VoiceSessionsWorkerInput>;
     readUsageCache: SessionHistoryReader<SessionUsageCacheWorkerInput>;
   };

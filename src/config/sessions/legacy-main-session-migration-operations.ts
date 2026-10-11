@@ -37,6 +37,7 @@ import {
   withSqliteSessionDeletions,
 } from "./session-accessor.sqlite-deletion.js";
 import {
+  assertQuestionAliasRelocation,
   deleteLegacySessionEntryRows,
   readExactSessionEntryRow,
   writeSessionEntry,
@@ -168,6 +169,11 @@ function migrateClaimsInPlace(params: {
           : currentCanonical !== undefined)
       ) {
         return undefined;
+      }
+      for (const claim of currentAliases) {
+        if (claim && claim.key !== params.canonicalKey) {
+          assertQuestionAliasRelocation(claim.entry);
+        }
       }
       if (!currentCanonical) {
         writeMigratedSessionClaim(database, params.canonicalKey, params.winner.entry);
@@ -514,6 +520,7 @@ function quarantineClaim(params: {
           break;
         }
       }
+      assertQuestionAliasRelocation(fresh.entry);
       writeMigratedSessionClaim(database, quarantineKey, params.claim.entry);
       deleteLegacySessionEntryRows(database, [params.claim.key], quarantineKey, {
         rehomeMembers: true,

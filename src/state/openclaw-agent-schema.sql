@@ -436,6 +436,31 @@ CREATE TABLE IF NOT EXISTS session_goal_operations (
 CREATE INDEX IF NOT EXISTS idx_agent_session_goal_operations_expiry
   ON session_goal_operations(expires_at);
 
+CREATE TABLE IF NOT EXISTS session_questions (
+  question_id TEXT PRIMARY KEY,
+  session_key TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  lifecycle_revision TEXT NOT NULL,
+  definition_json TEXT NOT NULL,
+  provenance_json TEXT NOT NULL,
+  session_binding_json TEXT NOT NULL,
+  result_json TEXT,
+  resolution_id TEXT,
+  continuation_state TEXT NOT NULL CHECK (continuation_state IN ('pending', 'owed', 'claimed', 'settled', 'interrupted', 'blocked')),
+  continuation_run_id TEXT,
+  gateway_epoch TEXT,
+  continuation_reason TEXT,
+  terminal_at INTEGER,
+  CHECK ((result_json IS NULL) = (resolution_id IS NULL)),
+  CHECK ((continuation_state = 'pending') = (result_json IS NULL)),
+  CHECK (continuation_state <> 'claimed' OR (continuation_run_id IS NOT NULL AND gateway_epoch IS NOT NULL))
+) STRICT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_session_questions_pending
+  ON session_questions(session_key, session_id, lifecycle_revision)
+  WHERE continuation_state = 'pending';
+CREATE INDEX IF NOT EXISTS idx_agent_session_questions_continuation
+  ON session_questions(continuation_state, session_key);
+
 CREATE TABLE IF NOT EXISTS transcript_events (
   session_id TEXT NOT NULL,
   seq INTEGER NOT NULL,

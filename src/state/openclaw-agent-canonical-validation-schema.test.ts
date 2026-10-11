@@ -702,6 +702,11 @@ describe("agent schema 25 migration", () => {
             ).toEqual(before.schema);
             expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(24);
             expect(
+              database
+                .prepare("SELECT name FROM sqlite_schema WHERE name = 'session_questions'")
+                .get(),
+            ).toBeUndefined();
+            expect(
               database.prepare("SELECT canonical_ready FROM session_key_contract").get()
                 ?.canonical_ready,
             ).toBe("old-physical-receipt");
@@ -719,6 +724,11 @@ describe("agent schema 25 migration", () => {
               ?.canonical_ready,
           ).toBeNull();
           expect(pendingKeys(database)).toEqual([key, sibling].toSorted());
+          expect(
+            database
+              .prepare("SELECT name FROM sqlite_schema WHERE name = 'session_questions'")
+              .get(),
+          ).toEqual({ name: "session_questions" });
           assertCanonicalSessionValidationSchema(database);
           const batch = readPendingCanonicalSessionValidationBatch(
             { agentId: "main", db: database },
