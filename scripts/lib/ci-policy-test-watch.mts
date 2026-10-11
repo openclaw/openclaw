@@ -293,6 +293,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   },
   ...[
     "src/agents/embedded-agent-runner/run/attempt-prompt-submit.test.ts",
+    "src/agents/embedded-agent-runner/run/attempt-prompt-submit.runtime-replay.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-stream-custody.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.test.ts",
     "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts",
@@ -928,7 +929,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   },
   ...[
-    "src/gateway/talk/client-spoken-confirmation.test.ts",
     "src/gateway/talk/handlers/client-native-control.test.ts",
     "src/gateway/talk/handlers/native-consult-target.test.ts",
     "src/gateway/talk/handlers/target.test.ts",

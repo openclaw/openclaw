@@ -30,7 +30,10 @@ import {
   hydrateSessionActorState,
   projectSessionActorHotState,
 } from "./session-actor-hydration.worker.js";
-import { applySessionActorPhase } from "./session-actor-phase.worker.js";
+import {
+  applySessionActorPhase,
+  SessionActorStaleStateError,
+} from "./session-actor-phase.worker.js";
 import {
   cloneSessionActorStoredState,
   withSessionActorTransactionState,
@@ -198,6 +201,7 @@ export function createSessionActorWorker(
             throw error;
           }
           const working = cloneSessionActorStoredState(before);
+          let commitPublication: unknown;
           const borrowed: AgentWorkerOperationContext = {
             ...context,
             open: () => opened,
@@ -208,6 +212,9 @@ export function createSessionActorWorker(
               return operation(opened);
             },
             admit(stage, publication) {
+              if (stage === "commit") {
+                commitPublication = publication;
+              }
               admit(stage, {
                 kind: "session-actor-admission",
                 snapshot: projectSessionActorHotState(working),
@@ -304,6 +311,7 @@ export function createSessionActorWorker(
             admit("commit", {
               kind: "session-actor-admission",
               snapshot: projectSessionActorHotState(working),
+              publication: turn ?? commitPublication,
               final: true,
             });
             return accepted;
@@ -352,7 +360,13 @@ export function createSessionActorWorker(
           return stale;
         }
         observed.settled("rolled-back");
-        return { kind: "rolled-back", error: errorFacts(error) };
+        return {
+          kind: "rolled-back",
+          error: errorFacts(error),
+          ...(error instanceof SessionActorStaleStateError
+            ? { reason: "stale-state" as const }
+            : {}),
+        };
       }
     },
     close() {

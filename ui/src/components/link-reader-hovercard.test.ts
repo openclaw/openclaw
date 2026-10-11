@@ -72,6 +72,7 @@ function card() {
   return document.querySelector<HTMLElement>(".link-reader-hovercard");
 }
 async function hover(anchor: HTMLAnchorElement) {
+  await Promise.resolve(); // Allow the bridge to mount before dispatching intent.
   anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
   await vi.advanceTimersByTimeAsync(250);
 }
@@ -89,6 +90,7 @@ describe("openclaw-link-reader-hovercard-provider", () => {
   afterEach(async () => {
     await i18n.setLocale("en");
     document.body.replaceChildren();
+    await Promise.resolve();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -202,6 +204,7 @@ describe("openclaw-link-reader-hovercard-provider", () => {
         metadata: [{ label: "Comments", value: "4" }],
       }),
     );
+    await provider.updateComplete;
     anchor.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
     await vi.advanceTimersByTimeAsync(0);
     expect(card()?.textContent).toContain("Change C42");

@@ -8,6 +8,7 @@ import {
   openNodeSqliteDatabase,
   resolveExistingSqliteFileUri,
   requestSqliteWorkerOperationAdmission,
+  readSqliteDatabasePendingWriteToken,
   runSqliteImmediateTransactionSync,
   supportsNodeSqliteExtensionLoading,
   type SqliteWorkerBackend,
@@ -29,6 +30,7 @@ import type {
   MemoryPublicationOperations,
   MemoryPublicationResult,
 } from "./manager-publication-task.js";
+import { MEMORY_INDEX_META_KEY, readMemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import { assertMemoryShadowIdentity, type MemoryShadowFailure } from "./manager-shadow-task.js";
 import {
   MemorySourceIndexKernel,
@@ -135,6 +137,7 @@ function createPublicationBackend(
     ): MemoryPublicationResult<T> => {
       let entered = false;
       let committed = false;
+      let writeToken: string | undefined;
       let restoredBusyTimeout = false;
       const restoreBusyTimeout = () => {
         if (!restoredBusyTimeout) {
@@ -157,11 +160,12 @@ function createPublicationBackend(
           withCommit: (commit) => {
             assertPath();
             admit("commit");
+            writeToken = readSqliteDatabasePendingWriteToken(db);
             commit();
             committed = true;
           },
         });
-        return { ok: true, value };
+        return { ok: true, value, writeToken };
       } catch (error) {
         return { ok: false, error: failure(error), entered, committed };
       } finally {
@@ -181,6 +185,8 @@ function createPublicationBackend(
           { withCommit: hooks.withCommit },
         ),
       );
+    const withFacts = <T>(result: MemoryPublicationResult<T>): MemoryPublicationResult<T> =>
+      result.ok ? { ...result, facts: readMemoryDatabaseFacts(db) } : result;
     return {
       assertSettled() {
         assertTransactionUsable(db);
@@ -190,11 +196,23 @@ function createPublicationBackend(
       },
       execute(command) {
         assertPath();
+        if (command.type === "index.facts") {
+          return readMemoryDatabaseFacts(db);
+        }
+        if (command.type === "index.writeMetadata") {
+          return withFacts(
+            write(() => {
+              db.prepare(
+                "INSERT INTO memory_index_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+              ).run(MEMORY_INDEX_META_KEY, JSON.stringify(command.input));
+            }),
+          );
+        }
         if (command.type === "schema.admit") {
           // Storage/STRICT migration must disable foreign keys before BEGIN.
           db.exec("PRAGMA foreign_keys = OFF");
           try {
-            return write(() => ensureMemoryIndexSchema({ ...command.input, db }));
+            return withFacts(write(() => ensureMemoryIndexSchema({ ...command.input, db })));
           } finally {
             if (db.isOpen) {
               db.exec(`PRAGMA foreign_keys = ${input.pragmas.foreign_keys}`);
@@ -211,7 +229,7 @@ function createPublicationBackend(
           return loadMemorySourceFileState({ db, ...command.input });
         }
         if (command.type === "source.refresh") {
-          return write(() => refreshMemorySessionSourceState(db, command.input));
+          return withFacts(write(() => refreshMemorySessionSourceState(db, command.input)));
         }
         if (command.type === "session.current") {
           return hasMemorySessionTombstone(db, command.input.agentId, command.input.sessionId)
@@ -331,22 +349,26 @@ function createPublicationBackend(
         }
         if (command.type === "database.publish") {
           const publication = command.input;
-          return transact((hooks) => {
-            assertMemoryShadowIdentity(publication.sourcePath, publication.sourceIdentity);
-            publishMemoryDatabaseTables({
-              ...publication,
-              targetDb: db,
-              onBegin: () => {
-                hooks.onBegin();
-                assertMemoryShadowIdentity(publication.sourcePath, publication.sourceIdentity);
-              },
-              withCommit: hooks.withCommit,
-            });
-          });
+          return withFacts(
+            transact((hooks) => {
+              assertMemoryShadowIdentity(publication.sourcePath, publication.sourceIdentity);
+              publishMemoryDatabaseTables({
+                ...publication,
+                targetDb: db,
+                onBegin: () => {
+                  hooks.onBegin();
+                  assertMemoryShadowIdentity(publication.sourcePath, publication.sourceIdentity);
+                },
+                withCommit: hooks.withCommit,
+              });
+            }),
+          );
         }
         if (command.type === "source.delete") {
-          return write(() =>
-            new MemorySourceIndexKernel(db, command.input.state).deleteIfCurrent(command.input),
+          return withFacts(
+            write(() =>
+              new MemorySourceIndexKernel(db, command.input.state).deleteIfCurrent(command.input),
+            ),
           );
         }
         let header: MemorySourceIndexHeader;
@@ -367,6 +389,7 @@ function createPublicationBackend(
           header = staged.header;
           rows = readPublicationRows<MemorySourceIndexRow>(staged.fragments);
         }
+        let facts: ReturnType<typeof readMemoryDatabaseFacts> | undefined;
         const outcome = write(() => {
           if (
             header.source === "sessions" &&
@@ -381,13 +404,15 @@ function createPublicationBackend(
             db,
             command.input.state,
           ).replaceRows(header, rows);
+          facts = readMemoryDatabaseFacts(db);
           return {
             beforeRevision,
-            databaseRevision: readMemoryDatabaseRevision(db),
+            databaseRevision: facts.revision,
             retainedDrift,
           };
         });
-        return command.type === "source.replace.inline" ? outcome : finish(outcome);
+        const published = outcome.ok ? { ...outcome, facts } : outcome;
+        return command.type === "source.replace.inline" ? published : finish(published);
       },
       close() {
         if (ownsConnection) {

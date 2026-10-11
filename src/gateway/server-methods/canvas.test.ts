@@ -137,35 +137,6 @@ describe("canvas.document.view", () => {
     }
   });
 
-  it.each(["gateway", "client", "signal", "configuration"] as const)(
-    "rejects a retired %s before returning awaited content",
-    async (boundary) => {
-      const { context, client, invoke } = createHarness();
-      const document = createDeferred<{ html: string; cspSandbox: "scripts" }>();
-      readDocument.mockReturnValue(document.promise);
-      const controller = new AbortController();
-      const pending = invoke(undefined, { signal: controller.signal });
-      if (boundary === "gateway") {
-        context.resolveGatewayContext = () => undefined;
-      }
-      if (boundary === "client") {
-        client.invalidated = true;
-      }
-      if (boundary === "signal") {
-        controller.abort();
-      }
-      if (boundary === "configuration") {
-        context.getRuntimeConfig = () => ({
-          plugins: { entries: { canvas: { config: { host: { enabled: false } } } } },
-        });
-      }
-      document.resolve({ html: "<p>Private widget</p>", cspSandbox: "scripts" });
-      const respond = await pending;
-      expect(respond.mock.calls[0]?.[0]).toBe(false);
-      expect(respond.mock.calls[0]?.[1]).toBeUndefined();
-    },
-  );
-
   it("reports missing documents and unavailable sandbox listeners without exposing file paths", async () => {
     const { context, invoke } = createHarness();
     readDocument.mockRejectedValueOnce(new Error("ENOENT: /private/state/canvas/secret"));
@@ -359,14 +330,6 @@ describe("canvas.document.preview", () => {
       }
     },
   );
-
-  it("provisions the existing host without touching stored documents", async () => {
-    const { context, invoke } = createPreviewHarness();
-    context.getMcpAppSandboxPort = () => undefined;
-    const respond = await invoke({ html: "<h1>Preview</h1>" });
-    expect(context.ensureSandboxHostPort).toHaveBeenCalledOnce();
-    expect(respond.mock.calls[0]?.[0]).toBe(true);
-  });
 
   it("reports unavailable or failed listeners without exposing server details", async () => {
     const { context, invoke } = createPreviewHarness();

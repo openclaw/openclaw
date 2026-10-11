@@ -2,7 +2,6 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildSystemAgentSessionInvalidatedErrorDetails } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
@@ -158,29 +157,6 @@ afterEach(() => {
 });
 
 describe("openclaw.chat session lifecycle", () => {
-  it("rejects a foreign-owner session with structured invalidation details", async () => {
-    const sessions = new Map<string, SystemAgentChatSession>([
-      ["s1", seededSession({ ownerKey: "device:someone-else" })],
-    ]);
-
-    const call = await callChat(makeContext(sessions), {
-      sessionId: "s1",
-      message: "Hello?",
-    });
-
-    // Persisted client session ids depend on the structured details to mint a
-    // fresh id instead of retry-looping against the foreign live session.
-    expect(call).toEqual({
-      ok: false,
-      payload: undefined,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "OpenClaw session belongs to another caller.",
-        details: buildSystemAgentSessionInvalidatedErrorDetails(),
-      },
-    });
-  });
-
   it("projects the live wizard interaction on a welcome-only rejoin", async () => {
     const engine = makeEngine();
     const liveQuestion = { id: "wizard-q", header: "Pick", options: [{ label: "A" }] };

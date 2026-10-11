@@ -46,7 +46,7 @@ import {
   resolveSqliteSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
 } from "./session-transcript-read-fence.js";
-import { transcriptEventNavigationSql } from "./transcript-payload.js";
+import { transcriptEventNavigationSql, transcriptEventRunIdSql } from "./transcript-payload.js";
 export { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 export {
   isSessionTranscriptProjectionUnavailableError,
@@ -135,7 +135,7 @@ export function everySessionTranscriptUserInputFrom(
         /* kysely-allow-raw: Stream only admission control facts, never message bodies, across the exact active input range. */
         sql<string>`json_object('role', json_extract(${transcriptEventNavigationSql("event")}, '$.message.role'),
           'idempotencyKey', json_extract(${transcriptEventNavigationSql("event")}, '$.message.idempotencyKey'),
-          '__openclaw', json_object('runId', json_extract(${transcriptEventNavigationSql("event")}, '$.message.__openclaw.runId')),
+          '__openclaw', json_object('runId', ${transcriptEventRunIdSql("event")}),
           'provenance', json_extract(${transcriptEventNavigationSql("event")}, '$.message.provenance'))`.as(
           "message_json",
         ),

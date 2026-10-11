@@ -40,6 +40,7 @@ import {
   mutateSubagentRuns,
   restoreSubagentRunsFromDisk,
   SubagentRegistryMutationRejectedError,
+  SubagentRegistryVersionConflictError,
 } from "./subagent-registry-persistence.js";
 import {
   getSubagentRegistryPublicationRevision,
@@ -189,6 +190,7 @@ it("streams bounded restore batches in one read and retains snapshot row version
   }));
   await mutateSubagentRuns(["paged-0"], updateRestored);
   expect(updateRestored).toHaveBeenCalledOnce();
+  await restoreSubagentRunsFromDisk({ runs: subagentRuns });
   await change("paged-2", (row) => {
     row.label = "after snapshot";
   });
@@ -330,70 +332,45 @@ it("publishes overlapping same-row mutations in FIFO order after each real commi
   }
 });
 
-it.each([false, true])(
-  "replans a foreign connection change and rejects only semantic ownership loss (%s)",
-  async (replaceOwner) => {
-    await register(entry("foreign"));
-    let injected = false;
-    interceptWrites((phase) => {
-      if (phase !== "before" || injected) {
-        return;
-      }
-      injected = true;
-      const foreign = loadSubagentRegistryFromSqlite().get("foreign")!;
-      foreign.model = "foreign metadata";
-      if (replaceOwner) {
-        foreign.requesterSessionKey = "agent:main:new-requester";
-      }
-      // This fixture's admitted native handle is a different SQLite connection from the worker.
-      saveSubagentRegistryChangesToSqlite(new Map([[foreign.runId, foreign]]), [foreign.runId]);
-      openOpenClawStateDatabase()
-        .db.prepare("UPDATE subagent_runs SET payload_json = payload_json || ' ' WHERE run_id = ?")
-        .run(foreign.runId);
-    });
-    const plan = vi.fn((rows: ReadonlyMap<string, SubagentRunRecord>) => {
-      const current = rows.get("foreign")!;
-      if (current.requesterSessionKey !== "agent:main:requester") {
-        throw new SubagentRegistryMutationRejectedError("Requester ownership changed");
-      }
-      return {
-        value: true,
-        postimages: new Map([[current.runId, { ...current, label: "local metadata" }]]),
-      };
-    });
-    const mutation = mutateSubagentRuns(["foreign"], plan);
-    if (replaceOwner) {
-      await expect(mutation).rejects.toBeInstanceOf(SubagentRegistryMutationRejectedError);
-    } else {
-      await expect(mutation).resolves.toBe(true);
-    }
-    expect(plan).toHaveBeenCalledTimes(2);
-    const saved = loadSubagentRegistryFromSqlite().get("foreign");
-    expect(saved?.model).toBe("foreign metadata");
-    expect(saved?.label).toBe(replaceOwner ? undefined : "local metadata");
-    expect(subagentRuns.get("foreign")?.requesterSessionKey).toBe(saved?.requesterSessionKey);
-  },
-);
-
-it("bounds repeated foreign conflicts and leaves the latest authoritative row published", async () => {
-  await register(entry("contended"));
-  let conflicts = 0;
+it("rejects a foreign connection change without replaying until canonical restore", async () => {
+  await register(entry("foreign"));
+  let injected = false;
   interceptWrites((phase) => {
-    if (phase !== "before") {
+    if (phase !== "before" || injected) {
       return;
     }
-    const foreign = loadSubagentRegistryFromSqlite().get("contended")!;
-    foreign.label = `foreign-${++conflicts}`;
+    injected = true;
+    const foreign = loadSubagentRegistryFromSqlite().get("foreign")!;
+    foreign.model = "foreign metadata";
+    // This fixture's admitted native handle is a different SQLite connection from the worker.
     saveSubagentRegistryChangesToSqlite(new Map([[foreign.runId, foreign]]), [foreign.runId]);
+    openOpenClawStateDatabase()
+      .db.prepare("UPDATE subagent_runs SET payload_json = payload_json || ' ' WHERE run_id = ?")
+      .run(foreign.runId);
   });
-  await expect(
-    change("contended", (row) => {
-      row.cleanupCompletedAt = 5;
-    }),
-  ).rejects.toMatchObject({ name: "SubagentRegistryConflictError", attempts: 3 });
-  expect(conflicts).toBe(3);
-  expect(subagentRuns.get("contended")?.label).toBe("foreign-3");
-  expect(loadSubagentRegistryFromSqlite().get("contended")?.cleanupCompletedAt).toBeUndefined();
+  const plan = vi.fn((rows: ReadonlyMap<string, SubagentRunRecord>) => {
+    const current = rows.get("foreign")!;
+    if (current.requesterSessionKey !== "agent:main:requester") {
+      throw new SubagentRegistryMutationRejectedError("Requester ownership changed");
+    }
+    return {
+      value: true,
+      postimages: new Map([[current.runId, { ...current, label: "local metadata" }]]),
+    };
+  });
+  const mutation = mutateSubagentRuns(["foreign"], plan);
+  await expect(mutation).rejects.toBeInstanceOf(SubagentRegistryVersionConflictError);
+  expect(plan).toHaveBeenCalledOnce();
+  const saved = loadSubagentRegistryFromSqlite().get("foreign");
+  expect(saved?.model).toBe("foreign metadata");
+  expect(saved?.label).toBeUndefined();
+  expect(subagentRuns.get("foreign")?.model).toBeUndefined();
+  await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+  await expect(mutateSubagentRuns(["foreign"], plan)).resolves.toBe(true);
+  expect(loadSubagentRegistryFromSqlite().get("foreign")).toMatchObject({
+    model: "foreign metadata",
+    label: "local metadata",
+  });
 });
 
 it.each(["payload bytes", "indexed field", "removed", "inserted", "undecodable"] as const)(
@@ -433,9 +410,6 @@ it.each(["payload bytes", "indexed field", "removed", "inserted", "undecodable"]
       foreignRows = rows();
     });
     const plan = vi.fn(() => {
-      if (injected) {
-        throw new SubagentRegistryMutationRejectedError("Cohort changed after planning");
-      }
       return {
         value: undefined,
         postimages: new Map<string, SubagentRunRecord | null>([
@@ -462,8 +436,8 @@ it.each(["payload bytes", "indexed field", "removed", "inserted", "undecodable"]
     try {
       await expect(
         mutateSubagentRuns([kept.runId, deleted.runId, guarded.runId], plan),
-      ).rejects.toBeInstanceOf(SubagentRegistryMutationRejectedError);
-      expect(plan).toHaveBeenCalledTimes(conflict === "undecodable" ? 1 : 2);
+      ).rejects.toBeInstanceOf(SubagentRegistryVersionConflictError);
+      expect(plan).toHaveBeenCalledOnce();
       expect(rows()).toEqual(foreignRows);
       expect(
         db.prepare("SELECT * FROM session_state_events WHERE run_id = ?").all(kept.runId),

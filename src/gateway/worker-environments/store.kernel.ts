@@ -19,6 +19,7 @@ import { isTerminalWorkerEnvironmentState } from "./state.js";
 import {
   credentialInsert,
   revokeCredential,
+  updateRow,
   updateWorkerEnvironmentRecord,
   upsertCredential,
 } from "./store-mutations.js";
@@ -223,7 +224,7 @@ export function createWorkerEnvironmentStoreKernel(
       const updatedAtMs = now();
       const ownerEpoch = Math.max(1, current.ownerEpoch);
       if (ownerEpoch !== current.ownerEpoch) {
-        updateWorkerEnvironmentRecord(db, environmentId, current.state, {
+        updateRow(db, environmentId, current.state, {
           owner_epoch: ownerEpoch,
           updated_at_ms: updatedAtMs,
         });

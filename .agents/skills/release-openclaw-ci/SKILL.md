@@ -402,6 +402,14 @@ chosen publication route only after resolving every `FAIL` and owner-action
 `WARN`. Extended-stable retains its separate owner workflows and is not
 admitted by this preflight. Alpha releases are retired.
 
+The checklist's `--workflow-ref`/`--workflow-sha` selects trusted P tooling, not
+the candidate harness. Reuse authenticated stable package Telegram proof from
+the exact FRV-qualified tarball; beta coverage remains deferred. Supplemental
+Telegram checks require the retained qualification ref verified at Q=C, with
+the harness pinned to C. Never dispatch candidate checks from moving main.
+Local Parallels uses C's checkout and dependency graph. Supplemental Telegram
+run IDs stay in candidate evidence, not the optional publisher diagnostic input.
+
 Check the report before retrying a failed publication: preserve the verified
 `openclaw_npm_resume_run_id` for already-published core bytes, inspect matching
 draft/published release state, and identify exact orphaned plugin/ClawHub children

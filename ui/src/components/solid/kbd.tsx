@@ -8,7 +8,7 @@ import {
 import { hasKeyboardIcon, KeyboardIcon } from "./icon.tsx";
 
 export type KbdOptions = {
-  className?: string;
+  class?: string;
   inline?: boolean;
   slot?: string;
   ariaHidden?: boolean;
@@ -63,7 +63,7 @@ export function Kbd(props: KbdOptions & { keys: string | number | readonly strin
       : props.keys;
   return (
     <kbd
-      class={["shortcut-kbd", props.className]}
+      class={["shortcut-kbd", props.class]}
       style={props.inline ? { font: "inherit" } : undefined}
       slot={props.slot}
       aria-hidden={props.ariaHidden ? "true" : undefined}

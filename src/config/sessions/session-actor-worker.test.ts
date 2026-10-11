@@ -1,37 +1,17 @@
-import { MessageChannel, MessagePort, receiveMessageOnPort } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { withSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
-import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
-import {
-  createSqliteWorkerOperationAdmission,
-  withSqliteWorkerOperationAdmission,
-} from "../../infra/sqlite-worker-operation-admission.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import {
-  closeOpenClawAgentDatabaseByPathAsync,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
-import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
-import {
-  readExactSessionEntryRow,
-  writeSessionEntry,
-} from "./session-accessor.sqlite-entry-store.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type {
   SessionActorHotState,
-  SessionActorOperations,
   SessionActorPendingFinalDelivery,
-  SessionActorTarget,
 } from "./session-actor-contract.js";
-import { createSessionActorWorker } from "./session-actor.worker.js";
-import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
+import { withActor, type Fixture, type Mutation } from "./session-actor-worker.test-support.js";
 import { readPendingInput } from "./session-pending-input-operations.kernel.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 
@@ -41,128 +21,6 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 }));
 // mock-isolation: The fixture owns its database lifetime without background history eviction.
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
-
-type Command = SqliteWorkerCommand<SessionActorOperations>;
-type Mutation = Exclude<Command, { type: "session.actor.read" }>;
-
-function createFixture() {
-  const seed = createSessionCompoundWorkerFixture();
-  let database = seed.database;
-  const identity = readOpenClawAgentDatabaseIdentity(database);
-  if (typeof identity.identity !== "string") {
-    throw new Error("Actor worker fixture requires a durable database");
-  }
-  const target: SessionActorTarget = {
-    sessionKey: seed.scope.sessionKey,
-    database: {
-      kind: "file",
-      physicalIdentity: identity.identity,
-      birthtime: identity.birthtime,
-      nativeLocation: database.path,
-    },
-  };
-  const hooks: {
-    admit?: AgentWorkerOperationContext["admit"];
-    withCommit?: (commit: () => void) => void;
-    afterTransaction?: () => void;
-    transactions: number;
-  } = { transactions: 0 };
-  const context: AgentWorkerOperationContext = {
-    open: () => database,
-    options: { agentId: "main", path: database.path },
-    admit: (stage, facts) => hooks.admit?.(stage, facts),
-    writeTransaction(_label, _owner, write) {
-      hooks.transactions += 1;
-      const result = runSqliteImmediateTransactionSync(database.db, () => write(database), {
-        withCommit: (commit) => (hooks.withCommit ? hooks.withCommit(commit) : commit()),
-      });
-      hooks.afterTransaction?.();
-      return result;
-    },
-  };
-  let actor = createSessionActorWorker(context, () => target.database);
-  const { port1, port2 } = new MessageChannel();
-  const admission = createSqliteWorkerOperationAdmission((_request, grant) => {
-    grant();
-  });
-  const receipts: unknown[] = [];
-  const postMessage = port1.postMessage.bind(port1);
-  const wire = vi.spyOn(port1, "postMessage").mockImplementation((message, transferList) => {
-    postMessage(message, transferList);
-    const received: unknown = receiveMessageOnPort(port2)?.message;
-    if (!isRecord(received)) {
-      throw new Error("Synchronous actor fixture lost its native frame");
-    }
-    if (received.kind === "native-commit" || received.kind === "native-settlement") {
-      receipts.push(received);
-      return;
-    }
-    // Preserve real admission exchanges while their native caller blocks on this isolate.
-    admission.port.postMessage(
-      received,
-      received.port instanceof MessagePort ? [received.port] : [],
-    );
-    admission.service();
-  });
-  const execute = (command: Command) =>
-    withSqliteWorkerOperationAdmission({ port: port1 }, () => actor.execute(command));
-  return {
-    target,
-    scope: { ...seed.scope, path: database.path },
-    hooks,
-    get database() {
-      return database;
-    },
-    read(selected = target): SessionActorHotState {
-      const value = execute({ type: "session.actor.read", input: { target: selected } });
-      if ("kind" in value) {
-        throw new Error("Actor read returned a mutation outcome");
-      }
-      return value;
-    },
-    mutate(command: Mutation) {
-      const value = execute(command);
-      if (!("kind" in value)) {
-        throw new Error("Actor mutation returned a read snapshot");
-      }
-      return value;
-    },
-    receipt(): unknown {
-      return receipts.shift();
-    },
-    prepare: (command: Command) => actor.prepare(command),
-    nativeEntry: () => readExactSessionEntryRow(database, target.sessionKey)?.entry,
-    restartActor() {
-      actor.close();
-      actor = createSessionActorWorker(context, () => target.database);
-    },
-    async reopenDatabase() {
-      await closeOpenClawAgentDatabaseByPathAsync(database.path);
-      database = openOpenClawAgentDatabase(context.options);
-    },
-    closeActor: () => actor.close(),
-    close() {
-      actor.close();
-      wire.mockRestore();
-      admission.finish();
-      port1.close();
-      port2.close();
-    },
-  };
-}
-
-type Fixture = ReturnType<typeof createFixture>;
-
-async function withActor(run: (fixture: Fixture) => void | Promise<void>) {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const fixture = createFixture();
-    try {
-      await run(fixture);
-    } finally {
-      fixture.close();
-    }
-  });
-}
 
 function patch(snapshot: SessionActorHotState, updatedAt: number): Mutation {
   return {
@@ -463,6 +321,99 @@ it("adopts a run only under the exact lifecycle and current transaction and comm
 });
 
 it.each([
+  { phase: "acceptInput", initial: true },
+  { phase: "acceptInput", initial: false },
+  { phase: "adoptRun", initial: false },
+] as const)(
+  "commits $phase transcript custody and lifecycle together (initial=$initial)",
+  async (mode) => {
+    await withActor(async (f) => {
+      const target = mode.initial
+        ? { ...f.target, sessionKey: "agent:main:first-input" }
+        : f.target;
+      const before = f.read(target);
+      const sessionId = mode.initial ? "first-input" : f.scope.sessionId;
+      const expectedState = buildRestartRecoveryExpectedState(
+        before.entry ?? { sessionId, updatedAt: 1 },
+      );
+      const lifecycle = { restartRecoveryDeliveryRunId: "input-run", startedAt: 2 };
+      const turn = {
+        agentId: "main",
+        sessionKey: target.sessionKey,
+        options: {
+          expectedSessionId: sessionId,
+          ...(mode.initial ? { initialSessionEntry: { sessionId, updatedAt: 1 } } : {}),
+          sessionFile: "synthetic.jsonl",
+          messages: [
+            {
+              eventId: "accepted-message",
+              message: { role: "user", content: "accepted bytes", idempotencyKey: "accepted-once" },
+            },
+          ],
+        },
+      };
+      const input = {
+        target,
+        expected: before.version,
+        commandId: "accept-transcript",
+        phaseId: "input",
+        expectedState,
+        lifecycle,
+        turn,
+      };
+      const command: Mutation =
+        mode.phase === "acceptInput"
+          ? { type: "session.actor.acceptInput", input }
+          : { type: "session.actor.adoptRun", input: { ...input, sessionId } };
+      await f.prepare(command);
+      const transactions = f.hooks.transactions;
+      const committed = f.mutate(command);
+      expect(committed).toMatchObject({
+        kind: "committed",
+        receipt: {
+          transcript: {
+            appendedMessages: [
+              {
+                appended: true,
+                messageId: "accepted-message",
+                message: { content: "accepted bytes" },
+              },
+            ],
+          },
+          postimage: {
+            entry: { sessionId, ...lifecycle },
+            pendingInputs: [],
+          },
+        },
+      });
+      expect(f.hooks.transactions - transactions).toBe(1);
+      if (committed.kind !== "committed") {
+        throw new Error("Expected input custody commit");
+      }
+      const turnResult =
+        mode.phase === "acceptInput"
+          ? committed.value && "turn" in committed.value && committed.value.turn
+          : committed.value;
+      expect(turnResult).toMatchObject({
+        kind: "session-turn",
+        result: { sessionEntry: committed.receipt.postimage.entry },
+      });
+      expect(
+        readTranscriptEventRows(f.database, sessionId).map((row) => JSON.parse(row.eventJson)),
+      ).toEqual([
+        expect.objectContaining({ type: "session", id: sessionId }),
+        expect.objectContaining({
+          type: "message",
+          id: "accepted-message",
+          message: expect.objectContaining({ content: "accepted bytes" }),
+        }),
+      ]);
+      expect(f.read(target).entry).toEqual(committed.receipt.postimage.entry);
+    });
+  },
+);
+
+it.each([
   { stored: "current-generation", requested: null },
   { stored: undefined, requested: "old-generation" },
 ])("refuses raw appends across nullable lifecycle revisions: %j", async ({ stored, requested }) => {
@@ -505,7 +456,60 @@ it.each([
   });
 });
 
-it.each(["assistant append", "empty append"] as const)(
+it("stages queued custody without rewriting the active session lifecycle", async () => {
+  await withActor(async (f) => {
+    const before = f.read();
+    const pending = {
+      kind: "stage" as const,
+      sessionKey: f.target.sessionKey,
+      sessionId: f.scope.sessionId,
+      idempotencyKey: "queued-input",
+      inputId: "queued-input",
+      runId: "queued-run",
+      requestHash: "queued-request",
+      lifecycleGeneration: "queued-generation",
+      trackCompletion: true,
+      messageJson: JSON.stringify({
+        role: "user",
+        content: "queued",
+        idempotencyKey: "queued-input",
+      }),
+    };
+    const expected = readPendingInput(f.database, pending);
+    if (expected.kind !== "stage") {
+      throw new Error("Expected queued input snapshot");
+    }
+    const writes = trackSqliteStatementExecutions(f.database.db, ["entry"], (sql) =>
+      /^\s*(?:insert|update|delete)\b.*\bsession_nodes\b/isu.test(sql) ? "entry" : null,
+    );
+    try {
+      expect(
+        f.mutate({
+          type: "session.actor.acceptInput",
+          input: {
+            target: f.target,
+            expected: before.version,
+            commandId: "stage-only",
+            phaseId: "input",
+            expectedState: buildRestartRecoveryExpectedState(before.entry!),
+            lifecycle: {},
+            pending: { ...pending, expected },
+          },
+        }),
+      ).toMatchObject({
+        kind: "committed",
+        receipt: {
+          postimage: { entry: before.entry, pendingInputs: [{ input_id: "queued-input" }] },
+        },
+      });
+      expect(writes.counts.entry).toBe(0);
+    } finally {
+      writes.restore();
+    }
+    expect(f.nativeEntry()).toEqual(before.entry);
+  });
+});
+it.each(["assistant append", "empty append", "bookkeeping"] as const)(
   "commits terminal custody and guarded accounting atomically with %s",
   async (mode) => {
     await withActor(async (f) => {
@@ -553,30 +557,42 @@ it.each(["assistant append", "empty append"] as const)(
           commandId: `complete-${expectedModel}`,
           phaseId: "terminal",
           pendingFinalDelivery: pending,
-          turn: {
-            agentId: "main",
-            sessionKey: f.target.sessionKey,
-            options: {
-              expectedSessionId: f.scope.sessionId,
-              expectedWriterRunId: "terminal-run",
-              expectedSessionState: buildRestartRecoveryExpectedState(snapshot.entry!),
-              sessionLifecyclePatch: { status: "done", endedAt: 50 },
-              sessionFile: "synthetic.jsonl",
-              messages:
-                mode === "assistant append"
-                  ? [
-                      {
-                        eventId: "terminal-answer",
-                        message: {
-                          role: "assistant",
-                          content: "final response",
-                          idempotencyKey: "terminal-answer",
-                        },
-                      },
-                    ]
-                  : [],
-            },
-          },
+          ...(mode === "bookkeeping"
+            ? {
+                bookkeeping: {
+                  sessionId: f.scope.sessionId,
+                  lifecycleRevision: snapshot.entry!.lifecycleRevision ?? null,
+                  writerRunId: "terminal-run",
+                  expectedState: buildRestartRecoveryExpectedState(snapshot.entry!),
+                  lifecycle: { status: "done" as const, endedAt: 50 },
+                },
+              }
+            : {
+                turn: {
+                  agentId: "main",
+                  sessionKey: f.target.sessionKey,
+                  options: {
+                    expectedSessionId: f.scope.sessionId,
+                    expectedWriterRunId: "terminal-run",
+                    expectedSessionState: buildRestartRecoveryExpectedState(snapshot.entry!),
+                    sessionLifecyclePatch: { status: "done", endedAt: 50 },
+                    sessionFile: "synthetic.jsonl",
+                    messages:
+                      mode === "assistant append"
+                        ? [
+                            {
+                              eventId: "terminal-answer",
+                              message: {
+                                role: "assistant",
+                                content: "final response",
+                                idempotencyKey: "terminal-answer",
+                              },
+                            },
+                          ]
+                        : [],
+                  },
+                },
+              }),
           reducers: [
             { kind: "activity", updatedAt: 60 },
             {
@@ -588,22 +604,16 @@ it.each(["assistant append", "empty append"] as const)(
           ],
         },
       });
-      const stale = complete(initial, "stale-model");
-      await f.prepare(stale);
-      expect(f.mutate(stale)).toMatchObject({
-        kind: "rolled-back",
-        error: { message: "Session actor model changed before consolidation" },
-      });
-      expect(f.receipt()).toBeUndefined();
-      expect(f.nativeEntry()).toEqual(initial.entry);
-      expect(readTranscriptEventRows(f.database, f.scope.sessionId)).toEqual(originalEvents);
-
       const fresh = f.read();
       const staleOwner = complete(fresh, "fixture-before");
-      staleOwner.input.turn.options.expectedWriterRunId = "superseded-run";
+      if (staleOwner.input.bookkeeping) {
+        staleOwner.input.bookkeeping.writerRunId = "superseded-run";
+      } else {
+        staleOwner.input.turn.options.expectedWriterRunId = "superseded-run";
+      }
       expect(f.mutate(staleOwner)).toMatchObject({
         kind: "rolled-back",
-        error: { message: "Session actor turn was refused by its current owner" },
+        reason: "stale-state",
       });
       expect(f.receipt()).toBeUndefined();
       expect(f.nativeEntry()).toEqual(initial.entry);
@@ -649,10 +659,14 @@ it.each(["assistant append", "empty append"] as const)(
           },
         },
       });
-      expect(committed.value).toMatchObject({
-        kind: "session-turn",
-        result: { sessionEntry: committed.receipt.postimage.entry },
-      });
+      expect(committed.value).toMatchObject(
+        mode === "bookkeeping"
+          ? { kind: "bookkeeping" }
+          : {
+              kind: "session-turn",
+              result: { sessionEntry: committed.receipt.postimage.entry },
+            },
+      );
       const appended = committed.receipt.transcript.appendedMessages;
       if (mode === "assistant append") {
         expect(appended).toMatchObject([
@@ -676,9 +690,203 @@ it.each(["assistant append", "empty append"] as const)(
       expect(readTranscriptEventRows(f.database, f.scope.sessionId)).toHaveLength(
         originalEvents.length + (mode === "assistant append" ? 1 : 0),
       );
+      const mismatch = f.mutate({
+        type: "session.actor.patch",
+        input: {
+          target: f.target,
+          expected: rehydrated.version,
+          commandId: "superseded-model-selection",
+          phaseId: "terminal",
+          reducers: [
+            {
+              kind: "live-model",
+              expected: { modelProvider: "openai", model: "fixture-before" },
+              next: { modelProvider: "openai", model: "must-not-replace-current-selection" },
+              clearPending: true,
+            },
+          ],
+        },
+      });
+      expect(mismatch).toMatchObject({
+        kind: "committed",
+        receipt: { reducers: [{ kind: "live-model", changed: false }] },
+      });
+      expect(f.nativeEntry()?.model).toBe("fixture-after");
     });
   },
 );
+
+it("keeps restart receipt custody across retries and settles only the exact provider claim", async () => {
+  await withActor((f) => {
+    const claim = { sessionId: f.scope.sessionId, sourceTurnId: "source", toolCallId: "tool" };
+    runSqliteImmediateTransactionSync(f.database.db, () => {
+      writeSessionEntry(f.database, f.target.sessionKey, {
+        ...f.nativeEntry()!,
+        restartRecoveryDeliveryRunId: "run",
+        restartRecoveryDeliverySourceRunId: claim.sourceTurnId,
+      });
+    });
+    let sequence = 0;
+    const common = () => ({
+      target: f.target,
+      expected: f.read().version,
+      commandId: `receipt-${++sequence}`,
+      phaseId: "delivery",
+    });
+    const settle = (outcome: "confirmed" | "not-sent", toolCallId = claim.toolCallId) =>
+      f.mutate({
+        type: "session.actor.deliverySettled",
+        input: {
+          ...common(),
+          restart: { claim: { ...claim, toolCallId }, outcome, updatedAt: 20 },
+        },
+      });
+    expect(
+      f.mutate({
+        type: "session.actor.deliveryPending",
+        input: { ...common(), claim, updatedAt: 10 },
+      }),
+    ).toMatchObject({ kind: "committed", value: { disposition: "started" } });
+    expect(f.nativeEntry()).toMatchObject({
+      restartRecoveryDeliveryReceiptState: "terminal-pending",
+      restartRecoveryDeliveryToolCallId: claim.toolCallId,
+    });
+    expect(
+      f.mutate({
+        type: "session.actor.deliveryPending",
+        input: { ...common(), claim, updatedAt: 11 },
+      }),
+    ).toMatchObject({ kind: "committed", value: { disposition: "delivery-ambiguous" } });
+    expect(settle("confirmed", "unrelated-tool")).toMatchObject({ kind: "rolled-back" });
+    expect(f.nativeEntry()?.restartRecoveryDeliveryReceiptState).toBe("terminal-pending");
+    expect(settle("confirmed")).toMatchObject({
+      kind: "committed",
+      value: { disposition: "recorded" },
+    });
+    expect(settle("confirmed")).toMatchObject({
+      kind: "committed",
+      value: { disposition: "recorded" },
+    });
+    expect(settle("not-sent")).toMatchObject({
+      kind: "committed",
+      value: { disposition: "stale" },
+    });
+    expect(f.nativeEntry()?.restartRecoveryDeliveryReceiptState).toBe("delivered-terminal");
+    const nextClaim = { ...claim, sourceTurnId: "next-source" };
+    runSqliteImmediateTransactionSync(f.database.db, () => {
+      writeSessionEntry(f.database, f.target.sessionKey, {
+        ...f.nativeEntry()!,
+        restartRecoveryDeliverySourceRunId: nextClaim.sourceTurnId,
+        restartRecoveryDeliveryReceiptState: "terminal-pending",
+      });
+    });
+    for (const commandId of ["cancel", "cancel-replay"]) {
+      expect(
+        f.mutate({
+          type: "session.actor.deliverySettled",
+          input: {
+            ...common(),
+            commandId,
+            restart: { claim: nextClaim, outcome: "not-sent", updatedAt: 30 },
+          },
+        }),
+      ).toMatchObject({ kind: "committed", value: { disposition: "cleared" } });
+    }
+    expect(f.nativeEntry()?.restartRecoveryDeliveryReceiptState).toBeUndefined();
+    expect(f.nativeEntry()?.restartRecoveryDeliveryToolCallId).toBeUndefined();
+  });
+});
+
+it("publishes actual pending-final state and evidence only after live commit authority", async () => {
+  await withActor((f) => {
+    const claim: HarnessCompletionRecovery = {
+      taskId: "task",
+      taskStatus: "succeeded",
+      taskRunId: "task-run",
+      sourceRunId: "source",
+      requesterSessionKey: f.target.sessionKey,
+      requesterAgentId: "main",
+      sessionId: f.scope.sessionId,
+    };
+    runSqliteImmediateTransactionSync(f.database.db, () => {
+      writeSessionEntry(f.database, f.target.sessionKey, {
+        ...f.nativeEntry()!,
+        abortedLastRun: true,
+        mainRestartRecovery: { cycleId: "cycle", revision: 2, chargedAttempts: 0 },
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "answer",
+          createdAt: 10,
+          intentId: "intent",
+          context: { channel: "telegram", to: "chat" },
+          deliveries: [{ id: "payload", state: "queued" }],
+        },
+      });
+    });
+    const initial = f.read();
+    const command = {
+      type: "session.actor.deliverySettled",
+      input: {
+        target: f.target,
+        expected: initial.version,
+        commandId: "settle",
+        phaseId: "delivery",
+        settlement: {
+          sessionId: f.scope.sessionId,
+          intentId: "intent",
+          deliveryId: "payload",
+          state: "delivered",
+        },
+        evidence: {
+          claim,
+          result: { channel: "telegram", target: { id: "chat" }, platformMessageId: "message" },
+        },
+      },
+    } satisfies Mutation;
+    f.hooks.admit = (stage) => {
+      if (stage === "commit") {
+        throw new Error("harness claim revoked");
+      }
+    };
+    expect(f.mutate(command)).toMatchObject({ kind: "rolled-back" });
+    expect(f.nativeEntry()).toEqual(initial.entry);
+    delete f.hooks.admit;
+    expect(
+      f.mutate({ ...command, input: { ...command.input, expected: f.read().version } }),
+    ).toMatchObject({
+      kind: "committed",
+      value: { state: "delivered", wakeRecovery: true },
+      receipt: {
+        postimage: {
+          entry: {
+            mainRestartRecovery: { revision: 3 },
+            restartRecoveryTerminalDeliveryEvidence: [
+              {
+                harnessCompletion: claim,
+                durableFinalReceipt: {
+                  intentId: "intent",
+                  deliveryId: "payload",
+                  platformMessageId: "message",
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(
+      f.mutate({
+        ...command,
+        input: {
+          ...command.input,
+          expected: f.read().version,
+          commandId: "replay",
+          evidence: undefined,
+        },
+      }),
+    ).toMatchObject({ kind: "committed", value: { state: "delivered", wakeRecovery: false } });
+  });
+});
 
 it("checks recovery provenance in the actor transaction and refuses a later unrelated input", async () => {
   await withActor(async (f) => {

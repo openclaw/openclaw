@@ -554,6 +554,7 @@ function redactTranscriptStructuredValue(
       delete next[key];
       continue;
     }
+    let sanitizedField: unknown;
     if (
       location === "assistant-content-block" &&
       (isOpenAIResponsesRoute(currentAssistantRoute) ||
@@ -561,31 +562,19 @@ function redactTranscriptStructuredValue(
       source.type === "thinking" &&
       key === "openclawReasoningReplay"
     ) {
-      const sanitizedMetadata = sanitizeOpenAIReasoningReplayMetadata(item, currentAssistantRoute);
-      if (sanitizedMetadata !== undefined) {
-        if (sanitizedMetadata !== item) {
-          next ??= { ...source };
-          next[key] = sanitizedMetadata;
-        }
-        continue;
-      }
+      sanitizedField = sanitizeOpenAIReasoningReplayMetadata(item, currentAssistantRoute);
     }
     if (
+      sanitizedField === undefined &&
       location === "assistant-content-block" &&
       source.type === "thinking" &&
       key === "thinkingSignature" &&
       typeof item === "string"
     ) {
-      const sanitizedSignature = sanitizeOpenAIReasoningSignature(item, currentAssistantRoute);
-      if (sanitizedSignature !== undefined) {
-        if (sanitizedSignature !== item) {
-          next ??= { ...source };
-          next[key] = sanitizedSignature;
-        }
-        continue;
-      }
+      sanitizedField = sanitizeOpenAIReasoningSignature(item, currentAssistantRoute);
     }
     if (
+      sanitizedField === undefined &&
       location === "assistant-content-block" &&
       // These transports use the same validated v1 phase signature for pre-tool commentary;
       // stripping it would resurface narration after reload or session resume.
@@ -601,6 +590,7 @@ function redactTranscriptStructuredValue(
       continue;
     }
     if (
+      sanitizedField === undefined &&
       location === "assistant-content-block" &&
       (isOpenAICompletionsRoute(currentAssistantRoute) ||
         isCustomProviderRoute(currentAssistantRoute)) &&
@@ -608,36 +598,29 @@ function redactTranscriptStructuredValue(
       key === "thoughtSignature" &&
       typeof item === "string"
     ) {
-      const sanitizedSignature = sanitizeOpenAICompletionsToolSignature(
-        item,
-        currentAssistantRoute,
-      );
-      if (sanitizedSignature !== undefined) {
-        if (sanitizedSignature !== item) {
-          next ??= { ...source };
-          next[key] = sanitizedSignature;
-        }
-        continue;
-      }
+      sanitizedField = sanitizeOpenAICompletionsToolSignature(item, currentAssistantRoute);
     }
     // Provider-signed/encrypted bytes must remain exact or replayed tool turns fail.
-    if (shouldPreserveOpaqueProviderPayload(source, key, item, location, currentAssistantRoute)) {
+    if (
+      sanitizedField === undefined &&
+      shouldPreserveOpaqueProviderPayload(source, key, item, location, currentAssistantRoute)
+    ) {
       continue;
     }
-    if (typeof item === "string") {
-      const sanitizedDataUrl = sanitizeTranscriptImageDataUrlField({
+    if (sanitizedField === undefined && typeof item === "string") {
+      sanitizedField = sanitizeTranscriptImageDataUrlField({
         source,
         key,
         value: item,
         preserveImageDataUrlFields,
       });
-      if (sanitizedDataUrl !== undefined) {
-        if (sanitizedDataUrl !== item) {
-          next ??= { ...source };
-          next[key] = sanitizedDataUrl;
-        }
-        continue;
+    }
+    if (sanitizedField !== undefined) {
+      if (sanitizedField !== item) {
+        next ??= { ...source };
+        next[key] = sanitizedField;
       }
+      continue;
     }
     if (key === "data" && sanitizedImageRecord) {
       continue;

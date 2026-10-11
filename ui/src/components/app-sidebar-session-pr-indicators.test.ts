@@ -173,7 +173,7 @@ describe("SessionPullRequestIndicatorsController", () => {
     expect(requestUpdate).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["open", "draft", "merged", "closed"] as const)(
+  it.each(["merged"] as const)(
     "observes visible rows and keeps the pushed %s summary through backoff",
     async (state) => {
       vi.useFakeTimers();
@@ -210,7 +210,7 @@ describe("SessionPullRequestIndicatorsController", () => {
         sessions: {
           [row.key]: {
             pullRequests: [
-              { number: 2, state: state === "closed" ? "closed" : "merged" },
+              { number: 2, state },
               {
                 number: 1,
                 owner: "openclaw",

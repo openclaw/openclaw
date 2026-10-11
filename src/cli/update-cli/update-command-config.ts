@@ -1,6 +1,5 @@
 // Config snapshots and pre/post-update config restoration.
 import fs from "node:fs/promises";
-import { isDeepStrictEqual } from "node:util";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -403,24 +402,6 @@ async function planUpdateChannelLegacyConfig(snapshot: ConfigFileSnapshot): Prom
     observe: false,
     pluginValidation: "skip",
   }).readConfigFileSnapshotForWrite();
-  if (snapshot.path !== current.snapshot.path) {
-    throw new Error(
-      "Legacy configuration path changed during update planning; retry against the current source.",
-    );
-  }
-  const keys = [
-    "exists",
-    "raw",
-    "hash",
-    "includedPaths",
-    "includeProvenance",
-    "sourceConfig",
-  ] as const;
-  if (keys.some((key) => !isDeepStrictEqual(snapshot[key], current.snapshot[key]))) {
-    defaultRuntime.error(
-      `Warning: Configuration changed during update planning at ${snapshot.path}; continuing with the current configuration.`,
-    );
-  }
   return {
     configSnapshot: current.snapshot,
     legacyConfigPlan: current.snapshot.valid

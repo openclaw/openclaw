@@ -209,21 +209,22 @@ export function noteSessionActivityEvent(
   noteMaxChars: number = DEFAULT_NOTE_MAX_CHARS,
 ): void {
   const data = event.data;
+  const addNote = (text: string) => addActivityNote(state, text, noteMaxChars);
   switch (event.stream) {
     case "lifecycle": {
       const phase = data.phase;
       if (phase === "start") {
-        addActivityNote(state, "Run started", noteMaxChars);
+        addNote("Run started");
       } else if (phase === "finishing") {
-        addActivityNote(state, "Run is wrapping up", noteMaxChars);
+        addNote("Run is wrapping up");
       } else if (phase === "end" || phase === "error") {
         const health = terminalHealthFor(event);
         const error = readNonBlankString(data.error);
-        addActivityNote(state, error ? `Run ${health}: ${error}` : `Run ${health}`, noteMaxChars);
+        addNote(error ? `Run ${health}: ${error}` : `Run ${health}`);
         const terminalReply = normalizeAgentRunTerminalReplySnapshot(data.terminalReply);
         state.terminalReply = terminalReply;
         if (terminalReply?.disposition === "visible") {
-          addActivityNote(state, `Assistant: ${terminalReply.text}`, noteMaxChars);
+          addNote(`Assistant: ${terminalReply.text}`);
         }
       }
       return;
@@ -236,7 +237,7 @@ export function noteSessionActivityEvent(
       }
       const name = readNonBlankString(data.name) ?? "tool";
       const args = summarizeToolArgs(data.args);
-      addActivityNote(state, args ? `Tool ${name}: ${args}` : `Tool ${name}`, noteMaxChars);
+      addNote(args ? `Tool ${name}: ${args}` : `Tool ${name}`);
       return;
     }
     case "command_output": {
@@ -246,11 +247,7 @@ export function noteSessionActivityEvent(
       const title = readNonBlankString(data.title) ?? readNonBlankString(data.name) ?? "command";
       const exitCode = asFiniteNumber(data.exitCode);
       const status = readNonBlankString(data.status) ?? (exitCode === 0 ? "completed" : "failed");
-      addActivityNote(
-        state,
-        `${title}: ${status}${exitCode === undefined ? "" : ` (exit ${exitCode})`}`,
-        noteMaxChars,
-      );
+      addNote(`${title}: ${status}${exitCode === undefined ? "" : ` (exit ${exitCode})`}`);
       return;
     }
     case "item": {
@@ -266,7 +263,7 @@ export function noteSessionActivityEvent(
       if (!rememberItemStatus(state, itemId, status)) {
         return;
       }
-      addActivityNote(state, `${title}: ${status}`, noteMaxChars);
+      addNote(`${title}: ${status}`);
       return;
     }
     case "plan": {
@@ -284,7 +281,7 @@ export function noteSessionActivityEvent(
           continue;
         }
         const status = step.status === "in_progress" ? "running" : step.status;
-        addActivityNote(state, `Plan: ${step.step}: ${status}`, noteMaxChars);
+        addNote(`Plan: ${step.step}: ${status}`);
       }
       return;
     }
@@ -319,11 +316,7 @@ export function noteSessionActivityEvent(
       if (data.status !== "pending" && data.phase !== "requested") {
         return;
       }
-      addActivityNote(
-        state,
-        `Waiting for approval: ${readNonBlankString(data.title) ?? "user action"}`,
-        noteMaxChars,
-      );
+      addNote(`Waiting for approval: ${readNonBlankString(data.title) ?? "user action"}`);
       break;
     }
     default:

@@ -19,8 +19,7 @@ type NativeControlNode = {
 // CDP is used only to locate Chromium's closed native controls. Input is real mouse input.
 async function nativeVideoControlBox(cdp: CDPSession, control: string) {
   const { result } = await cdp.send("Runtime.evaluate", {
-    expression:
-      'document.querySelector("openclaw-image-lightbox").shadowRoot.querySelector("video")',
+    expression: 'document.querySelector("openclaw-image-lightbox").querySelector("video")',
   });
   if (!result.objectId) {
     throw new Error("Missing expanded native player");
@@ -127,7 +126,7 @@ suite.define(() => {
           await page.screenshot({ path: `${dir}/expanded-first.png`, animations: "disabled" });
           expect(
             await viewer.evaluate((element) => {
-              const root = element.shadowRoot!;
+              const root = element;
               const videoBox = root.querySelector("video")!.getBoundingClientRect();
               return [...root.querySelectorAll(".actions, .navigation, .gallery-counter")].every(
                 (control) => {

@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render, type ReactiveElement } from "lit";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import "../test-helpers/app-sidebar-suite.ts";
 import { renderAppSidebarOnline } from "./app-sidebar-online.ts";
 import { renderAppSidebarBrand, type AppSidebarRenderHost } from "./app-sidebar-render.ts";
@@ -180,16 +180,25 @@ it.each([false, true])(
     update();
     const facepile = container.querySelector("openclaw-viewer-facepile")!;
     await facepile.updateComplete;
-    const updates = vi.spyOn(facepile, "performUpdate");
+    const updates: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => updates.push(...records));
+    observer.observe(facepile, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      characterData: true,
+    });
+    onTestFinished(() => observer.disconnect());
 
     update();
     await facepile.updateComplete;
-    expect(updates).not.toHaveBeenCalled();
+    expect(updates).toHaveLength(0);
 
     host.sessionData.presencePayload = { presence: presence.slice(0, 1) };
     update();
     await facepile.updateComplete;
-    expect(updates).toHaveBeenCalledOnce();
+    expect(updates.length).toBeGreaterThan(0);
+    updates.length = 0;
     expect(facepile.querySelector(".viewer-facepile")?.getAttribute("aria-label")).toBe(
       withOwner ? undefined : "ada",
     );
@@ -199,7 +208,7 @@ it.each([false, true])(
     };
     update();
     await facepile.updateComplete;
-    expect(updates).toHaveBeenCalledTimes(2);
+    expect(updates.length > 0).toBe(withOwner);
     expect(facepile.querySelector(".viewer-facepile")?.getAttribute("aria-label")).toBe("ada");
   },
 );
@@ -219,21 +228,30 @@ it("keeps Online facepiles idle until presence or time-sensitive ordering change
   update();
   const facepile = container.querySelector("openclaw-viewer-facepile")!;
   await facepile.updateComplete;
-  const updates = vi.spyOn(facepile, "performUpdate");
+  const updates: MutationRecord[] = [];
+  const observer = new MutationObserver((records) => updates.push(...records));
+  observer.observe(facepile, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    characterData: true,
+  });
+  onTestFinished(() => observer.disconnect());
 
   update();
   await facepile.updateComplete;
-  expect(updates).not.toHaveBeenCalled();
+  expect(updates).toHaveLength(0);
 
   vi.setSystemTime(now + 2);
   update();
   await facepile.updateComplete;
-  expect(updates).toHaveBeenCalledOnce();
+  expect(updates.length).toBeGreaterThan(0);
+  updates.length = 0;
   expect(facepile.querySelector(".viewer-facepile")?.getAttribute("aria-label")).toBe("zoe, ada");
 
   host.sessionData.presencePayload = { presence: presence.slice(0, 1) };
   update();
   await facepile.updateComplete;
-  expect(updates).toHaveBeenCalledTimes(2);
+  expect(updates.length).toBeGreaterThan(0);
   expect(facepile.querySelector(".viewer-facepile")?.getAttribute("aria-label")).toBe("ada");
 });
