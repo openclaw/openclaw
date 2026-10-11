@@ -75,9 +75,9 @@ it("publishes native writes into a warm cache without new generation probes", ()
       );
     }
   };
-  const publishEntry = entryCache.publishSessionEntryCacheInvalidation;
+  const publishEntry = entryCache.publishWrittenSessionEntry;
   const cachePublication = vi
-    .spyOn(entryCache, "publishSessionEntryCacheInvalidation")
+    .spyOn(entryCache, "publishWrittenSessionEntry")
     .mockImplementation((...args) => observePublication(() => publishEntry(...args)));
   const publishIdentity = identityPublication.prepareSessionIdentityPublication;
   const lifecyclePublication = vi
@@ -99,6 +99,9 @@ it("publishes native writes into a warm cache without new generation probes", ()
     expect(cachePublication).toHaveBeenCalled();
     expect(lifecyclePublication).toHaveBeenCalled();
     expect(publicationQueries).toEqual([]);
+    const warm = entryCache.readSessionEntryCache(writer, { cache: true });
+    expect(warm.entries.get(replacementKey)?.label).toBe("replacement");
+    expect(warm.entries.get(initialKey)?.label).toBe("initial");
     expect(readExactSessionEntryRow(writer, replacementKey)?.entry.label).toBe("replacement");
     expect(readExactSessionEntryRow(writer, initialKey)?.entry.label).toBe("initial");
   } finally {
