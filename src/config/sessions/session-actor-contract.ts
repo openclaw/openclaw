@@ -1,6 +1,7 @@
 import type { RestartRecoveryTerminalDeliveryClaim } from "./restart-recovery-receipt-state.js";
 import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
 import type {
+  SessionActorAuthority,
   SessionActorTarget,
   SessionActorVersion,
   SessionActorLifetime,
@@ -30,23 +31,13 @@ import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type {
+  SessionActorAuthority,
   SessionActorTarget,
   SessionActorVersion,
   SessionActorLifetime,
   SessionActorHotState,
   SessionActorSettlement,
 } from "./session-actor-state.types.js";
-
-/** Host-owned live authority, rechecked at both synchronous admission boundaries. */
-export type SessionActorAuthority = {
-  assertCurrent(): void;
-  authorize(
-    stage: "transaction" | "commit",
-    facts: SessionActorHotState,
-    /** Existing kernel source/custody evidence remains subject to its owner's checks. */
-    publication?: unknown,
-  ): void;
-};
 
 /** Serializable, pure bookkeeping. These reducers cannot change session identity or authority. */
 export type SessionActorReducer = SessionEntryBookkeepingReducer;

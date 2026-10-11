@@ -1,5 +1,4 @@
 import type { SessionGoalOperationErrorCode } from "./goals-operations.types.js";
-import type { SessionActorAuthority, SessionActorHotState } from "./session-actor-contract.js";
 import type {
   SessionActorMemoryEntryReads,
   SessionActorMemoryEntryWrites,
@@ -17,6 +16,7 @@ import type {
   SessionActorMemoryPendingReads,
   SessionActorMemoryPendingWrites,
 } from "./session-actor-memory-pending-contract.js";
+import type { SessionActorAuthority, SessionActorHotState } from "./session-actor-state.types.js";
 import type { PendingInputCustodyCandidate } from "./session-pending-input-history.types.js";
 
 export type SessionActorStorageReads = SessionActorMemoryEntryReads &
