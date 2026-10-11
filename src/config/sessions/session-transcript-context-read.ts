@@ -216,9 +216,12 @@ export function readSessionTranscriptModelContextAsync<T>(
         );
       })
       .then((result) => {
-        prepared.actor.sessions
-          .captureCurrent(prepared.target.sessionKey)
-          .authorize(prepared.authority, "commit");
+        prepared.authority.assertCurrent();
+        if (prepared.actor.sessions.readSharing(prepared.target.sessionKey)?.entry) {
+          prepared.actor.sessions
+            .captureCurrent(prepared.target.sessionKey)
+            .authorize(prepared.authority, "commit");
+        }
         return result;
       });
   }
