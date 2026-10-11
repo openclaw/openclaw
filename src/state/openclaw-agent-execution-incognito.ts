@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import type { IncognitoAcpSessionAccess } from "../acp/runtime/session-meta-incognito.types.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -144,26 +143,9 @@ function createIncognitoAgentExecutionOwner(
     }
     assertRetainedCurrent();
   };
-  let granting = false;
-  const withGrant = <T>(operation: () => T): T => {
-    const wasGranting = granting;
-    granting = true;
-    try {
-      return operation();
-    } finally {
-      granting = wasGranting;
-    }
-  };
-  const assertOutsideGrant = () => {
-    if (granting) {
-      throw new Error("Incognito authority callbacks cannot call their actor");
-    }
-  };
   const sessionFacts = createIncognitoSessionFacts(
     identity,
     assertRetainedCurrent,
-    withGrant,
-    assertOutsideGrant,
     (targets) => invalidateIncognitoSessionActorTokens(actorWriteTokens, targets),
     assertCurrent,
   );
@@ -171,23 +153,14 @@ function createIncognitoAgentExecutionOwner(
     (source: AgentDatabaseIncognitoAuthority): SqliteWorkerAdmissionFactory =>
     () => ({
       nativeLocations: [],
-      admission: createSqliteWorkerOperationAdmission((request, grant) =>
-        withGrant(() => {
-          source.assertCurrent();
-          assertRetainedCurrent();
-          const expected = request.stage === "open" ? input : { identity };
-          if (
-            !isDeepStrictEqual(request.facts, expected) ||
-            (request.stage !== "open" && request.stage !== "prepare")
-          ) {
-            throw new Error("Incognito operation differs from its admitted actor");
-          }
-          // Session commands use their separate request-bound transaction/commit admission.
-          if (!grant()) {
-            throw new Error("Incognito actor admission was refused");
-          }
-        }),
-      ),
+      admission: createSqliteWorkerOperationAdmission((_request, grant) => {
+        source.assertCurrent();
+        assertRetainedCurrent();
+        // Session commands use their separate request-bound transaction/commit admission.
+        if (!grant()) {
+          throw new Error("Incognito actor admission was refused");
+        }
+      }),
     });
   const track = <T>(work: Promise<T>, collection = pending): Promise<T> => {
     collection.add(work);
@@ -365,7 +338,6 @@ function createIncognitoAgentExecutionOwner(
         createAdmission?: SqliteWorkerAdmissionFactory,
         cleanup = false,
       ): Promise<T> => {
-        assertOutsideGrant();
         currentAuthority.assertCurrent();
         if (cleanup) {
           assertRetainedCurrent();

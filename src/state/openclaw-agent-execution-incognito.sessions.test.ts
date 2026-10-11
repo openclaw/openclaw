@@ -187,12 +187,6 @@ it("grants only its transaction preimage and publishes detached facts before its
       stages.push(stage);
       expect(actor.sessions.readSharing(sessionKey)).toBeUndefined();
       actor.sessions.captureCurrent(sessionKey).assertCurrent();
-      expect(() => actor.sessions.read(authority, { sessionKey })).toThrow(
-        "Incognito authority callbacks cannot call their actor",
-      );
-      expect(() => actor.sessions.withSharedState(async () => undefined)).toThrow(
-        "Incognito authority callbacks cannot call their actor",
-      );
       expect(facts.sharing?.entry?.sessionId).toBe(stage === "commit" ? "publication" : undefined);
     },
   };
