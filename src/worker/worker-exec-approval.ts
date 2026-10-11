@@ -4,13 +4,22 @@ import type { WorkerConnection } from "./worker-connection.js";
 
 /** Only approval data crosses the worker connection; Gateway credentials stay on the host. */
 export function createWorkerExecApprovalTransport(
-  client: Pick<WorkerConnection, "requestExecApproval" | "requestExecApprovalDecision">,
+  client: Pick<
+    WorkerConnection,
+    "requestExecApproval" | "requestExecApprovalDecision" | "captureExecApprovalAuthority"
+  >,
   signal?: AbortSignal,
 ): ExecApprovalTransport {
+  const assertConnectionCurrent = client.captureExecApprovalAuthority();
+  const assertCurrent = () => {
+    signal?.throwIfAborted();
+    assertConnectionCurrent();
+  };
   const wait = <T>(request: Promise<T>) => (signal ? abortable(signal, request) : request);
   return {
+    assertCurrent,
     async request(params) {
-      signal?.throwIfAborted();
+      assertCurrent();
       if (!params.command) {
         throw new Error("Worker exec approval requires a command");
       }
@@ -23,16 +32,16 @@ export function createWorkerExecApprovalTransport(
           ...(params.warningText ? { warningText: params.warningText } : {}),
         }),
       );
-      signal?.throwIfAborted();
+      assertCurrent();
       if (!response.ok) {
         throw new Error(response.error.message);
       }
       return response.payload;
     },
     async waitDecision(params) {
-      signal?.throwIfAborted();
+      assertCurrent();
       const response = await wait(client.requestExecApprovalDecision(params));
-      signal?.throwIfAborted();
+      assertCurrent();
       if (!response.ok) {
         throw new Error(response.error.message);
       }

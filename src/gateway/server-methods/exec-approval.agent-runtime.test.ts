@@ -1,6 +1,8 @@
+import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
@@ -15,9 +17,12 @@ import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import * as execApprovals from "../../infra/exec-approvals.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createWorkerExecApprovalTransport } from "../../worker/worker-exec-approval.js";
+import { createWorkerPlacementTools } from "../../worker/worker-placement-tools.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import { resolveApprovalSessionAudienceWithFallback } from "../approval-session-audience.js";
@@ -355,6 +360,175 @@ describe("exec approval signed agent runtime", () => {
               });
               await fixture.manager.resolve(registered.id, "allow-once");
               expect(await waiting).toEqual({ ok: true, result: { decision: "allow-once" } });
+              // Compose the actual placement exec constructor and worker transport with the
+              // canonical approval owner. Only wire framing is adapted in this fixture.
+              const workspace = path.join(fixture.databaseOptions.env.OPENCLAW_STATE_DIR, "worker");
+              await mkdir(workspace, { recursive: true });
+              for (const scenario of [
+                "allow",
+                "deny",
+                "foreign",
+                "aborted",
+                "reconnected",
+                "reassigned",
+              ] as const) {
+                const controller = new AbortController();
+                const registeredApproval = Promise.withResolvers<string>();
+                const waitStarted = Promise.withResolvers<void>();
+                let connectionCurrent = true;
+                let replacement: typeof claim | undefined;
+                const commitAuthorization = execApprovals.commitExecAuthorizationLocked;
+                const commitSpy =
+                  scenario === "reconnected"
+                    ? vi
+                        .spyOn(execApprovals, "commitExecAuthorizationLocked")
+                        .mockImplementation(async (params) => {
+                          const authority = await commitAuthorization(params);
+                          connectionCurrent = false;
+                          return authority;
+                        })
+                    : undefined;
+                testContext.onTestFinished(() => commitSpy?.mockRestore());
+                const transport = createWorkerExecApprovalTransport(
+                  {
+                    captureExecApprovalAuthority: () => () => {
+                      if (!connectionCurrent) {
+                        throw new Error("worker connection changed");
+                      }
+                    },
+                    async requestExecApproval(request) {
+                      const response = await bridge.requestExecApproval(
+                        workerIdentity,
+                        request,
+                        controller.signal,
+                      );
+                      if (!response.ok) {
+                        throw new Error(`Approval registration rejected: ${response.closeReason}`);
+                      }
+                      if (scenario === "foreign") {
+                        expect(
+                          await bridge.waitExecApprovalDecision(
+                            {
+                              ...workerIdentity,
+                              credentialHash: "another-worker-credential",
+                            },
+                            { id: response.result.id },
+                          ),
+                        ).toMatchObject({ ok: false });
+                      }
+                      registeredApproval.resolve(response.result.id);
+                      return { type: "res", id: "register", ok: true, payload: response.result };
+                    },
+                    async requestExecApprovalDecision(request) {
+                      const response = bridge.waitExecApprovalDecision(
+                        workerIdentity,
+                        request,
+                        controller.signal,
+                      );
+                      waitStarted.resolve();
+                      const result = await response;
+                      if (!result.ok) {
+                        throw new Error(`Approval decision rejected: ${result.closeReason}`);
+                      }
+                      // The parent lifetime can end after the canonical decision was consumed.
+                      if (scenario === "aborted") {
+                        controller.abort(new Error("worker connection closed"));
+                      }
+                      return { type: "res", id: "wait", ok: true, payload: result.result };
+                    },
+                  },
+                  controller.signal,
+                );
+                const tools = createWorkerPlacementTools({
+                  policy: {
+                    workspaceOnly: true,
+                    readOnly: false,
+                    applyPatchEnabled: false,
+                    applyPatchWorkspaceOnly: true,
+                    imageSanitization: {},
+                  },
+                  cwd: workspace,
+                  containmentRoot: workspace,
+                  execAuthority: { host: "gateway", security: "allowlist", ask: "always" },
+                  agentId: source.agentId,
+                  sessionKey: source.sessionKey,
+                  sessionId: source.sessionId,
+                  runId: claim.runId,
+                  approvalTransport: transport,
+                });
+                const exec = tools.find((tool) => tool.name === "exec");
+                if (!exec) {
+                  throw new Error("Placement exec tool missing");
+                }
+                const marker = path.join(workspace, `${scenario}.txt`);
+                const execution = exec.execute(
+                  `marker-${scenario}`,
+                  {
+                    command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+                      `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'worker-local')`,
+                    )}`,
+                    workdir: workspace,
+                  },
+                  controller.signal,
+                );
+                // Observe rejection immediately, including cancellation before spawn.
+                const settled = execution.then(
+                  (result) => ({ result, error: undefined }),
+                  (error: unknown) => ({ result: undefined, error }),
+                );
+                const approvalId = await awaitGateBeforeSettlement(
+                  registeredApproval.promise,
+                  execution,
+                  "Exec finished before registering approval",
+                );
+                await awaitGateBeforeSettlement(
+                  waitStarted.promise,
+                  execution,
+                  "Exec finished before waiting for approval",
+                );
+                await expect(stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+                if (scenario === "reassigned") {
+                  await placements.releaseTurn(claim);
+                  replacement = await placements.claimTurn({
+                    ...source,
+                    claimId: "replacement-approval-claim",
+                    runId: "replacement-approval-run",
+                    owner: {
+                      kind: "worker",
+                      environmentId: workerIdentity.environmentId,
+                      ownerEpoch: 3,
+                    },
+                  });
+                }
+                await fixture.manager.resolve(
+                  approvalId,
+                  scenario === "deny" ? "deny" : "allow-once",
+                );
+                const outcome = await settled;
+                commitSpy?.mockRestore();
+                if (replacement) {
+                  await placements.releaseTurn(replacement);
+                }
+                if (scenario === "allow" || scenario === "foreign") {
+                  expect(outcome.error).toBeUndefined();
+                  await expect(readFile(marker, "utf8")).resolves.toBe("worker-local");
+                } else {
+                  await expect(stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+                  if (scenario === "aborted") {
+                    expect(outcome.error).toBeUndefined();
+                    expect(outcome.result).toMatchObject({
+                      details: {
+                        status: "failed",
+                        exitCode: null,
+                        aggregated: expect.stringContaining("approval-request-failed"),
+                      },
+                    });
+                  }
+                  if (scenario === "reconnected") {
+                    expect(outcome.error).toMatchObject({ message: "worker connection changed" });
+                  }
+                }
+              }
               bridge.clear();
             } finally {
               requestSpy.mockRestore();

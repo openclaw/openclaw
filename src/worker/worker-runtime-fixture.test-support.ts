@@ -1,6 +1,6 @@
 import type { ExecApprovalsFile } from "../infra/exec-approvals.js";
 
-export type InferencePlan =
+type InferencePlan =
   | "text"
   | "read-image"
   | "tool"

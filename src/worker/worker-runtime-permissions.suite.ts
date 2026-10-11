@@ -308,18 +308,22 @@ export function registerWorkerPermissionTests({ setup }: WorkerPermissionFixture
     async (mode) => {
       const { gateway, workspaceDir, launch } = await setup({
         inferencePlans: ["safe-tool", "text"],
+        approvalDecision: "deny",
       });
       launch.assignment.permissionMode = mode;
       launch.assignment.workerContainmentRoot = workspaceDir;
 
       await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
 
-      const toolResult = JSON.stringify(
-        gateway.inferenceRequests[1]?.context.messages.find(
-          (message) => message.role === "toolResult",
-        ),
+      const toolResult = gateway.inferenceRequests[1]?.context.messages.find(
+        (message) => message.role === "toolResult",
       );
-      expect(toolResult).toContain("approval_required");
+      expect(toolResult).toMatchObject({ isError: true });
+      expect(JSON.stringify(toolResult)).toContain("user-denied");
+      expect(gateway.methods.filter((method) => method.includes("approval"))).toEqual([
+        "worker.exec.approval.request",
+        "worker.exec.approval.waitDecision",
+      ]);
     },
   );
 

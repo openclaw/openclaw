@@ -68,6 +68,8 @@ type ExecApprovalRequestToolParams = RequestExecApprovalDecisionParams & {
 
 /** Run-bound alternative to local Gateway RPC for restricted execution hosts. */
 export type ExecApprovalTransport = {
+  /** Recheck the transport admission at the final process-launch boundary. */
+  assertCurrent?(this: void): void;
   request(params: ExecApprovalRequestToolParams): Promise<{
     id: string;
     expiresAtMs: number;

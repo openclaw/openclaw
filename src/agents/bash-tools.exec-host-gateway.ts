@@ -12,7 +12,6 @@ import { lookupCronRunExecSource } from "../infra/cron-run-exec-source.js";
 import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import {
   type AllowAlwaysPersistenceDecision,
-  commitExecAuthorizationLocked,
   countObsoleteGeneratedExecApprovals,
   createExecApprovalPolicySnapshot,
   type ExecApprovalUsageAuthorization,
@@ -69,6 +68,7 @@ import {
   buildExecApprovalTurnSourceContext,
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
+import { createExecAuthorizationGuard } from "./bash-tools.exec-authorization.js";
 import { prepareCronStandingGrantConsumption } from "./bash-tools.exec-cron-grant.js";
 import type {
   ProcessGatewayAllowlistParams,
@@ -552,13 +552,7 @@ export async function processGatewayAllowlist(
     }
     return { ...state, approvedByAsk: true, deniedReason: null };
   };
-  let assertCommittedAuthorization: (() => void) | undefined;
-  const assertCurrent = () => {
-    if (!assertCommittedAuthorization) {
-      throw new Error("Exec authorization has not been committed");
-    }
-    assertCommittedAuthorization();
-  };
+  const { assertCurrent, commit } = createExecAuthorizationGuard(params.approvalTransport);
   const commitExecutionAuthorization = async (options: {
     source: ExecApprovalUsageAuthorization["source"];
     resolvedPath?: string;
@@ -587,7 +581,7 @@ export async function processGatewayAllowlist(
     });
     const delayedAuthorization =
       options.source === "explicit-approval" || options.source === "auto-review";
-    assertCommittedAuthorization = await commitExecAuthorizationLocked({
+    await commit({
       agentId: params.agentId,
       matches: allowlistMatches,
       command: params.command,

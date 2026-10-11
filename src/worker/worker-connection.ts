@@ -221,6 +221,18 @@ export class WorkerConnection {
     );
   }
 
+  /** An approval cannot survive replacement of the connection that admitted its turn. */
+  captureExecApprovalAuthority(): () => void {
+    const generation = this.generation;
+    const assertCurrent = () => {
+      if (this.stateValue.kind !== "ready" || this.generation !== generation) {
+        throw new WorkerConnectionInterruptedError("Worker exec approval lost Gateway admission");
+      }
+    };
+    assertCurrent();
+    return assertCurrent;
+  }
+
   requestExecApproval(params: WorkerExecApprovalParams): Promise<WorkerExecApprovalResponseFrame> {
     return this.frames.request("exec-approval", params);
   }

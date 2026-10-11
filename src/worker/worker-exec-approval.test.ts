@@ -6,7 +6,9 @@ import type {
 import { createWorkerExecApprovalTransport } from "./worker-exec-approval.js";
 
 function fixture(signal?: AbortSignal) {
+  const assertCurrent = vi.fn();
   const client = {
+    captureExecApprovalAuthority: () => assertCurrent,
     requestExecApproval: vi.fn(async (): Promise<WorkerExecApprovalResponseFrame> => ({
       type: "res",
       id: "rpc-register",
@@ -22,7 +24,7 @@ function fixture(signal?: AbortSignal) {
       }),
     ),
   };
-  return { client, transport: createWorkerExecApprovalTransport(client, signal) };
+  return { client, assertCurrent, transport: createWorkerExecApprovalTransport(client, signal) };
 }
 const request = {
   id: "approval",
@@ -75,6 +77,17 @@ describe("worker exec approval transport", () => {
     const rejected = expect(pending).rejects.toThrow("worker stopped");
     abort.abort(new Error("worker stopped"));
     await rejected;
+  });
+
+  it("rechecks connection admission after an allowed decision and before launch", async () => {
+    const { client, assertCurrent, transport } = fixture();
+    await transport.waitDecision({ id: "approval" });
+    assertCurrent.mockImplementation(() => {
+      throw new Error("Worker exec approval lost Gateway admission");
+    });
+    expect(() => transport.assertCurrent?.()).toThrow("lost Gateway admission");
+    await expect(transport.request(request)).rejects.toThrow("lost Gateway admission");
+    expect(client.requestExecApproval).not.toHaveBeenCalled();
   });
 
   it("propagates transport failures without authorizing execution", async () => {

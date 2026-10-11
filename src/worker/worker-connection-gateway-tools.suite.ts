@@ -117,6 +117,29 @@ export function registerWorkerGatewayToolTransportTests(connectParams: WorkerCon
       }
     });
 
+    it("invalidates captured exec authority across disconnect and readmission", async () => {
+      vi.useFakeTimers();
+      const { connection, sockets } = createGatewayToolConnectionFixture(connectParams);
+      try {
+        expect(() => connection.captureExecApprovalAuthority()).toThrow("lost Gateway admission");
+        await connection.start();
+        const assertCurrent = connection.captureExecApprovalAuthority();
+        expect(assertCurrent).not.toThrow();
+        sockets[0]!.emit("close", 1006, Buffer.alloc(0));
+        expect(assertCurrent).toThrow("lost Gateway admission");
+        await vi.advanceTimersByTimeAsync(10);
+        expect(connection.state.kind).toBe("ready");
+        expect(assertCurrent).toThrow("lost Gateway admission");
+        const assertReadmitted = connection.captureExecApprovalAuthority();
+        expect(assertReadmitted).not.toThrow();
+        await connection.stop();
+        expect(assertReadmitted).toThrow("lost Gateway admission");
+      } finally {
+        await connection.stop();
+        vi.useRealTimers();
+      }
+    });
+
     it("fails closed without replay when the approval connection is interrupted", async () => {
       vi.useFakeTimers();
       const { connection, sent, sockets } = createGatewayToolConnectionFixture(connectParams);
