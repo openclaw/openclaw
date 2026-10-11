@@ -7,6 +7,10 @@ import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { ensureSessionEntrySync } from "../config/sessions/session-accessor.js";
@@ -196,6 +200,9 @@ describe("managed attachment SQLite visibility", () => {
         });
       }
       expect(await f.download()).toBeNull();
+      expect(
+        await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey }),
+      ).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
       expect(fs.existsSync(f.originalPath)).toBe(true);
     },
   );
@@ -397,9 +404,15 @@ describe("managed attachment SQLite visibility", () => {
       { type: "reset", id: "reset", parentId: f.messageId, timestamp, reason: "new" },
     ]);
     expect(await f.download()).toBeNull();
-    expect(
-      await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey }),
-    ).toEqual({ deletedRecordCount: 1, deletedFileCount: 1, retainedCount: 0 });
+    const hostSql = observeHostDataSql();
+    try {
+      expect(
+        await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey }),
+      ).toEqual({ deletedRecordCount: 1, deletedFileCount: 1, retainedCount: 0 });
+      expect(hostSql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+    } finally {
+      hostSql.restore();
+    }
     expect(await readManagedImageRecord(f.attachmentId, stateDir)).toBeNull();
     expect(fs.existsSync(f.originalPath)).toBe(false);
     expect(await f.download()).toBeNull();

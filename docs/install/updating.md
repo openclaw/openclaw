@@ -290,6 +290,13 @@ installation is checked before writable preparation. The updater settles eligibl
 lost-lease recovery automatically; other unfinished operations still require the
 reported recovery command. Doctor does not clear those artifacts.
 
+During an uninterrupted package update, the freshly installed private candidate
+is checked by directory identity, package version, and launchers instead of
+repeated full-tree scans. Content changes inside that private candidate during
+publication are not detected. Its full fingerprint is retained for recovery;
+resumed publication and repair still verify package contents. This optimization
+applies when the installed updater contains it; older updaters keep their checks.
+
 If a pnpm-owned install fails with `IO error: not a terminal`, the installed
 updater may be triggering an interactive pnpm build-approval prompt while
 capturing its output. A newer candidate cannot repair that first update.
@@ -517,8 +524,9 @@ These commands do not replace post-update plugin, migration or service recovery.
 Keep other package managers stopped while recovering the operation.
 
 On FreeBSD, `repair` and `retire` read process identity through the recorded
-installation's own `koffi` dependency: the live package, or the copy the
-operation retains beside it during publication. Helpers written by older
+installation's own `@openclaw/proc-safe` dependency and its FreeBSD platform
+addon: the live package, or the copy the operation retains beside it during
+publication. Helpers written by older
 updaters cannot repair or retire on FreeBSD; `status` still reports the
 operation.
 

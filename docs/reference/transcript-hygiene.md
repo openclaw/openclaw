@@ -34,6 +34,17 @@ If you need transcript storage details, see
 
 ---
 
+## Delivered command exchanges
+
+Slash commands and their delivered replies from the shared dispatcher are ordinary
+conversation messages, not runtime-only prompt context. Native command menus,
+button selections, and acknowledgements on Discord and Telegram, Slack
+argument menus, and Mattermost model pickers are also retained after delivery.
+Login device codes, pairing codes, login URLs, and sensitive `/config set` or `/debug set` values
+(including nested object assignments) are redacted before appending the exchange.
+These rows remain available to later provider requests and chat history without rewriting earlier
+rows. `/btw` and `/side` remain ephemeral.
+
 ## Failed attempts and recovery
 
 Text-only assistant errors are buffered until the logical run settles. Recovery

@@ -404,6 +404,7 @@ export function authorizePreparedSessionMutation(
   prepared: {
     policy: GatewayOperatorRoleDefinition | undefined;
     aliases: ReadonlySet<string>;
+    authorizesAgentRun?: boolean;
   },
 ): ErrorShape | null {
   return authorizeSessionMutationTarget(params, () => facts.target, {
@@ -419,16 +420,18 @@ function authorizeSessionMutationTarget(
     policy: GatewayOperatorRoleDefinition | undefined;
     aliases: ReadonlySet<string>;
     membership: ReadonlySet<string>;
+    authorizesAgentRun?: boolean;
   },
 ): ErrorShape | null {
-  if (isGatewayAdmin(params.client) && !params.cfg.gateway?.roles) {
+  const authorizesAgentRun = prepared?.authorizesAgentRun !== false;
+  if (isGatewayAdmin(params.client) && (!authorizesAgentRun || !params.cfg.gateway?.roles)) {
     return null;
   }
   if (isGatewayClientProfilePending(params.client)) {
     return authenticatedProfileUnavailableError();
   }
   const target = readTarget();
-  if (target) {
+  if (target && authorizesAgentRun) {
     const agentError = authorizeSessionAgentRun(
       { cfg: params.cfg, client: params.client, target },
       prepared,

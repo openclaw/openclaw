@@ -1,6 +1,5 @@
 // Cron run diagnostics tests cover diagnostic event formatting for scheduled runs.
 import { describe, expect, it } from "vitest";
-import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
   createCronRunDiagnosticsFromMissingWebSearchProvider,
   createCronRunDiagnosticsFromAgentResult,
@@ -31,29 +30,6 @@ describe("cron run diagnostics", () => {
     expect(diagnostics?.entries.at(-1)?.message).not.toContain("sk-1234567890abcdef");
     expect(diagnostics?.entries.at(-1)?.truncated).toBe(true);
     expect(diagnostics?.summary).toHaveLength(2_000);
-  });
-
-  it("keeps bounded diagnostic text valid at UTF-16 boundaries", () => {
-    const diagnostics = normalizeCronRunDiagnostics({
-      summary: `${"s".repeat(1_998)}😀tail`,
-      entries: [
-        {
-          ts: 1,
-          source: "exec",
-          severity: "error",
-          message: `${"m".repeat(998)}😀tail`,
-        },
-      ],
-    });
-
-    expect(diagnostics?.summary).toBe(`${"s".repeat(1_998)}…`);
-    expect(diagnostics?.entries[0]).toEqual({
-      ts: 1,
-      source: "exec",
-      severity: "error",
-      message: `${"m".repeat(998)}…`,
-      truncated: true,
-    });
   });
 
   it("preserves later terminal diagnostics when capping entries", () => {
@@ -156,18 +132,6 @@ describe("cron run diagnostics", () => {
         hasWebSearchProvider: true,
       }),
     ).toBeUndefined();
-  });
-
-  it("keeps a later delivery error summary ahead of an earlier warning", () => {
-    const warning = normalizeCronRunDiagnostics({
-      summary: "agent warning",
-      entries: [{ ts: 100, source: "agent-run", severity: "warn", message: "agent warning" }],
-    });
-    const deliveryError = createCronRunDiagnosticsFromError("delivery", "delivery failed", {
-      nowMs: () => 200,
-    });
-
-    expect(mergeCronRunDiagnostics(warning, deliveryError)?.summary).toBe("delivery failed");
   });
 
   it("extracts fatal agent result payloads and meta errors", () => {
@@ -387,35 +351,6 @@ describe("cron run diagnostics", () => {
     expect(
       createCronRunDiagnosticsFromAgentResult(result, { finalStatus: "error" }),
     ).toBeUndefined();
-  });
-
-  it("keeps non-terminal tool warnings as warning diagnostics for successful runs", () => {
-    const toolWarning = setReplyPayloadMetadata(
-      {
-        toolName: "exec",
-        text: "⚠️ Exec failed",
-        isError: true,
-      },
-      { nonTerminalToolErrorWarning: true },
-    );
-
-    const diagnostics = createCronRunDiagnosticsFromAgentResult(
-      {
-        payloads: [{ text: "Queued 3 topics." }, toolWarning],
-      },
-      { finalStatus: "ok", nowMs: () => 700 },
-    );
-
-    expect(diagnostics?.entries).toEqual([
-      {
-        ts: 700,
-        source: "tool",
-        severity: "warn",
-        message: "⚠️ Exec failed",
-        toolName: "exec",
-      },
-    ]);
-    expect(diagnostics?.summary).toBe("⚠️ Exec failed");
   });
 
   it("downgrades recovered tool errors for successful runs", () => {

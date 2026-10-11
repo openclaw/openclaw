@@ -24,6 +24,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
+import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import type {
   SessionMetadataExpectedEntry,
   SessionOwnerAssignParams,
@@ -59,6 +60,7 @@ export function replaceSessionOwnerInTransaction(
   database: OpenClawAgentDatabase,
   sessionKey: string,
   owner: SessionOwnerAssignment | undefined,
+  postimages?: SessionEntryWritePostimages,
 ): boolean {
   if (!hasSqliteSessionOwnerColumns(database.db)) {
     if (!owner?.actor.id) {
@@ -97,6 +99,11 @@ export function replaceSessionOwnerInTransaction(
   );
   if (!updated) {
     return false;
+  }
+  const postimage = postimages?.get(sessionKey);
+  if (postimage) {
+    postimage.entry = { ...postimage.entry, owner };
+    postimage.changed = true;
   }
   publishSessionEntryCacheInvalidation(
     database,

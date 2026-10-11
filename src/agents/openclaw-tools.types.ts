@@ -17,7 +17,10 @@ import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import type { CronToolOptions } from "./tools/cron-tool.types.js";
 import type { QuestionPromptDelivery } from "./tools/question-prompt-send.js";
-import type { SessionsYieldCallback } from "./tools/sessions-yield-tool.js";
+import type {
+  SessionsYieldCallback,
+  SessionsYieldRuntimeClaim,
+} from "./tools/sessions-yield-tool.js";
 import type { SkillWorkshopRunOptions } from "./tools/skill-workshop-tool-factory.js";
 
 /** Options shared by the coding-tool factory and its OpenClaw tool surface. */
@@ -103,7 +106,7 @@ export type OpenClawSharedToolsOptions = {
   /** Host-only observation after a canonical progress-card replacement commits. */
   onProgressCardPlanSaved?: (unfinished: boolean) => void;
   onYield?: SessionsYieldCallback;
-  claimYieldCompletion?: () => boolean | Promise<boolean>;
+  claimYieldCompletion?: () => SessionsYieldRuntimeClaim | Promise<SessionsYieldRuntimeClaim>;
   /** Records hot-path tool-prep stages for reply startup diagnostics. */
   recordToolPrepStage?: (name: string) => void;
 };

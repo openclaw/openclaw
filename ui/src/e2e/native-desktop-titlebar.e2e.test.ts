@@ -126,7 +126,7 @@ suite.define(() => {
         await toolbar.waitFor();
         const assertChromeClear = async () => {
           const controls = page.locator(
-            ".chat-pane__header button:visible, [data-region-header='side'] button:visible, .sidebar-brand button:visible, .settings-sidebar__header button:visible, .content-header button:visible, .new-session-page__incognito-rail button:visible",
+            ".chat-pane__header button:visible, [data-region-header='side'] button:visible, .sidebar-rail button:visible, .sidebar-session-toolbar button:visible, .settings-sidebar__header button:visible, .content-header button:visible, .new-session-page__incognito-rail button:visible",
           );
           expect(await controls.count()).toBeGreaterThan(0);
           // Sidebar transitions settle before the screenshot and hit-target proof.

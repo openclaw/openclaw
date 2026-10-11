@@ -65,6 +65,12 @@
         "https://openclaw.ai"
       ],
       "markdownCapable": true,
+      "doctorCapabilities": {
+        "dmAllowFromMode": "topOnly",
+        "groupModel": "sender",
+        "groupAllowFromFallbackToAllowFrom": true,
+        "warnOnEmptyGroupSenderAllowlist": true
+      },
       "setup": {
         "fields": [
           {
