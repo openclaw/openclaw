@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   replaceConfigFile: vi.fn(async () => {}),
   setDisplayName: vi.fn(async () => {}),
   setAvatarUrl: vi.fn(async () => {}),
+  bootstrap: vi.fn(async () => ({ success: true })),
+  recoveryKey: vi.fn(async () => ({ encodedPrivateKey: "synthetic-stored-key" })),
 }));
 
 vi.mock("./runtime.js", async (importOriginal) => ({
@@ -33,6 +35,7 @@ const cfg: CoreConfig = {
 describe("Matrix command config handoff", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.bootstrap.mockResolvedValue({ success: true });
     mocks.runtime.mockReturnValue({
       config: { current: () => cfg, replaceConfigFile: mocks.replaceConfigFile },
     });
@@ -44,7 +47,8 @@ describe("Matrix command config handoff", () => {
         setDisplayName: mocks.setDisplayName,
         setAvatarUrl: mocks.setAvatarUrl,
         verifyWithRecoveryKey: async () => ({ success: true }),
-        bootstrapOwnDeviceVerification: async () => ({ success: true }),
+        bootstrapOwnDeviceVerification: mocks.bootstrap,
+        crypto: { listVerifications: async () => [], getRecoveryKey: mocks.recoveryKey },
         getOwnDeviceVerificationStatus: async () => ({ serverDeviceKnown: false }),
       },
       start: async () => {},
@@ -98,18 +102,65 @@ describe("Matrix command config handoff", () => {
   ] as const)(
     "runs %s verification with Gateway config",
     async (_label, handle, params, result) => {
-      const respond = vi.fn();
-      await handle({
-        params: { accountId: "ops", ...params },
-        respond,
-        context: { getRuntimeConfig: () => cfg },
-      });
-
-      expect(respond).toHaveBeenCalledWith(true, result);
+      for (const routed of [false, true]) {
+        const respond = vi.fn();
+        await handle({
+          params: {
+            accountId: "ops",
+            ...params,
+            ...(routed ? { expectedOwnerId: "owner-fixture" } : {}),
+          },
+          respond,
+          context: { getRuntimeConfig: () => cfg },
+        });
+        expect(respond).toHaveBeenCalledWith(true, routed ? { result, accountId: "ops" } : result);
+      }
       expect(mocks.acquire).toHaveBeenCalledWith(
         expect.objectContaining({ cfg, accountId: "ops" }),
       );
-      expect(mocks.release).toHaveBeenCalledTimes(1);
+      expect(mocks.release).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("preserves structured verification failure for CLI rendering and legacy RPCs", async () => {
+    mocks.bootstrap.mockResolvedValue({ success: false });
+    for (const routed of [false, true]) {
+      const respond = vi.fn();
+      await handleVerificationBootstrap({
+        params: routed ? { expectedOwnerId: "owner-fixture" } : {},
+        respond,
+        context: { getRuntimeConfig: () => cfg },
+      });
+      expect(respond).toHaveBeenCalledWith(
+        routed,
+        routed ? { result: { success: false }, accountId: "ops" } : { success: false },
+      );
+    }
+  });
+
+  it.each([false, true])(
+    "includes the stored recovery key only when explicitly requested (%s)",
+    async (includeRecoveryKey) => {
+      const respond = vi.fn();
+      await handleVerificationStatus({
+        params: {
+          expectedOwnerId: "owner-fixture",
+          includeRecoveryKey,
+          allowDegradedLocalState: true,
+        },
+        respond,
+        context: { getRuntimeConfig: () => cfg },
+      });
+      expect(respond).toHaveBeenCalledWith(true, {
+        accountId: "ops",
+        result: {
+          serverDeviceKnown: false,
+          pendingVerifications: 0,
+          ...(includeRecoveryKey ? { recoveryKey: "synthetic-stored-key" } : {}),
+        },
+      });
+      expect(mocks.recoveryKey).toHaveBeenCalledTimes(includeRecoveryKey ? 1 : 0);
+      expect(mocks.release).toHaveBeenCalledWith({ mode: "discard" });
     },
   );
 });

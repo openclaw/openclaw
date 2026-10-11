@@ -42,17 +42,20 @@ vi.mock("../loader.js", () => ({
   ) => mocks.loadAndActivateRootPluginRegistry(...args),
 }));
 
+// mock-isolation: Loader scope uses fixture channel ids without persisted channel discovery.
 vi.mock("../channel-plugin-ids.js", () => ({
-  resolveConfiguredChannelPluginIds: (
+  resolveConfiguredChannelPluginIdsAsync: async (
     ...args: Parameters<typeof mocks.resolveConfiguredChannelPluginIds>
   ) => mocks.resolveConfiguredChannelPluginIds(...args),
   resolveChannelPluginIds: (...args: Parameters<typeof mocks.resolveChannelPluginIds>) =>
     mocks.resolveChannelPluginIds(...args),
 }));
 
+// mock-isolation: Loader scope uses fixture plugin ids without installed-plugin discovery.
 vi.mock("../effective-plugin-ids.js", () => ({
-  resolveEffectivePluginIds: (...args: Parameters<typeof mocks.resolveEffectivePluginIds>) =>
-    mocks.resolveEffectivePluginIds(...args),
+  resolveEffectivePluginIdsAsync: async (
+    ...args: Parameters<typeof mocks.resolveEffectivePluginIds>
+  ) => mocks.resolveEffectivePluginIds(...args),
 }));
 
 vi.mock("../gateway-startup-plugin-ids.js", () => ({

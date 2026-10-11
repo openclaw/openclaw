@@ -50,7 +50,6 @@ function expectBoundTui(expected: {
   expect(runTuiMock).toHaveBeenCalledWith(
     expect.objectContaining({
       deliver: false,
-      forceProcessExitOnReturn: true,
       boundGateway: expected,
     }),
   );
@@ -627,7 +626,6 @@ describe("runCli exit behavior", () => {
     expect(runTuiMock).toHaveBeenCalledWith({
       deliver: false,
       local: true,
-      forceProcessExitOnReturn: true,
     });
   });
 });

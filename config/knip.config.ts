@@ -783,6 +783,15 @@ const config = {
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
     "src/infra/heartbeat-wake.ts": ["exports"],
+    // Lazy loaders import these modules opaquely (media-understanding runner, config model
+    // validation), which Knip counts as using every export until a bare namespace reference
+    // disables that shortcut: plugin-test-runtime's isolated-completion fixture passes these
+    // namespaces to vi.spyOn. Plain unused exports stay reported here; the full-tree scan
+    // still audits every export against its test consumers.
+    "src/agents/model-auth.ts": ["nsExports"],
+    "src/agents/model-auth-runtime.ts": ["nsExports"],
+    "src/agents/model-auth-runtime-shared.ts": ["nsExports"],
+    "src/agents/prepared-model-runtime.ts": ["nsExports"],
   },
   workspaces: {
     ".": {
@@ -866,6 +875,13 @@ const config = {
         "src/lib/reactive/*.ts!",
         "!src/lib/reactive/*.test.ts!",
         "src/solid-smoke/solid-smoke.tsx!",
+        // Solid presentation primitives (#168576) and the chat render lifecycle (#168657) land
+        // before their page and chat consumers; drop each entry with its first production importer.
+        "src/components/solid/*.tsx!",
+        "!src/components/solid/*.test.tsx!",
+        "src/components/icon-data*.ts!",
+        "src/app/shell-layout-traits-solid.tsx!",
+        "src/pages/chat/solid-render-lifecycle.ts!",
       ],
       // Workboard lazy-loads Three.js at runtime; Knip's dependency pass misses it.
       ignoreDependencies: ["three"],

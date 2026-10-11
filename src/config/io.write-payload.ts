@@ -39,7 +39,7 @@ import { rejectConfigNonFiniteNumbers } from "./value-tree.js";
 export function prepareConfigWritePayload(
   context: ConfigIoContext,
   snapshot: ConfigFileSnapshot,
-  topology: ReturnType<typeof prepareConfigWriteTopology>,
+  topology: Awaited<ReturnType<typeof prepareConfigWriteTopology>>,
   options: ConfigWriteOptions,
   deferredPluginMigrations: readonly DeferredPluginMigration[],
 ) {

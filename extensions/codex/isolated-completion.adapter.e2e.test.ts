@@ -86,6 +86,7 @@ it.each(["allowed", "forbidden", "revoked"] as const)(
     const harness = createCodexAppServerAgentHarness({
       bindingStore: {
         read: unexpectedSessionBinding,
+        readAsync: unexpectedSessionBinding,
         readMany: unexpectedSessionBinding,
         readNativeSubagentSubmissions: unexpectedSessionBinding,
         hasOtherThreadOwner: unexpectedSessionBinding,

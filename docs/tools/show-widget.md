@@ -387,16 +387,22 @@ read. Ordinary widgets and MCP App tool names do not trigger this identity check
 | `excludePullRequests` | Boolean; default `true`. GitHub omits embedded pull-request objects, not pull-request-triggered runs.                                                                                  |
 
 Other fields, including identity overrides, URLs, headers, and methods, are
-rejected. The result keeps GitHub's `{ total_count, workflow_runs }` shape.
+rejected. The result keeps GitHub's `{ total_count, workflow_runs }` fields.
 Each run contains only `id`, `name`, `display_title`, `head_branch`, `status`,
 `conclusion`, `html_url`, `run_started_at`, `created_at`, `updated_at`, `event`,
 `workflow_id`, and `run_attempt`. No credentials or raw repository objects are
 returned. The upstream response is capped at 1 MiB and the projected run list
 at 30 entries. Successful reads are cached for about 30 seconds within the
 current Gateway, board identity, credential, repository, and filter scope.
+After that, a read returns the last successful result with `stale: true` while
+one background request refreshes it. Display a refreshing indicator when this
+flag is present. The next read uses the replacement result once it is ready.
+First reads and changes to the credential or filters still wait for GitHub.
 
 Rate limits, access denial, unavailable identity, and upstream failure return
-sanitized guidance. Redirects are refused. For a renamed repository, verify its
+sanitized guidance. A failed background refresh logs that guidance and removes
+the cached result, so the next read retries GitHub instead of reusing it.
+Redirects are refused. For a renamed repository, verify its
 new name and update both the read and grant. Each caller revalidates its widget,
 Gateway, and identity before receiving data, including shared reads and cache
 hits. Removing one widget does not fail another authorized widget's shared read.

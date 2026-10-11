@@ -64,6 +64,12 @@ reusable after the snapshot ends. Autocommit caches use the owning writer's rece
 Closing a connection clears its prepared statements
 and row caches, while physical-database admission survives for the process lifetime.
 
+Worker dispatch carries snapshots prepared by the admission owner when it publishes
+facts or writer custody. Unchanged requests reuse the registry revision without
+scanning every database or rebuilding fact maps. Shared revocation cells still
+invalidate transferred facts immediately; retirement removes the published snapshot.
+This changes no schema, stored bytes, or update behavior.
+
 Shared-state content-version checks reuse the physical database's admitted version
 facts across handles and workers. Ordinary commits, transactions, and connection
 closure do not force another marker read. The migration owner publishes replacement
@@ -105,7 +111,7 @@ process's published facts without repeating validation.
 
 Progress-card writes reuse the transaction's admitted table facts. The schema owner creates the lazy table only when it is absent and publishes the committed facts for every handle and worker. A rolled-back installation remains absent until the next normal installation transaction. Stored cards, revision tombstones, schema versions, and upgrade or downgrade behavior are unchanged.
 
-The agent-database execution owner retains up to four idle physical-agent executors in least-recently-used order. Borrowing an executor refreshes its independent 30-minute idle timeout; a fifth idle executor evicts the least recently used one. Configuration changes to the agent roster or storage paths stop warm retention and drain affected executors after their last borrower settles. Already-admitted work retains its original physical store; new requests resolve the current configuration. Explicit database closure and Gateway shutdown still revoke and drain the existing lifecycle resources. This changes no schema, stored bytes, or update behavior.
+The agent-database execution owner retains up to four idle physical-agent executors in least-recently-used order. Borrowing an executor refreshes its independent 30-minute idle timeout; a fifth idle executor evicts the least recently used one. Configuration changes to the agent roster or storage paths leave existing executors to expire normally. Already-admitted work retains its original physical store; new requests resolve the current configuration. Explicit database closure and Gateway shutdown still revoke and drain the existing lifecycle resources. This changes no schema, stored bytes, or update behavior.
 
 Creating an agent database at an admitted absent path revokes the previous file's
 retained validation before worker preparation. A recreated file cannot borrow that

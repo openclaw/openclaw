@@ -12,11 +12,11 @@ import { hasManagedRuntimeConfigWriteOwner } from "./runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
 /** Assess root-file safety without publishing config, audit, or rejection artifacts. */
-export function previewConfigFileWriteSafety(params: {
+export async function previewConfigFileWriteSafety(params: {
   sourceConfig: OpenClawConfig;
   snapshot: ConfigFileSnapshot;
   writeOptions: ConfigWriteOptions;
-}): string[] {
+}): Promise<string[]> {
   const { snapshot } = params;
   const options: ConfigWriteOptions = { ...params.writeOptions, inputBase: "source" };
   options.assertConfigPathForWrite?.();
@@ -40,7 +40,7 @@ export function previewConfigFileWriteSafety(params: {
     return [];
   }
   const context = createConfigIoContext({ configPath: snapshot.path, env, observe: false });
-  const topology = prepareConfigWriteTopology({
+  const topology = await prepareConfigWriteTopology({
     snapshot,
     pluginMetadataSnapshot: options.basePluginMetadataSnapshot,
     nextConfig,

@@ -5,7 +5,11 @@ import {
   patchSessionEntry,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  useSessionStoreTempDirs,
+  withNativeSessionMutationForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 const runHostPreparedIsolatedCompletion = vi.hoisted(() => vi.fn());
@@ -30,8 +34,12 @@ import codexPluginPackage from "./package.json" with { type: "json" };
 import { buildCodexRuntimeModelParams } from "./src/app-server/model-runtime.js";
 import { clearCodexBindingAfterInvalidImagePayload } from "./src/app-server/run-attempt-state.js";
 import {
+  CODEX_APP_SERVER_BINDING_NAMESPACE,
+  CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+} from "./src/app-server/session-binding-meta.js";
+import { createCodexSqliteTestBindingStateStore } from "./src/app-server/session-binding.sqlite.test-helpers.js";
+import {
   createCodexTestBindingStore,
-  createCodexTestBindingStateStore,
   createCodexAppServerBindingStore,
   bindingStoreKey,
   sessionBindingIdentity,
@@ -429,81 +437,102 @@ describe("Codex agent harness reset()", () => {
   it.each(["withSessionContextReset"] as const)(
     "%s removes bindings at the session commit boundary",
     async (hook) => {
-      const state = createCodexTestBindingStateStore();
-      const bindingStore = createCodexAppServerBindingStore(state);
-      const identity = sessionBindingIdentity({
-        agentId: "worker",
-        sessionId: "session-1",
-        sessionKey: "agent:worker:main",
-      });
-      await bindingStore.mutate(identity, {
-        kind: "set",
-        binding: { threadId: "thread-1", cwd: "/repo" },
-      });
-      const harness = createCodexAppServerAgentHarness({ bindingStore });
-
-      await harness[hook]?.(
-        {
+      await withOpenClawTestState({ label: "codex-context-reset" }, async (fixture) => {
+        const storePath = path.join(fixture.stateDir, "openclaw-agent.sqlite");
+        const state = createCodexSqliteTestBindingStateStore({
+          namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
+          maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+          overflowPolicy: "reject-new",
+          env: fixture.env,
+        });
+        const bindingStore = createCodexAppServerBindingStore(state);
+        const identity = sessionBindingIdentity({
           agentId: "worker",
           sessionId: "session-1",
           sessionKey: "agent:worker:main",
-          assertCurrent() {},
-        },
-        async (mutation) => {
-          mutation.commit();
-          expect(state.lookup(bindingStoreKey(identity))).toBeUndefined();
-        },
-      );
+        });
+        await bindingStore.mutate(identity, {
+          kind: "set",
+          binding: { threadId: "thread-1", cwd: "/repo" },
+        });
+        const harness = createCodexAppServerAgentHarness({ bindingStore });
 
-      await harness.reset?.({
-        agentId: "worker",
-        sessionId: "session-1",
-        sessionKey: "agent:worker:main",
-        reason: "deleted",
+        await upsertSessionEntry({
+          agentId: identity.agentId,
+          sessionKey: "agent:worker:main",
+          storePath,
+          entry: { sessionId: identity.sessionId, updatedAt: 1 },
+        });
+        await withNativeSessionMutationForTest({
+          pluginId: "codex",
+          harness,
+          hook,
+          target: { ...identity, sessionKey: "agent:worker:main", storePath, assertCurrent() {} },
+          run: async (settle) => {
+            await settle();
+            expect(state.lookup(bindingStoreKey(identity))).toBeUndefined();
+          },
+        });
+
+        await harness.reset?.({
+          agentId: "worker",
+          sessionId: "session-1",
+          sessionKey: "agent:worker:main",
+          reason: "deleted",
+        });
+
+        expect(state.lookup(bindingStoreKey(identity))).toBeUndefined();
       });
-
-      expect(state.lookup(bindingStoreKey(identity))).toBeUndefined();
     },
   );
 
   it.each(["withSessionDeletion"] as const)(
     "%s rejects supervision before invoking the session transaction",
     async (hook) => {
-      const bindingStore = createCodexTestBindingStore();
-      const identity = sessionBindingIdentity({
-        agentId: "worker",
-        sessionId: "supervised",
-        sessionKey: "agent:worker:main",
-      });
-      await bindingStore.mutate(identity, {
-        kind: "set",
-        binding: {
-          threadId: "thread-supervised",
-          cwd: "/repo",
-          connectionScope: "supervision",
-          supervisionSourceThreadId: "thread-source",
-          model: "gpt-5.5",
-          modelProvider: "openai",
-          preserveNativeModel: true,
-          conversationSourceTransferComplete: true,
-        },
-      });
-      const harness = createCodexAppServerAgentHarness({ bindingStore });
-      const run = vi.fn();
-      await expect(
-        harness[hook]?.(
-          {
-            agentId: "worker",
-            sessionId: "supervised",
-            sessionKey: "agent:worker:main",
-            assertCurrent() {},
+      await withOpenClawTestState({ label: "codex-supervision-deletion" }, async (fixture) => {
+        const bindingStore = createCodexAppServerBindingStore(
+          createCodexSqliteTestBindingStateStore({
+            namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
+            maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+            overflowPolicy: "reject-new",
+            env: fixture.env,
+          }),
+        );
+        const identity = sessionBindingIdentity({
+          agentId: "worker",
+          sessionId: "supervised",
+          sessionKey: "agent:worker:main",
+        });
+        await bindingStore.mutate(identity, {
+          kind: "set",
+          binding: {
+            threadId: "thread-supervised",
+            cwd: "/repo",
+            connectionScope: "supervision",
+            supervisionSourceThreadId: "thread-source",
+            model: "gpt-5.5",
+            modelProvider: "openai",
+            preserveNativeModel: true,
+            conversationSourceTransferComplete: true,
           },
-          run,
-        ),
-      ).rejects.toThrow("owned by supervision");
-      expect(run).not.toHaveBeenCalled();
-      expect(bindingStore.read(identity)).toMatchObject({
-        threadId: "thread-supervised",
+        });
+        const harness = createCodexAppServerAgentHarness({ bindingStore });
+        const run = vi.fn();
+        await expect(
+          harness[hook]?.(
+            {
+              agentId: "worker",
+              sessionId: "supervised",
+              sessionKey: "agent:worker:main",
+              assertCurrent() {},
+            },
+            run,
+          ),
+        ).rejects.toThrow("owned by supervision");
+        expect(run).not.toHaveBeenCalled();
+        expect(bindingStore.read(identity)).toMatchObject({
+          threadId: "thread-supervised",
+        });
       });
     },
   );
@@ -562,7 +591,7 @@ const observedBinding: CodexAppServerThreadBinding = {
 function createOwnershipFixture() {
   const bindingStore = createCodexTestBindingStore();
   const harness = createCodexAppServerAgentHarness({ bindingStore });
-  const resolveOwnership = harness.resolveSessionRuntimeOwnership?.bind(harness);
+  const resolveOwnership = harness.resolveSessionRuntimeOwnershipAsync?.bind(harness);
   if (!resolveOwnership) {
     throw new Error("expected Codex session runtime ownership capability");
   }
@@ -570,7 +599,13 @@ function createOwnershipFixture() {
     bindingStore,
     harness,
     resolveOwnership: (overrides: Partial<Parameters<typeof resolveOwnership>[0]> = {}) =>
-      resolveOwnership({ ...session, assertCurrent() {}, ...overrides }),
+      resolveOwnership({
+        version: 2,
+        ...session,
+        assertCurrent() {},
+        readPreviousSessionId: async () => undefined,
+        ...overrides,
+      }),
   };
 }
 
@@ -602,8 +637,8 @@ describe("Codex session runtime ownership", () => {
     const fixture = createOwnershipFixture();
     await fixture.bindingStore.mutate(identity, { kind: "set", binding });
 
-    const readPreviousSessionId = vi.fn(() => undefined);
-    expect(fixture.resolveOwnership({ readPreviousSessionId })).toEqual(expected);
+    const readPreviousSessionId = vi.fn(async () => undefined);
+    expect(await fixture.resolveOwnership({ readPreviousSessionId })).toEqual(expected);
     expect(readPreviousSessionId).not.toHaveBeenCalled();
     expect(fixture.bindingStore.read(identity)).toEqual(binding);
   });
@@ -655,7 +690,7 @@ describe("Codex session runtime ownership", () => {
     });
     await fixture.bindingStore.mutate(identity, { kind: "set", binding });
     await patchSessionEntry({ ...scope, update: () => ({ sessionId: successor.sessionId }) });
-    const readPreviousSessionId = () => {
+    const readPreviousSessionId = async () => {
       const entry = getSessionEntry({
         ...scope,
         hydrateSkillPromptRefs: false,
@@ -665,7 +700,7 @@ describe("Codex session runtime ownership", () => {
     };
 
     expect(
-      fixture.resolveOwnership({
+      await fixture.resolveOwnership({
         sessionId: successor.sessionId,
         readPreviousSessionId,
         storePath,
@@ -685,7 +720,7 @@ describe("Codex session runtime ownership", () => {
     const binding = { ...observedBinding, preserveNativeModel: true as const };
     await fixture.bindingStore.mutate(identity, { kind: "set", binding });
 
-    expect(fixture.resolveOwnership({ sessionId: "session-successor" })).toBeUndefined();
+    expect(await fixture.resolveOwnership({ sessionId: "session-successor" })).toBeUndefined();
     expect(fixture.bindingStore.read(identity)).toEqual(binding);
   });
 
@@ -695,21 +730,21 @@ describe("Codex session runtime ownership", () => {
       kind: "set",
       binding: { ...observedBinding, preserveNativeModel: true },
     });
-    expect(fixture.resolveOwnership()).toEqual({
+    expect(await fixture.resolveOwnership()).toEqual({
       model: "native",
       auth: "host",
       modelRef: { provider: "native-provider", model: "native-model" },
     });
     await fixture.bindingStore.retireSessionGeneration(identity);
 
-    expect(fixture.resolveOwnership()).toBeUndefined();
+    expect(await fixture.resolveOwnership()).toBeUndefined();
   });
 
   it.each(["revoked", "disposed"] as const)(
     "refuses %s admission before reading private state",
     async (reason) => {
       const fixture = createOwnershipFixture();
-      const read = vi.spyOn(fixture.bindingStore, "read");
+      const read = vi.spyOn(fixture.bindingStore, "readAsync");
       if (reason === "disposed") {
         await fixture.harness.dispose?.();
       }
@@ -719,7 +754,7 @@ describe("Codex session runtime ownership", () => {
         }
       };
 
-      expect(() => fixture.resolveOwnership({ assertCurrent })).toThrow(
+      await expect(fixture.resolveOwnership({ assertCurrent })).rejects.toThrow(
         reason === "disposed" ? "harness is disposed" : "admission revoked",
       );
       expect(read).not.toHaveBeenCalled();
@@ -734,23 +769,25 @@ describe("Codex session runtime ownership", () => {
         kind: "set",
         binding: { ...observedBinding, preserveNativeModel: true },
       });
-      const readBinding = fixture.bindingStore.read.bind(fixture.bindingStore);
+      const readBinding = fixture.bindingStore.readAsync.bind(fixture.bindingStore);
       let current = true;
       const cleanup: { disposal?: Promise<void> } = {};
-      vi.spyOn(fixture.bindingStore, "read").mockImplementationOnce((requestedIdentity) => {
-        const binding = readBinding(requestedIdentity);
-        if (reason === "disposed") {
-          const disposal = fixture.harness.dispose?.();
-          if (disposal) {
-            cleanup.disposal = disposal;
+      vi.spyOn(fixture.bindingStore, "readAsync").mockImplementationOnce(
+        async (requestedIdentity) => {
+          const binding = await readBinding(requestedIdentity);
+          if (reason === "disposed") {
+            const disposal = fixture.harness.dispose?.();
+            if (disposal) {
+              cleanup.disposal = disposal;
+            }
+          } else {
+            current = false;
           }
-        } else {
-          current = false;
-        }
-        return binding;
-      });
+          return binding;
+        },
+      );
       try {
-        expect(() =>
+        await expect(
           fixture.resolveOwnership({
             assertCurrent() {
               if (!current) {
@@ -758,7 +795,7 @@ describe("Codex session runtime ownership", () => {
               }
             },
           }),
-        ).toThrow(reason === "disposed" ? "harness is disposed" : "admission revoked");
+        ).rejects.toThrow(reason === "disposed" ? "harness is disposed" : "admission revoked");
       } finally {
         if (cleanup.disposal) {
           await cleanup.disposal;

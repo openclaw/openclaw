@@ -128,7 +128,7 @@ export async function writeConfigFileFromContext(
     assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
   }
 
-  const topology = prepareConfigWriteTopology({
+  const topology = await prepareConfigWriteTopology({
     ...snapshotRead,
     nextConfig: configForWrite,
     options,

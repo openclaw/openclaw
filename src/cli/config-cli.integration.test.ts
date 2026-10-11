@@ -144,6 +144,11 @@ describe("config cli integration", () => {
           expect(result.errors).toEqual([
             { kind: "write-safety", message: expect.stringMatching(/size-drop:\d+->\d+/) },
           ]);
+          expect(result.errors[0].message).toContain("Correct the proposed update");
+          expect(result.errors[0].message).toContain("openclaw doctor --fix");
+          logs.length = 0;
+          await reject(run(...args, "--dry-run"));
+          expect(errors.join("\n")).toContain(result.errors[0].message);
         } else {
           expect(errors).toEqual([]);
         }

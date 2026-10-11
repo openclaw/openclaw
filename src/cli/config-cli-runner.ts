@@ -5,7 +5,10 @@ import { replaceConfigFile } from "../config/config.js";
 import { getDeferredPluginMigrationConfigFacts } from "../config/deferred-plugin-migration-config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { coerceConfig } from "../config/io.read-helpers.js";
-import { isConfigValidationFailedError } from "../config/io.write-errors.js";
+import {
+  createConfigWriteSafetyRejectionError,
+  isConfigValidationFailedError,
+} from "../config/io.write-errors.js";
 import { prepareConfigWriteValues } from "../config/io.write-prepare.js";
 import { previewConfigFileWriteSafety } from "../config/io.write-preview.js";
 import { prepareConfigWriteTopology } from "../config/io.write-topology.js";
@@ -457,7 +460,7 @@ export async function runConfigOperations(params: {
     previousEnv: preparedPreviousValues.resolutionEnv,
   };
   if (options.dryRun) {
-    const topology = prepareConfigWriteTopology({
+    const topology = await prepareConfigWriteTopology({
       snapshot,
       pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
       nextConfig: authoredNextConfig,
@@ -503,7 +506,7 @@ export async function runConfigOperations(params: {
     ) {
       let reasons: string[];
       try {
-        reasons = previewConfigFileWriteSafety({
+        reasons = await previewConfigFileWriteSafety({
           sourceConfig: authoredNextConfig,
           snapshot,
           writeOptions,
@@ -528,7 +531,7 @@ export async function runConfigOperations(params: {
         validation.result.errors = [
           {
             kind: "write-safety",
-            message: `Config write would be rejected (${reasons.join(", ")}). No settings were saved.`,
+            message: `Config write would be rejected (${reasons.join(", ")}). ${createConfigWriteSafetyRejectionError({ reasons }).message}`,
           },
         ];
       }
