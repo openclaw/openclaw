@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 // Control UI tests cover schema composition that changes field requiredness.
 import {
   renderAnalyzedFormFixture,
@@ -155,31 +155,35 @@ describe("config form composition integrity", () => {
 
     const onPatch = vi.fn();
     const container = document.createElement("div");
+    document.body.append(container);
+    onTestFinished(() => container.remove());
     renderAnalyzedFormFixture(container, analysis, {
       value: { retention: "30d", mode: "auto", plainMode: "auto" },
       onPatch,
     });
 
-    const modeControl = [
-      ...container.querySelectorAll<HTMLElement & { value: string }>(
-        "wa-radio-group.settings-segmented",
-      ),
-    ].find((group) => group.querySelector("[slot='label']")?.textContent === "Native Commands");
+    const modeControl = container.querySelector(
+      '.settings-segmented[role="radiogroup"][aria-label="Native Commands"]',
+    );
     expect(modeControl).not.toBeNull();
-    const modeOptions = [...(modeControl?.querySelectorAll("wa-radio") ?? [])];
-    // Web Awesome radios take their accessible names from their visible default-slot text.
+    const modeOptions = [...(modeControl?.querySelectorAll(".settings-segmented__btn") ?? [])];
     expect(modeOptions.map((option) => option.textContent?.trim())).toEqual(["On", "Off", "Auto"]);
-    expect(modeOptions.map((option) => option.getAttribute("value"))).toEqual(["0", "1", "2"]);
-    const plainModeControl = [...container.querySelectorAll("wa-radio-group")].find(
-      (group) => group.querySelector("[slot='label']")?.textContent === "Plain Mode",
+    expect(
+      modeOptions.map((option) => option.querySelector<HTMLInputElement>("input")?.value),
+    ).toEqual(["0", "1", "2"]);
+    const plainModeControl = container.querySelector(
+      '.settings-segmented[role="radiogroup"][aria-label="Plain Mode"]',
     );
     expect(
-      [...(plainModeControl?.querySelectorAll("wa-radio") ?? [])].map((option) =>
+      [...(plainModeControl?.querySelectorAll(".settings-segmented__btn") ?? [])].map((option) =>
         option.textContent?.trim(),
       ),
     ).toEqual(["auto", "manual"]);
-    modeControl!.value = "1";
-    modeControl!.dispatchEvent(new Event("change", { bubbles: true }));
+    const offOption = modeControl?.querySelector<HTMLInputElement>(
+      'input[type="radio"][value="1"]',
+    );
+    expect(offOption).not.toBeNull();
+    offOption!.click();
     expect(onPatch).toHaveBeenCalledWith(["mode"], false);
   });
 

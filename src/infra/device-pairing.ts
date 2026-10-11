@@ -95,12 +95,14 @@ export async function requestDevicePairing(
   req: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
   baseDir?: string,
   onPending?: (pairing: RequestDevicePairingResult) => void,
+  assertCurrent?: () => void,
 ): Promise<RequestDevicePairingResult> {
   return await withDevicePairingLock(async () => {
     const pairing = await executeDevicePairingMutation(
       { type: "devicePairing.request", input: { request: req, nowMs: Date.now() } },
-      { baseDir },
+      { baseDir, assertCurrent },
     );
+    assertCurrent?.();
     for (const superseded of pairing.superseded ?? []) {
       publishDevicePairingResolution(superseded, "superseded", baseDir);
     }
@@ -191,11 +193,12 @@ export async function updatePairedDeviceMetadata(
   deviceId: string,
   patch: Partial<PairedDeviceMetadataPatch>,
   baseDir?: string,
+  assertCurrent?: () => void,
 ): Promise<boolean> {
   return await withDevicePairingLock(() =>
     executeDevicePairingMutation(
       { type: "devicePairing.updateMetadata", input: { deviceId, patch } },
-      { baseDir },
+      { baseDir, assertCurrent },
     ),
   );
 }

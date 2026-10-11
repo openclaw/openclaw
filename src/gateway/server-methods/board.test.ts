@@ -19,6 +19,8 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
+import { makeClient } from "../server-broadcast.test-helpers.js";
 import {
   createBoardHarness as createHarness,
   createMcpAppDependencies,
@@ -119,11 +121,18 @@ describe("board gateway methods", () => {
 
   it("adds fresh frames from prepared metadata only for admitted widgets, starting the sandbox once", async () => {
     let sandboxPort: number | undefined;
+    const { client } = makeClient("board-viewer", "operator", ["operator.read", "operator.write"]);
     const ensureSandboxHostPort = vi.fn(async () => (sandboxPort = 18790));
-    const { put, grant, get, store } = widgetHarness(undefined, undefined, undefined, {
-      getMcpAppSandboxPort: () => sandboxPort,
-      ensureSandboxHostPort,
-    });
+    const { put, grant, get, store } = widgetHarness(
+      undefined,
+      undefined,
+      undefined,
+      {
+        getMcpAppSandboxPort: () => sandboxPort,
+        ensureSandboxHostPort,
+      },
+      client,
+    );
     await put(
       "status",
       { kind: "html", html: "status" },
@@ -181,11 +190,20 @@ describe("board gateway methods", () => {
     for (const name of ["app", "rejected"]) {
       expect(first.widgets.find((widget) => widget.name === name)).not.toHaveProperty("frameUrl");
     }
+    client.remoteControlUiIngress = createRemoteControlUiIngressTestContext();
     const second = await get();
     for (const name of ["plain", "status"]) {
-      expect(second.widgets.find((widget) => widget.name === name)?.frameUrl).not.toBe(
-        first.widgets.find((widget) => widget.name === name)?.frameUrl,
+      const widget = second.widgets.find((candidate) => candidate.name === name)!;
+      expect(widget.frameUrl).not.toBe(
+        first.widgets.find((candidate) => candidate.name === name)?.frameUrl,
       );
+      expect(new URL(widget.frameUrl!).origin).toBe("https://ui.example.test");
+      expect(new URL(widget.frameUrl!).pathname).toBe(
+        `/__openclaw__/board/agent%3Amain%3Amain/${name}/index.html`,
+      );
+      expect(widget.sandboxOrigin).toBe("https://sandbox.example.test");
+      expect(new URL(widget.sandboxUrl!).origin).toBe("https://sandbox.example.test");
+      expect(new URL(widget.sandboxUrl!).pathname).toBe("/mcp-app-sandbox");
     }
   });
 

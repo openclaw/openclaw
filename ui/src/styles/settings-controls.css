@@ -92,14 +92,6 @@
   border: 0;
 }
 
-wa-radio-group.settings-segmented::part(form-control-label) {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-}
-
 /* The parent selector also wins over the shared .btn hover/active chrome. */
 .settings-segmented > .settings-segmented__btn {
   display: inline-flex;

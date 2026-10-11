@@ -7,8 +7,8 @@ import type {
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { validatePluginStateComparison } from "./plugin-state-observation.js";
 import { createPluginStateOperation } from "./plugin-state-operation.js";
-import { validatePluginStateComparison } from "./plugin-state-store.comparison.js";
 import {
   preparePluginStateJournalValue,
   type PluginStateSequencedJournalParams,

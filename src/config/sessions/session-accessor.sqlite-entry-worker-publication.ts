@@ -315,6 +315,9 @@ export function retainSessionEntryWorkerPublication(params: {
             prepared: {
               source: record.receipt.source,
               entries: new Map([[record.sessionKey, entry]]),
+              ...(record.value.fullEntry && entry === record.value.entry
+                ? { fullEntries: new Map([[record.sessionKey, record.value.fullEntry]]) }
+                : {}),
             },
           });
           selected.push(change);

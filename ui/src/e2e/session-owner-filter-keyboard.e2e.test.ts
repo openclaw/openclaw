@@ -192,9 +192,14 @@ suite.define(() => {
       await chooseSidebarOwner(page, "owner:profile-0");
       await expectBrowser(owners).toHaveAccessibleName("Owners: Owner 1");
       const active = menu.getByRole("radio", { name: "Active", exact: true });
+      const snoozed = menu.getByRole("radio", { name: "Snoozed", exact: true });
       await active.focus();
+      await page.keyboard.press("ArrowLeft");
+      await expectBrowser(snoozed).toBeChecked();
+      await expectBrowser(snoozed).toBeFocused();
       await page.keyboard.press("ArrowRight");
-      await expectBrowser(menu.getByRole("radio", { name: "Snoozed", exact: true })).toBeChecked();
+      await expectBrowser(active).toBeChecked();
+      await expectBrowser(active).toBeFocused();
       await page.keyboard.press("Escape");
       await expectBrowser(menu).toHaveCount(0);
       await expectBrowser(

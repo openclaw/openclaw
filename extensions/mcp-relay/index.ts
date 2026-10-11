@@ -113,6 +113,8 @@ export default definePluginEntry({
           identity,
           relayUrl: config.relayUrl,
           gateway,
+          controlUiIngress: context.controlUiIngress,
+          config: () => api.runtime.config.current(),
           operations: createOperations({
             runtime: api.runtime,
             logger: api.logger,

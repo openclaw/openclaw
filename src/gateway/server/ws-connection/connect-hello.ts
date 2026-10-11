@@ -26,6 +26,7 @@ import {
   listControlUiLinkReaders,
   listControlUiPluginWidgetKinds,
 } from "../../control-ui-plugin-tabs.js";
+import { normalizeControlUiBasePath } from "../../control-ui-shared.js";
 import {
   broadcastSetupHandoffDeliveryUncertain,
   broadcastSetupHandoffCompletion,
@@ -38,6 +39,7 @@ import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
 import { operatorSessionCap } from "../../operator-role-policy.js";
 import { resolveBrowserAuthOrigin } from "../../provider-browser-auth.js";
+import { getRemoteControlUiIngressContext } from "../../remote-control-ui-context.js";
 import {
   MAX_BUFFERED_BYTES,
   MAX_PAYLOAD_BYTES,
@@ -146,7 +148,13 @@ export async function sendGatewayHello(
     scopes,
     buildRequestContext().getGatewayMethodRegistry?.(),
   );
-  const controlUiLocation = resolveControlUiLinkLocation(context.configSnapshot);
+  const ingress = getRemoteControlUiIngressContext(context.handler.upgradeReq);
+  const controlUiLocation = ingress
+    ? {
+        origin: ingress.publicOrigin,
+        basePath: normalizeControlUiBasePath(context.configSnapshot.gateway?.controlUi?.basePath),
+      }
+    : resolveControlUiLinkLocation(context.configSnapshot);
   // Gateway runtime provenance is independent of the UI artifact source.
   // Consumers use the source field to decide whether UI build comparison applies.
   const controlUiBuildSource = context.configSnapshot.gateway?.controlUi?.root

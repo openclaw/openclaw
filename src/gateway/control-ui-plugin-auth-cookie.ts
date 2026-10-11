@@ -4,7 +4,9 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { TLSSocket } from "node:tls";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import type { GatewayPluginReadCookieV1 } from "../plugins/gateway-ingress.types.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import {
   CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS,
   CONTROL_UI_PLUGIN_AUTH_PROBE_MESSAGE,
@@ -15,6 +17,10 @@ import { controlUiPluginAssetPrefix } from "./control-ui-plugin-assets-contract.
 import type { ControlUiPluginTabAuthGrant } from "./control-ui-plugin-tabs.js";
 import { isLocalDirectRequest, isLoopbackHost, resolveHostName } from "./net.js";
 import { isOperatorScope, type OperatorScope } from "./operator-scopes.js";
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./remote-control-ui-context.js";
 import { resolvePluginRoutePathContext } from "./server/plugins-http/path-context.js";
 
 // Cookies are hostname-scoped, never port-scoped. The suffix prevents trusted
@@ -23,6 +29,28 @@ import { resolvePluginRoutePathContext } from "./server/plugins-http/path-contex
 const CONTROL_UI_PLUGIN_AUTH_COOKIE_PREFIX = `__openclaw_plugin_tab_auth_${randomBytes(8).toString("hex")}`;
 const CONTROL_UI_PLUGIN_AUTH_COOKIE_SCOPE = "plugin-tab";
 const controlUiPluginAuthCookieSecret = randomBytes(32);
+
+/** Forward only this host process's core-issued read-cookie namespace; verification stays at its owner. */
+export function filterRemoteControlUiPluginReadCookies(header: string): string | undefined {
+  const prefix = `${CONTROL_UI_PLUGIN_AUTH_COOKIE_PREFIX}_`;
+  const cookies = header
+    .split(";")
+    .map((entry) => entry.trimStart())
+    .filter((entry) => {
+      const separator = entry.indexOf("=");
+      if (separator < 0) {
+        return false;
+      }
+      const name = entry.slice(0, separator);
+      const value = entry.slice(separator + 1);
+      return (
+        name.startsWith(prefix) &&
+        /^[a-f0-9]{64}$/.test(name.slice(prefix.length)) &&
+        /^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(value)
+      );
+    });
+  return cookies.length ? cookies.join("; ") : undefined;
+}
 
 type PluginAuthCookiePayload = {
   scope: typeof CONTROL_UI_PLUGIN_AUTH_COOKIE_SCOPE;
@@ -130,7 +158,28 @@ function createControlUiPluginAuthCookie(
   // cross-site for cookie purposes even when the panel URL is same-host.
   // CHIPS cannot be used here: its cross-site-ancestor key prevents nested
   // opaque frames from receiving the grant. HTTP auth limits it to safe reads.
-  return `${cookieNameForPlugin(grant.pluginId)}=v1.${encodedPayload}.${sig}; Path=${path}; HttpOnly;${secure ? " Secure;" : ""} SameSite=${isNativeAsset ? "Strict" : "None"}; Max-Age=${Math.ceil(CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS / 1000)}`;
+  const name = cookieNameForPlugin(grant.pluginId);
+  const value = `v1.${encodedPayload}.${sig}`;
+  const maxAgeSeconds = Math.ceil(CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS / 1000);
+  return {
+    serialized: `${name}=${value}; Path=${path}; HttpOnly;${secure ? " Secure;" : ""} SameSite=${isNativeAsset ? "Strict" : "None"}; Max-Age=${maxAgeSeconds}`,
+    metadata: {
+      name,
+      value,
+      path,
+      maxAgeSeconds,
+      kind: isNativeAsset ? "native-assets" : "iframe-read",
+    } satisfies GatewayPluginReadCookieV1,
+  };
+}
+
+const issuedReadCookies = new WeakMap<ServerResponse, readonly GatewayPluginReadCookieV1[]>();
+
+/** Only cookies signed and marked by the core read-grant owner can cross remote ingress. */
+export function readGatewayPluginReadCookies(
+  res: ServerResponse,
+): readonly GatewayPluginReadCookieV1[] {
+  return issuedReadCookies.get(res) ?? [];
 }
 
 export function setControlUiPluginAuthCookie(
@@ -138,14 +187,19 @@ export function setControlUiPluginAuthCookie(
   grants: readonly ControlUiPluginTabAuthGrant[],
   params: PluginAuthCookieOptions,
 ) {
+  assertRemoteControlUiIngressCurrent(
+    params.request ? getRemoteControlUiIngressContext(params.request) : undefined,
+  );
   const issuedGrants: ControlUiPluginTabAuthGrant[] = [];
+  const metadata: GatewayPluginReadCookieV1[] = [];
   const cookiesToAdd = grants.flatMap((grant) => {
     const cookie = createControlUiPluginAuthCookie(grant, params);
     if (!cookie) {
       return [];
     }
     issuedGrants.push(grant);
-    return [cookie];
+    metadata.push(Object.freeze(cookie.metadata));
+    return [cookie.serialized];
   });
   if (cookiesToAdd.length === 0) {
     return issuedGrants;
@@ -157,6 +211,7 @@ export function setControlUiPluginAuthCookie(
       ? [existing, ...cookiesToAdd]
       : cookiesToAdd;
   res.setHeader("Set-Cookie", cookies);
+  issuedReadCookies.set(res, Object.freeze([...readGatewayPluginReadCookies(res), ...metadata]));
   return issuedGrants;
 }
 
@@ -183,6 +238,8 @@ export function resolveControlUiPluginAuthCookieGrants(
     nowMs?: number;
   },
 ): ControlUiPluginTabAuthGrant[] {
+  const ingress = getRemoteControlUiIngressContext(req);
+  assertRemoteControlUiIngressCurrent(ingress);
   const now = asDateTimestampMs(params.nowMs ?? Date.now());
   if (now === undefined) {
     return [];
@@ -239,11 +296,14 @@ export function resolveControlUiPluginAuthCookieGrants(
       ) {
         continue;
       }
+      const scopes = payload.scopes.filter(isOperatorScope);
       const grant = {
         pluginId: payload.pluginId,
         path: payload.path,
         match: payload.match,
-        scopes: payload.scopes.filter(isOperatorScope),
+        scopes: ingress
+          ? ingress.operatorScopeCeiling.filter((scope) => operatorScopeSatisfied(scope, scopes))
+          : scopes,
         ...(payload.profileId ? { profileId: payload.profileId } : {}),
       };
       grants.push(grant);
@@ -263,6 +323,8 @@ export function respondControlUiPluginAuthCookieProbe(
   req: IncomingMessage,
   res: ServerResponse,
 ): boolean {
+  const ingress = getRemoteControlUiIngressContext(req);
+  assertRemoteControlUiIngressCurrent(ingress);
   const url = new URL(req.url ?? "/", "http://localhost");
   const nonce = url.searchParams.get(CONTROL_UI_PLUGIN_AUTH_PROBE_QUERY);
   if (nonce === null) {
@@ -285,7 +347,7 @@ export function respondControlUiPluginAuthCookieProbe(
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader(
     "Content-Security-Policy",
-    "default-src 'none'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'",
+    `default-src 'none'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors ${ingress ? [ingress.publicOrigin, ...ingress.frameAncestors].join(" ") : "'self'"}`,
   );
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("X-Content-Type-Options", "nosniff");

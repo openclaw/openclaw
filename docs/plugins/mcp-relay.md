@@ -3,6 +3,7 @@ summary: "Connect ChatGPT and Claude to your Gateway through the opt-in MCP rela
 read_when:
   - Connecting a remote MCP client to your OpenClaw Gateway
   - Pairing or revoking a ChatGPT or Claude connector
+  - Showing the full Control UI in ChatGPT
 title: "MCP Relay"
 ---
 
@@ -70,6 +71,60 @@ letter case do not matter. If a code expires, run `openclaw mcp-relay pair`
 again. Pairing requires a connected relay socket; check
 `openclaw mcp-relay status` if issuing a code fails.
 
+## Show the full Control UI in ChatGPT
+
+After pairing, open OpenClaw in ChatGPT to use your Gateway's full Control UI.
+There is no additional plugin configuration: HTTP and WebSocket traffic travel
+over the existing outbound relay connection. The Gateway can remain on a private
+network. The relay gives each grant separate HTTPS origins for the UI and its
+sandbox, and preserves the Gateway's configured Control UI base path.
+
+This requires a current Gateway and relay, with Gateway authentication set to
+**token** or **password** and no `gateway.roles` configuration. You do not paste
+the Gateway's shared token or password into ChatGPT. The browser signs the normal
+device challenge and becomes an ordinary paired device with `operator.read` and
+`operator.write` scopes. The embedded UI cannot administer the Gateway, approve
+commands, or resolve approval prompts; use your direct OpenClaw connection for
+those actions.
+
+Run `openclaw mcp-relay status` to see UI availability and any update guidance.
+Until the first launch, availability checks only whether the Gateway and relay
+support the tunnel. If Gateway authentication is unsupported, that first launch
+shows the configuration error inside the frame. Later launches use the built-in
+conversations view until a plugin restart or configuration reload clears the
+cached error. A Gateway or relay without tunnel support also keeps the built-in
+conversations view.
+
+The browser appears in the ordinary **Devices** list. To revoke its device token,
+use **Devices** through your direct OpenClaw connection, or
+`openclaw devices revoke --device <id> --role operator`. Revoking the MCP relay
+grant closes its UI path and active requests and sockets, but does not revoke
+ordinary device tokens or delete paired devices. Those tokens also work on the
+Gateway's direct listener at their issued read/write scopes; revoke the device
+token separately when needed.
+
+**The relay sees UI traffic in transit**, including device tokens and content.
+TLS protects each connection, but this is not end-to-end encryption against the
+relay. Only pair a client when you trust it and the relay with read/write access
+to your Gateway.
+
+The tunnel applies these limits per Gateway relay connection; stricter Gateway
+and endpoint limits still apply:
+
+| Resource                                            | Limit                              |
+| --------------------------------------------------- | ---------------------------------- |
+| Concurrent HTTP requests                            | 64                                 |
+| UI WebSockets, including pending opens              | 8                                  |
+| HTTP request body                                   | 16 MiB                             |
+| Raw payload per tunnel chunk                        | 512 KiB, within a 1 MiB JSON frame |
+| Queued response data and partial WebSocket messages | 32 MiB combined                    |
+| HTTP response-head wait                             | 60 seconds                         |
+| WebSocket-open wait                                 | 10 seconds                         |
+
+Oversized or stalled work fails explicitly. Disconnecting the relay closes its
+active requests and sockets. Sandbox-origin WebSocket opens are refused; the
+sandbox serves only its dedicated HTTP content.
+
 ## Available operations
 
 A paired client can inspect Gateway and agent status, list conversations with
@@ -94,21 +149,25 @@ run. It continues to report `running`; it never reports `waiting_for_approval`.
 If progress stalls, open the conversation in OpenClaw and check for an approval
 prompt.
 
-The relay cannot change Gateway configuration, approve commands, resolve agent
-approval prompts, or invoke arbitrary Gateway methods. Sending a message acts
-as the Gateway owner: the agent can take real actions under its own policies,
-and its approval prompts must still be answered in OpenClaw.
+The MCP conversation operations cannot change Gateway configuration, approve
+commands, resolve agent approval prompts, or invoke arbitrary Gateway methods.
+These restrictions remain when the full Control UI is available. Sending a
+message acts as the Gateway owner: the agent can take real actions under its own
+policies, and its approval prompts must still be answered through your direct
+OpenClaw connection.
 
 ## Data and authority
 
 The Gateway generates and persists its own Ed25519 identity in plugin-owned
 SQLite state. The relay receives the public key and a signed challenge, never
-a Gateway credential or the private key. Pairing-code hashes and client grants
-also live in plugin-owned SQLite state and survive Gateway restarts and updates.
+the configured Gateway token or password or the private key. Pairing-code hashes
+and client grants also live in plugin-owned SQLite state and survive Gateway
+restarts and updates.
 
 The Gateway authorizes each grant and checks it on every data operation. A
-grant is broad access to the operations above; it is not limited to a single
-conversation. Only pair clients you trust with those conversations.
+grant is broad access to the operations above and, when available, the read/write
+Control UI; it is not limited to a single conversation. Only pair clients you
+trust with that access.
 
 **This connection is not end-to-end encrypted.** TLS protects each network
 connection, but the relay sees request and response content in transit. The
@@ -147,5 +206,7 @@ the plugin.
 ## Related
 
 - [Manage plugins](/plugins/manage-plugins)
+- [Control UI](/web/control-ui)
+- [Devices](/cli/devices)
 - [Operator scopes](/gateway/operator-scopes)
 - [Gateway security](/gateway/security)

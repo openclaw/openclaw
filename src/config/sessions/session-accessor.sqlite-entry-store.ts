@@ -679,6 +679,8 @@ export function writeSessionEntry(
           owner: canonicalPreviousEntry?.owner,
         }),
       entryJson: persisted.entryJson,
+      snapshotEntry: canonicalEntry,
+      snapshots: persisted.snapshotsChanged ? persisted.snapshots : undefined,
       sideMetadata: structuredClone({
         owner: canonicalPreviousEntry?.owner,
         participants: canonicalPreviousEntry?.participants,

@@ -1,5 +1,37 @@
 import { createHash } from "node:crypto";
 import type { ServerResponse } from "node:http";
+import type { RemoteControlUiIngressContext } from "./remote-control-ui-context.js";
+
+/** The contextual host policy admits explicit secure origins and the supported embedding scheme. */
+export function validateRemoteControlUiFrameAncestors(
+  values: readonly string[],
+): readonly string[] {
+  if (!Array.isArray(values) || values.length > 16 || values.join(" ").length > 4096) {
+    throw new Error("Remote Control UI frame ancestors must contain at most 16 bounded origins");
+  }
+  for (const value of values) {
+    if (value === "codex-sandbox:") {
+      continue;
+    }
+    const origin = typeof value === "string" ? URL.parse(value) : null;
+    if (
+      !origin ||
+      origin.protocol !== "https:" ||
+      origin.origin !== value ||
+      (origin.hostname.includes("*") &&
+        !/^https:\/\/\*\.(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(
+          value,
+        )) ||
+      origin.username ||
+      origin.password
+    ) {
+      throw new Error(
+        "Remote Control UI frame ancestors must be exact HTTPS origins, https://*.<domain>, or codex-sandbox:",
+      );
+    }
+  }
+  return Object.freeze([...new Set(values)]);
+}
 
 const SCRIPT_ATTRIBUTE_NAME_RE = /\s([^\s=/>]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/g;
 
@@ -41,6 +73,7 @@ export function buildControlUiCspHeader(opts?: {
    * being enabled so the baseline Control UI CSP stays tight otherwise.
    */
   allowWasm?: boolean;
+  frameAncestors?: readonly string[];
 }): string {
   const hashes = opts?.inlineScriptHashes;
   const scriptTokens = ["'self'"];
@@ -78,7 +111,7 @@ export function buildControlUiCspHeader(opts?: {
     "default-src 'self'",
     "base-uri 'none'",
     "object-src 'none'",
-    "frame-ancestors 'none'",
+    `frame-ancestors ${opts?.frameAncestors?.length ? opts.frameAncestors.join(" ") : "'none'"}`,
     // Gateway selection can move to a remote dedicated MCP Apps origin after
     // this document loads. The component still validates the exact endpoint.
     "frame-src 'self' blob: http: https:",
@@ -92,9 +125,21 @@ export function buildControlUiCspHeader(opts?: {
   ].join("; ");
 }
 
-export function applyControlUiSecurityHeaders(res: ServerResponse) {
-  res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader("Content-Security-Policy", buildControlUiCspHeader());
+export function applyControlUiSecurityHeaders(
+  res: ServerResponse,
+  remote?: RemoteControlUiIngressContext,
+) {
+  remote?.signal.throwIfAborted();
+  remote?.assertCurrent();
+  if (remote?.frameAncestors.length) {
+    res.removeHeader("X-Frame-Options");
+  } else {
+    res.setHeader("X-Frame-Options", "DENY");
+  }
+  res.setHeader(
+    "Content-Security-Policy",
+    buildControlUiCspHeader({ frameAncestors: remote?.frameAncestors }),
+  );
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
   // Browser Talk is owned by this same-origin Control UI document. Keep camera

@@ -6,6 +6,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../../../config/paths.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { createRemoteControlUiIngressTestContext } from "../../remote-control-ui.test-support.js";
 import type { GatewayRequestOptions } from "../../server-methods/types.js";
 
 afterEach(() => {
@@ -59,9 +60,14 @@ describe("authenticated request completion", { concurrent: false }, () => {
     },
   );
 
-  it.for(["lazy import", "start scheduler"] as const)(
-    "rejects access revoked during %s before entering the handler",
-    async (stage, { signal }) => {
+  it.for([
+    ["lazy import", "operator"],
+    ["start scheduler", "operator"],
+    ["lazy import", "remote ingress"],
+    ["start scheduler", "remote ingress"],
+  ] as const)(
+    "rejects access revoked during %s (%s) before entering the handler",
+    async ([stage, source], { signal }) => {
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const grant = new AbortController();
@@ -89,12 +95,19 @@ describe("authenticated request completion", { concurrent: false }, () => {
         await import("./authenticated-request-dispatch.test-support.js");
       const harness = createDispatchTestHarness();
       const client = createOperatorWsClient({ socket: new EventEmitter() });
-      client.internal = {
-        operatorAccessAuthority: {
-          signal: grant.signal,
+      if (source === "operator") {
+        client.internal = {
+          operatorAccessAuthority: {
+            signal: grant.signal,
+            assertCurrent: () => grant.signal.throwIfAborted(),
+          },
+        };
+      } else {
+        client.remoteControlUiIngress = createRemoteControlUiIngressTestContext({
+          // Assert the live callback independently of AbortSignal delivery.
           assertCurrent: () => grant.signal.throwIfAborted(),
-        },
-      };
+        });
+      }
       const dispatch = harness.dispatcher.dispatch(
         { type: "req", id: "revoked", method: "test.lifetime", params: {} },
         client,

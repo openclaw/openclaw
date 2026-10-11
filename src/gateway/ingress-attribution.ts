@@ -10,6 +10,7 @@ import {
   resolveClientIp,
   resolveRequestClientIpFromHeaders,
 } from "./net.js";
+import type { RemoteControlUiIngressContext } from "./remote-control-ui-context.js";
 
 export const PROXY_ATTRIBUTION_REQUIRED_REASON = "proxy_attribution_required";
 export const PROXY_ATTRIBUTION_GUIDANCE =
@@ -29,6 +30,7 @@ export type GatewayTailscaleIngressEndpoint = {
 
 export type GatewayIngressTransport =
   | { kind: "ordinary" }
+  | { kind: "remote-forwarded"; context: RemoteControlUiIngressContext }
   | { kind: "managed-tailscale"; mode: GatewayTailscaleIngressMode };
 
 export type VerifiedTailscaleIngressIdentity = {
@@ -52,6 +54,7 @@ type AttributedGatewayIngress = {
 export type GatewayIngressAttribution =
   | (AttributedGatewayIngress & { kind: "direct-local" })
   | (AttributedGatewayIngress & { kind: "direct-remote" })
+  | (AttributedGatewayIngress & { kind: "remote-forwarded" })
   | (AttributedGatewayIngress & {
       kind: "trusted-proxy";
       /** Deny-only observation; this never grants managed Tailscale provenance. */
@@ -88,6 +91,9 @@ export function markGatewayIngressTransport(
   if (existing) {
     if (
       existing.kind !== transport.kind ||
+      (existing.kind === "remote-forwarded" &&
+        transport.kind === "remote-forwarded" &&
+        existing.context !== transport.context) ||
       (existing.kind === "managed-tailscale" &&
         transport.kind === "managed-tailscale" &&
         existing.mode !== transport.mode)
@@ -96,7 +102,16 @@ export function markGatewayIngressTransport(
     }
     return;
   }
-  requestTransport.set(req, transport);
+  if (preparedAttribution.has(req)) {
+    throw new Error("Gateway ingress policy already prepared before transport assignment");
+  }
+  requestTransport.set(req, Object.freeze({ ...transport }));
+}
+
+export function readGatewayIngressTransport(
+  req: IncomingMessage,
+): GatewayIngressTransport | undefined {
+  return requestTransport.get(req);
 }
 
 function unattributableProxy(remoteAddress: string): GatewayIngressAttribution {
@@ -213,6 +228,17 @@ function resolveGatewayIngressAttribution(params: {
     req.socket?.remoteAddress ??
     "unknown";
   const transport = requestTransport.get(req) ?? { kind: "ordinary" as const };
+
+  if (transport.kind === "remote-forwarded") {
+    return Object.freeze({
+      kind: "remote-forwarded",
+      clientIp: remoteAddress,
+      rateLimit: Object.freeze({
+        subject: Object.freeze({ key: `remote-control-ui:${transport.context.pluginId}` }),
+        resetOnSuccess: true as const,
+      }),
+    });
+  }
 
   if (transport.kind === "managed-tailscale") {
     return resolveManagedTailscaleIngress({

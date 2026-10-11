@@ -14,6 +14,11 @@ import {
   normalizeHostHeader,
   resolveHostName,
 } from "./net.js";
+import {
+  getRemoteControlUiIngressContext,
+  hasCurrentRemoteControlUiIngress,
+  type RemoteControlUiIngressContext,
+} from "./remote-control-ui-context.js";
 import type { GatewayWsBrowserOrigin } from "./server/client-identity-types.js";
 
 export function checkGatewayWsBrowserOrigin(origin: GatewayWsBrowserOrigin, cfg: OpenClawConfig) {
@@ -38,6 +43,7 @@ export type BrowserOriginPolicy = {
   fetchSite?: string;
   allowedOrigins?: string[];
   allowHostHeaderOriginFallback?: boolean;
+  remoteControlUiIngress?: RemoteControlUiIngressContext;
 };
 
 /** Gather the canonical Gateway browser-origin policy inputs for one HTTP request. */
@@ -46,6 +52,7 @@ export function resolveBrowserOriginPolicy(params: {
   cfg?: OpenClawConfig;
 }): BrowserOriginPolicy {
   return {
+    remoteControlUiIngress: getRemoteControlUiIngressContext(params.req),
     requestHost: getHeader(params.req, "host"),
     origin: getHeader(params.req, "origin"),
     fetchSite: getHeader(params.req, "sec-fetch-site"),
@@ -106,7 +113,14 @@ export function checkBrowserOrigin(params: {
   allowedOrigins?: string[];
   allowHostHeaderOriginFallback?: boolean;
   isLocalClient?: boolean;
+  remoteControlUiIngress?: RemoteControlUiIngressContext;
 }): OriginCheckResult {
+  if (params.remoteControlUiIngress) {
+    return hasCurrentRemoteControlUiIngress(params.remoteControlUiIngress) &&
+      params.origin === params.remoteControlUiIngress.publicOrigin
+      ? { ok: true, matchedBy: "allowlist" }
+      : { ok: false, reason: "remote Control UI origin missing, stale, or not an exact match" };
+  }
   const parsedOrigin = parseOrigin(params.origin);
   if (!parsedOrigin) {
     return { ok: false, reason: "origin missing or invalid" };

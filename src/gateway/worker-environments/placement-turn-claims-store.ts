@@ -206,6 +206,9 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
                   resultFacts,
                   previousState,
                   facts.placement,
+                  facts.projection
+                    ? { projection: facts.projection, conflictSessionIds: new Set() }
+                    : undefined,
                 )
               : stagePlacementWorkspaceResultWorkerPublication(
                   context.admission.identity,

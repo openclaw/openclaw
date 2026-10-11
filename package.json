@@ -867,6 +867,10 @@
     "./plugin-sdk/gateway-config-runtime": {
       "default": "./dist/plugin-sdk/gateway-config-runtime.js"
     },
+    "./plugin-sdk/gateway-ingress": {
+      "types": "./dist/plugin-sdk/gateway-ingress.d.ts",
+      "default": "./dist/plugin-sdk/gateway-ingress.js"
+    },
     "./plugin-sdk/gateway-method-runtime": {
       "types": "./dist/plugin-sdk/gateway-method-runtime.d.ts",
       "default": "./dist/plugin-sdk/gateway-method-runtime.js"

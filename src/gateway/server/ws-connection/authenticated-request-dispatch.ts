@@ -31,6 +31,7 @@ import {
   hasCurrentGatewayOperatorAccess,
 } from "../../operator-access-policy.js";
 import { onOperatorRolePolicyChanged } from "../../operator-role-policy.js";
+import { hasCurrentRemoteControlUiIngress } from "../../remote-control-ui-context.js";
 import { bindWebSocketRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
 import type { GatewayRequestEntry } from "../../server-request-entry.js";
 import { SharedGatewaySessionGenerationState } from "../../server-shared-auth-generation.js";
@@ -141,10 +142,26 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     const generationState = SharedGatewaySessionGenerationState.fromReader(
       getRequiredSharedGatewaySessionGeneration,
     );
+    const remoteIngress = client.remoteControlUiIngress;
+    const hasCurrentIngress = () => {
+      if (hasCurrentRemoteControlUiIngress(remoteIngress)) {
+        return true;
+      }
+      invalidateGatewayPolicyClient(client, {
+        reason: "remote-control-ui-ingress-closed",
+        code: 4001,
+        message: "remote Control UI ingress closed",
+        close: () => close(4001, "remote Control UI ingress closed"),
+      });
+      return false;
+    };
     const clientAuthority = captureGatewayDeviceRevocation(
       context,
       { deviceId: client.connect.device?.id, role: client.connect.role },
       () => {
+        if (!hasCurrentIngress()) {
+          return false;
+        }
         if (!hasCurrentGatewayOperatorAccess(client.internal?.operatorAccessAuthority)) {
           invalidateGatewayPolicyClient(client, {
             reason: "operator-access-closed",
@@ -186,10 +203,17 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
               sharedGeneration: client.usesSharedGatewayAuth
                 ? client.sharedGatewaySessionGeneration
                 : undefined,
+              authorityOwner: remoteIngress,
             },
             isCurrent: () =>
-              hasCurrentGatewayPolicyClientSource(client) && isCommittedGrantCurrent(),
+              hasCurrentIngress() &&
+              hasCurrentGatewayPolicyClientSource(client) &&
+              isCommittedGrantCurrent(),
             subscribe: (onRevoked) => {
+              remoteIngress?.signal.addEventListener("abort", onRevoked, { once: true });
+              if (remoteIngress?.signal.aborted) {
+                onRevoked();
+              }
               const releaseClient = onGatewayPolicyClientInvalidated(client, onRevoked);
               const releasePolicy = onOperatorRolePolicyChanged((change) => {
                 if (
@@ -208,6 +232,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                   )
                 : undefined;
               return () => {
+                remoteIngress?.signal.removeEventListener("abort", onRevoked);
                 releaseClient();
                 releasePolicy();
                 releaseGeneration?.();
@@ -369,7 +394,12 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
             client.connect.client.id === GATEWAY_CLIENT_IDS.CLI &&
             client.connect.client.mode === GATEWAY_CLIENT_MODES.CLI);
         const requestController = cancelOnDisconnect ? new AbortController() : undefined;
-        const accessSignal = client.internal?.operatorAccessAuthority?.signal;
+        const operatorAccessSignal = client.internal?.operatorAccessAuthority?.signal;
+        const accessSignal = remoteIngress
+          ? operatorAccessSignal
+            ? AbortSignal.any([remoteIngress.signal, operatorAccessSignal])
+            : remoteIngress.signal
+          : operatorAccessSignal;
         const signal = requestController
           ? accessSignal
             ? AbortSignal.any([requestController.signal, accessSignal])

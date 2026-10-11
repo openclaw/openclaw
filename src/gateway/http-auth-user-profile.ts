@@ -29,6 +29,10 @@ import {
 import type { GatewayOperatorAccessAuthority } from "./operator-access-policy.types.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import { resolveBrowserOriginPolicy } from "./origin-check.js";
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./remote-control-ui-context.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -124,18 +128,25 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
   req: IncomingMessage;
   res?: ServerResponse;
 }): Promise<AuthenticatedHttpUserProfile> {
+  const ingress = getRemoteControlUiIngressContext(params.req);
   const readAdmissionPolicy = (cfg: OpenClawConfig) => {
+    // Snapshot policy facts; service authority retains live closures and is checked separately.
+    const { remoteControlUiIngress: _ingress, ...browserOrigin } = resolveBrowserOriginPolicy({
+      req: params.req,
+      cfg,
+    });
     return {
       // HTTP admission never consumes WebSocket identity grants.
       auth: { ...cfg.gateway?.auth, identityScopes: undefined },
       roles: cfg.gateway?.roles,
       trustedProxies: cfg.gateway?.trustedProxies,
       allowRealIpFallback: cfg.gateway?.allowRealIpFallback,
-      browserOrigin: resolveBrowserOriginPolicy({ req: params.req, cfg }),
+      browserOrigin,
     };
   };
   const admissionPolicy = structuredClone(readAdmissionPolicy(params.cfg));
   const assertCurrent = () => {
+    assertRemoteControlUiIngressCurrent(ingress);
     if (
       params.req.aborted ||
       params.req.socket?.destroyed ||

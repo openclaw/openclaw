@@ -143,22 +143,14 @@ suite.define(() => {
         await gateway.waitForRequest("config.get");
 
         const row = settingsRow(page, "Collapse task progress by default on desktop");
-        const toggle = row.locator("wa-switch");
+        const toggle = row.getByRole("switch");
         await row.scrollIntoViewIfNeeded();
-        await expect
-          .poll(() =>
-            toggle.evaluate((element) => Boolean((element as { checked?: boolean }).checked)),
-          )
-          .toBe(false);
+        await expect.poll(() => toggle.isChecked()).toBe(false);
         await expect.poll(() => row.textContent()).not.toContain("Using default:");
         await captureViewport(page, "11-task-progress-collapse-off.png");
 
         await row.click();
-        await expect
-          .poll(() =>
-            toggle.evaluate((element) => Boolean((element as { checked?: boolean }).checked)),
-          )
-          .toBe(true);
+        await expect.poll(() => toggle.isChecked()).toBe(true);
         await expect
           .poll(() => readPersistedSettings(page))
           .toMatchObject({
@@ -217,13 +209,13 @@ suite.define(() => {
       const colorModeRow = settingsRow(page, "Color mode");
       const textSizeSection = page.locator("#settings-appearance-text-size");
       const languageSelect = languageRow.locator("wa-select");
-      const colorModeGroup = colorModeRow.locator("wa-radio-group");
+      const colorModeGroup = colorModeRow.getByRole("radiogroup");
 
       await expect.poll(() => selectValue(languageSelect)).toBe("en");
       await expect
         .poll(() => themeSection.locator(".settings-theme-card--knot").getAttribute("aria-pressed"))
         .toBe("true");
-      await expect.poll(() => selectValue(colorModeGroup)).toBe("dark");
+      await expect.poll(() => colorModeGroup.locator("input:checked").inputValue()).toBe("dark");
       await expect
         .poll(() =>
           textSizeSection
@@ -275,7 +267,7 @@ suite.define(() => {
       await resetSyncedPreference({
         click: () =>
           colorModeRow
-            .locator('wa-radio[value="system"]')
+            .getByRole("radio", { name: "System", exact: true })
             .click()
             .then(() => undefined),
         expectedKey: "themeMode",
@@ -291,7 +283,7 @@ suite.define(() => {
       await expect
         .poll(() => themeSection.locator(".settings-theme-card--claw").getAttribute("aria-pressed"))
         .toBe("true");
-      await expect.poll(() => selectValue(colorModeGroup)).toBe("system");
+      await expect.poll(() => colorModeGroup.locator("input:checked").inputValue()).toBe("system");
       await expect
         .poll(() =>
           textSizeSection
@@ -316,7 +308,9 @@ suite.define(() => {
         )
         .toBe("true");
       await expect
-        .poll(() => selectValue(reloadedColorModeRow.locator("wa-radio-group")))
+        .poll(() =>
+          reloadedColorModeRow.getByRole("radiogroup").locator("input:checked").inputValue(),
+        )
         .toBe("system");
       await expect
         .poll(() =>

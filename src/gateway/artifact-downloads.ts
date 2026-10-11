@@ -16,6 +16,10 @@ import {
   encodeImageThumbnail,
   resolveManagedImageThumbnail,
 } from "./managed-image-thumbnail-cache.js";
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./remote-control-ui-context.js";
 import type { GatewayClient } from "./server-methods/types.js";
 
 /** The RPC chooses and authorizes the resource; HTTP never accepts a replacement query. */
@@ -46,8 +50,10 @@ export async function handleArtifactDownloadHttpRequest(
     respondNotFound(res);
     return true;
   }
-  const assertCurrent = () =>
+  const assertCurrent = () => {
+    assertRemoteControlUiIngressCurrent(getRemoteControlUiIngressContext(req));
     assertArtifactDownloadGrantCurrent(opts.clients, client, ticket, grant);
+  };
   let prepared: ArtifactDownloadResponse | undefined;
   const thumbnail = grant.image && url.searchParams.get("variant") === "thumbnail";
   try {

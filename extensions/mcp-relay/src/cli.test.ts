@@ -77,6 +77,21 @@ describe("MCP relay CLI", () => {
     expect(output).toContain("consent page");
   });
 
+  it.each([
+    { ui: { available: true, basePath: "/control" }, line: "Control UI: available (/control)" },
+    {
+      ui: { available: false, reason: "Update the relay." },
+      line: "Control UI: unavailable — Update the relay.",
+    },
+  ])("prints UI availability in human status: $line", async ({ ui, line }) => {
+    mocks.callGatewayFromCli.mockResolvedValue({ connected: true, ui });
+    await runCli(["status"]);
+    expect(mocks.log).toHaveBeenCalledWith(line);
+    mocks.log.mockClear();
+    await runCli(["status", "--json"]);
+    expect(mocks.log).not.toHaveBeenCalled();
+  });
+
   it("reports Gateway failures with recovery instructions and a failing exit", async () => {
     mocks.callGatewayFromCli.mockRejectedValue(new Error("Gateway offline."));
     await runCli(["pair", "--json"]);

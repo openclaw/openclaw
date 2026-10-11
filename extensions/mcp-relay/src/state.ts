@@ -139,6 +139,8 @@ export class RelayState {
   readonly #relayOrigin: string;
   readonly #assertCurrent: () => void;
   readonly #now: () => number;
+  readonly #activeGrants = new Set<string>();
+  #updates: Promise<void> = Promise.resolve();
 
   constructor(
     runtime: Pick<PluginRuntime, "state">,
@@ -194,6 +196,7 @@ export class RelayState {
         } catch {
           throw stateError();
         }
+        this.#publishGrants(record);
         return { privateKey: record.privateKey };
       }
       candidate ??= {
@@ -211,6 +214,7 @@ export class RelayState {
         value: candidate,
       });
       if (result.status !== "conflict") {
+        this.#publishGrants(candidate);
         return { privateKey: candidate.privateKey };
       }
       observation = result.current;
@@ -221,18 +225,58 @@ export class RelayState {
     decide: (record: RelayRecord) => { value?: RelayRecord; result: T },
     assertOperationCurrent?: () => void,
   ): Promise<T> {
+    // Publish grant authority in the same order as this owner's durable mutations.
+    const update = this.#updates.then(() => this.#applyUpdate(decide, assertOperationCurrent));
+    this.#updates = update.then(
+      () => {},
+      () => {},
+    );
+    return update;
+  }
+
+  #publishGrants(record: RelayRecord): void {
+    this.#activeGrants.clear();
+    for (const grant of record.grants) {
+      if (grant.revokedAt === undefined) {
+        this.#activeGrants.add(grant.grantId);
+      }
+    }
+  }
+
+  assertGrantCurrent(grantId: string): void {
+    this.#assertCurrent();
+    if (!this.#activeGrants.has(grantId)) {
+      throw new RelayError(
+        "grant_revoked",
+        "This connection was revoked. Run openclaw mcp-relay pair and connect again.",
+      );
+    }
+  }
+
+  async #applyUpdate<T>(
+    decide: (record: RelayRecord) => { value?: RelayRecord; result: T },
+    assertOperationCurrent?: () => void,
+  ): Promise<T> {
     const store = this.#currentStore(assertOperationCurrent);
     let observation = await store.observe(RECORD_KEY);
     for (;;) {
-      const decision = decide(this.#record(observation.value));
-      const result = await store.compareAndApply(
-        RECORD_KEY,
-        observation.comparison,
-        decision.value
-          ? { operation: "update", action: "set", value: decision.value }
-          : { operation: "update", action: "keep" },
-      );
+      const record = this.#record(observation.value);
+      const decision = decide(record);
+      const result = await store
+        .compareAndApply(
+          RECORD_KEY,
+          observation.comparison,
+          decision.value
+            ? { operation: "update", action: "set", value: decision.value }
+            : { operation: "update", action: "keep" },
+        )
+        .catch((error: unknown) => {
+          // An uncertain write may have revoked a grant. Fail closed until a successful reread.
+          this.#activeGrants.clear();
+          throw error;
+        });
       if (result.status !== "conflict") {
+        this.#publishGrants(decision.value ?? record);
         return decision.result;
       }
       observation = result.current;

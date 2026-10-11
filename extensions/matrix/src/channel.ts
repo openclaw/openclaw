@@ -373,7 +373,7 @@ const matrixChannelOutbound: ChannelOutboundAdapter = {
     },
   },
   presentationCapabilities: matrixPresentationCapabilities,
-  shouldSuppressLocalPayloadPrompt: shouldSuppressLocalMatrixExecApprovalPrompt,
+  shouldSuppressLocalPayloadPromptAsync: shouldSuppressLocalMatrixExecApprovalPrompt,
   ...createRuntimeOutboundDelegates({
     getRuntime: loadMatrixChannelRuntime,
     renderPresentation: {

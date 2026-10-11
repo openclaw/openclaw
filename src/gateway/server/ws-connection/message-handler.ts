@@ -1,4 +1,5 @@
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import {
   asOptionalObjectRecord,
   readStringField,
@@ -43,6 +44,10 @@ import { isWebchatClient } from "../../../utils/message-channel.js";
 import { isLocalishHost, isLoopbackAddress } from "../../net.js";
 import { resolveNodePairingClientIpSource } from "../../node-pairing-auto-approve.js";
 import {
+  assertRemoteControlUiIngressCurrent,
+  getRemoteControlUiIngressContext,
+} from "../../remote-control-ui-context.js";
+import {
   MAX_PREAUTH_PAYLOAD_BYTES,
   MAX_QUEUED_GATEWAY_PREAUTH_FRAMES,
 } from "../../server-constants.js";
@@ -75,6 +80,7 @@ function claimsWorkerConnectionIdentity(value: unknown): boolean {
 }
 
 export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerParams) {
+  const remoteIngress = getRemoteControlUiIngressContext(params.upgradeReq);
   let waitingForPairing = false;
   const {
     socket,
@@ -102,12 +108,18 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
 
   const sendFrame = async (obj: unknown): Promise<void> =>
     await new Promise<void>((resolve, reject) => {
+      assertRemoteControlUiIngressCurrent(remoteIngress);
       socket.send(JSON.stringify(obj), (err) => {
         if (err) {
           reject(err);
           return;
         }
-        resolve();
+        try {
+          assertRemoteControlUiIngressCurrent(remoteIngress);
+          resolve();
+        } catch (error) {
+          reject(toErrorObject(error, "Remote Control UI authority changed during send"));
+        }
       });
     });
 
@@ -163,11 +175,12 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
   const runDetachedConnectWork = (run: () => Promise<void>, onError: (error: unknown) => void) => {
     // Connect-triggered mutations outlive hello-ok. Give each tail its own
     // root lease so suspension cannot report ready while one is still active.
-    void params.connectionWork
+    const work = params.connectionWork
       .track(() =>
         runWithGatewayIndependentRootWorkAdmission(run, "ws:preauth", params.connectionWork.signal),
       )
       .catch(onError);
+    void remoteIngress?.trackWork(work);
   };
 
   const rejectOversizedPreauthFrame = (data: GatewayConnectionFrame): boolean => {
@@ -348,6 +361,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             origin: requestOrigin,
             isLocalClient,
             enforceOriginCheckForAnyClient,
+            remoteControlUiIngress: getRemoteControlUiIngressContext(params.upgradeReq),
           }),
           browserRateLimitClientIp,
           authRateLimiter,
@@ -368,14 +382,17 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           releasePendingNodePairingCleanup,
         } satisfies GatewayConnectPhaseContext;
         const authenticated = await authenticateGatewayConnect(phaseContext);
+        assertRemoteControlUiIngressCurrent(remoteIngress);
         if (!authenticated) {
           return;
         }
         const deviceAuthorized = await authorizeGatewayConnectDevice(phaseContext, authenticated);
+        assertRemoteControlUiIngressCurrent(remoteIngress);
         if (!deviceAuthorized) {
           return;
         }
         await attachAuthenticatedGatewayConnect(phaseContext, deviceAuthorized);
+        assertRemoteControlUiIngressCurrent(remoteIngress);
         runDetachedConnectWork(
           () => publishConnectModelCatalog(params, authenticatedRequestDispatcher),
           (error) =>
@@ -518,7 +535,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       onSettled?.();
       return;
     }
-    void params.connectionWork
+    const work = params.connectionWork
       .track(() =>
         runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
           handleIncomingMessage(data, admission),
@@ -528,6 +545,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         logGateway.error(`request dispatch failed conn=${connId}: ${formatForLog(error)}`);
       })
       .finally(onSettled);
+    void remoteIngress?.trackWork(work);
   };
 
   let queuedHandshakeFrames: GatewayConnectionFrame[] | undefined;
@@ -543,6 +561,12 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
   }
 
   const onMessage = (data: GatewayConnectionFrame): void => {
+    try {
+      assertRemoteControlUiIngressCurrent(remoteIngress);
+    } catch {
+      close(1008, "remote Control UI ingress closed");
+      return;
+    }
     if (isClosed()) {
       return;
     }

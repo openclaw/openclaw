@@ -205,6 +205,7 @@ function isMatrixAccountConfigured(
   return prepared.hasHomeserver && (prepared.hasConfiguredAuth || hasStored);
 }
 
+/** @deprecated Use resolveMatrixAccountAsync; removed in the next Plugin SDK major. */
 export function resolveMatrixAccount(params: {
   cfg: CoreConfig;
   accountId?: string | null;

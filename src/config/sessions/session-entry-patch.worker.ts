@@ -6,6 +6,7 @@ import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.
 import type { AgentDatabaseAdmissionRestriction } from "../../state/openclaw-agent-execution-domain.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { captureTrajectoryRuntimeRetentionMetadataMutation } from "../../trajectory/runtime-retention.sqlite.js";
+import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import {
   applySessionEntryPatchInDatabase,
   writeSessionEntryPatchInDatabase,
@@ -14,7 +15,10 @@ import {
   readLifecycleTargetSnapshot,
   readSessionEntrySelectionSnapshot,
 } from "./session-accessor.sqlite-entry-store.js";
-import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import {
+  boundSessionEntryReplacementPublication,
+  prepareSessionEntryReplacementPublication,
+} from "./session-accessor.sqlite-replacement-state.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 import { readSessionEntryPatchPredicate } from "./session-entry-patch-guard.js";
 import {
@@ -28,6 +32,7 @@ import type {
   SessionEntryPatchReduction,
   SessionEntryPatchSelection,
 } from "./session-entry-patch.types.js";
+import { sealSessionEntryPublicationSource } from "./session-entry-publication-source.js";
 import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
 import { readSessionPendingInputAuthorityFactsInTransaction } from "./session-pending-input-authority.kernel.js";
 import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
@@ -198,6 +203,7 @@ export function commitSessionEntryPatch(
               maintenancePlans: [],
             },
             database,
+            { captureFullFacts: true },
           )
         : undefined;
       // Publish after every patch-owned write, including commit-receipt preparation.
@@ -221,24 +227,30 @@ export function commitSessionEntryPatch(
 export function transferSessionEntryWorkerCandidate(
   database: OpenClawAgentDatabase,
   admit: AgentWorkerOperationContext["admit"],
-  result: { kind: string },
+  result: { kind: string; publication?: SessionEntryReplacementPublication },
 ): SessionEntryPatchReceipt;
 export function transferSessionEntryWorkerCandidate<Receipt>(
   database: OpenClawAgentDatabase,
   admit: AgentWorkerOperationContext["admit"],
-  result: { kind: string },
+  result: { kind: string; publication?: SessionEntryReplacementPublication },
   wrapReceipt: (receipt: SessionEntryPatchReceipt) => Receipt,
 ): Receipt;
 export function transferSessionEntryWorkerCandidate<Receipt>(
   database: OpenClawAgentDatabase,
   admit: AgentWorkerOperationContext["admit"],
-  result: { kind: string },
+  result: { kind: string; publication?: SessionEntryReplacementPublication },
   wrapReceipt?: (receipt: SessionEntryPatchReceipt) => Receipt,
 ): SessionEntryPatchReceipt | Receipt {
   // Deliver the exact candidate before COMMIT; the small native receipt certifies it afterward.
   const transfer = createSqliteWorkerTransferOwner();
   const transcriptPublication = readStagedSessionTranscriptAuthority(database);
   const candidate = transcriptPublication ? { ...result, transcriptPublication } : result;
+  if (result.publication) {
+    if (result.publication.source && result.publication.fullEntries?.size) {
+      sealSessionEntryPublicationSource(result.publication.source);
+    }
+    boundSessionEntryReplacementPublication(result.publication, candidate);
+  }
   const handle = transfer.start([{ kind: "patch", value: candidate }].values(), {
     kinds: ["patch"],
   });

@@ -5046,5 +5046,9 @@
   {
     "source": "mcp-relay",
     "target": "mcp-relay"
+  },
+  {
+    "source": "Remote Control UI ingress",
+    "target": "远程 Control UI 入口"
   }
 ]

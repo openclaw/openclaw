@@ -128,6 +128,7 @@ export function createBoardHandlers(
   return {
     "board.get": defineBoardMethod("board.get", validateBoardGetParams, async (invocation) => {
       const { params: boardParams, respond, context, client } = invocation;
+      const ingress = client?.remoteControlUiIngress;
       const authority = captureBoardRequestAuthority(invocation);
       const boardSession = resolveBoardSession(boardParams, context, respond);
       if (!boardSession) {
@@ -191,6 +192,9 @@ export function createBoardHandlers(
           name: widget.name,
           ticket,
         });
+        if (ingress) {
+          widget.frameUrl = new URL(widget.frameUrl, ingress.publicOrigin).href;
+        }
         widget.viewTicket = ticket;
         widget.viewTicketTtlMs = BOARD_VIEW_TICKET_TTL_MS;
         widget.viewGeneration = viewMetadata.viewGeneration;
@@ -199,9 +203,13 @@ export function createBoardHandlers(
             ...viewMetadata,
             ...(resourceOrigins ? { resourceOrigins } : {}),
           });
+          if (ingress) {
+            widget.sandboxUrl = new URL(widget.sandboxUrl, ingress.sandboxOrigin).href;
+          }
           widget.sandboxPort = sandboxPort;
           if (sandboxOrigin === null) {
-            const configuredOrigin = context.getRuntimeConfig?.().mcp?.apps?.sandboxOrigin;
+            const configuredOrigin =
+              ingress?.sandboxOrigin ?? context.getRuntimeConfig?.().mcp?.apps?.sandboxOrigin;
             sandboxOrigin = configuredOrigin ? new URL(configuredOrigin).origin : undefined;
           }
           if (sandboxOrigin) {

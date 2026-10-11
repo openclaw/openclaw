@@ -30,7 +30,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { resolveCommandAuthorization } from "../command-auth.js";
+import { resolveCommandAuthorizationAsync } from "../command-auth.js";
 import {
   type AbortCutoff,
   resolveAbortCutoffFromContext,
@@ -233,7 +233,7 @@ export async function executeFastAbortRequest(
   const { ctx, cfg } = params;
   const { commandSessionKey, targetKey, resolveTargetAgentId } = request;
 
-  const auth = resolveCommandAuthorization({
+  const auth = await resolveCommandAuthorizationAsync({
     ctx,
     cfg,
     commandAuthorized: ctx.CommandAuthorized,

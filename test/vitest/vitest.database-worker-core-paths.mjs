@@ -927,6 +927,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugins/official-external-plugin-catalog-snapshot-store.worker.test.ts",
   "src/plugins/official-external-plugin-catalog.test.ts",
   "src/infra/device-pairing.test.ts",
+  "src/infra/device-pairing.ingress-approval.test.ts",
   "src/infra/device-bootstrap.test.ts",
   "src/infra/device-bootstrap.worker.test.ts",
   "src/infra/device-pairing-approval-policy.test.ts",

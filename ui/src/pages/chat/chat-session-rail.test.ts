@@ -345,7 +345,7 @@ describe("ChatSessionRailElement", () => {
     const empty = element.querySelector("openclaw-panel-empty-state");
     await empty?.updateComplete;
 
-    expect(empty?.shadowRoot?.querySelector(".empty-state__title")?.textContent).toBe("Side chat");
+    expect(empty?.querySelector(".empty-state__title")?.textContent).toBe("Side chat");
     expect(empty?.querySelector("svg")).not.toBeNull();
   });
 

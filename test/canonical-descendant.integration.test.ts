@@ -47,10 +47,11 @@ import { seedAttachedPlacementEnvironment } from "../src/gateway/worker-environm
 import { readCodexSessionTranscriptEventsBeforeAdmission } from "../src/plugin-sdk/codex-session-transcript-runtime.js";
 import { appendSessionTranscriptMessagesByIdentity } from "../src/plugin-sdk/session-transcript-runtime.js";
 import {
-  createPluginStateKeyedStore,
+  createPluginStateKeyedStoreV2,
   createPluginStateSyncKeyedStore,
   type OpenAsyncKeyedStoreOptions,
   type OpenKeyedStoreOptions,
+  type PluginStateActionAuthority,
 } from "../src/plugin-state/plugin-state-store.js";
 import { createRuntimePluginManifestLookup } from "../src/plugins/active-runtime-registry.js";
 import { resolvePluginCapabilityCatalogContext } from "../src/plugins/loader-runtime-load.js";
@@ -205,8 +206,11 @@ async function withFixture(
       agent: createRuntimeAgent(),
       config: { current: () => config },
       state: {
-        openKeyedStore: <T>(storeOptions: OpenAsyncKeyedStoreOptions) =>
-          createPluginStateKeyedStore<T>("codex", { ...storeOptions, env: state.env }),
+        openKeyedStoreV2: <T>(
+          storeOptions: OpenAsyncKeyedStoreOptions,
+          authority: PluginStateActionAuthority = { assertCurrent() {} },
+        ) =>
+          createPluginStateKeyedStoreV2<T>("codex", { ...storeOptions, env: state.env }, authority),
         openSyncKeyedStore: <T>(storeOptions: OpenKeyedStoreOptions) =>
           createPluginStateSyncKeyedStore<T>("codex", { ...storeOptions, env: state.env }),
       },

@@ -18,8 +18,100 @@ import { recordSessionParticipant } from "./session-accessor.sqlite-participants
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
-import { addSessionMember } from "./session-sharing-store.native.js";
+import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
 import { projectionLane } from "./session-transcript-worker-resources.js";
+
+it("reads cold entry, participant and membership facts in one statement without a transaction", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const sessionKey = "agent:main:fused";
+    const scope = { agentId: "main", env, storePath: database.path, sessionKey };
+    replaceSessionEntrySync(scope, {
+      sessionId: "fused",
+      updatedAt: 1,
+      skillsSnapshot: { prompt: "cold prompt", skills: [] },
+    });
+    const contribution = {
+      identity: { type: "agent" as const, id: "participant" },
+      sessionAgentId: "main",
+      promptedAt: 2,
+    };
+    recordSessionParticipant(scope, contribution);
+    addSessionMember(scope, { identityId: "member", addedBy: "owner", addedAt: 3 });
+    const operations = await loadAgentEntryReadOperations();
+    const context: AgentWorkerOperationContext = {
+      open: () => database,
+      options: { agentId: "main", path: database.path, env },
+      admit: () => {},
+      writeTransaction: () => {
+        throw new Error("A fact read cannot write");
+      },
+    };
+    const read = (snapshotFields?: SessionEntryCohortRequest["snapshotFields"]) =>
+      operations["session.entry.read"](
+        {
+          sessionKeys: [sessionKey, "agent:main:absent"],
+          snapshotFields,
+          includeMembers: true,
+          includeParticipantRecords: true,
+        },
+        context,
+      );
+    const statements = trackSqliteStatementExecutions(database.db, ["all"], () => "all");
+    const transactions = vi.spyOn(database.db, "exec");
+    try {
+      const first = read();
+      expect(statements.counts.all).toBe(1);
+      expect(transactions).not.toHaveBeenCalled();
+      expect(first.entries).toMatchObject([
+        {
+          sessionKey,
+          entry: {
+            sessionId: "fused",
+            skillsSnapshot: { prompt: "cold prompt" },
+            participants: [{ identity: contribution.identity }],
+            participantCount: 1,
+          },
+        },
+      ]);
+      expect(first.members).toEqual({
+        [sessionKey]: [{ identityId: "member", addedBy: "owner", addedAt: 3 }],
+      });
+      expect(first.participantRecords).toEqual({
+        [sessionKey]: [
+          {
+            identity: contribution.identity,
+            contributionCount: 1,
+            firstPromptedAt: 2,
+            lastPromptedAt: 2,
+          },
+        ],
+      });
+      expect(first.source.databaseIdentity).toBe(first.databaseIdentity.identity);
+      statements.counts.all = 0;
+      expect(read([]).entries[0]?.entry.skillsSnapshot).toBeUndefined();
+      expect(statements.counts.all).toBe(1);
+      recordSessionParticipant(scope, { ...contribution, promptedAt: 4 });
+      removeSessionMember(scope, "member");
+      statements.counts.all = 0;
+      transactions.mockClear();
+      const next = read();
+      expect(next.members).toEqual({ [sessionKey]: [] });
+      expect(next.participantRecords?.[sessionKey]).toMatchObject([
+        { contributionCount: 2, firstPromptedAt: 2, lastPromptedAt: 4 },
+      ]);
+      expect(statements.counts.all).toBe(1);
+      expect(transactions).not.toHaveBeenCalled();
+      database.db
+        .prepare("UPDATE session_participants SET contribution_count = ? WHERE session_key = ?")
+        .run(9_007_199_254_740_992n, sessionKey);
+      expect(read).toThrow("cannot be represented safely");
+    } finally {
+      transactions.mockRestore();
+      statements.restore();
+    }
+  });
+});
 
 it("prepares bounded facts on one admitted source and refreshes after sibling and local writes without probes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {

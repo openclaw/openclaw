@@ -49,6 +49,7 @@ import {
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
 import {
+  assertMemorySessionNotForgotten,
   retainIndexedSessionChunks,
   type PreparedMemoryIndexEntry,
 } from "./manager-session-delta.js";
@@ -535,21 +536,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
           throw new Error("Memory source owner changed before replacement");
         }
       };
-      if (session) {
-        // Forget shares this cross-process lock. The prepared predicate remains
-        // current through native commit only while this lock and original owner
-        // stay retained; a shadow's empty tombstone table cannot authorize it.
-        const predicate = await sourceDatabase.read(
-          { type: "session.current", input: session },
-          assertCurrent,
-        );
-        assertCurrent();
-        if (predicate === "forgotten") {
-          this.markFailedFullReindexRetry({ memory: false, sessions: true });
-          throw new Error(
-            "A session was forgotten while memory indexing was running; retry the memory index.",
-          );
-        }
+      if (session && database !== sourceDatabase) {
+        // The workspace lock keeps the published predicate current through the shadow commit.
+        await assertMemorySessionNotForgotten(sourceDatabase, session, assertCurrent);
       }
       const createReplacement = (): MemorySourceIndexReplacement => ({
         entry: { path: entry.path, hash: entry.hash, mtimeMs: entry.mtimeMs, size: entry.size },
@@ -599,6 +588,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         warn: (message) => log.warn(message),
       });
       return published.retainedDrift;
+    }).catch((error: unknown) => {
+      this.markFailedFullReindexRetry({ memory: false, sessions: Boolean(session) });
+      throw error;
     });
     // A drifted delta wrote nothing; rebuild once after releasing the workspace lock.
     if (retryInFull) {

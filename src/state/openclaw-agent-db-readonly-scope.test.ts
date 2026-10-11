@@ -508,7 +508,7 @@ it("closes generic and explicit candidate-family readers without releasing unrel
   });
 });
 
-it("loads canonical proof before fresh full reads without trusting a copied file", async () => {
+it("loads canonical proof before fresh full selections without trusting a copied file", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const options = { agentId: "main", env };
     const database = openOpenClawAgentDatabase(options);
@@ -539,7 +539,7 @@ it("loads canonical proof before fresh full reads without trusting a copied file
               database: target,
               env,
               projection: "full",
-              sessionKeys: [sessionKey],
+              selection: { kind: "session-id", sessionId: "receipt-session" },
             });
             expect(result.entries[0]?.entry.sessionId).toBe("receipt-session");
             if (pathname === database.path) {

@@ -36,6 +36,7 @@ function parseFrame(text: string): Record<string, unknown> {
 }
 
 export class FakeRelaySocket extends EventEmitter implements RelaySocket {
+  bufferedAmount = 0;
   readonly frames: Record<string, unknown>[] = [];
   readonly closes: { code?: number; reason?: string }[] = [];
   readonly #queue: Record<string, unknown>[] = [];
@@ -86,6 +87,8 @@ export class FakeRelaySocket extends EventEmitter implements RelaySocket {
 
 export async function createTransportFixture(
   operations: ConstructorParameters<typeof RelayService>[0]["operations"] = async () => ({}),
+  ui: Pick<ConstructorParameters<typeof RelayService>[0], "controlUiIngress"> &
+    Partial<Pick<ConstructorParameters<typeof RelayService>[0], "config">> = {},
 ) {
   const clock = createGatewaySchedulerClock(1_000);
   const scheduler = createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock));
@@ -96,6 +99,8 @@ export async function createTransportFixture(
   const addresses: string[] = [];
   const effects: { connectError?: Error } = {};
   const service = new RelayService({
+    config: () => ({}),
+    ...ui,
     scheduler,
     state,
     identity: identityFromPrivateKey(VECTOR_PRIVATE_KEY),
@@ -129,10 +134,14 @@ export async function createTransportFixture(
     sockets,
     addresses,
     effects,
-    ready: async (target = socket) => {
+    ready: async (target = socket, capability?: unknown) => {
       target.receive(CHALLENGE);
       const hello = await target.nextFrame();
-      target.receive({ type: "ready", gatewayId: GATEWAY_ID });
+      target.receive({
+        type: "ready",
+        gatewayId: GATEWAY_ID,
+        ...(capability === undefined ? {} : { ui: capability }),
+      });
       return hello;
     },
     request: async (frame: Record<string, unknown>) => {

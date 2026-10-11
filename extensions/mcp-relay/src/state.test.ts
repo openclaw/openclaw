@@ -77,6 +77,8 @@ describe("MCP relay durable authority", () => {
   it("retains revocation tombstones and last-use facts through restart without resurrecting grant IDs", async () => {
     const f = createStateFixture();
     const state = await paired(f);
+    expect(() => state.assertGrantCurrent("gr_one")).not.toThrow();
+    expect(() => state.assertGrantCurrent("unknown")).toThrow("revoked");
     await expect(state.authorize("unknown", 20)).resolves.toBe(false);
     await expect(state.authorize("gr_one", 20)).resolves.toBe(true);
     await expect(f.open().grants()).resolves.toEqual([
@@ -89,6 +91,10 @@ describe("MCP relay durable authority", () => {
       },
     ]);
     await expect(state.revoke("gr_one", 30)).resolves.toBe(true);
+    expect(() => state.assertGrantCurrent("gr_one")).toThrow("revoked");
+    const restarted = f.open();
+    await restarted.initialize();
+    expect(() => restarted.assertGrantCurrent("gr_one")).toThrow("revoked");
     await expect(f.open().authorize("gr_one", 40)).resolves.toBe(false);
     await state.issue("fresh", 1_000, 40);
     await expect(
@@ -97,6 +103,8 @@ describe("MCP relay durable authority", () => {
     await expect(
       state.createGrant({ grantId: "gr_two", codeHash: "fresh", client: CLIENT }, 40),
     ).resolves.toBe(true);
+    await restarted.initialize();
+    expect(() => restarted.assertGrantCurrent("gr_two")).not.toThrow();
     expect((await f.open().grants())[0]).toMatchObject({ lastUsedAt: 20, revokedAt: 30 });
   });
 

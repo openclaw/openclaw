@@ -37,8 +37,12 @@ export type SessionEntryReadWorkerResult = {
   kind: "session-entry-read";
   source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
 } & (
-  | { entry: SessionEntry | undefined; readError?: never }
-  | { entry: undefined; readError: SessionTranscriptWorkerReadError }
+  | {
+      entry: SessionEntry | undefined;
+      readError?: never;
+      facts?: SessionExactEntriesWorkerResult;
+    }
+  | { entry: undefined; readError: SessionTranscriptWorkerReadError; facts?: never }
 );
 
 export type SessionEntryListWorkerInput = {

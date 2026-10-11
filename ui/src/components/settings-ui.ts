@@ -2,15 +2,25 @@
 // layout through these helpers so pages cannot drift back into bespoke
 // card/pill markup. Styles live in ui/src/styles/settings.css and the shared
 // ui/src/styles/settings-controls.css; rules in ui/docs/design-system/settings-design.md.
-import "@awesome.me/webawesome/dist/components/radio/radio.js";
-import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
-import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { html, nothing, type TemplateResult } from "lit";
+import { Directive, directive } from "lit/directive.js";
 import { live } from "lit/directives/live.js";
 import { shellLayoutTraits } from "../app/shell-layout-traits.ts";
 import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { icons } from "./icons.ts";
+import {
+  nextSettingsRadioName,
+  settingsRadioChange,
+  settingsRadioClick,
+  settingsRadioKeyDown,
+  settingsSwitchChange,
+  settingsSwitchClick,
+  settingsSwitchKeyDown,
+  settingsToggleRowClick,
+  type SettingsSegmentedProps,
+  type SettingsToggleControl,
+} from "./settings-controls.ts";
 import "./tooltip.ts";
 
 type SettingsStatusKind = "ok" | "warn" | "danger" | "accent" | "muted";
@@ -271,89 +281,49 @@ export function renderSettingsNavRow(
   `;
 }
 
-/** Toggle for a custom control slot. ariaLabel is required because the row
- * title is not associated with the input; prefer renderSettingsToggleRow. */
-export function renderSettingsToggle(props: {
-  checked: boolean;
-  onChange: (checked: boolean) => boolean | void;
-  disabled?: boolean;
-  ariaLabel: string;
-}): TemplateResult {
-  return html`
-    <wa-switch
-      class="settings-toggle"
-      size="s"
+function renderToggleControl(props: SettingsToggleControl, label: unknown) {
+  const labelId = nextSettingsRadioName();
+  return html`<span class="settings-toggle">
+    <input
+      class="settings-toggle__input"
+      type="checkbox"
+      role="switch"
       .checked=${live(props.checked)}
       ?disabled=${props.disabled ?? false}
-      aria-disabled="false"
-      @change=${(event: Event) => {
-        const target = event.currentTarget as HTMLElement & { checked: boolean };
-        if (props.onChange(target.checked) === false) {
-          target.checked = props.checked;
-        }
-      }}
-    >
-      <span class="settings-control__sr-label">${props.ariaLabel}</span>
-    </wa-switch>
-  `;
+      aria-labelledby=${labelId}
+      @click=${(event: MouseEvent) => settingsSwitchClick(event, props)}
+      @keydown=${(event: KeyboardEvent) => settingsSwitchKeyDown(event, props)}
+      @change=${(event: Event) => settingsSwitchChange(event, props)}
+    />
+    <span class="settings-toggle__control" aria-hidden="true"></span>
+    <span id=${labelId} class="settings-control__sr-label">${label}</span>
+  </span>`;
+}
+
+/** Toggle for a custom control slot; the row title is not an input label. */
+export function renderSettingsToggle(
+  props: SettingsToggleControl & { ariaLabel: string },
+): TemplateResult {
+  return renderToggleControl(props, props.ariaLabel);
 }
 
 /** The whole row activates the switch, whose accessible name follows the title. */
-export function renderSettingsToggleRow(props: {
-  icon?: unknown;
-  title: unknown;
-  ariaLabel?: unknown;
-  description?: unknown;
-  checked: boolean;
-  onChange: (checked: boolean) => boolean | void;
-  /** Runs synchronously during direct activation for effects gated on user activation. */
-  onAct?: (checked: boolean) => void;
-  disabled?: boolean;
-}): TemplateResult {
-  const notifySwitchActivation = (event: MouseEvent | KeyboardEvent) => {
-    const fromInput = event.composedPath().some((node) => node instanceof HTMLInputElement);
-    if (
-      !fromInput ||
-      (event instanceof KeyboardEvent && event.key !== "ArrowLeft" && event.key !== "ArrowRight")
-    ) {
-      return;
-    }
-    const checked = (event.currentTarget as HTMLElement & { checked: boolean }).checked;
-    if (checked !== props.checked) {
-      props.onAct?.(checked);
-    }
-  };
+export function renderSettingsToggleRow(
+  props: SettingsToggleControl & {
+    icon?: unknown;
+    title: unknown;
+    ariaLabel?: unknown;
+    description?: unknown;
+  },
+): TemplateResult {
   return html`
     <div
       class="settings-row settings-row--toggle"
-      @click=${(event: MouseEvent) => {
-        const target = event.target;
-        if (props.disabled || (target instanceof Element && target.closest("wa-switch") !== null)) {
-          return;
-        }
-        const checked = !props.checked;
-        props.onAct?.(checked);
-        props.onChange(checked);
-      }}
+      @click=${(event: MouseEvent) => settingsToggleRowClick(event, props)}
     >
       ${props.icon ?? nothing} ${renderSettingsRowText(props.title, props.description)}
       <div class="settings-row__control">
-        <wa-switch
-          class="settings-toggle"
-          size="s"
-          .checked=${live(props.checked)}
-          ?disabled=${props.disabled ?? false}
-          @click=${notifySwitchActivation}
-          @keydown=${notifySwitchActivation}
-          @change=${(event: Event) => {
-            const target = event.currentTarget as HTMLElement & { checked: boolean };
-            if (props.onChange(target.checked) === false) {
-              target.checked = props.checked;
-            }
-          }}
-        >
-          <span class="settings-control__sr-label">${props.ariaLabel ?? props.title}</span>
-        </wa-switch>
+        ${renderToggleControl(props, props.ariaLabel ?? props.title)}
       </div>
     </div>
   `;
@@ -364,38 +334,56 @@ export function renderSettingsDefaultDescription(value: string, overridden: bool
   return overridden ? html`${t("configForm.defaultValue", { value })}` : undefined;
 }
 
+class SettingsRadioGroupDirective extends Directive {
+  // Renaming a checked radio can uncheck a sibling before Lit updates its value.
+  private readonly name = nextSettingsRadioName();
+
+  render(renderGroup: (name: string) => TemplateResult) {
+    return renderGroup(this.name);
+  }
+}
+
+function renderSettingsRadioGroup<T extends string>(
+  props: SettingsSegmentedProps<T, unknown>,
+  name: string,
+) {
+  return html`<div
+    class="settings-segmented ${props.className ?? ""}"
+    role="radiogroup"
+    aria-label=${props.ariaLabel ?? nothing}
+    aria-describedby=${props.descriptionId ?? nothing}
+    aria-orientation="horizontal"
+  >
+    ${props.options.map(
+      (option) => html`
+        <label
+          class="settings-segmented__btn ${option.value === props.value ? "settings-segmented__btn--active" : ""}"
+          title=${option.title ?? nothing}
+          data-test-id=${option.testId ?? nothing}
+        >
+          <input
+            class="settings-segmented__input"
+            type="radio"
+            name=${name}
+            value=${option.value}
+            .checked=${live(option.value === props.value)}
+            ?disabled=${props.disabled || option.disabled}
+            aria-label=${option.ariaLabel ?? nothing}
+            @click=${(event: MouseEvent) => settingsRadioClick(event, option.value, props)}
+            @change=${(event: Event) => settingsRadioChange(event, option.value, props)}
+            @keydown=${settingsRadioKeyDown}
+          />
+          ${option.label}
+        </label>
+      `,
+    )}
+  </div>`;
+}
+
+const settingsRadioGroup = directive(SettingsRadioGroupDirective);
+
 export function renderSettingsSegmented<T extends string>(
-  props: {
-    value: T;
-    options: ReadonlyArray<{
-      value: T;
-      label: unknown;
-      title?: string;
-      testId?: string;
-      disabled?: boolean;
-      compactLabel?: string;
-      ariaLabel?: string;
-    }>;
-    disabled?: boolean;
-    ariaLabel?: string;
-    descriptionId?: string;
-    className?: string;
-  } & (
-    | {
-        mode?: undefined;
-        /** The selected radio is passed so callers can anchor visual transitions. */
-        onChange: (value: T, element: HTMLElement) => boolean | void;
-        onReselect?: (value: T, element: HTMLElement) => void;
-      }
-    | {
-        mode: "buttons";
-        variant?: "accent" | "primary" | "compact";
-        ariaPressed?: false;
-        onClick?: (event: MouseEvent, value: T) => void;
-        onChange: (value: T) => void;
-        onReselect?: (value: T) => void;
-      }
-  ),
+  props: SettingsSegmentedProps<T, unknown>,
 ): TemplateResult<1> {
   if (props.mode === "buttons") {
     return html`<div
@@ -430,54 +418,7 @@ export function renderSettingsSegmented<T extends string>(
       )}
     </div>`;
   }
-  return html`
-    <wa-radio-group
-      class="settings-segmented  ${props.className ?? ""}"
-      size="s"
-      aria-describedby=${props.descriptionId ?? nothing}
-      orientation="horizontal"
-      .value=${live(props.value)}
-      ?disabled=${live(props.disabled ?? false)}
-      @change=${(event: Event) => {
-        const group = event.currentTarget as HTMLElement & { value?: string };
-        const value = group.value;
-        if (value !== undefined) {
-          const selected = [...group.querySelectorAll<HTMLElement>("wa-radio")].find(
-            (radio) => radio.getAttribute("value") === value,
-          );
-          if (props.onChange(value as T, selected ?? group) === false) {
-            group.value = props.value;
-          }
-        }
-      }}
-    >
-      ${
-        props.ariaLabel
-          ? html`<span slot="label" class="settings-control__sr-label">${props.ariaLabel}</span>`
-          : nothing
-      }
-      ${props.options.map(
-        (option) => html`
-          <wa-radio
-            class="settings-segmented__btn  ${option.value === props.value ? "settings-segmented__btn--active" : ""}"
-            appearance="button"
-            value=${option.value}
-            .checked=${live(option.value === props.value)}
-            ?disabled=${live(option.disabled ?? false)}
-            title=${option.title ?? nothing}
-            data-test-id=${option.testId ?? nothing}
-            @click=${(event: Event) => {
-              if (option.value === props.value && event.currentTarget instanceof HTMLElement) {
-                props.onReselect?.(option.value, event.currentTarget);
-              }
-            }}
-          >
-            ${option.label}
-          </wa-radio>
-        `,
-      )}
-    </wa-radio-group>
-  `;
+  return html`${settingsRadioGroup((name) => renderSettingsRadioGroup(props, name))}`;
 }
 
 export function renderSettingsStatus(props: {

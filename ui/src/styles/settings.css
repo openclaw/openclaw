@@ -723,10 +723,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
   cursor: var(--cursor-action);
 }
 
-.settings-row--toggle:has(wa-switch[disabled]) {
-  cursor: not-allowed;
-}
-
 .settings-row--nav {
   width: 100%;
   border: none;
@@ -785,10 +781,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
   align-items: center;
   gap: var(--space-2);
   cursor: var(--cursor-action);
-}
-
-wa-switch.settings-toggle {
-  flex: none;
 }
 
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select {
@@ -1137,7 +1129,7 @@ textarea.settings-input {
 .shell--embed-settings {
   --settings-control-height: 44px;
 
-  :is(button, .btn, summary, wa-switch, .settings-segmented__btn) {
+  :is(button, .btn, summary, .settings-toggle, .settings-segmented__btn) {
     min-width: 44px;
     min-height: 44px;
   }
@@ -1164,7 +1156,7 @@ textarea.settings-input {
   :is(.shell--settings, openclaw-skills-page, openclaw-cron-page) {
     --settings-control-height: 44px;
 
-    :is(button, .btn, summary, wa-switch, .settings-segmented__btn) {
+    :is(button, .btn, summary, .settings-toggle, .settings-segmented__btn) {
       min-width: 44px;
       min-height: 44px;
     }

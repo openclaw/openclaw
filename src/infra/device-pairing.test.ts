@@ -60,19 +60,6 @@ function requestBootstrap(patch: Partial<Parameters<typeof requestDevicePairing>
   );
 }
 
-async function approveProxy(requestId: string, scopes: string[]) {
-  return approveDevicePairing(
-    requestId,
-    { callerScopes: scopes, approvedVia: "trusted-proxy", autoApproveNewDeviceScopes: scopes },
-    baseDir,
-  );
-}
-
-async function setupProxyDevice() {
-  const initial = await requestOperator(["operator.read"]);
-  await approveProxy(initial.request.requestId, ["operator.read"]);
-}
-
 type RotateDeviceTokenResult = Awaited<ReturnType<typeof rotateDeviceToken>>;
 
 function requestOperator(scopes: string[]) {
@@ -307,73 +294,6 @@ describe("device pairing tokens", () => {
     ]);
     expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read", "operator.talk.secrets"]);
     expect(paired?.tokens?.operator?.scopes).not.toContain("operator.write");
-  });
-
-  test("caps trusted-proxy grants and upgrades same-key re-requests", async () => {
-    const initial = await requestOperator(["operator.read", "operator.write"]);
-    await expect(approveProxy(initial.request.requestId, ["operator.read"])).resolves.toMatchObject(
-      { status: "approved", requestId: initial.request.requestId },
-    );
-    expect(await getPairedDevice("device-1", baseDir)).toMatchObject({
-      approvedScopes: ["operator.read"],
-      approvedVia: "trusted-proxy",
-    });
-    const upgrade = await requestOperator(["operator.read", "operator.write"]);
-    await expect(
-      approveProxy(upgrade.request.requestId, ["operator.read", "operator.write"]),
-    ).resolves.toMatchObject({ status: "approved", requestId: upgrade.request.requestId });
-    expect((await listDevicePairing(baseDir)).pending).toEqual([]);
-    expect((await getPairedDevice("device-1", baseDir))?.approvedScopes).toEqual([
-      "operator.read",
-      "operator.write",
-    ]);
-  });
-
-  test("refuses trusted-proxy auto-approval when the pending key mismatches the paired device", async () => {
-    await setupProxyDevice();
-    const repair = await requestPairing({
-      publicKey: "public-key-1-rotated",
-      role: "operator",
-      scopes: ["operator.read", "operator.write"],
-    });
-    await expect(
-      approveProxy(repair.request.requestId, ["operator.read", "operator.write"]),
-    ).resolves.toBeNull();
-    expect((await listDevicePairing(baseDir)).pending).toContainEqual(
-      expect.objectContaining({ requestId: repair.request.requestId, isRepair: true }),
-    );
-    expect((await getPairedDevice("device-1", baseDir))?.approvedScopes).toEqual(["operator.read"]);
-  });
-
-  test("refuses non-trusted-proxy auto-approval for a known device even with a matching key", async () => {
-    await setupProxyDevice();
-    const upgrade = await requestOperator(["operator.read", "operator.write"]);
-    await expect(
-      approveDevicePairing(
-        upgrade.request.requestId,
-        {
-          callerScopes: ["operator.read", "operator.write"],
-          approvedVia: "silent",
-          autoApproveNewDeviceScopes: ["operator.read", "operator.write"],
-        },
-        baseDir,
-      ),
-    ).resolves.toBeNull();
-    expect((await getPairedDevice("device-1", baseDir))?.approvedScopes).toEqual(["operator.read"]);
-  });
-
-  test("refuses trusted-proxy auto-approval for a merged node and operator request", async () => {
-    await requestPairing({ role: "node", scopes: [] });
-    const browser = await requestOperator(["operator.read"]);
-    expect(browser.request.roles).toEqual(["node", "operator"]);
-    await expect(approveProxy(browser.request.requestId, ["operator.read"])).resolves.toBeNull();
-    await expect(getPairedDevice("device-1", baseDir)).resolves.toBeNull();
-    expect((await listDevicePairing(baseDir)).pending).toContainEqual(
-      expect.objectContaining({
-        requestId: browser.request.requestId,
-        roles: ["node", "operator"],
-      }),
-    );
   });
 
   test("rejects operator scopes requested only for a node role", async () => {

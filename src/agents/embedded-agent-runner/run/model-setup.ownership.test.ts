@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import { prepareReplyToolAuthority } from "../../../auto-reply/reply/reply-tool-authority.js";
+import { bindReplyOperationDatabaseAdmission } from "../../../auto-reply/reply/reply-turn-database-admission.js";
 import { persistSessionUsageUpdate } from "../../../auto-reply/reply/session-usage.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../../../config/sessions.js";
 import {
@@ -14,10 +15,12 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
+import { loadSessionEntryForAdmission } from "../../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { projectionLane } from "../../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -192,6 +195,73 @@ async function createFixture(
 }
 
 describe("model chat and native model ownership", () => {
+  it.each([true, false])(
+    "prepares native ownership through the async hook (sync hook present: %s)",
+    async (hasSyncHook) => {
+      const syncOwner = vi.fn(() => ({ model: "native" as const, auth: "native" as const }));
+      const fixture = await createFixture({}, syncOwner);
+      const asyncOwner = vi.fn<NonNullable<AgentHarness["resolveSessionRuntimeOwnershipAsync"]>>(
+        async ({ assertCurrent, readPreviousSessionId }) => {
+          expect(await readPreviousSessionId()).toBe("native-predecessor");
+          assertCurrent();
+          return { model: "native", auth: "native" };
+        },
+      );
+      fixture.harness.resolveSessionRuntimeOwnershipAsync = asyncOwner;
+      if (!hasSyncHook) {
+        delete fixture.harness.resolveSessionRuntimeOwnership;
+      }
+      registerAgentHarness(fixture.harness);
+      await patchSessionEntryCore(fixture.target, () => ({
+        previousSessionId: "native-predecessor",
+      }));
+
+      const setup = await fixture.resolve();
+      expect(setup.nativeModelOwned).toBe(true);
+      await expect(setup.nativeSessionRuntime!.assertCurrent()).resolves.toBeUndefined();
+      expect(asyncOwner).toHaveBeenCalledTimes(2);
+      expect(syncOwner).not.toHaveBeenCalled();
+      expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects unpublished native row changes while awaiting the ownership hook", async () => {
+    const fixture = await createFixture({}, () => ({ model: "native", auth: "native" }));
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: fixture.state.env });
+    fixture.harness.resolveSessionRuntimeOwnershipAsync = async () => {
+      await Promise.resolve();
+      // Model a retained native SDK write without the session-row publication owner.
+      database.db
+        .prepare("UPDATE session_windows SET previous_session_id = ? WHERE session_id = ?")
+        .run("changed-predecessor", fixture.entry.sessionId);
+      return { model: "native", auth: "native" };
+    };
+    registerAgentHarness(fixture.harness);
+    const operation = createReplyOperation({
+      sessionId: fixture.entry.sessionId,
+      sessionKey: fixture.target.sessionKey,
+      resetTriggered: false,
+    });
+    const admission = await loadSessionEntryForAdmission(fixture.target);
+    const bound = bindReplyOperationDatabaseAdmission(
+      operation,
+      fixture.target,
+      undefined,
+      admission.databaseClaim,
+    );
+    fixture.runParams.replyOperation = operation;
+    try {
+      expect(bound.operationAdmission.reader).toBeDefined();
+      await expect(fixture.resolve()).rejects.toMatchObject({
+        name: "AgentHarnessPreflightError",
+        cause: { name: "SessionEntryChangedDuringReadError" },
+      });
+    } finally {
+      await bound.releaseWorkerDatabaseClaim?.();
+      operation.complete();
+    }
+  });
+
   it("keeps native ownership through unrelated runtime, auth and display publications", async () => {
     const nativeOwner = vi.fn<NonNullable<AgentHarness["resolveSessionRuntimeOwnership"]>>(
       ({ assertCurrent, sessionKey }) => {

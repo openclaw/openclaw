@@ -16,6 +16,10 @@ import { captureGatewayAuthPolicy } from "../../auth-policy.js";
 import { AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult } from "../../auth.js";
 import { withSerializedCredentialFallbackAttempt } from "../../rate-limit-attempt-serialization.js";
+import {
+  assertRemoteControlUiIngressCurrent,
+  getRemoteControlUiIngressContext,
+} from "../../remote-control-ui-context.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
@@ -70,6 +74,9 @@ export async function authenticateGatewayConnect(
 async function authenticateGatewayConnectCore(
   context: GatewayConnectPhaseContext,
 ): Promise<AuthenticatedGatewayConnect | undefined> {
+  const remoteIngress = getRemoteControlUiIngressContext(context.handler.upgradeReq);
+  const assertCurrent = () => assertRemoteControlUiIngressCurrent(remoteIngress);
+  assertCurrent();
   const {
     upgradeReq,
     connId,
@@ -104,6 +111,7 @@ async function authenticateGatewayConnectCore(
   const resolvedAuth = getResolvedAuth();
   const hasRequestedScopes = Array.isArray(connectParams.scopes);
   const admission = await admitGatewayConnect(context);
+  assertCurrent();
   if (!admission) {
     return undefined;
   }
@@ -133,6 +141,7 @@ async function authenticateGatewayConnectCore(
     clientIp: browserRateLimitClientIp,
   });
   const { sharedAuthOk, pendingSharedAuthFailure, bootstrapTokenCandidate } = connectAuthState;
+  assertCurrent();
   let { authResult, authOk, authMethod } = connectAuthState;
   let rejectedPendingSharedAuthFailure = pendingSharedAuthFailure;
   const settleRejectedSharedAuthFailure = async () => {
@@ -333,25 +342,37 @@ async function authenticateGatewayConnectCore(
     return undefined;
   }
 
-  const authDecision = await resolveConnectAuthDecision({
-    state: connectAuthState,
-    hasDeviceIdentity: Boolean(device),
-    deviceId: device?.id,
-    publicKey: device?.publicKey,
-    role,
-    scopes,
-    requireBootstrapToken: startupBootstrapConnect,
-    rateLimiter: authRateLimiter,
-    clientIp: browserRateLimitClientIp,
-    verifyBootstrapToken: verifyDeviceBootstrapToken,
-    async verifyDeviceToken(paramsLocal) {
-      return await verifyDeviceToken({
-        ...paramsLocal,
-        requiredSharedGatewaySessionGeneration: getRequiredSharedGatewaySessionGeneration?.(),
+  // Admission already requires a live grant, operator role, and no shared or
+  // bootstrap credential. Only the signed, credential-free connect uses it as auth.
+  const ingressAuthenticated = remoteIngress && connectParams.auth?.deviceToken === undefined;
+  const authDecision = ingressAuthenticated
+    ? {
+        authResult: { ok: true, method: "remote-ingress" as const },
+        authOk: true,
+        authMethod: "remote-ingress" as const,
+        deviceTokenSharedGatewaySessionGeneration: undefined,
+      }
+    : await resolveConnectAuthDecision({
+        state: connectAuthState,
+        hasDeviceIdentity: Boolean(device),
+        deviceId: device?.id,
+        publicKey: device?.publicKey,
+        role,
+        scopes,
+        requireBootstrapToken: startupBootstrapConnect,
+        rateLimiter: authRateLimiter,
+        clientIp: browserRateLimitClientIp,
+        verifyBootstrapToken: verifyDeviceBootstrapToken,
+        async verifyDeviceToken(paramsLocal) {
+          return await verifyDeviceToken({
+            ...paramsLocal,
+            requiredSharedGatewaySessionGeneration: getRequiredSharedGatewaySessionGeneration?.(),
+            assertCurrent,
+          });
+        },
       });
-    },
-  });
   ({ authResult, authOk, authMethod } = authDecision);
+  assertCurrent();
   const deviceTokenSharedGatewaySessionGeneration =
     authDecision.deviceTokenSharedGatewaySessionGeneration;
   ({ pairingLocality, skipLocalBackendSelfPairing } = resolvePairingContext());
@@ -362,6 +383,12 @@ async function authenticateGatewayConnectCore(
     }
     rejectUnauthorized(authResult);
     return undefined;
+  }
+  // Verify the signature against the browser's original scopes before applying
+  // the ingress default; an omitted or empty request receives the full ceiling.
+  if (ingressAuthenticated && scopes.length === 0) {
+    scopes = [...remoteIngress.operatorScopeCeiling];
+    connectParams.scopes = scopes;
   }
   const boundBootstrapContext =
     authMethod === "bootstrap-token" && bootstrapTokenCandidate && device
@@ -400,7 +427,10 @@ async function authenticateGatewayConnectCore(
   advanceHandshakePhase("auth_validated");
   const issuedBootstrapProfile = boundBootstrapContext?.profile ?? null;
   const usesSharedGatewayAuth =
-    authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy";
+    authMethod === "token" ||
+    authMethod === "password" ||
+    authMethod === "trusted-proxy" ||
+    authMethod === "remote-ingress";
   const sharedGatewaySessionGeneration = usesSharedGatewayAuth
     ? resolveSharedGatewaySessionGeneration(resolvedAuth, trustedProxies)
     : undefined;

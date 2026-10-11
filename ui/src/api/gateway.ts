@@ -25,6 +25,7 @@ import type {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import { NativeGatewayAuthUnavailableError } from "../app/native-gateway-auth.ts";
+import { isRemoteControlUiIngress } from "../app/remote-ingress.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { isLoopbackHostname } from "../lib/gateway-locality.ts";
 import {
@@ -142,7 +143,9 @@ export class GatewayBrowserClient {
   private maxInboundSilenceMs: number | null = null;
   private tickWatchTimer: ReturnType<typeof setInterval> | null = null;
   private pendingDeviceTokenRetry = false;
+  private pendingCredentialFreeRetry = false;
   private deviceTokenRetryBudgetUsed = false;
+  private readonly remoteIngress = isRemoteControlUiIngress();
   private nativeAuthAbort: AbortController | null = null;
   private nativeAuthError: GatewayRequestError | null = null;
   // Close/stop advances this generation before another socket can make stale hello work look active.
@@ -153,6 +156,17 @@ export class GatewayBrowserClient {
   private pairingFailure: GatewayRequestError | null = null;
 
   constructor(private opts: GatewayBrowserClientOptions) {
+    if (this.remoteIngress) {
+      // The ingress owns admission and supplies its scope ceiling for an empty request.
+      Object.assign(this.opts, {
+        token: undefined,
+        password: undefined,
+        bootstrapToken: undefined,
+        bootstrapProfile: undefined,
+        nativeConnectAuth: undefined,
+        scopes: [],
+      });
+    }
     this.client = new GatewayProtocolClient<ConnectPlan>({
       createSocket: (handlers) => {
         this.pendingPairing = null;
@@ -289,6 +303,7 @@ export class GatewayBrowserClient {
     this.cancelScopeUpgrade();
     this.scopeUpgradeBinding = null;
     this.pendingDeviceTokenRetry = false;
+    this.pendingCredentialFreeRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
   }
 
@@ -362,6 +377,7 @@ export class GatewayBrowserClient {
     if (this.pendingDeviceTokenRetry && plan.selectedAuth.authDeviceToken) {
       this.pendingDeviceTokenRetry = false;
     }
+    this.pendingCredentialFreeRetry = false;
     return plan;
   }
 
@@ -375,6 +391,7 @@ export class GatewayBrowserClient {
     this.maxPayloadBytes = hello.policy?.maxPayload;
     this.startTickWatch(hello);
     this.pendingDeviceTokenRetry = false;
+    this.pendingCredentialFreeRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
     this.opts.bootstrapToken = undefined;
     this.opts.bootstrapProfile = undefined;
@@ -506,6 +523,10 @@ export class GatewayBrowserClient {
         gatewayUrl: this.opts.url,
         role: plan.params.role ?? CONTROL_UI_OPERATOR_ROLE,
       });
+      if (this.remoteIngress && !this.deviceTokenRetryBudgetUsed) {
+        this.pendingCredentialFreeRetry = true;
+        this.deviceTokenRetryBudgetUsed = true;
+      }
     }
     const startupRetryAfterMs = resolveGatewayStartupRetryAfterMs(err);
     if (startupRetryAfterMs !== null) {
@@ -576,7 +597,8 @@ export class GatewayBrowserClient {
       token: this.opts.token,
       bootstrapToken: this.opts.bootstrapToken,
       password: this.opts.password,
-      storedToken: storedTokenCanRead ? storedEntry?.token : undefined,
+      storedToken:
+        storedTokenCanRead && !this.pendingCredentialFreeRetry ? storedEntry?.token : undefined,
       storedScopes: storedEntry?.scopes,
       pendingDeviceTokenRetry: this.pendingDeviceTokenRetry,
       trustedDeviceTokenRetry: isTrustedRetryEndpoint(this.opts.url),
@@ -653,12 +675,13 @@ export class GatewayBrowserClient {
     const connectErrorCode = resolveGatewayErrorDetailCode(connectError);
     // This decision drives both scheduling and the store's reconnect rendering.
     const retry =
-      connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH
+      this.pendingCredentialFreeRetry ||
+      (connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH
         ? this.pendingDeviceTokenRetry
         : !shouldPauseGatewayReconnect({
             details: connectError?.details,
             protocolMismatchIsTerminal: true,
-          });
+          }));
     return { retry, notify: true, pendingError: error };
   }
 

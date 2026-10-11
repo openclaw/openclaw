@@ -8,6 +8,7 @@ import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.ty
 import type { GatewayOperatorAccessAuthority } from "../operator-access-policy.types.js";
 import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
 import type { PluginNodeCapabilityClient } from "../plugin-node-capability.js";
+import type { RemoteControlUiIngressContext } from "../remote-control-ui-context.js";
 import type { WorkerConnectionIdentity } from "../worker-environments/connection-identity.js";
 import type { GatewayWsBrowserOrigin } from "./client-identity-types.js";
 import type { GatewayConnectionTransport } from "./connection-transport.js";
@@ -34,6 +35,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   connId: string;
   /** Host-owned transport retirement notification; never accepted from wire params. */
   connectionSignal?: AbortSignal;
+  /** Service grant lifetime, independent of individual socket retirement. */
+  remoteControlUiIngress?: RemoteControlUiIngressContext;
   connectionKind?: GatewayWsConnectionKind;
   worker?: WorkerConnectionIdentity;
   isDeviceTokenAuth?: boolean;

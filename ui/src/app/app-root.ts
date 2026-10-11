@@ -36,6 +36,7 @@ import { availableLinkReaders, availableLinkPreviewReaders } from "./link-reader
 import { nativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { isDesktopPanelAvailable } from "./panel-availability.ts";
+import { isRemoteControlUiIngress } from "./remote-ingress.ts";
 import { resolveGatewayCredentialsForUrlEdit } from "./settings.ts";
 import { connectShellViewport } from "./shell-viewport.ts";
 
@@ -622,6 +623,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
       (route.pendingMatches[0] ?? route.matches[0])?.routeId === "connection" &&
       (context.gateway.hasStoredDeviceToken?.() ?? false);
     const shellOwnsRecovery =
+      isRemoteControlUiIngress() ||
       browserSignInRecovery ||
       gatewaySnapshot.phase === "reconnecting" ||
       gatewaySnapshot.phase === "reload-required" ||

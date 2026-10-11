@@ -1,3 +1,8 @@
+import {
+  GatewayControlUiIngressError,
+  type GatewayControlUiIngressV1,
+} from "openclaw/plugin-sdk/gateway-ingress";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { codeHash } from "./protocol.js";
 import {
@@ -8,6 +13,13 @@ import {
   PUBLIC_KEY,
   SIGNATURE,
 } from "./transport.test-helpers.js";
+import { abortable, HTTP, IngressSocket, ORIGINS, WS } from "./ui-tunnel.test-helpers.js";
+
+const unavailableUi = {
+  available: false,
+  reason: "Update OpenClaw on this Gateway to show the full Control UI in ChatGPT.",
+};
+const uiCapability = { frameAncestors: ["https://chatgpt.com"] };
 
 const fixtures: Awaited<ReturnType<typeof createTransportFixture>>[] = [];
 async function fixture(...args: Parameters<typeof createTransportFixture>) {
@@ -46,6 +58,7 @@ describe("MCP relay transport and authority", () => {
       gatewayId: GATEWAY_ID,
       relayUrl: "https://mcp.openclaw.ai",
       grantsCount: 0,
+      ui: unavailableUi,
     });
     await f.clock.advanceBy(0);
     await f.clock.advanceBy(29_999);
@@ -419,7 +432,7 @@ describe("MCP relay transport and authority", () => {
           grantId: "gr_one",
           params: {},
         }),
-      ).toEqual({ type: "res", id: "status", ok: true, result: {} });
+      ).toEqual({ type: "res", id: "status", ok: true, result: { ui: unavailableUi } });
       if (change === "revoked") {
         await f.state.revoke("gr_one", f.scheduler.now());
       } else {
@@ -468,5 +481,138 @@ describe("MCP relay transport and authority", () => {
     const f = await fixture();
     f.socket.emit("message", Buffer.alloc(1024 * 1024 + 1, 32), false);
     expect(f.socket.closes).toEqual([{ code: 1009, reason: "Frame too large" }]);
+  });
+
+  it.each(["operation", "unavailable UI"])(
+    "bounds queued %s output on the shared relay socket",
+    async (kind) => {
+      const f = await fixture();
+      await createGrant(f);
+      await f.ready();
+      await f.clock.advanceBy(0);
+      f.socket.bufferedAmount = 32 * 1024 * 1024 - 10;
+      f.socket.receive(
+        kind === "operation"
+          ? { type: "req", id: "status", op: "status", grantId: "gr_one", params: {} }
+          : HTTP,
+      );
+      await f.clock.advanceBy(0);
+      expect(f.socket.closes).toEqual([
+        { code: 1011, reason: "Relay output buffer limit exceeded" },
+      ]);
+      expect(f.socket.terminated).toBe(true);
+      expect(f.socket.frames).toHaveLength(1);
+    },
+  );
+
+  it.each([null, {}, { frameAncestors: "https://chatgpt.com" }, { frameAncestors: [1] }])(
+    "rejects malformed ready UI metadata: %j",
+    async (ui) => {
+      const f = await fixture();
+      await f.ready(f.socket, ui);
+      expect(f.socket.closes).toEqual([{ code: 4400, reason: "Invalid UI capability" }]);
+    },
+  );
+
+  it("requires relay UI support and defers auth admission until the first launch, clearing its error on config reload", async () => {
+    const reason =
+      "Remote Control UI ingress does not support gateway.roles. Use a Gateway without role configuration.";
+    let config: OpenClawConfig = { gateway: { controlUi: { basePath: " /control/ " } } };
+    const open = vi.fn(async () => {
+      throw new GatewayControlUiIngressError("unsupported-auth", reason);
+    });
+    const f = await fixture(undefined, { controlUiIngress: { open }, config: () => config });
+    await createGrant(f);
+    await f.ready();
+    expect((await f.service.status()).ui).toMatchObject({
+      available: false,
+      reason: expect.stringContaining("Update the MCP relay"),
+    });
+    f.socket.close(4409);
+    await f.clock.advanceBy(0);
+    await f.clock.advanceBy(1_000);
+    const socket = f.sockets[1]!;
+    await f.ready(socket, uiCapability);
+    expect((await f.service.status()).ui).toEqual({ available: true, basePath: "/control" });
+    expect(open).not.toHaveBeenCalled();
+    socket.receive(HTTP);
+    await f.clock.advanceBy(0);
+    expect(await socket.nextFrame()).toEqual({
+      type: "ui.error",
+      sid: HTTP.sid,
+      code: "unavailable",
+      message: reason,
+    });
+    expect((await f.service.status()).ui).toEqual({ available: false, reason });
+    config = {};
+    expect((await f.service.status()).ui).toEqual({ available: true, basePath: "/" });
+    socket.receive({ type: "req", id: "ui-status", op: "status", grantId: "gr_one", params: {} });
+    await f.clock.advanceBy(0);
+    expect(await socket.nextFrame()).toEqual({
+      type: "res",
+      id: "ui-status",
+      ok: true,
+      result: { ui: { available: true, basePath: "/" } },
+    });
+    socket.receive({ ...HTTP, sid: "relaunch" });
+    await f.clock.advanceBy(0);
+    expect(await socket.nextFrame()).toMatchObject({ type: "ui.error", message: reason });
+    expect(open).toHaveBeenCalledTimes(2);
+  });
+
+  it("closes the grant handle and browser socket when the operator revokes through the service", async () => {
+    const browser = new IngressSocket();
+    const handle = {
+      presentation: {
+        ...ORIGINS,
+        basePath: "/",
+        operatorScopeCeiling: ["operator.read", "operator.write"],
+      },
+      request: async () => ({ response: new Response("index"), pluginReadCookies: [] }),
+      openWebSocket: async () => ({ socket: browser }),
+      close: vi.fn(async () => {
+        browser.close();
+      }),
+    } satisfies GatewayControlUiIngressV1;
+    const f = await fixture(undefined, { controlUiIngress: { open: async () => handle } });
+    await createGrant(f);
+    await f.ready(f.socket, uiCapability);
+    f.socket.receive(WS);
+    const opening = f.clock.advanceBy(0);
+    expect(await f.socket.nextFrame()).toMatchObject({ type: "ui.ws.opened" });
+    const revoking = f.service.revoke("gr_one");
+    expect(await f.socket.nextFrame()).toMatchObject({ type: "ui.error", code: "grant_revoked" });
+    const notification = await f.socket.nextFrame();
+    expect(notification).toMatchObject({ op: "grant.revoke" });
+    f.socket.acknowledge(notification);
+    await revoking;
+    await opening;
+    expect(browser.closes[0]?.code).toBe(1008);
+    expect(handle.close).toHaveBeenCalledOnce();
+    expect(() => f.state.assertGrantCurrent("gr_one")).toThrow("revoked");
+  });
+
+  it("aborts pending ingress HTTP and closes its handle when the relay disconnects", async () => {
+    const entered = Promise.withResolvers<AbortSignal>();
+    const handle = {
+      presentation: { ...ORIGINS, basePath: "/", operatorScopeCeiling: ["operator.read"] },
+      request: async ({ signal }) => {
+        entered.resolve(signal);
+        return abortable<Awaited<ReturnType<GatewayControlUiIngressV1["request"]>>>(signal);
+      },
+      openWebSocket: async () => ({ socket: new IngressSocket() }),
+      close: vi.fn(async () => {}),
+    } satisfies GatewayControlUiIngressV1;
+    const f = await fixture(undefined, { controlUiIngress: { open: async () => handle } });
+    await createGrant(f);
+    await f.ready(f.socket, uiCapability);
+    f.socket.receive(HTTP);
+    const dispatch = f.clock.advanceBy(0);
+    const signal = await entered.promise;
+    f.socket.close(4409);
+    await dispatch;
+    expect(signal.aborted).toBe(true);
+    expect(handle.close).toHaveBeenCalledOnce();
+    expect(f.socket.frames).toHaveLength(1);
   });
 });

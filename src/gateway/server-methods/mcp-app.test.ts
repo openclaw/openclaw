@@ -65,6 +65,8 @@ const policyEntry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
 let policyServer: McpServerConfig | undefined;
 import type { McpAppPrepareToolCall } from "../../agents/mcp-ui-resource.js";
 import { resolveMcpAppAllowedToolNames } from "../mcp-app-operations.js";
+import type { RemoteControlUiIngressContext } from "../remote-control-ui-context.js";
+import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { makeClient } from "../server-broadcast.test-helpers.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
@@ -100,6 +102,7 @@ async function invoke(
   config: Record<string, unknown> = {},
   scopes: string[] = ["operator.write"],
   profileId?: string,
+  remoteControlUiIngress?: RemoteControlUiIngressContext,
 ) {
   const respond = vi.fn();
   const cfg = {
@@ -114,6 +117,7 @@ async function invoke(
     params,
     client: {
       connect: { scopes },
+      remoteControlUiIngress,
       ...(profileId ? { authenticatedUserProfile: { profileId } } : {}),
     },
     context: {
@@ -512,6 +516,29 @@ describe("MCP App gateway bridge", () => {
       sessionKey: "agent:main:main",
       toolOperationsAuthorized: false,
       view,
+    });
+  });
+
+  it("projects the ingress sandbox origin without changing direct view presentation", async () => {
+    const params = { sessionKey: "agent:main:main", viewId: "cv_app" };
+    const remote = await invoke(
+      "mcp.app.view",
+      params,
+      true,
+      {},
+      ["operator.read"],
+      undefined,
+      createRemoteControlUiIngressTestContext(),
+    );
+    expect(remote.mock.calls[0]?.[0]).toBe(true);
+    expect(remote.mock.calls[0]?.[1]).toMatchObject({
+      sandboxUrl: "https://sandbox.example.test/mcp-app-sandbox",
+      sandboxOrigin: "https://sandbox.example.test",
+    });
+    const direct = await invoke("mcp.app.view", params);
+    expect(direct.mock.calls[0]?.[1]).toMatchObject({
+      sandboxUrl: "mcp-app-sandbox",
+      sandboxOrigin: "https://apps.example.com",
     });
   });
 

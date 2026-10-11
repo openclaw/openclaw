@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import type { GatewayRpcOpts } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type CliContext = Parameters<Parameters<OpenClawPluginApi["registerCli"]>[0]>[0];
 type RelayCommand = "status" | "pair" | "grants" | "revoke";
@@ -32,6 +33,13 @@ async function runCommand(
         "In ChatGPT, open Plugins and add this MCP URL; in Claude, add a custom connector. Enter this code on the OpenClaw consent page.",
       );
       return;
+    }
+    if (op === "status" && isRecord(result.ui)) {
+      defaultRuntime.log(
+        result.ui.available === true
+          ? `Control UI: available (${typeof result.ui.basePath === "string" ? result.ui.basePath : "/"})`
+          : `Control UI: unavailable${typeof result.ui.reason === "string" ? ` — ${result.ui.reason}` : ""}`,
+      );
     }
     defaultRuntime.writeJson(result);
   } catch (error) {

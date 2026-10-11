@@ -18,6 +18,10 @@ import {
 } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { respondPlainText } from "./control-ui-http-utils.js";
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./remote-control-ui-context.js";
 
 type PublicResourceReader = NonNullable<
   PluginBoardWidgetContentKind["resources"]["readPublicResource"]
@@ -41,7 +45,12 @@ function handleMcpAppSandboxHttpRequest(req: IncomingMessage, res: ServerRespons
     return true;
   }
 
-  const { html, headers, version } = buildSandboxHostDocument(csp);
+  const ingress = getRemoteControlUiIngressContext(req);
+  assertRemoteControlUiIngressCurrent(ingress);
+  const { html, headers, version } = buildSandboxHostDocument(
+    csp,
+    ingress ? [ingress.publicOrigin, ...ingress.frameAncestors] : undefined,
+  );
   res.statusCode = 200;
   for (const [name, value] of Object.entries(headers)) {
     res.setHeader(name, value);
@@ -63,6 +72,17 @@ export function createSandboxHostHttpServer(
   tlsOptions?: TlsOptions,
   resolvePluginRegistry?: () => PluginRegistry,
 ): HttpServer {
+  const handler = createSandboxHostHttpRequestHandler(resolvePluginRegistry);
+  const listener = (req: IncomingMessage, res: ServerResponse) => {
+    void handler(req, res);
+  };
+  return tlsOptions ? createHttpsServer(tlsOptions, listener) : createHttpServer(listener);
+}
+
+/** Shared dedicated-surface owner for listener and virtual ingress transports. */
+export function createSandboxHostHttpRequestHandler(
+  resolvePluginRegistry?: () => PluginRegistry,
+): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   // One activation owns each prepared map; reactivation cannot revive stale readers.
   const readersByEpoch = new WeakMap<object, Map<string, PublicResourceReader>>();
   const serveResource = async (req: IncomingMessage, res: ServerResponse) => {
@@ -88,6 +108,7 @@ export function createSandboxHostHttpServer(
     const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
     const reader = readers.get(pathname);
     const resource = reader ? await reader(pathname) : undefined;
+    assertRemoteControlUiIngressCurrent(getRemoteControlUiIngressContext(req));
     if (
       !resource ||
       resolvePluginRegistry?.() !== registry ||
@@ -104,7 +125,9 @@ export function createSandboxHostHttpServer(
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.end(req.method === "HEAD" ? undefined : resource.body);
   };
-  const handler = (req: IncomingMessage, res: ServerResponse) => {
+  return async (req: IncomingMessage, res: ServerResponse) => {
+    const ingress = getRemoteControlUiIngressContext(req);
+    assertRemoteControlUiIngressCurrent(ingress);
     if (handleMcpAppSandboxHttpRequest(req, res)) {
       return;
     }
@@ -112,9 +135,18 @@ export function createSandboxHostHttpServer(
       respondPlainText(res, 404, "Not Found");
       return;
     }
-    void serveResource(req, res).catch(() =>
-      respondPlainText(res, 503, "Renderer resource unavailable"),
-    );
+    try {
+      await serveResource(req, res);
+    } catch {
+      if (ingress) {
+        try {
+          assertRemoteControlUiIngressCurrent(ingress);
+        } catch {
+          res.destroy();
+          return;
+        }
+      }
+      respondPlainText(res, 503, "Renderer resource unavailable");
+    }
   };
-  return tlsOptions ? createHttpsServer(tlsOptions, handler) : createHttpServer(handler);
 }

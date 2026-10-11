@@ -9,6 +9,10 @@ import { resolveBootstrapProfileScopesForRole } from "../../../shared/device-boo
 import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
+  assertRemoteControlUiIngressCurrent,
+  getRemoteControlUiIngressContext,
+} from "../../remote-control-ui-context.js";
+import {
   isMobileNodeBootstrapConnect,
   isSetupCodeHandoffBootstrapClient,
   pairedDeviceAllowsBootstrapProfile,
@@ -167,12 +171,20 @@ export async function authorizeExistingGatewayDevice(params: {
   // and same-family mobile OS version labels, but real platform/device-family
   // changes must stay on the approved pairing record.
   if (device) {
-    await updatePairedDeviceMetadata(device.id, {
-      ...clientAccessMetadata,
-      ...(metadataPinning.refreshPairedPlatform
-        ? { platform: metadataPinning.refreshPairedPlatform }
-        : {}),
-    });
+    await updatePairedDeviceMetadata(
+      device.id,
+      {
+        ...clientAccessMetadata,
+        ...(metadataPinning.refreshPairedPlatform
+          ? { platform: metadataPinning.refreshPairedPlatform }
+          : {}),
+      },
+      undefined,
+      () =>
+        assertRemoteControlUiIngressCurrent(
+          getRemoteControlUiIngressContext(context.handler.upgradeReq),
+        ),
+    );
   }
   return { ok: true, handoffBootstrapProfile };
 }

@@ -560,8 +560,8 @@ describe("CronPage lifecycle", () => {
     (page.querySelector('[data-test-id="cron-new-task"]') as HTMLButtonElement).click();
     await waitForCronPage(() => expect(page.querySelector("fieldset.cron-editor")).not.toBeNull());
 
-    const triggerToggle = Array.from(page.querySelectorAll("wa-switch.settings-toggle")).find(
-      (toggle) => toggle.textContent?.includes("Condition trigger"),
+    const triggerToggle = Array.from(page.querySelectorAll(".settings-toggle")).find((toggle) =>
+      toggle.textContent?.includes("Condition trigger"),
     );
     expect(triggerToggle).toBeUndefined();
     expect(page.textContent).toContain("disabled by cron.triggers.enabled");

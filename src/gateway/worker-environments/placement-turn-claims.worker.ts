@@ -80,7 +80,14 @@ function operation<
         const source = guardedWorkspaceWrite ? input.sessionEntryCurrentSource : undefined;
         const admit = (stage: "transaction" | "commit", facts: unknown) =>
           requestSessionEntryCurrentAdmission(source, { stage, facts }, { lookup: "logical" });
-        admit("transaction", { placement: find(db, sessionId), placementMove: move() });
+        const simpleTurn =
+          type === "placementTurns.claim" ||
+          type === "placementTurns.release" ||
+          type === "placementTurns.releaseIfOwned";
+        admit("transaction", {
+          placement: simpleTurn ? undefined : find(db, sessionId),
+          placementMove: move(),
+        });
         const receipt = execute(
           {
             path: database.path,
@@ -342,8 +349,7 @@ export const placementTurnClaimOperations = {
   "placementTurns.claim": operation(
     "placementTurns.claim",
     (runtime, input: { claim: WorkerTurnClaimInput; nowMs?: number }) => {
-      const claim = createPlacementTurnClaimOps(runtime).claimTurn(input.claim);
-      return { claim, placement: getRequired(runtime.read(), claim.sessionId) };
+      return createPlacementTurnClaimOps(runtime).claimTurn(input.claim);
     },
   ),
   "placementTurns.updateWorkspaceBaseManifest": operation(
@@ -408,10 +414,7 @@ export const placementTurnClaimOperations = {
   "placementTurns.releaseIfOwned": operation(
     "placementTurns.releaseIfOwned",
     (runtime, input: ClaimInput) => {
-      const claims = createPlacementTurnClaimOps(runtime);
-      return claims.validateTurnClaim(input.claim)
-        ? { placement: claims.releaseTurn(input.claim) }
-        : {};
+      return { placement: createPlacementTurnClaimOps(runtime).releaseTurnIfOwned(input.claim) };
     },
   ),
   "placementTurns.release": operation("placementTurns.release", (runtime, input: ClaimInput) => ({

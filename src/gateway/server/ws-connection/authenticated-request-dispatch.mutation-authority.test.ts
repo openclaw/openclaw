@@ -30,8 +30,14 @@ import { prepareUserProfileSelectionAuthority } from "../../../state/user-channe
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { captureGatewayAuthPolicy } from "../../auth-policy.js";
+import {
+  acceptGatewayDeviceSourceAuthority,
+  readAcceptedGatewayDeviceSourceAuthority,
+  retainGatewayDeviceRevocation,
+} from "../../device-revocation.js";
 import { publishOperatorRoleConfigChange } from "../../operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../../operator-run-authority.js";
+import { createRemoteControlUiIngressTestContext } from "../../remote-control-ui.test-support.js";
 import { createDirectChatContext } from "../../server-chat.agent-events.test-helpers.js";
 import { readGatewayRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "../../server-methods/types.js";
@@ -64,6 +70,45 @@ beforeEach(() => {
 afterEach(() => clearRuntimeConfigSnapshot());
 
 describe("authenticated request mutation custody", () => {
+  it("retains the remote grant assertion after accepted work leaves its request", async () => {
+    setRuntimeConfigSnapshot({});
+    const ingress = new AbortController();
+    const client = createOperatorWsClient();
+    client.remoteControlUiIngress = createRemoteControlUiIngressTestContext({
+      assertCurrent: () => ingress.signal.throwIfAborted(),
+    });
+    const generation = new SharedGatewaySessionGenerationState({
+      current: undefined,
+      required: null,
+    });
+    let source: (() => boolean) | undefined;
+    let release: (() => void) | undefined;
+    const harness = createDispatchTestHarness({
+      getRequiredSharedGatewaySessionGeneration: generation.reader,
+      buildRequestContext: () => createDirectChatContext(),
+      extraHandlers: {
+        "test.accepted-remote": (options) => {
+          release = retainGatewayDeviceRevocation(options.hasCurrentClientAuthority);
+          expect(acceptGatewayDeviceSourceAuthority(options.hasCurrentClientAuthority)).toBe(true);
+          source = readAcceptedGatewayDeviceSourceAuthority(options.hasCurrentClientAuthority);
+          options.respond(true);
+        },
+      },
+    });
+    try {
+      await harness.dispatcher.dispatch(
+        { type: "req", id: "accepted-remote", method: "test.accepted-remote", params: {} },
+        client,
+      );
+      expect(source?.()).toBe(true);
+      expect([...harness.clients.authorityClients]).toEqual([]);
+      ingress.abort(new Error("remote grant expired"));
+      expect(source?.()).toBe(false);
+    } finally {
+      release?.();
+    }
+  });
+
   it("keeps original wildcard model ceilings separate through WS capture and contiguous collect", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForEmail("queued-model-ceiling@example.test");
@@ -448,13 +493,22 @@ describe("authenticated request mutation custody", () => {
     "policy changed",
     "selection mismatch",
     "copied generation reader",
+    "remote ingress assertion",
+    "remote ingress signal",
   ] as const)("retains the admitted authority for %s", async (scenario) => {
     const generation = new SharedGatewaySessionGenerationState({
       current: "generation-a",
       required: null,
     });
     const connection = new AbortController();
+    const ingress = new AbortController();
     const client = createOperatorWsClient();
+    if (scenario.startsWith("remote ingress")) {
+      client.remoteControlUiIngress = createRemoteControlUiIngressTestContext({
+        ...(scenario === "remote ingress signal" ? { signal: ingress.signal } : {}),
+        assertCurrent: () => ingress.signal.throwIfAborted(),
+      });
+    }
     client.usesSharedGatewayAuth = true;
     client.sharedGatewaySessionGeneration = "generation-a";
     setRuntimeConfigSnapshot({});
@@ -572,6 +626,8 @@ describe("authenticated request mutation custody", () => {
       ]);
       if (scenario === "transport retirement") {
         connection.abort();
+      } else if (scenario.startsWith("remote ingress")) {
+        ingress.abort(new Error("remote ingress grant revoked"));
       } else if (scenario === "client invalidated") {
         client.invalidated = true;
       } else if (scenario === "generation rotated" || compatibilityReader) {

@@ -21,6 +21,7 @@ import {
   authorizeCurrentOperatorRoleScopes,
   resolveGatewayOperatorRoleActor,
 } from "../operator-role-policy.js";
+import { assertRemoteControlUiIngressCurrent } from "../remote-control-ui-context.js";
 import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
@@ -249,6 +250,7 @@ export function bindWebSocketRequestMutationAuthority<T extends GatewayRequestOp
   const captured = captureRequestMutationOptions(options, client);
   const { signal, hasCurrentClientAuthority } = captured.transport;
   const assertWorkerCurrent = () => {
+    assertRemoteControlUiIngressCurrent(client.remoteControlUiIngress);
     signal?.throwIfAborted();
     const acceptedSource = readAcceptedGatewayDeviceSourceAuthority(hasCurrentClientAuthority);
     captured.assertCurrent();

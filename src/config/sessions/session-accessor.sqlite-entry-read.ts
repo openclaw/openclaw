@@ -150,7 +150,7 @@ export type ResolvedSessionEntryRow = {
 type ReadableSessionEntryRow = ResolvedSessionEntryRow["row"] &
   (CanonicalSessionValidationRow | { retained_window_id?: never });
 
-function parseReadableSessionEntryData(
+export function parseReadableSessionEntryData(
   database: Pick<OpenClawAgentDatabase, "db">,
   row: ReadableSessionEntryRow,
   projection: SessionEntryProjection | "delivery",

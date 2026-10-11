@@ -6,6 +6,7 @@ import {
   createChannelApprovalNativeRuntimeAdapter,
   createChannelApprovalHandlerFromCapability,
   createLazyChannelApprovalNativeRuntimeAdapter,
+  createLazyChannelApprovalNativeRuntimeAdapterAsync,
 } from "./approval-handler-runtime.js";
 import {
   createApprovalNativeRuntimeAdapterStubs,
@@ -103,6 +104,35 @@ function firstCallArg(mock: ReturnType<typeof vi.fn>): unknown {
 }
 
 describe("createChannelApprovalHandlerFromCapability", () => {
+  it("awaits async native eligibility before loading delivery hooks", async () => {
+    const deliverPending = vi.fn().mockResolvedValue({ messageId: "async-card" });
+    const capability = makeNativeApprovalCapability({ deliverPending });
+    const nativeRuntime = capability.nativeRuntime;
+    if (!nativeRuntime) {
+      throw new Error("Expected fixture native runtime");
+    }
+    const load = vi.fn(async () => nativeRuntime);
+    const eligibility = createDeferred<boolean>();
+    const nativeRuntimeAsync = createLazyChannelApprovalNativeRuntimeAdapterAsync({
+      load,
+      isConfigured: async () => true,
+      shouldHandle: () => eligibility.promise,
+    });
+    const runtime = await createChannelApprovalHandlerFromCapability({
+      capability: { native: capability.native, nativeRuntimeAsync },
+      ...TEST_HANDLER_PARAMS,
+    });
+    if (!runtime) {
+      throw new Error("Expected async approval handler");
+    }
+    const requested = runtime.handleRequested(makeExecApprovalRequest("async-declined"));
+    eligibility.resolve(false);
+    await requested;
+    expect(load).not.toHaveBeenCalled();
+    expect(deliverPending).not.toHaveBeenCalled();
+    await runtime.stop();
+  });
+
   it("returns null when the capability does not expose a native runtime", async () => {
     await expect(
       createChannelApprovalHandlerFromCapability({

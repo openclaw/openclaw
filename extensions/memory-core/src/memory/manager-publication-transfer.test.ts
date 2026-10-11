@@ -16,6 +16,7 @@ import { readMemoryDatabaseRevision } from "./manager-db-kernel.js";
 import {
   memoryEmbeddingCacheBatches,
   memoryPublicationBatches,
+  memoryPublicationInline,
 } from "./manager-publication-transfer.js";
 import {
   bindSqliteWorkerBackend,
@@ -416,7 +417,7 @@ describe("bounded memory publication transfer", () => {
               operation({
                 execute: async (command) => {
                   commands.push(command.type);
-                  if (command.type === "source.replace") {
+                  if (command.type === "source.replace.inline") {
                     throw original;
                   }
                   if (command.type === "stage.discard") {
@@ -466,7 +467,7 @@ describe("bounded memory publication transfer", () => {
         await expect(result).rejects.toBe(original);
       }
       expect(closed).toBe(true);
-      expect(commands).toEqual(["stage.start", "stage.append", "source.replace"]);
+      expect(commands).toEqual(["source.replace.inline"]);
       expect(owner.db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);
     },
   );
@@ -503,6 +504,7 @@ describe("bounded memory publication transfer", () => {
     vector.splice(510, 4, -0, Number.MIN_VALUE, Number.MAX_VALUE, 1 + Number.EPSILON);
     input.embeddings = [vector];
     const batches = [...memoryPublicationBatches(input)];
+    expect(memoryPublicationInline(input)).toBeUndefined();
     expect(batches.length).toBeGreaterThan(1);
     for (const batch of batches) {
       expect(serialize(batch).byteLength).toBeLessThanOrEqual(512 * 1024);
@@ -569,6 +571,62 @@ describe("bounded memory publication transfer", () => {
         )
         .all(),
     ).toEqual([{ path: input.entry.path }]);
+  });
+
+  it("keeps inline source replacement atomic and observes a later in-process forget", () => {
+    const owner = createOwner();
+    const db = owner.db;
+    ensureMemorySessionTombstones(db);
+    const input: MemorySourceIndexReplacement = {
+      ...replacement(),
+      source: "sessions",
+      agentId: "main",
+      sessionId: "inline-session",
+    };
+    const inline = memoryPublicationInline(input);
+    assert.ok(inline);
+    let refuseCommit = false;
+    const backend = createBackend(owner, (stage) => {
+      if (stage === "commit" && refuseCommit) {
+        throw new Error("refused inline source commit");
+      }
+    });
+    const command = {
+      type: "source.replace.inline" as const,
+      input: {
+        ...inline,
+        state: {
+          vector: { enabled: false, available: false },
+          fts: { enabled: true, available: true },
+        },
+      },
+    };
+    expect(backend.execute(command)).toMatchObject({ ok: true });
+    refuseCommit = true;
+    expect(
+      backend.execute({
+        ...command,
+        input: {
+          ...command.input,
+          header: { ...inline.header, entry: { ...inline.header.entry, hash: "replacement" } },
+        },
+      }),
+    ).toMatchObject({ ok: false, entered: true, committed: false });
+    expect(db.prepare("SELECT hash FROM memory_index_sources").get()).toEqual({
+      hash: "source-hash",
+    });
+    refuseCommit = false;
+    db.prepare(
+      "INSERT INTO memory_session_tombstones (session_id, agent_id, reason, created_at) VALUES (?, ?, 'forgotten', 1)",
+    ).run("inline-session", "main");
+    expect(backend.execute(command)).toMatchObject({
+      ok: false,
+      committed: false,
+      error: { message: expect.stringContaining("forgotten") },
+    });
+    expect(db.prepare("SELECT hash FROM memory_index_sources").get()).toEqual({
+      hash: "source-hash",
+    });
   });
 
   it("publishes a session delta that keeps retained rows and reports retained drift", async () => {

@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { IncomingMessage } from "node:http";
+import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -15,7 +15,10 @@ import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "./control-ui-bootstrap-contract.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
+import { authorizeControlUiReadRequestOrReply } from "./http-auth-utils.js";
+import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { createRemoteControlUiIngressTestContext } from "./remote-control-ui.test-support.js";
 import {
   AUTH_TOKEN,
   createRequest,
@@ -151,6 +154,64 @@ it.each(["operator.admin", "operator.read"])(
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+it("caps remote HTTP device reads and refuses the shared Gateway token", async () => {
+  await withOpenClawTestState({ label: "remote-http-device-ceiling" }, async () => {
+    const scopes = ["operator.admin"];
+    const requested = await requestDevicePairing({
+      deviceId: "remote-http-browser",
+      publicKey: "synthetic-key",
+      role: "operator",
+      scopes,
+    });
+    await approveDevicePairing(requested.request.requestId, { callerScopes: scopes });
+    const token = await deviceTokens.ensureDeviceToken({
+      deviceId: "remote-http-browser",
+      role: "operator",
+      scopes,
+      issuer: {
+        kind: "shared-gateway-auth",
+        generation: resolveSharedGatewaySessionGeneration(AUTH_TOKEN, [])!,
+      },
+    });
+    expect(token).not.toBeNull();
+    for (const credential of [token!.token, AUTH_TOKEN.token!]) {
+      const req = createRequest({
+        path: "/control-ui-config.json",
+        authorization: `Bearer ${credential}`,
+        headers: { origin: "https://ui.example.test" },
+        host: "ui.example.test",
+      });
+      markGatewayIngressTransport(req, {
+        kind: "remote-forwarded",
+        context: createRemoteControlUiIngressTestContext({
+          operatorScopeCeiling: ["operator.read"],
+          frameAncestors: [],
+        }),
+      });
+      const res = new ServerResponse(req);
+      try {
+        const result = await authorizeControlUiReadRequestOrReply({
+          req,
+          res,
+          auth: AUTH_TOKEN,
+          cfg: {},
+          getRuntimeConfig: () => ({}),
+        });
+        if (credential === token!.token) {
+          expect(result?.authMethod).toBe("device-token");
+          expect(result?.operatorScopes).toEqual(["operator.read"]);
+        } else {
+          expect(result).toBeNull();
+          expect(res.statusCode).toBe(401);
+        }
+      } finally {
+        res.destroy();
+        req.destroy();
+      }
+    }
+  });
+});
 
 it("keeps the public shell when a paired token is revoked during bootstrap admission", async () => {
   await withOpenClawTestState({ label: "bootstrap-revoked-device" }, async () => {

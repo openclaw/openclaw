@@ -153,7 +153,7 @@ suite.define(() => {
         await expect
           .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
           .toContain("Saved");
-        await row(page, "Archive older transcripts").locator("wa-switch").click();
+        await row(page, "Archive older transcripts").getByRole("switch").click();
         await expect.poll(async () => (await gateway.getRequests("config.set")).length).toBe(2);
         const saves = await gateway.getRequests("config.set");
         expect(submittedConfig(saves[1]!)).toHaveProperty("session.maintenance.coldStorage", {
@@ -215,12 +215,8 @@ suite.define(() => {
         await page.reload();
         await expect.poll(() => age.inputValue()).toBe("14");
         await expect
-          .poll(() =>
-            page
-              .getByRole("switch", { name: /Archive older transcripts/ })
-              .getAttribute("aria-checked"),
-          )
-          .toBe("true");
+          .poll(() => page.getByRole("switch", { name: /Archive older transcripts/ }).isChecked())
+          .toBe(true);
       },
     );
   });

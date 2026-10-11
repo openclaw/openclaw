@@ -17,6 +17,10 @@ import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui
 import { selectControlUiRoutePreloads } from "./control-ui-route-preloads.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { sendControlUiHtmlBody } from "./control-ui-static.js";
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./remote-control-ui-context.js";
 
 /** Anchors bundled assets before deep-linked documents begin preloading. */
 function rewriteControlUiIndexHtmlAssetHrefs(
@@ -58,6 +62,7 @@ export async function serveControlUiIndexHtml(
   proxySessionEntry = false,
   bootstrapConfig?: ControlUiBootstrapConfig,
 ) {
+  const ingress = getRemoteControlUiIngressContext(req);
   const normalizedBasePath = normalizeControlUiBasePath(basePath);
   const preloadRoute =
     uiPath === "/chat" || uiPath.startsWith("/chat/")
@@ -92,7 +97,7 @@ export async function serveControlUiIndexHtml(
       .replace(
         /<html\b/i,
         () =>
-          `<html${basePathAttribute}${proxySessionEntry ? ' data-openclaw-proxy-session-entry="true"' : ""} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"${environmentAttributes}${buildAttribute}${bootstrapAttribute}`,
+          `<html${basePathAttribute}${ingress ? ' data-openclaw-remote-ingress="true"' : ""}${proxySessionEntry ? ' data-openclaw-proxy-session-entry="true"' : ""} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"${environmentAttributes}${buildAttribute}${bootstrapAttribute}`,
       ),
   );
   const document = sessionEntryPath
@@ -103,6 +108,9 @@ export async function serveControlUiIndexHtml(
       )
     : prepared;
   const hashes = computeInlineScriptHashes(document);
+  if (ingress) {
+    assertRemoteControlUiIngressCurrent(ingress);
+  }
   // Always set the document CSP here (the index carries inline scripts) so the
   // terminal's WASM relaxation is applied to the page that loads ghostty-web.
   res.setHeader(
@@ -111,6 +119,7 @@ export async function serveControlUiIndexHtml(
       inlineScriptHashes: hashes,
       allowWasm,
       portalHost: req.headers.host,
+      frameAncestors: ingress?.frameAncestors,
     }),
   );
   res.setHeader("Content-Type", "text/html; charset=utf-8");

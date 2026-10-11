@@ -1,7 +1,7 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { RetrySupervisor } from "../../packages/retry/src/index.js";
 import { isChannelAccountExplicitlyDisabled } from "../channels/account-config-enabled.js";
-import { resolveChannelAccount } from "../channels/account-resolution.js";
+import { describeChannelAccount, resolveChannelAccount } from "../channels/account-resolution.js";
 import {
   getCredentialUnavailableDiagnostics,
   projectSafeChannelAccountSnapshotFields,
@@ -92,6 +92,7 @@ import {
   runChannelAccountMonitor,
   runChannelAccountStartup,
   waitForChannelStartupHandoff,
+  waitForDeferredAccountStart,
 } from "./server-channel-startup.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 
@@ -173,23 +174,6 @@ type ChannelAccountStopState = (
 ) & {
   cleanup?: Promise<ChannelAccountStopOutcome>;
 };
-
-async function waitForDeferredAccountStart(
-  deferred: Promise<void>,
-  abortSignal: AbortSignal,
-): Promise<void> {
-  if (abortSignal.aborted) {
-    return;
-  }
-  const aborted = createDeferredCore();
-  const onAbort = () => aborted.resolve();
-  abortSignal.addEventListener("abort", onAbort, { once: true });
-  try {
-    await Promise.race([deferred, aborted.promise]);
-  } finally {
-    abortSignal.removeEventListener("abort", onAbort);
-  }
-}
 
 export type ChannelManager = {
   getRuntimeSnapshot: (options?: ChannelRuntimeSnapshotOptions) => ChannelRuntimeSnapshot;
@@ -711,7 +695,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 runPluginCleanup(stopAccount, () => stopAccount.call(gateway, context)),
             };
           }
-          const described = plugin.config.describeAccount?.(account, cfg);
+          const described = await describeChannelAccount({ plugin, account, cfg });
+          assertStartCurrent();
+          capabilityLease.assertActive("startup");
           const enabled = plugin.config.isEnabled
             ? plugin.config.isEnabled(account, cfg)
             : isAccountEnabled(account);
@@ -1508,7 +1494,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               accountId: id,
               runtime: current,
             });
-        } else if (!plugin.config.resolveAccountAsync) {
+        } else if (!plugin.config.resolveAccountAsync && !plugin.config.describeAccountAsync) {
           const account = plugin.config.resolveAccount(cfg, id);
           const enabled = plugin.config.isEnabled
             ? plugin.config.isEnabled(account, cfg)

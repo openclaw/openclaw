@@ -29,4 +29,24 @@ export const BINDING_PERSISTENCE_COMPAT_RECORDS = [
     releaseNote:
       "Native harness binding preparation and ordinary durable settlement use workers. Host-selected initialization, incognito, and mixed legacy deletion transactions retain their explicit native atomic settlement; no schema or update migration is required.",
   },
+  {
+    code: "approval-event-sync-publication",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-09-08",
+    deprecated: "2026-10-10",
+    warningStarts: "2026-10-10",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await approvalEvents.publishRequestedAsync. The legacy publisher retains synchronous delivery counts for synchronous subscribers and refuses async eligibility before delivery; removed in the next Plugin SDK major.",
+    docsPath: "/plugins/sdk-migration/how-to-migrate#await-gateway-approval-publication",
+    surfaces: ["GatewayRequestHandlerOptions.context.approvalEvents.publishRequested"],
+    diagnostics: ["TypeScript @deprecated annotation and the shared capability-family warning"],
+    tests: [
+      "src/gateway/server-instance-runtime.test.ts",
+      "src/plugin-sdk/state-binding.released-compat.test.ts",
+    ],
+    releaseNote:
+      "Gateway approval publication awaits native eligibility while retaining the released synchronous publisher type and old publisher objects.",
+  },
 ] as const satisfies readonly PluginCompatRecord[];

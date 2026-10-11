@@ -2350,6 +2350,17 @@ jobs:
           )"
             export OPENCLAW_VITEST_INCLUDE_FILE
           fi
+          requires_webkit="$(node --input-type=module <<'NODE'
+          import { existsSync } from "node:fs";
+          import { loadPatternListFromEnv, matchesVitestGlob } from "./test/vitest/vitest.pattern-file.ts";
+          const suite = "ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts";
+          const include = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE");
+          process.stdout.write(String(existsSync(suite) && (!include || include.some((pattern) => matchesVitestGlob(suite, pattern)))));
+          NODE
+          )"
+          if [[ "$requires_webkit" == "true" ]]; then
+            pnpm --dir ui exec playwright install --with-deps webkit
+          fi
           node scripts/run-vitest.mjs run \
             --config test/vitest/vitest.ui-e2e.config.ts \
             --configLoader runner \

@@ -51,37 +51,44 @@ function observe() {
 }
 
 describe("plugin state committed facts", () => {
-  it("keeps a prepared read current only until its exact dependency commits", async () => {
-    await withOpenClawTestState({ label: "plugin-state-read-dependencies" }, async ({ env }) => {
-      const options = { namespace: "bindings", maxEntries: 10, env };
-      const worker = createPluginStateKeyedStore("receipt-test", options);
-      const native = createPluginStateSyncKeyedStore("receipt-test", options);
-      const unrelated = createPluginStateSyncKeyedStore("receipt-test", {
-        namespace: "unrelated",
-        maxEntries: 10,
-        env,
-      });
-      await worker.register("session", { model: "first" });
-      const captured = await capturePluginStateReadDependencies(() => worker.lookup("session"));
-      try {
-        expect(captured.value).toEqual({ model: "first" });
-        unrelated.register("session", { model: "unrelated" });
-        native.register("another-session", { model: "another" });
-        expect(captured.isCurrent()).toBe(true);
+  it.each(["lookup", "observe"] as const)(
+    "keeps a prepared %s current only until its exact dependency commits",
+    async (method) => {
+      await withOpenClawTestState({ label: "plugin-state-read-dependencies" }, async ({ env }) => {
+        const options = { namespace: "bindings", maxEntries: 10, env };
+        const worker = createPluginStateKeyedStore("receipt-test", options);
+        const native = createPluginStateSyncKeyedStore("receipt-test", options);
+        const unrelated = createPluginStateSyncKeyedStore("receipt-test", {
+          namespace: "unrelated",
+          maxEntries: 10,
+          env,
+        });
+        await worker.register("session", { model: "first" });
+        const read = () =>
+          method === "observe"
+            ? worker.observe("session").then(({ value }) => value)
+            : worker.lookup("session");
+        const captured = await capturePluginStateReadDependencies(read);
+        try {
+          expect(captured.value).toEqual({ model: "first" });
+          unrelated.register("session", { model: "unrelated" });
+          native.register("another-session", { model: "another" });
+          expect(captured.isCurrent()).toBe(true);
 
-        native.register("session", { model: "replacement" });
-        expect(captured.isCurrent()).toBe(false);
-        expect(() => captured.assertCurrent()).toThrow("Plugin state changed");
-      } finally {
-        captured.release();
-      }
-      const replacement = await capturePluginStateReadDependencies(() => worker.lookup("session"));
-      expect(replacement.value).toEqual({ model: "replacement" });
-      expect(replacement.isCurrent()).toBe(true);
-      replacement.release();
-      expect(() => replacement.assertCurrent()).toThrow("Plugin state changed");
-    });
-  });
+          native.register("session", { model: "replacement" });
+          expect(captured.isCurrent()).toBe(false);
+          expect(() => captured.assertCurrent()).toThrow("Plugin state changed");
+        } finally {
+          captured.release();
+        }
+        const replacement = await capturePluginStateReadDependencies(read);
+        expect(replacement.value).toEqual({ model: "replacement" });
+        expect(replacement.isCurrent()).toBe(true);
+        replacement.release();
+        expect(() => replacement.assertCurrent()).toThrow("Plugin state changed");
+      });
+    },
+  );
 
   it("invalidates a captured legacy absence when its database is first created", async () => {
     await withOpenClawTestState(

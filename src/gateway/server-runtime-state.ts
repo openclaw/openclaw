@@ -12,6 +12,7 @@ import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worke
 import type { GatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
+import { getGatewayContextLifetime } from "../plugins/runtime/gateway-context-binding.js";
 import type { PluginRuntimeCore } from "../plugins/runtime/types-core.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -26,13 +27,17 @@ import {
   type GatewayTailscaleIngressEndpoint,
   type GatewayTailscaleIngressMode,
 } from "./ingress-attribution.js";
-import { createSandboxHostHttpServer } from "./mcp-app-sandbox-http.js";
+import {
+  createSandboxHostHttpRequestHandler,
+  createSandboxHostHttpServer,
+} from "./mcp-app-sandbox-http.js";
 import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
 import { createGatewayPortalService, type GatewayPortalService } from "./portals/portal-service.js";
+import { bindGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import type { ControlUiRootState } from "./server-control-ui-root.js";
 import { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";
-import { createGatewayHttpServer } from "./server-http.js";
+import { createGatewayHttpServer, getGatewayHttpRequestHandler } from "./server-http.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { HookClientIpConfig, HooksRequestHandler } from "./server/hooks-request-handler.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
@@ -324,6 +329,7 @@ export async function createGatewayHttpTransport(params: {
     ...(params.gatewayTls?.enabled ? { tlsOptions: params.gatewayTls.tlsOptions } : {}),
   });
   const reportUnattributableProxy = createGatewayUnattributableProxyReporter(params.log);
+  let controlUiUpgradeHandler: ReturnType<typeof attachGatewayUpgradeHandler> | undefined;
   const createGatewayListener = (
     ingressTransport: GatewayIngressTransport,
     tlsOptions: GatewayTlsRuntime["tlsOptions"] | undefined,
@@ -363,8 +369,9 @@ export async function createGatewayHttpTransport(params: {
       ingressTransport,
       reportUnattributableProxy,
     });
-    attachGatewayUpgradeHandler({
+    const upgradeHandler = attachGatewayUpgradeHandler({
       httpServer,
+      controlUiBasePath: params.controlUiBasePath,
       wss,
       handlePluginUpgrade,
       shouldEnforcePluginGatewayAuth,
@@ -385,6 +392,9 @@ export async function createGatewayHttpTransport(params: {
       ingressTransport,
       reportUnattributableProxy,
     });
+    if (ingressTransport.kind === "ordinary") {
+      controlUiUpgradeHandler ??= upgradeHandler;
+    }
     return httpServer;
   };
   for (const host of bindHosts) {
@@ -407,6 +417,21 @@ export async function createGatewayHttpTransport(params: {
   const httpServer = gatewayHttpServers[0];
   if (!httpServer) {
     throw new Error("Gateway HTTP server failed to start");
+  }
+  if (params.getGatewayRequestContext && controlUiUpgradeHandler) {
+    const gatewayLifetime = getGatewayContextLifetime(params.getGatewayRequestContext).signal;
+    const requestLifetime = params.httpRequestLifetime?.requestEntryLifetime?.signal;
+    bindGatewayControlUiIngressHost(params.getGatewayRequestContext, {
+      controlUiBasePath: params.controlUiBasePath,
+      getResolvedAuth: params.getResolvedAuth,
+      getRuntimeConfig: loadRuntimeConfig,
+      handleRequest: getGatewayHttpRequestHandler(httpServer),
+      handleUpgrade: controlUiUpgradeHandler,
+      handleSandboxRequest: createSandboxHostHttpRequestHandler(resolvePluginRouteRegistry),
+      signal: requestLifetime
+        ? AbortSignal.any([gatewayLifetime, requestLifetime])
+        : gatewayLifetime,
+    });
   }
   let mcpAppSandboxPort: number | undefined;
   let sandboxHostStartPromise: Promise<number> | null = null;

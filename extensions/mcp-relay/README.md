@@ -1,9 +1,9 @@
 # MCP Relay
 
 Bundled, disabled-by-default connector for the OpenClaw MCP relay. The Gateway
-opens an outbound WebSocket; no inbound Gateway port or Gateway credential is
-shared with the relay. Enable the plugin, follow any restart or reload instruction
-printed by the command, then run `openclaw mcp-relay pair`.
+opens an outbound WebSocket; no inbound Gateway port or configured Gateway token
+or password is shared with the relay. Enable the plugin, follow any restart or
+reload instruction printed by the command, then run `openclaw mcp-relay pair`.
 
 [Setup and security model](https://docs.openclaw.ai/plugins/mcp-relay).
 
@@ -11,6 +11,15 @@ This version supports status, conversation listing, paginated conversation
 reading, sending messages, and bounded reply polling. Messages use ordinary
 operator input without a distinct `mcp-relay` transcript source label. A run
 blocked on approval remains `running`; answer approval prompts in OpenClaw.
+
+ChatGPT can also show the Gateway's full Control UI through the same outbound
+connection, with no additional plugin configuration. This requires token or
+password Gateway authentication without `gateway.roles`. The browser pairs as
+an ordinary read/write device; admin and approval capabilities remain unavailable.
+Revoke its token through the ordinary Devices controls on a direct OpenClaw
+connection. Revoking its relay grant closes the UI path and its active work, but
+does not revoke ordinary device tokens. The relay sees UI traffic, including
+device tokens, in transit.
 
 ## Maintainer notes
 
@@ -25,6 +34,7 @@ Gateway; they never create their own identity or relay connection.
 | Private identity and grant state   | `api.runtime.state.openKeyedStore`, `withCurrent`, `observe`, `compareAndApply`                    | `src/plugin-sdk/plugin-state-runtime.ts`; `docs/plugins/sdk-runtime/state-and-system.md`, State namespaces                                                     |
 | Identity precedent                 | Reef stores private keys in plugin-scoped SQLite; this plugin uses Ed25519 PKCS8 and `node:crypto` | `extensions/reef/src/state.ts`; no private Reef imports                                                                                                        |
 | Outbound WebSocket                 | `WebSocket` from `plugin-sdk/websocket-runtime`                                                    | `src/plugin-sdk/websocket-runtime.ts`; `extensions/reef/src/transport.ts`                                                                                      |
+| Remote Control UI transport        | Service-owned `context.controlUiIngress`, `GatewayIngressSocketV1`                                 | `openclaw/plugin-sdk/gateway-ingress`; `docs/plugins/sdk-gateway-ingress.md`                                                                                   |
 | Running-Gateway CLI                | `api.registerCli`, `callGatewayFromCli`, `api.registerGatewayMethod`                               | `src/plugin-sdk/gateway-runtime.ts`; `docs/plugins/sdk-runtime/gateway-and-nodes.md`; Reef CLI itself uses relay HTTP, so it is not the RPC precedent          |
 | Agent roster and default           | `listAgentIds`, `tryResolveDefaultAgentId`, canonical `config.agents.entries` names                | `src/plugin-sdk/agent-scope-runtime.ts`; `docs/plugins/sdk-migration/how-to-migrate.md`, roster helpers                                                        |
 | Gateway version                    | `api.runtime.version`                                                                              | `docs/plugins/sdk-runtime.md`                                                                                                                                  |
@@ -41,6 +51,37 @@ public transcript precedent. This plugin uses worker-backed `chat.history`
 instead of its legacy synchronous catalog reader. It does not use Admin HTTP
 RPC's `dispatchGatewayMethod`: that capability requires an authenticated HTTP
 request scope, which a relay socket does not supply.
+
+### Control UI tunnel
+
+The relay owns per-grant UI and sandbox HTTPS origins, browser sessions, and
+routing. The plugin forwards paths unchanged through one lazily opened ingress
+handle per active grant. Core owns HTTP routing, device pairing, tokens, scope
+checks, and the isolation of the sandbox surface. The plugin uses the documented
+`gateway-ingress` contract and requests only `operator.read` and `operator.write`.
+The grant-state owner supplies the synchronous live-grant assertion; revocation,
+service retirement, relay disconnect, and changed origins close owned work.
+Sandbox-origin WebSocket opens return `forbidden` because the core contract has
+no sandbox upgrade adapter.
+
+Status reports UI availability from the optional host factory and the relay's
+`ready.ui` announcement. It reports the normalized configured Control UI base
+path, defaulting to `/`, without opening a handle. Authentication is checked on
+the first real open. An `unsupported-auth` result becomes an `unavailable` error
+with the core's configuration guidance and is cached until plugin restart or
+configuration reload. The accepted first-launch edge is that an unsupported
+Gateway displays this error inside the frame; subsequent status calls select
+the conversations view.
+
+Tunnel frames retain the 1 MiB frame ceiling, with at most 512 KiB of raw payload
+per chunk. Per relay connection, the plugin limits work to 64 HTTP streams and
+eight WebSockets, including pending opens, with 16 MiB request bodies and 32 MiB
+of combined queued response data and partial WebSocket messages. HTTP heads have
+a 60-second deadline and WebSocket opens a 10-second deadline. Core and endpoint
+limits can be stricter. HTTP cancellation, socket closure, disconnect, and stop
+settle the corresponding streams and sockets. Only core-issued
+`pluginReadCookies` are forwarded as cookies; arbitrary `Set-Cookie` headers and
+relay session cookies are excluded.
 
 ### State and update behavior
 
@@ -101,5 +142,5 @@ Future source labeling should be bound to the registering plugin by the
 existing agent-turn owner, rather than accepting caller-selected authority.
 Approval status belongs with the existing run/approval owners. Those narrow
 host contracts would require capability-ladder step 3; neither is implemented
-by this plugin or required for its current send/reply operations. No core or SDK
-files are changed.
+by this plugin or required for its current send/reply operations. The Control UI
+tunnel uses the separate core-owned remote ingress contract described above.

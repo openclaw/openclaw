@@ -85,9 +85,12 @@ describe("browser screencast sessions", () => {
     vi.useRealTimers();
   });
 
-  async function attach(params = screencastParams()): Promise<ScreencastViewer> {
+  async function attach(
+    params = screencastParams(),
+    ingress?: Parameters<typeof attachBrowserScreencastViewer>[2],
+  ): Promise<ScreencastViewer> {
     const viewer = new ScreencastViewer();
-    attachBrowserScreencastViewer(params, viewer as unknown as WebSocket);
+    attachBrowserScreencastViewer(params, viewer as unknown as WebSocket, ingress);
     await flush();
     return viewer;
   }
@@ -461,6 +464,59 @@ describe("browser screencast sessions", () => {
     await flush();
     expect(mocks.getPage).toHaveBeenCalledTimes(2);
     expect(successor.messages()).toHaveLength(1);
+  });
+
+  it("retains ingress cleanup until CDP detach completes and fences pending page acquisition", async () => {
+    const work: Promise<unknown>[] = [];
+    const grant = new AbortController();
+    let current = true;
+    const ingress = {
+      signal: grant.signal,
+      isCurrent: () => current,
+      trackWork<T>(pending: Promise<T>) {
+        work.push(pending);
+        return pending;
+      },
+    };
+    const viewer = await attach(screencastParams(), ingress);
+    let finishDetach!: () => void;
+    page.cdp.detach.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishDetach = resolve;
+        }),
+    );
+    grant.abort();
+    expect(viewer.close).toHaveBeenCalledWith(4006, "authority_revoked");
+    let settled = false;
+    const drain = Promise.all(work).then(() => {
+      settled = true;
+    });
+    await flush();
+    try {
+      expect(settled).toBe(false);
+    } finally {
+      finishDetach();
+    }
+    await drain;
+    expect(settled).toBe(true);
+
+    let resolvePage!: (value: Page) => void;
+    mocks.getPage.mockImplementationOnce(
+      () =>
+        new Promise<Page>((resolve) => {
+          resolvePage = resolve;
+        }),
+    );
+    const nextIngress = { ...ingress, signal: new AbortController().signal };
+    const next = await attach(screencastParams(), nextIngress);
+    current = false;
+    const captures = page.newCDPSession.mock.calls.length;
+    resolvePage(page as unknown as Page);
+    await flush();
+    await Promise.all(work);
+    expect(page.newCDPSession).toHaveBeenCalledTimes(captures);
+    expect(next.close).toHaveBeenCalledWith(4006, "authority_revoked");
   });
 
   it("does not send stale metadata after a title read crosses a navigation", async () => {
