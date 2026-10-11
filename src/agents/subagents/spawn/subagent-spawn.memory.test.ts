@@ -15,6 +15,7 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
     throw new Error("Memory subagent spawn allocated a database worker");
   }),
 }));
+// mock-isolation: Keep real session writes without initializing the spawn barrel's Gateway/channel state.
 vi.mock("./subagent-spawn.runtime.js", async () => ({
   ...(await import("../../../config/sessions/session-accessor.sqlite-entry.js")),
 }));

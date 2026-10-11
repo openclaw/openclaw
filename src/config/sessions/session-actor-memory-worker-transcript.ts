@@ -62,7 +62,7 @@ export function commitSessionActorMemoryWorkerTranscript(
         ...scope,
         agentId,
         sessionKey: scope.sessionKey ?? state.hot.target.sessionKey,
-        storePath: scope.storePath ?? state.hot.target.storePath,
+        storePath: scope.storePath ?? context.path,
       },
     };
     const plan = prepareTranscriptCommitFromSnapshot(preparedInput, entry, () => ({
