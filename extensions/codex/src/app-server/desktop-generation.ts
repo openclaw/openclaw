@@ -47,7 +47,12 @@ const state = defineCodexBuildState(
 );
 
 export function waitForCodexDesktopGeneration(): Promise<CodexDesktopGeneration | undefined> {
-  return state().owner?.wait() ?? Promise.resolve(undefined);
+  const current = state();
+  const owner = current.owner;
+  return (
+    (current.watchHealthy === false ? owner?.refresh() : owner?.wait()) ??
+    Promise.resolve(undefined)
+  );
 }
 
 export function createCodexDesktopGenerationService(

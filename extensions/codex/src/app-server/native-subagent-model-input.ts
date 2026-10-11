@@ -206,6 +206,7 @@ export async function prepareNativeModelToolInput(
     const targetThreadId = resolveInputTarget(request, dependencies);
     const targetParent = dependencies.parents.get(targetThreadId);
     const targetChild = dependencies.knownChildren.get(targetThreadId);
+    const targetLoad = (targetParent ?? targetChild)?.nativeLoad;
     const targetConfiguration = targetChild?.configurationQualification;
     const targetRouting = request.readQualification(targetThreadId);
     let metadataRead = false;
@@ -230,6 +231,7 @@ export async function prepareNativeModelToolInput(
       if (
         dependencies.parents.get(targetThreadId) !== targetParent ||
         dependencies.knownChildren.get(targetThreadId) !== targetChild ||
+        (targetParent ?? targetChild)?.nativeLoad !== targetLoad ||
         targetChild?.configurationQualification !== targetConfiguration ||
         request.readQualification(targetThreadId) !== targetRouting
       ) {

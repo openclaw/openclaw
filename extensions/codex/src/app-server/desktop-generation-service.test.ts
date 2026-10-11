@@ -4,7 +4,10 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createCodexDesktopGenerationService } from "./desktop-generation.js";
+import {
+  createCodexDesktopGenerationService,
+  waitForCodexDesktopGeneration,
+} from "./desktop-generation.js";
 
 class FakeWatcher extends EventEmitter {
   close = vi.fn();
@@ -115,6 +118,13 @@ describe("Codex desktop generation service", () => {
       expect(harness.registrations).toHaveLength(failures === 1 ? 3 : 0);
       await vi.advanceTimersByTimeAsync(60_000);
       expect(harness.watchAttempts).toBe(4);
+      if (failures === Infinity) {
+        harness.setFingerprint("updated-without-watcher");
+        const next = waitForCodexDesktopGeneration();
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(await next).toMatchObject({ fingerprint: "updated-without-watcher" });
+        expect(harness.watchAttempts).toBe(4);
+      }
     },
   );
 

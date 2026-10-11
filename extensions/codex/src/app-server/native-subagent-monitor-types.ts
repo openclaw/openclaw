@@ -135,6 +135,7 @@ export type NativeChildAdmissionEvidence = DirectSpawnEvidence &
   );
 export type ParentState = {
   parentThreadId: string;
+  nativeLoad?: { loaded: boolean };
   // Retirement sees pending captures, but notifications cannot admit their work.
   preparing?: true;
   pendingRegistrations?: number;
@@ -200,6 +201,7 @@ export type ChildState = NativeSubagentAssignment & {
 };
 
 export type KnownChild = {
+  nativeLoad?: { loaded: boolean };
   configurationQualification?: CodexInferenceThreadQualification;
   parent: ParentState;
   nativeParentThreadId: string;

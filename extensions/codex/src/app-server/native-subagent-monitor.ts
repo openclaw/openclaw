@@ -665,6 +665,27 @@ class Monitor {
       return;
     }
     const params = isJsonObject(notification.params) ? notification.params : undefined;
+    const startedThread = isJsonObject(params?.thread) ? params.thread : undefined;
+    const threadId =
+      readString(params, "threadId")?.trim() ?? readString(startedThread, "id")?.trim();
+    const threadStatus = isJsonObject(params?.status)
+      ? normalizeIdentifier(readString(params.status, "type"))
+      : undefined;
+    const loadOwner = threadId
+      ? (this.parentStates.get(threadId) ?? this.knownChildren.get(threadId))
+      : undefined;
+    if (
+      loadOwner &&
+      (notification.method === "thread/started" ||
+        notification.method === "thread/closed" ||
+        (notification.method === "thread/status/changed" && threadStatus))
+    ) {
+      const loaded = notification.method !== "thread/closed" && threadStatus !== "notloaded";
+      if (loadOwner.nativeLoad?.loaded !== loaded) {
+        // Loaded receivers keep their own configuration; pending reads cannot qualify a new load.
+        loadOwner.nativeLoad = { loaded };
+      }
+    }
     if (notification.method === "thread/closed") {
       const closedThreadId = readString(params, "threadId");
       if (closedThreadId) {
@@ -716,12 +737,6 @@ class Monitor {
       }
     }
     const notificationState = this.resolveNotificationState(notification);
-    const startedThread = isJsonObject(params?.thread) ? params.thread : undefined;
-    const threadId =
-      readString(params, "threadId")?.trim() ?? readString(startedThread, "id")?.trim();
-    const threadStatus = isJsonObject(params?.status)
-      ? normalizeIdentifier(readString(params.status, "type"))
-      : undefined;
     const parent = threadId ? this.parentStates.get(threadId) : undefined;
     if (parent) {
       observeNativeParentTurn(parent, notification);
