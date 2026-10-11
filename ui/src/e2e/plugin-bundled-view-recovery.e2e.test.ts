@@ -75,11 +75,13 @@ suite.define(() => {
       const documentReachable = new Promise<void>((resolve) => {
         markDocumentReachable = resolve;
       });
-      await page.route(/\/plugin(?:\?.*)?$/u, async (route) => {
+      let documentProbes = 0;
+      await page.route(new URL("index.html", suite.server.baseUrl).href, async (route) => {
         if (route.request().method() !== "HEAD") {
           await route.continue();
           return;
         }
+        documentProbes += 1;
         await documentReachable;
         await route.fulfill({ status: 200 });
       });
@@ -111,7 +113,7 @@ suite.define(() => {
 
       await expect.poll(() => failedRequests).toBe(2);
       await alert.waitFor();
-      await page.waitForTimeout(500);
+      expect(documentProbes).toBe(1);
       expect(await alert.count()).toBe(1);
       expect(documentRequestCount).toBe(1);
 
@@ -120,6 +122,7 @@ suite.define(() => {
       expect(await alert.count()).toBe(0);
       expect(assetRequests).toBeGreaterThan(2);
       expect(documentRequestCount).toBe(2);
+      expect(documentProbes).toBe(2);
       await gateway.waitForRequest("logbook.status");
       await page.screenshot({
         fullPage: true,
