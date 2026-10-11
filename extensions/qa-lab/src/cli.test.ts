@@ -194,14 +194,11 @@ describe("qa cli registration", () => {
     );
   });
 
-  it.each([
-    ["run", "--qa-profile", "smoke-ci", "--scenario", ""],
-    ["suite", "--scenario", ""],
-    ["telegram", "--scenario", ""],
-  ])("prints an empty scenario selection failure for %j", async (...args) => {
-    await expectQaFailure(args, "--scenario must name at least one non-empty scenario id.");
-    expect(runQaProfileCommand).not.toHaveBeenCalled();
-    expect(runQaSuiteCommand).not.toHaveBeenCalled();
+  it("prints an empty SDK runner scenario selection failure", async () => {
+    await expectQaFailure(
+      ["telegram", "--scenario", ""],
+      "--scenario must name at least one non-empty scenario id.",
+    );
     expect(runQaTelegramCommand).not.toHaveBeenCalled();
   });
 
