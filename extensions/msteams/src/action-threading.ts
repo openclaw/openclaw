@@ -1,4 +1,8 @@
-import type { ChannelToolSend } from "openclaw/plugin-sdk/channel-contract";
+import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
+import type {
+  ChannelMessageActionContext,
+  ChannelToolSend,
+} from "openclaw/plugin-sdk/channel-contract";
 import { stripChannelTargetPrefix } from "openclaw/plugin-sdk/channel-core";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -77,6 +81,39 @@ export function msteamsContextTargetsMatch(
   }
   const currentMessaging = normalizeMSTeamsThreadingTarget(context.currentMessagingTarget);
   return Boolean(currentMessaging && currentMessaging === normalizedTarget);
+}
+
+export function resolveMSTeamsActionMessage(
+  ctx: Pick<ChannelMessageActionContext, "params" | "toolContext">,
+  to: string,
+  allowCurrentMessageIdFallback = false,
+): { messageId: string; threadRootId?: string } {
+  const canUseCurrentMessageId =
+    allowCurrentMessageIdFallback &&
+    msteamsContextTargetsMatch(to, {
+      currentChannelId: ctx.toolContext?.currentChannelId ?? undefined,
+      currentMessagingTarget:
+        normalizeOptionalString(ctx.toolContext?.currentGraphChannelId) ??
+        normalizeOptionalString(ctx.toolContext?.currentMessagingTarget),
+    });
+  const resolved = canUseCurrentMessageId
+    ? resolveReactionMessageId({
+        args: ctx.params,
+        toolContext: { currentMessageId: ctx.toolContext?.currentMessageId ?? undefined },
+      })
+    : (normalizeOptionalString(ctx.params.messageId) ?? "");
+  const messageId = resolved == null ? "" : String(resolved).trim();
+  // Graph addresses a channel reply only beneath its thread root. Carry the root for
+  // the current message; never infer one for another explicit message id.
+  const currentMessageId = ctx.toolContext?.currentMessageId;
+  const threadRootId =
+    canUseCurrentMessageId &&
+    ctx.toolContext?.currentChatType === "channel" &&
+    currentMessageId != null &&
+    messageId === String(currentMessageId).trim()
+      ? normalizeOptionalString(ctx.toolContext.currentThreadTs)
+      : undefined;
+  return { messageId, ...(threadRootId ? { threadRootId } : {}) };
 }
 
 export function resolveMSTeamsAutoThreadId(params: {

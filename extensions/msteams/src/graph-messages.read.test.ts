@@ -480,11 +480,12 @@ describe("unpinMessageMSTeams", () => {
 });
 
 describe("MSTeams reactions", () => {
+  const channelPath = "/teams/team-id-1/channels/channel-id-1";
   it.each([
     {
       operation: "react",
       to: CHAT_ID,
-      path: `/chats/${encodeURIComponent(CHAT_ID)}`,
+      messagePath: `/chats/${encodeURIComponent(CHAT_ID)}/messages/msg-1`,
       reactionType: " LAUGH ",
       expected: "😆",
       action: "setReaction",
@@ -493,32 +494,76 @@ describe("MSTeams reactions", () => {
     {
       operation: "unreact",
       to: CHANNEL_TO,
-      path: "/teams/team-id-1/channels/channel-id-1",
+      messagePath: `${channelPath}/messages/msg-1`,
       reactionType: " 🎉 ",
       expected: "🎉",
       action: "unsetReaction",
     },
+    {
+      operation: "react",
+      to: CHANNEL_TO,
+      threadRootId: "root-1",
+      messagePath: `${channelPath}/messages/root-1/replies/msg-1`,
+      reactionType: "🎉",
+      expected: "🎉",
+      action: "setReaction",
+    },
+    {
+      operation: "unreact",
+      to: CHANNEL_TO,
+      threadRootId: "msg-1",
+      messagePath: `${channelPath}/messages/msg-1`,
+      reactionType: "🎉",
+      expected: "🎉",
+      action: "unsetReaction",
+    },
   ])(
-    "$operation normalizes $reactionType for $to",
-    async ({ operation, to, path, reactionType, expected, action }) => {
+    "$operation normalizes $reactionType for $messagePath",
+    async ({ operation, to, threadRootId, messagePath, reactionType, expected, action }) => {
       mockState.mutateGraphJson.mockResolvedValue(undefined);
       const invoke = operation === "react" ? reactMessageMSTeams : unreactMessageMSTeams;
-      await expect(invoke({ cfg: {}, to, messageId: "msg-1", reactionType })).resolves.toEqual({
-        ok: true,
-      });
+      await expect(
+        invoke({ cfg: {}, to, messageId: "msg-1", threadRootId, reactionType }),
+      ).resolves.toEqual({ ok: true });
       expect(mockState.resolveGraphToken).toHaveBeenCalledWith(
         {},
         { preferDelegated: true, accountId: undefined },
       );
       expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
         token: TOKEN,
-        path: `${path}/messages/msg-1/${action}`,
+        path: `${messagePath}/${action}`,
         method: "POST",
         body: { reactionType: expected },
         beta: true,
       });
     },
   );
+
+  it("reads a channel reply and its reactions beneath the thread root", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({ id: "msg-1", reactions: [] });
+    const target = { cfg: {}, to: CHANNEL_TO, messageId: "msg-1", threadRootId: "root-1" };
+
+    await getMessageMSTeams(target);
+    await listReactionsMSTeams(target);
+
+    expect(mockState.fetchGraphJson.mock.calls.map(([request]) => request.path)).toEqual([
+      "/teams/team-id-1/channels/channel-id-1/messages/root-1/replies/msg-1",
+      "/teams/team-id-1/channels/channel-id-1/messages/root-1/replies/msg-1",
+    ]);
+  });
+
+  it("ignores a thread root outside channels", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({ id: "msg-1", reactions: [] });
+
+    await listReactionsMSTeams({
+      cfg: {},
+      to: CHAT_ID,
+      messageId: "msg-1",
+      threadRootId: "root-1",
+    });
+
+    expect(readFirstGraphPath()).toBe(`/chats/${encodeURIComponent(CHAT_ID)}/messages/msg-1`);
+  });
 });
 
 function readFirstGraphPath(): string {
