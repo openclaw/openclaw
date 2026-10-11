@@ -7,6 +7,7 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
+import { emitInternalRunUsageDiagnostic } from "../../agents/internal-run-usage.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -231,9 +232,19 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
       ...(capability ? { cronCreatorAuthorityCapability: capability } : {}),
     });
   try {
-    assertSkillReviewRunSucceeded(
-      capability ? await runWithCronCreatorAuthorityCapability(capability, run) : await run(),
-    );
+    const result = capability
+      ? await runWithCronCreatorAuthorityCapability(capability, run)
+      : await run();
+    emitInternalRunUsageDiagnostic(result, {
+      config,
+      agentId,
+      agentDir: foregroundPromptContext.agentDir,
+      sessionId: reviewSession.sessionId,
+      sessionKey: reviewSession.sessionKey,
+      provider: candidate.ctx.modelProviderId,
+      model: candidate.ctx.modelId,
+    });
+    assertSkillReviewRunSucceeded(result);
   } finally {
     // Each skill_workshop call commits on its own, so a failed or aborted run may have changed skills.
     const changes = await listWorkshopChanges(agentId, { runId });
