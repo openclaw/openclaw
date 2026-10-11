@@ -353,7 +353,7 @@ describe("qa-channel plugin", () => {
   });
 
   it(
-    "attaches sanitized agent tool starts to outbound qa bus messages",
+    "attaches original agent tool starts to outbound qa bus messages",
     { timeout: 20_000 },
     async () => {
       const harness = await startQaChannelTestHarness({
@@ -401,8 +401,8 @@ describe("qa-channel plugin", () => {
           {
             name: "exec",
             arguments: {
-              command: "[redacted]",
-              apiToken: "[redacted]",
+              command: "pwd",
+              apiToken: "secret-token",
             },
           },
         ]);

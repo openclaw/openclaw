@@ -115,53 +115,54 @@ describe("onepassword list with SQLite grants", () => {
     expect(getItem).not.toHaveBeenCalled();
   });
 
-  it("ignores unrelated corrupt JSON but reports selected corruption", async () => {
-    const grants = openGrants();
-    const key = grantKey(invocation.agentId, "selected");
-    await grants.register(key, grant("selected"));
-    await grants.register("unrelated", grant("unrelated", "other"));
-    const corruptRow = async (entryKey: string) => {
-      // Raw corruption fixtures need exclusive ownership before readers reopen.
-      await closeOpenClawStateDatabaseAsync();
+  it.each(["selected", "unrelated"])(
+    "validates %s corrupt JSON before caching grants",
+    async (corrupt) => {
       const { db } = openOpenClawStateDatabase({ env });
-      db.prepare(
-        "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = 'onepassword' AND namespace = 'grants' AND entry_key = ?",
-      ).run("{", entryKey);
+      const insert = db.prepare(
+        "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at, expires_at) VALUES ('onepassword', 'grants', ?, ?, ?, NULL)",
+      );
+      // Seed corruption before any keyed-store write receipt can cache valid values.
+      insert.run(
+        grantKey(invocation.agentId, "selected"),
+        corrupt === "selected" ? "{" : JSON.stringify(grant("selected")),
+        NOW,
+      );
+      insert.run(
+        "unrelated",
+        corrupt === "unrelated" ? "{" : JSON.stringify(grant("unrelated", "other")),
+        NOW,
+      );
       await closeOpenClawStateDatabaseAsync();
-    };
-    await corruptRow("unrelated");
-    expect((await setup(["selected"], grants).list()).details).toMatchObject({
-      ok: true,
-      items: [{ slug: "selected", standingGrantActive: true }],
-    });
-    const { lookupMany: _lookupMany, ...olderStore } = grants;
-    expect((await setup(["selected"], olderStore).list()).details).toMatchObject({
-      ok: false,
-      error: { code: "PLUGIN_STATE_CORRUPT" },
-    });
-    await corruptRow(key);
-    expect((await setup(["selected"], grants).list()).details).toMatchObject({
-      ok: false,
-      error: { code: "PLUGIN_STATE_CORRUPT" },
-    });
-  });
+      const grants = openGrants();
+      expect((await setup(["selected"], grants).list()).details).toMatchObject(
+        corrupt === "selected"
+          ? { ok: false, error: { code: "PLUGIN_STATE_CORRUPT" } }
+          : { ok: true, items: [{ slug: "selected", standingGrantActive: true }] },
+      );
+      const { lookupMany: _lookupMany, ...olderStore } = grants;
+      expect((await setup(["selected"], olderStore).list()).details).toMatchObject({
+        ok: false,
+        error: { code: "PLUGIN_STATE_CORRUPT" },
+      });
+    },
+  );
 
   it("treats null and expired rows as inactive without changing stored rows", async () => {
-    const grants = openGrants();
-    for (const slug of ["null-value", "expired-row"]) {
-      await grants.register(grantKey(invocation.agentId, slug), grant(slug));
-    }
-    await closeOpenClawStateDatabaseAsync();
     const { db } = openOpenClawStateDatabase({ env });
-    db.prepare("UPDATE plugin_state_entries SET value_json = 'null' WHERE entry_key = ?").run(
-      grantKey(invocation.agentId, "null-value"),
+    const insert = db.prepare(
+      "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at, expires_at) VALUES ('onepassword', 'grants', ?, ?, ?, ?)",
     );
-    db.prepare("UPDATE plugin_state_entries SET expires_at = ? WHERE entry_key = ?").run(
-      NOW,
+    insert.run(grantKey(invocation.agentId, "null-value"), "null", NOW, null);
+    insert.run(
       grantKey(invocation.agentId, "expired-row"),
+      JSON.stringify(grant("expired-row")),
+      NOW,
+      NOW,
     );
     const before = db.prepare("SELECT * FROM plugin_state_entries ORDER BY entry_key").all();
     await closeOpenClawStateDatabaseAsync();
+    const grants = openGrants();
     expect((await setup(["null-value", "expired-row"], grants).list()).details).toMatchObject({
       ok: true,
       items: [
