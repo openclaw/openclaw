@@ -523,7 +523,7 @@ extensions/memory-core/src/memory/manager-db.ts	2
 extensions/memory-core/src/memory/manager-embedding-errors.ts	2
 extensions/memory-core/src/memory/manager-search.ts	4
 extensions/memory-core/src/memory/manager-vector-rebuild-state.ts	1
-extensions/memory-core/src/memory/manager.ts	2
+extensions/memory-core/src/memory/manager.ts	1
 extensions/memory-core/src/memory/search-deadline.ts	1
 extensions/memory-core/src/migration/doctor-host-event-sources.ts	1
 extensions/memory-core/src/migration/doctor-memory-sidecar-import.ts	6
@@ -2578,7 +2578,7 @@ src/talk/provider-internal.ts	2
 src/talk/turn-context-tracker.ts	2
 src/trajectory/export.ts	8
 src/trajectory/runtime-store.sqlite.ts	1
-src/trajectory/runtime.ts	3
+src/trajectory/runtime.ts	2
 src/transcripts/config.ts	2
 src/transcripts/store-export-ownership.ts	2
 src/transcripts/store-sqlite.ts	2

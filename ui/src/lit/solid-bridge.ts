@@ -382,7 +382,17 @@ export function LitContent(props: {
   if (className) {
     host.className = className;
   }
-  createLitContentRef(() => props.render())(host);
-
+  let part: ReturnType<typeof renderLit> | undefined;
+  // Parent observers discover controls in these stateless fragments immediately.
+  createRenderEffect(
+    () => props.render(),
+    (template) => {
+      part = renderLit(template, host, { host });
+    },
+  );
+  onCleanup(() => {
+    part?.setConnected(false);
+    renderLit(nothing, host);
+  });
   return host;
 }

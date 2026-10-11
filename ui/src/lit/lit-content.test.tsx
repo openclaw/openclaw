@@ -3,8 +3,28 @@ import { AsyncDirective } from "lit/async-directive.js";
 import { directive } from "lit/directive.js";
 import { createSignal, flush } from "solid-js";
 import { expect, it, vi } from "vitest";
+import { LitRouteHost } from "../app/lit-route-host.tsx";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { LitContent } from "./solid-bridge.ts";
+import { renderSolidSnapshot } from "./solid-snapshot.ts";
+
+it("renders inert Solid artwork inside a connected Lit route", () => {
+  const view = mountSolid(() => (
+    <LitRouteHost
+      renderValue={() =>
+        html`${renderSolidSnapshot(() => (
+          <svg aria-label="Avatar artwork">
+            <circle cx="4" cy="5" r="2" />
+          </svg>
+        ))}`
+      }
+    />
+  ));
+  flush();
+  const artwork = view.container.querySelector('svg[aria-label="Avatar artwork"]');
+  expect(artwork?.querySelector("circle")?.getAttribute("cx")).toBe("4");
+  expect(artwork?.namespaceURI).toBe("http://www.w3.org/2000/svg");
+});
 
 it("retains a Lit island's nodes and disconnects its directives on Solid disposal", () => {
   const disconnected = vi.fn();

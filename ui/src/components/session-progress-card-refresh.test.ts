@@ -1,14 +1,19 @@
 /* @vitest-environment jsdom */
 import type { ProgressCard } from "@openclaw/gateway-protocol";
-import { createSignal } from "solid-js";
+import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { flush } from "../test-helpers/solid-settle.ts";
 import {
-  SessionProgressCard,
-  type SessionProgressCardProps,
-} from "./session-progress-card-view.tsx";
-import type { SessionProgressCardRefreshAction } from "./session-progress-card.ts";
+  renderSessionProgressCard,
+  type SessionProgressCardRefreshAction,
+} from "./session-progress-card.ts";
+
+const containers: HTMLElement[] = [];
+function createContainer() {
+  const container = document.createElement("div");
+  document.body.append(container);
+  containers.push(container);
+  return container;
+}
 
 const NOW_MS = Date.UTC(2026, 7, 26, 13, 37);
 
@@ -30,6 +35,10 @@ describe("progress card refresh control", () => {
     vi.setSystemTime(NOW_MS);
   });
   afterEach(() => {
+    for (const container of containers.splice(0)) {
+      render(nothing, container);
+      container.remove();
+    }
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
@@ -38,20 +47,23 @@ describe("progress card refresh control", () => {
     async (collapsed) => {
       const onRefresh = vi.fn();
       const onManipulate = vi.fn();
-      const [state, setState] = createSignal<SessionProgressCardRefreshAction["state"]>();
-      const { container } = mountSolid(() => (
-        <SessionProgressCard
-          card={progressCard}
-          placement="composer"
-          collapseComposerByDefault={collapsed}
-          composerDisclosureContext={{ onManipulate }}
-          refreshAction={{ onRefresh, state: state() }}
-        />
-      ));
-      const show = (next?: SessionProgressCardRefreshAction["state"]) => {
-        setState(next);
-        flush();
-      };
+      const container = createContainer();
+      const show = (state?: SessionProgressCardRefreshAction["state"]) =>
+        render(
+          renderSessionProgressCard(
+            progressCard,
+            "composer",
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            true,
+            collapsed,
+            { onManipulate },
+            { onRefresh, state },
+          ),
+          container,
+        );
       show();
       await Promise.resolve();
       const details = container.querySelector("details")!;
@@ -103,16 +115,19 @@ describe("progress card refresh control", () => {
   );
 
   it("uses a fresh saved timestamp rather than an older completed run after reload", () => {
-    const { container } = mountSolid(() => (
-      <SessionProgressCard
-        card={{ ...progressCard, updatedAt: NOW_MS }}
-        placement="composer"
-        sessionStatus="done"
-        startedAt={NOW_MS - 120_000}
-        endedAt={NOW_MS - 60_000}
-        hasActiveRun={false}
-      />
-    ));
+    const container = createContainer();
+    render(
+      renderSessionProgressCard(
+        { ...progressCard, updatedAt: NOW_MS },
+        "composer",
+        undefined,
+        "done",
+        NOW_MS - 120_000,
+        NOW_MS - 60_000,
+        false,
+      ),
+      container,
+    );
     expect(container.querySelector("time")?.textContent).toBe("Updated just now");
     expect(container.querySelector("time")?.getAttribute("datetime")).toBe(
       new Date(NOW_MS).toISOString(),
@@ -122,34 +137,40 @@ describe("progress card refresh control", () => {
   });
 
   it("does not expose refresh on read-only board cards", () => {
-    const { container } = mountSolid(() => (
-      <SessionProgressCard
-        card={progressCard}
-        placement="board"
-        refreshAction={{ onRefresh: vi.fn() }}
-      />
-    ));
+    const container = createContainer();
+    render(
+      renderSessionProgressCard(
+        progressCard,
+        "board",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true,
+        false,
+        undefined,
+        { onRefresh: vi.fn() },
+      ),
+      container,
+    );
     expect(container.querySelector(".session-progress-card__refresh")).toBeNull();
   });
 
   it("retains manual disclosure across card updates and retires absent cards", () => {
-    const [card, setCard] = createSignal<ProgressCard | null>(null);
-    const { container } = mountSolid(() => (
-      <SessionProgressCard card={card()} placement="composer" />
-    ));
+    const container = createContainer();
+    const show = (card: ProgressCard | null) =>
+      render(renderSessionProgressCard(card, "composer"), container);
+    show(null);
     expect(container.querySelector("details")).toBeNull();
-    setCard(progressCard);
-    flush();
+    show(progressCard);
     const details = container.querySelector("details")!;
     details.querySelector("summary")!.click();
     expect(details.open).toBe(false);
-    setCard({ ...progressCard, revision: 3, markdown: "**Updated progress**" });
-    flush();
+    show({ ...progressCard, revision: 3, markdown: "**Updated progress**" });
     expect(container.querySelector("details")).toBe(details);
     expect(details.open).toBe(false);
     expect(details.querySelector("strong")?.textContent).toBe("Updated progress");
-    setCard(null);
-    flush();
+    show(null);
     expect(container.querySelector("details")).toBeNull();
     // Deliver jsdom's queued details toggle without advancing the 30s activity interval.
     vi.advanceTimersByTime(0);
@@ -157,15 +178,13 @@ describe("progress card refresh control", () => {
   });
 
   it("retires disclosure listeners when changing to a board card", () => {
-    const [placement, setPlacement] =
-      createSignal<SessionProgressCardProps["placement"]>("composer");
-    const { container } = mountSolid(() => (
-      <SessionProgressCard card={progressCard} placement={placement()} />
-    ));
+    const container = createContainer();
+    const show = (placement: Parameters<typeof renderSessionProgressCard>[1]) =>
+      render(renderSessionProgressCard(progressCard, placement), container);
+    show("composer");
     const details = container.querySelector("details")!;
     const summary = details.querySelector("summary")!;
-    setPlacement("board");
-    flush();
+    show("board");
     expect(container.querySelector("details")).toBeNull();
     expect(container.querySelector("section")?.dataset.progressCardPlacement).toBe("board");
     const click = new MouseEvent("click", { bubbles: true, cancelable: true });
@@ -174,26 +193,23 @@ describe("progress card refresh control", () => {
     // Native details toggle delivery is a task, separate from the owned activity timer.
     vi.advanceTimersByTime(0);
     expect(vi.getTimerCount()).toBe(1);
-    setPlacement("details");
-    flush();
+    show("details");
     expect(container.querySelector("details")?.open).toBe(true);
     vi.advanceTimersByTime(0);
     expect(vi.getTimerCount()).toBe(1);
   });
 
   it("refreshes relative activity while mounted and clears its timer on unmount", () => {
-    const { container, unmount } = mountSolid(() => (
-      <SessionProgressCard
-        card={{ ...progressCard, updatedAt: NOW_MS - 10_000 }}
-        placement="composer"
-      />
-    ));
+    const container = createContainer();
+    render(
+      renderSessionProgressCard({ ...progressCard, updatedAt: NOW_MS - 10_000 }, "composer"),
+      container,
+    );
     const time = container.querySelector("time")!;
     expect(time.textContent).toBe("Updated just now");
     vi.advanceTimersByTime(60_000);
-    flush();
     expect(time.textContent).toBe("Updated 1m ago");
-    unmount();
+    render(nothing, container);
     expect(vi.getTimerCount()).toBe(0);
   });
 });

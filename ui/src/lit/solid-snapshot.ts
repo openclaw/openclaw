@@ -1,19 +1,21 @@
-import { render, type JSX } from "@solidjs/web";
-import { runWithOwner } from "solid-js";
+import { insert, type JSX } from "@solidjs/web";
+import { createRoot, runWithOwner } from "solid-js";
 
 // Legacy Lit consumers need inert artwork, not a second live Solid root.
 export function renderSolidSnapshot(view: () => JSX.Element): DocumentFragment {
-  return runWithOwner(null, () => {
-    const host = document.createElement("div");
-    const dispose = render(view, host);
-    try {
-      const snapshot = document.createDocumentFragment();
-      for (const child of host.childNodes) {
-        snapshot.append(child.cloneNode(true));
+  return runWithOwner(null, () =>
+    createRoot((dispose) => {
+      const host = document.createElement("div");
+      try {
+        insert(host, view());
+        const snapshot = document.createDocumentFragment();
+        for (const child of host.childNodes) {
+          snapshot.append(child.cloneNode(true));
+        }
+        return snapshot;
+      } finally {
+        dispose();
       }
-      return snapshot;
-    } finally {
-      dispose();
-    }
-  });
+    }),
+  );
 }
