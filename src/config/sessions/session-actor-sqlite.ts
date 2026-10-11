@@ -7,8 +7,10 @@ import type {
   SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import { projectSessionActorAuthority } from "./session-actor-command.js";
 import type {
   SessionActorAuthority,
+  SessionActorAuthorityFacts,
   SessionActorCommandContext,
   SessionActorCommitObserver,
   SessionActorHotState,
@@ -118,7 +120,7 @@ export function createSqliteSessionActorExecutor(
     observe?: (
       native: NativeAdmission,
       stage: "transaction" | "commit",
-      state: SessionActorHotState,
+      state: SessionActorAuthorityFacts,
       final: boolean,
     ) => void,
   ) => {
@@ -146,7 +148,7 @@ export function createSqliteSessionActorExecutor(
           throw new Error("Session actor admission belongs to another target");
         }
         // SAFETY: The private MessagePort already detached this snapshot from the paired kernel.
-        const snapshot = facts.snapshot as SessionActorHotState;
+        const snapshot = facts.snapshot as SessionActorAuthorityFacts;
         authority.authorize(request.stage, structuredClone(snapshot), facts.publication);
         observe?.(native, request.stage, snapshot, facts.final === true);
       } else if (
@@ -168,26 +170,36 @@ export function createSqliteSessionActorExecutor(
       params.assertReadable();
       authority.assertCurrent();
       let snapshot = params.replica.read();
-      if (!snapshot) {
+      for (let attempt = 0; !snapshot && attempt < 2; attempt += 1) {
         const pending = params.replica.beginRead();
         try {
           snapshot = await scope.execute({ type: "session.actor.read", input: { target } });
           generation?.assertCurrent();
           if (!pending.install(snapshot)) {
-            throw new Error("Session actor changed before its read could publish");
+            // A committed receipt can supersede the read while its reply is in flight.
+            snapshot = params.replica.read();
           }
-          fenced = false;
         } finally {
           pending.cancel();
         }
       }
+      if (!snapshot) {
+        throw new Error("Session actor changed before its read could publish");
+      }
+      fenced = false;
       params.assertReadable();
       authority.assertCurrent();
       authority.authorize("commit", snapshot);
       authority.assertCurrent();
       params.assertReadable();
       if (!isInstalled(snapshot)) {
-        throw new Error("Session actor changed before read disclosure");
+        snapshot = params.replica.read();
+        if (!snapshot) {
+          throw new Error("Session actor changed before read disclosure");
+        }
+        authority.authorize("commit", snapshot);
+        authority.assertCurrent();
+        params.assertReadable();
       }
       return snapshot;
     }, authorize(authority));
@@ -201,8 +213,8 @@ export function createSqliteSessionActorExecutor(
     type Outcome = SessionActorOutcome<SessionActorPhaseResults[Phase]>;
     const selected: {
       native?: NativeAdmission;
-      transactionSnapshot?: SessionActorHotState;
-      commitSnapshot?: SessionActorHotState;
+      transactionSnapshot?: SessionActorAuthorityFacts;
+      commitSnapshot?: SessionActorAuthorityFacts;
     } = {};
     let running: Promise<Outcome> | undefined;
     let committed: Extract<Outcome, { kind: "committed" }> | undefined;
@@ -268,7 +280,17 @@ export function createSqliteSessionActorExecutor(
                   selected.transactionSnapshot.version.epoch &&
                 selected.commitSnapshot.version.sequence ===
                   selected.transactionSnapshot.version.sequence + 1 &&
-                isDeepStrictEqual(receipt.postimage, selected.commitSnapshot)
+                isRecord(receipt.postimage) &&
+                isDeepStrictEqual(
+                  {
+                    target: receipt.postimage.target,
+                    version: receipt.postimage.version,
+                    entry: receipt.postimage.entry,
+                    writeToken: receipt.postimage.writeToken,
+                    dependencySessionIds: receipt.postimage.dependencySessionIds,
+                  },
+                  selected.commitSnapshot,
+                )
               ) {
                 // SAFETY: The paired native receipt owns the result type; the checks above match its command and postimage.
                 committed = structuredClone(evidence) as Extract<Outcome, { kind: "committed" }>;
@@ -290,7 +312,10 @@ export function createSqliteSessionActorExecutor(
                   (reply.value.kind === "stale-version" &&
                     captured.expected !== undefined &&
                     isDeepStrictEqual(reply.value.expected, captured.expected) &&
-                    isDeepStrictEqual(reply.value.postimage, selected.transactionSnapshot) &&
+                    isDeepStrictEqual(
+                      projectSessionActorAuthority(reply.value.postimage),
+                      selected.transactionSnapshot,
+                    ) &&
                     !isDeepStrictEqual(reply.value.postimage.version, captured.expected))) &&
                 (settled.kind === "not-entered" ||
                   native.admission.settlement?.kind === "completed")

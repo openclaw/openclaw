@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { serialize } from "node:v8";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   readSqliteDatabasePendingScopedWriteToken,
   readSqliteDatabaseScopedWriteToken,
@@ -18,6 +19,7 @@ import {
 import { deferSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-admission.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
+import { projectSessionActorAuthority } from "./session-actor-command.js";
 import type {
   SessionActorOperations,
   SessionActorOutcome,
@@ -176,7 +178,10 @@ export function createSessionActorWorker(
         const opened = database;
         if (command.type === "session.actor.read") {
           const before = read(database, target);
-          context.admit("transaction", { kind: "session-actor-admission", snapshot: before.hot });
+          context.admit("transaction", {
+            kind: "session-actor-admission",
+            snapshot: projectSessionActorAuthority(before.hot),
+          });
           observed.settled("read");
           return structuredClone(before.hot);
         }
@@ -191,7 +196,10 @@ export function createSessionActorWorker(
           // The writer owns both hydration and version validation. A replica miss
           // never requires a separate read command before this transaction.
           const before = read(opened, target);
-          admit("transaction", { kind: "session-actor-admission", snapshot: before.hot });
+          admit("transaction", {
+            kind: "session-actor-admission",
+            snapshot: projectSessionActorAuthority(before.hot),
+          });
           if (
             command.input.expected !== undefined &&
             !isDeepStrictEqual(before.hot.version, command.input.expected)
@@ -220,10 +228,15 @@ export function createSessionActorWorker(
             admit(stage, publication) {
               if (stage === "commit") {
                 commitPublication = publication;
+                // An append shares this transaction and message owner. Its final
+                // custody check joins the actor's grant immediately before COMMIT.
+                if (isRecord(publication) && publication.kind === "session-message") {
+                  return;
+                }
               }
               admit(stage, {
                 kind: "session-actor-admission",
-                snapshot: projectSessionActorHotState(working),
+                snapshot: projectSessionActorAuthority(working.hot),
                 publication,
               });
             },
@@ -276,7 +289,7 @@ export function createSessionActorWorker(
                   : undefined;
             admit("commit", {
               kind: "session-actor-admission",
-              snapshot: projectSessionActorHotState(working),
+              snapshot: projectSessionActorAuthority(working.hot),
               publication: turn ?? commitPublication,
               final: true,
             });

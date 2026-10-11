@@ -384,6 +384,20 @@ unscoped calls warn once per method. Core and bundled callers use the awaited
 methods. This migration changes no RPC schema, stored data, retention, or update
 behavior.
 
+## Await skill-command discovery
+
+Use `prepareSkillCommandsForAgents` and `prepareSkillCommandsForWorkspace` from
+`openclaw/plugin-sdk/skill-commands-runtime` when building native command menus.
+`command-auth-native` also exposes `prepareSkillCommandsForAgents` alongside its
+existing command helpers. Await preparation before registering commands or
+publishing a menu so managed-library selection runs through its database worker.
+
+The synchronous `listSkillCommandsForAgents` and `listSkillCommandsForWorkspace`
+methods retain their array results until the next Plugin SDK major. They are
+deprecated and warn once per plugin and capability family on use. Bundled
+Discord, Mattermost, Slack, and Telegram menus use the awaited methods.
+Command names, filtering, stored selections, and update behavior are unchanged.
+
 ## Await placement preparation
 
 Gateway contexts provide `workerSessionPlacementService.getAsync`, `getManyAsync`,

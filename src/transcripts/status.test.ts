@@ -293,7 +293,6 @@ it("keeps transcript provider health bound to its live Gateway registry", async 
     setActivePluginRegistry(requestRegistry);
     const requestOwner = createPluginRegistryOwner(requestRegistry);
     setActivePluginRegistry(unrelatedRegistry);
-    const unrelatedOwner = createPluginRegistryOwner(unrelatedRegistry);
     const failures: unknown[] = [];
     try {
       const store = new TranscriptsStore(path.join(state.stateDir, "transcripts"));
@@ -324,7 +323,7 @@ it("keeps transcript provider health bound to its live Gateway registry", async 
     } catch (error) {
       failures.push(error);
     } finally {
-      const results = await Promise.allSettled([requestOwner.close(), unrelatedOwner.close()]);
+      const results = await Promise.allSettled([requestOwner.close()]);
       restoreActivePluginRegistrySnapshot(previous);
       failures.push(
         ...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),

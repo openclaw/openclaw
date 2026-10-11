@@ -538,6 +538,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       limit: CHANNEL_STARTUP_CONCURRENCY,
       tasks: accountIds.map((id) => async () => {
         const rKey = restartKey(channelId, id);
+        const setRestartState = (restartPending: boolean, reconnectAttempts = 0) =>
+          setRuntime(channelId, id, { restartPending, reconnectAttempts });
         const explicitlyDisabled = isChannelAccountExplicitlyDisabled({
           cfg,
           channel: channelId,
@@ -580,7 +582,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             store.lifetimes.get(id)?.capabilityLease.revoke();
             store.lifetimes.delete(id);
             store.tasks.delete(id);
-            setRuntime(channelId, id, { restartPending: false, reconnectAttempts: 0 });
+            setRestartState(false);
           }
           const existingStart = store.starting.get(id);
           if (!existingStart) {
@@ -928,29 +930,20 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 // Leaving recovery state behind would restart a channel that needs user action.
                 clearRecoveryState(rKey);
                 restarts.delete(rKey);
-                setRuntime(channelId, id, {
-                  restartPending: false,
-                  reconnectAttempts: 0,
-                });
+                setRestartState(false);
                 log.info?.(`[${id}] auto-restart skipped, terminal disconnect`);
                 return;
               }
               if (recoveryStopTimedOut.has(rKey)) {
                 recoveryStopTimedOut.delete(rKey);
                 if (!recoveryStartRequested.delete(rKey)) {
-                  setRuntime(channelId, id, {
-                    restartPending: false,
-                    reconnectAttempts: 0,
-                  });
+                  setRestartState(false);
                   releaseTask();
                   return;
                 }
                 restarts.delete(rKey);
                 log.info?.(`[${id}] restarting after timed-out channel stop completed`);
-                setRuntime(channelId, id, {
-                  restartPending: true,
-                  reconnectAttempts: 0,
-                });
+                setRestartState(true);
                 releaseTask();
                 try {
                   await startChannelInternal(channelId, id, {
@@ -974,20 +967,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               restarts.set(rKey, restart);
               const retry = restart.next(abort.signal);
               if (!retry) {
-                setRuntime(channelId, id, {
-                  restartPending: false,
-                  reconnectAttempts: restart.attempts,
-                });
+                setRestartState(false, restart.attempts);
                 log.error?.(`[${id}] giving up after ${MAX_RESTARTS} restart attempts`);
                 return;
               }
               log.info?.(
                 `[${id}] auto-restart attempt ${restart.attempts}/${MAX_RESTARTS} in ${Math.round(retry.delayMs / 1000)}s`,
               );
-              setRuntime(channelId, id, {
-                restartPending: true,
-                reconnectAttempts: restart.attempts,
-              });
+              setRestartState(true, restart.attempts);
               pendingAutoRestarts.add(rKey);
               try {
                 await sleepWithAbort(retry.delayMs, retry.signal);

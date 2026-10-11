@@ -4,7 +4,7 @@ import { render, type ReactiveElement } from "lit";
 import { expect, it, onTestFinished, vi } from "vitest";
 import "../test-helpers/app-sidebar-suite.ts";
 import { renderAppSidebarOnline } from "./app-sidebar-online.ts";
-import { renderAppSidebarBrand, type AppSidebarRenderHost } from "./app-sidebar-render.ts";
+import { renderSidebarAgentCard, type AppSidebarRenderHost } from "./app-sidebar-render.ts";
 import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
 import { renderRecentSession, type SessionListHost } from "./app-sidebar-session-row-render.ts";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
@@ -22,8 +22,6 @@ const emptySnapshot: SidebarSnapshotModel = {
   roster: null,
   mode: "chip",
   navigationView: "sessions",
-  navigationScope: "all",
-  scopesEquivalent: false,
   pages: [],
   pageScopeId: null,
   pinnedSessions: [],
@@ -68,15 +66,17 @@ it("renders the saved chip identity before agent discovery without reviving anot
     ...emptySnapshot,
     brand: { ...emptySnapshot.brand, agentId: "main", name: "Harbor", textAvatar: "⚓" },
   });
-  render(renderAppSidebarBrand(host), container);
+  render(renderSidebarAgentCard(host), container);
   const card = container.querySelector<ReactiveElement>("openclaw-sidebar-agent-card");
   expect(card).not.toBeNull();
   await card!.updateComplete;
   expect(container.querySelector(".sidebar-workspace-header")).toBeNull();
-  expect(card!.querySelector(".sidebar-agent-card__name")?.textContent).toContain("Harbor");
+  expect(card!.querySelector(".sidebar-agent-card__main")?.getAttribute("aria-label")).toContain(
+    "Harbor",
+  );
   expect(card!.querySelector("[data-avatar='⚓']")).not.toBeNull();
   host.sessionKey = "agent:other:thread";
-  render(renderAppSidebarBrand(host), container);
+  render(renderSidebarAgentCard(host), container);
   expect(container.querySelector("openclaw-sidebar-agent-card")).toBeNull();
   expect(container.querySelector(".sidebar-workspace-header")).not.toBeNull();
 });
