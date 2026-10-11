@@ -25,6 +25,7 @@ import {
   resolveActiveMemoryAgentId,
   usesNativeMemoryProvider,
 } from "./query-memory-provider.js";
+import { resolveQueryableWikiPageForLookup } from "./query-page-lookup.js";
 import {
   listWikiMarkdownFiles,
   QUERY_PAGE_READ_CONCURRENCY,
@@ -902,22 +903,6 @@ async function readExactWikiPage(
   return (await readQueryableWikiPagesByPaths(rootDir, [relativePath]))[0] ?? null;
 }
 
-export function resolveQueryableWikiPageByLookup(
-  pages: QueryableWikiPage[],
-  lookup: string,
-): QueryableWikiPage | null {
-  const key = normalizeLookupKey(lookup);
-  const withExtension = key.endsWith(".md") ? key : `${key}.md`;
-  return (
-    pages.find((page) => page.relativePath === key) ??
-    pages.find((page) => page.relativePath === withExtension) ??
-    pages.find((page) => page.relativePath.replace(/\.md$/i, "") === key) ??
-    pages.find((page) => path.basename(page.relativePath, ".md") === key) ??
-    pages.find((page) => page.id === key) ??
-    null
-  );
-}
-
 export async function searchMemoryWiki(
   input: WikiQueryParams & {
     query: string;
@@ -1010,13 +995,16 @@ export async function getMemoryWikiPage(
         ).find(canReadPage) ?? null)
       : null;
     // Claim IDs may themselves be paths; preserve their established lookup priority.
-    const directLookupPage =
-      digestLookupPage ?? (await readExactWikiPage(effectiveConfig.vault.path, params.lookup));
-    const pages =
-      directLookupPage && canReadPage(directLookupPage)
-        ? [directLookupPage]
-        : (await readQueryableWikiPages(effectiveConfig.vault.path)).filter(canReadPage);
-    const page = digestLookupPage ?? resolveQueryableWikiPageByLookup(pages, params.lookup);
+    const page =
+      digestLookupPage ??
+      (await resolveQueryableWikiPageForLookup({
+        lookup: params.lookup,
+        readExactPage: () => readExactWikiPage(effectiveConfig.vault.path, params.lookup),
+        listFiles: () => listWikiMarkdownFiles(effectiveConfig.vault.path),
+        readPages: (relativePaths) =>
+          readQueryableWikiPagesByPaths(effectiveConfig.vault.path, relativePaths),
+        canReadPage,
+      }));
     if (page) {
       const lines = page.parsed.body.split(/\r?\n/);
       const totalLines = lines.length;
