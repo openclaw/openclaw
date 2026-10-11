@@ -7,6 +7,7 @@ import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolut
 import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
 import * as fileHashing from "./package-update-integrity-hasher.js";
+import { legacyPackageTreeDigest } from "./package-update-integrity-legacy.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
 
 // The shared deadline bounds elapsed time. At ~200 bytes per entry, 500,000
@@ -325,6 +326,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     root: string,
     originalRoot = root,
     reuse?: PackageIntegrityFingerprint,
+    legacy = false,
   ): Promise<PackageIntegrityFingerprint> {
     const prior = reuse ? observations.get(reuse) : undefined;
     const digest = createHash("sha256");
@@ -414,7 +416,11 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       // npm's disposable hidden lockfile is a cache, not package content:
       // https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json#hidden-lockfiles
       // Keep the observation so a mid-scan substitution still refuses recovery.
-      if (stat.isFile() && /(?:^|\/)node_modules\/\.package-lock\.json$/u.test(relative)) {
+      if (
+        !legacy &&
+        stat.isFile() &&
+        /(?:^|\/)node_modules\/\.package-lock\.json$/u.test(relative)
+      ) {
         return;
       }
       const info = metadata(stat);
@@ -539,7 +545,18 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
           throw new Error("Package rollback tree changed during verification");
         }
       }
-      const fingerprint = { digest: digest.digest("hex"), identity: rootIdentity, version };
+      const fingerprint = {
+        digest: legacy
+          ? legacyPackageTreeDigest(
+              observed.map(({ file }) => {
+                const relative = path.relative(root, file).split(path.sep).join("/");
+                return { relative, fields: entriesObserved.get(relative)?.fields };
+              }),
+            )
+          : digest.digest("hex"),
+        identity: rootIdentity,
+        version,
+      };
       observations.set(fingerprint, entriesObserved);
       return fingerprint;
     } finally {

@@ -12,6 +12,10 @@ import {
   createPackagePathAssertion,
 } from "./package-update-filesystem.js";
 import {
+  LEGACY_PACKAGE_RECOVERY_HELPER,
+  LEGACY_PACKAGE_SETTLEMENT_WARNING,
+} from "./package-update-integrity-legacy.js";
+import {
   createPackageIntegrityReader,
   isPackageIntegrityResourceError,
   packageIntegrityDifferences,
@@ -112,12 +116,14 @@ export async function copyPackagePublicationTree(
 }
 
 export function createPackagePublicationTreeMatcher(
-  candidate: PackageActivationDescriptor["candidate"],
+  descriptor: Pick<PackageActivationDescriptor, "candidate" | "previous" | "helperDigest">,
   onWarning: (message: string) => void,
 ) {
   let candidateWarningRecorded = false;
   const verified = new WeakMap<PackageIntegrityFingerprint, PackageIntegrityFingerprint>();
-  return async (
+  let legacyWarning: string | undefined;
+  const legacy = descriptor.helperDigest === LEGACY_PACKAGE_RECOVERY_HELPER;
+  const matches = async (
     file: string,
     expected: PackageActivationDescriptor["candidate"],
     logical: string,
@@ -141,6 +147,7 @@ export function createPackagePublicationTreeMatcher(
           file,
           logical,
           verified.get(expected) ?? expected,
+          legacy,
         );
         if (!isDeepStrictEqual(observed, expected)) {
           throw new PackageIntegrityMismatchError(
@@ -153,7 +160,15 @@ export function createPackagePublicationTreeMatcher(
         verified.set(expected, observed);
         return true;
       } catch (error) {
-        if (expected !== candidate || !isPackageIntegrityResourceError(error)) {
+        // Legacy package code is reinstallable; accept identity/version instead of its stale seal.
+        const legacyPrevious =
+          legacy &&
+          expected === descriptor.previous &&
+          error instanceof PackageIntegrityMismatchError;
+        if (
+          !legacyPrevious &&
+          (expected !== descriptor.candidate || !isPackageIntegrityResourceError(error))
+        ) {
           throw error;
         }
       }
@@ -162,6 +177,13 @@ export function createPackagePublicationTreeMatcher(
     if (observed?.identity !== expected.identity || observed.version !== expected.version) {
       throw new Error(`Package publication object changed: ${file}`);
     }
+    if (legacy && expected === descriptor.previous) {
+      if (!legacyWarning) {
+        legacyWarning = LEGACY_PACKAGE_SETTLEMENT_WARNING;
+        onWarning(legacyWarning);
+      }
+      return true;
+    }
     if (!candidateWarningRecorded) {
       onWarning(
         "candidate package fingerprint incomplete; activation requires the directory identity, package version and launchers; full package contents are unverified",
@@ -169,5 +191,11 @@ export function createPackagePublicationTreeMatcher(
       candidateWarningRecorded = true;
     }
     return true;
+  };
+  return {
+    matches,
+    get legacyWarning() {
+      return legacyWarning;
+    },
   };
 }

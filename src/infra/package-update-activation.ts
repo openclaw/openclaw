@@ -39,6 +39,7 @@ import {
   readPackageActivationRecordStatus as status,
   type PackageActivationStatus,
 } from "./package-update-activation-status.js";
+import { LEGACY_PACKAGE_RECOVERY_HELPER } from "./package-update-integrity-legacy.js";
 import { createPublicationOwner } from "./package-update-publication-owner.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import {
@@ -225,6 +226,7 @@ export async function settlePendingPackageActivation(
 ) {
   const anchor = resolvePackageActivationAnchor(installKey);
   if (!expectedCompleted && !fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
+    assertNoPendingPackageActivation(installKey);
     return undefined;
   }
   const journal = openPackageActivationJournal(anchor);
@@ -451,6 +453,12 @@ export async function runPackageActivationRecovery(
   const admission = await journal.readForRecovery();
   const initial = admission.record;
   assertPackageActivationOperation(initial, operationId);
+  const recoveryAction =
+    action === "repair" &&
+    initial.phase === "aborted" &&
+    initial.descriptor.helperDigest === LEGACY_PACKAGE_RECOVERY_HELPER
+      ? "retire"
+      : action;
   const complete = isPackageActivationComplete(anchor, initial);
   const authority = complete
     ? {
@@ -471,7 +479,7 @@ export async function runPackageActivationRecovery(
       },
       initial,
       admission.assertUnchanged,
-    ).preflight(action);
+    ).preflight(recoveryAction);
   }
   return withUpdateCommandExecutor(
     randomUUID(),
@@ -492,7 +500,7 @@ export async function runPackageActivationRecovery(
         return status(initial);
       }
       const owner = createPublicationOwner(anchor, journal, fence.assertCurrent, initial);
-      return action === "repair" ? owner.publish(true) : owner.retire();
+      return recoveryAction === "repair" ? owner.publish(true) : owner.retire();
     },
     { existingAuthority: authority },
   );

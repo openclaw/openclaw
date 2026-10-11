@@ -63,14 +63,16 @@ export function createPublicationOwner(
   const assertion = retainMutationAuthority(assertOwner);
   let record = initial;
   let descriptor = record.descriptor;
-  const matches = createPackagePublicationTreeMatcher(descriptor.candidate, onWarning);
+  const trees = createPackagePublicationTreeMatcher(descriptor, onWarning);
+  const matches = trees.matches;
   let retirementSelected: "previous" | "candidate" | undefined;
   const live = descriptor.authority.installKey;
-  const matchesSelected = (selected: "previous" | "candidate") =>
+  const matchesSelected = (selected: "previous" | "candidate", contents = true) =>
     matches(
       live,
       descriptor[selected],
       selected === "previous" ? live : descriptor.originalStageRoot,
+      contents,
     );
   const root = (name: string) => path.join(anchor, name);
   // Creation can lose its acknowledgement before custody is journaled. Keep
@@ -173,12 +175,7 @@ export function createPublicationOwner(
       if (!selected) {
         throw new Error("The installed package is not either recorded generation.");
       }
-      await matches(
-        live,
-        descriptor[selected],
-        selected === "previous" ? live : descriptor.originalStageRoot,
-        contents === "all" || contents === "selected",
-      );
+      await matchesSelected(selected, contents === "all" || contents === "selected");
     }
     let previous = await matches(root("previous"), descriptor.previous, live, contents === "all");
     if (copying && (await matches(copyRoot, descriptor.previous, live))) {
@@ -250,13 +247,7 @@ export function createPublicationOwner(
       await inspect(action === "repair" ? "all" : "selected");
     } else {
       const selected = selectedPackageRetirementGeneration(record);
-      if (
-        !(await matches(
-          live,
-          descriptor[selected],
-          selected === "previous" ? live : descriptor.originalStageRoot,
-        ))
-      ) {
+      if (!(await matchesSelected(selected))) {
         throw new Error("Selected package is missing.");
       }
       await verifySelectedLaunchers(record, selected);
@@ -497,7 +488,7 @@ export function createPublicationOwner(
       throw new Error("Candidate publication is incomplete.");
     }
     transition("publication-complete");
-    return packageActivationStatus(record);
+    return trees.legacyWarning ? retire() : packageActivationStatus(record);
   };
   const persistRetirement = async () => {
     const assertRetired = () => {
@@ -514,17 +505,49 @@ export function createPublicationOwner(
     // another journal write. Read-only receipts remain observations, not grants.
     return packageActivationStatus(record);
   };
-  const retire = async () => {
+  const assertSettlementSelection = (selected: "previous" | "candidate", cause?: unknown) => {
+    assertion();
+    assertManagedUpdateLeaseDatabaseIdentity(descriptor.authority);
+    if (packageActivationIdentity(live, true) !== descriptor[selected].identity) {
+      throw new Error("Selected package changed during retirement.", { cause });
+    }
+    assertSelectedLaunchers(record, selected);
+  };
+  const settleSelected = (
+    selected: "previous" | "candidate",
+    detail: string,
+    onSettled?: (detail: string) => void,
+  ) => {
+    const settled = settlePackageActivationCustody({
+      anchor,
+      journal,
+      record,
+      settlement: {
+        kind: "publication-settled-external-change",
+        replacementIdentity: descriptor[selected].identity,
+        settled: true,
+        detail,
+      },
+      assertCurrent: () => assertSettlementSelection(selected),
+      onSettled: () => onSettled?.(detail),
+    });
+    record = settled.record;
+    return settled;
+  };
+  const retire = async (onSettled?: (detail: string) => void) => {
     await verifyClosure();
     assertPackageActivationActionAllowed(record, "retire");
     const selected = selectedPackageRetirementGeneration(record);
-    await matchesSelected(selected);
-    if (!(await packagePathEntryExists(live))) {
+    if (!(await matchesSelected(selected))) {
       throw new Error("Selected package is missing.");
     }
     await verifySelectedLaunchers(record, selected);
     retirementSelected = selected;
     assertCurrent();
+    if (trees.legacyWarning) {
+      onWarning(settleSelected(selected, trees.legacyWarning, onSettled).warning);
+      return packageActivationStatus(record);
+    }
     if (!["retiring", "anchor-retired"].includes(record.phase)) {
       const publications =
         record.phase === "aborted"
@@ -624,17 +647,10 @@ export function createPublicationOwner(
     }
     const selected = selectedPackageRetirementGeneration(record);
     try {
-      await retire();
-      return undefined;
+      await retire(onSettled);
+      return trees.legacyWarning;
     } catch (error) {
-      const assertSelected = () => {
-        assertion();
-        assertManagedUpdateLeaseDatabaseIdentity(descriptor.authority);
-        if (packageActivationIdentity(live, true) !== descriptor[selected].identity) {
-          throw new Error("Selected package changed during retirement.", { cause: error });
-        }
-        assertSelectedLaunchers(record, selected);
-      };
+      const assertSelected = () => assertSettlementSelection(selected, error);
       assertSelected();
       assertJournalCurrent(record);
       await matchesSelected(selected);
@@ -642,21 +658,7 @@ export function createPublicationOwner(
       assertSelected();
       assertJournalCurrent(record);
       const detail = `Verified ${selected} package; recovery evidence retained after cleanup failed: ${formatErrorMessage(error)}`;
-      const settled = settlePackageActivationCustody({
-        anchor,
-        journal,
-        record,
-        settlement: {
-          kind: "publication-settled-external-change",
-          replacementIdentity: descriptor[selected].identity,
-          settled: true,
-          detail,
-        },
-        assertCurrent: assertSelected,
-        onSettled: () => onSettled?.(detail),
-      });
-      record = settled.record;
-      return settled.warning;
+      return settleSelected(selected, detail, onSettled).warning;
     }
   };
   return {
