@@ -83,7 +83,7 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
     ];
     loadModelCatalogMock.mockResolvedValue(initialCatalog);
     const runtime = await import("./run-model-selection.runtime.js");
-    // Admission owns its catalog; live thinking observations belong to each selected scope.
+    // Reuse the admitted host row; only the missing fallback needs scoped hydration.
     const scopedCatalog = vi
       .spyOn(runtime, "loadProviderScopedThinkingCatalog")
       .mockImplementation(async ({ provider }) =>
@@ -146,11 +146,7 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
           scope.model,
           scope.agentRuntime,
         ]),
-      ).toEqual([
-        ["openai", "gpt-5.6-sol", "openclaw"],
-        ["openai", "gpt-5.6-sol", "openclaw"],
-        ["ollama", "minimax-m3:cloud", "openclaw"],
-      ]);
+      ).toEqual([["ollama", "minimax-m3:cloud", "openclaw"]]);
       expect(runEmbeddedAgentMock.mock.calls.map((call) => call[0].thinkLevel)).toEqual([
         "off",
         "medium",

@@ -110,11 +110,17 @@ async function settledMenuSurface(dropdown: Dropdown) {
   return menuSurface(dropdown);
 }
 
-async function openMenu(dropdown: Dropdown) {
+async function openMenu(dropdown: Dropdown, trigger?: HTMLElement) {
+  // Popover membership precedes final geometry; pointer assertions need the completed show.
   const shown = new Promise<Event>((resolve) => {
     dropdown.addEventListener("wa-after-show", resolve, { once: true });
   });
-  dropdown.open = true;
+  if (trigger) {
+    const { page } = await import("vitest/browser");
+    await page.elementLocator(trigger).click();
+  } else {
+    dropdown.open = true;
+  }
   await shown;
 }
 
@@ -359,8 +365,10 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
         }),
         host,
       );
-      const { page } = await import("vitest/browser");
-      await page.elementLocator(host.querySelector<HTMLElement>('[slot="trigger"]')!).click();
+      await openMenu(
+        host.querySelector("wa-dropdown")!,
+        host.querySelector<HTMLElement>('[slot="trigger"]')!,
+      );
       const photo = host.querySelector<HTMLElement>('wa-dropdown-item[value="photo"]')!;
       const skills = host.querySelector<HTMLElement>('wa-dropdown-item[value="open-skills"]')!;
       await hoverBackground(photo, highlight);
@@ -376,7 +384,6 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       const highlight = useTheme(theme);
       const host = document.createElement("div");
       document.body.append(host);
-      const { page } = await import("vitest/browser");
       render(
         html`<wa-dropdown>
           <button slot="trigger">Library</button>
@@ -394,7 +401,10 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
         </wa-dropdown>`,
         host,
       );
-      await page.elementLocator(host.querySelector<HTMLElement>('[slot="trigger"]')!).click();
+      await openMenu(
+        host.querySelector("wa-dropdown")!,
+        host.querySelector<HTMLElement>('[slot="trigger"]')!,
+      );
       await hoverBackground(
         host.querySelector<HTMLElement>('[value="library-reload"]')!,
         highlight,
@@ -418,10 +428,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       };
       document.body.append(card);
       const dropdown = await browserCardMenu(card);
-      const { page } = await import("vitest/browser");
-      await page
-        .elementLocator(card.shadowRoot!.querySelector<HTMLElement>('[slot="trigger"]')!)
-        .click();
+      await openMenu(dropdown, card.shadowRoot!.querySelector<HTMLElement>('[slot="trigger"]')!);
       const item = card.shadowRoot!.querySelector<HTMLElement>('[value="copy-url"]')!;
       const reference = document.createElement("wa-dropdown");
       reference.className = "session-menu";
@@ -491,12 +498,12 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
         </wa-dropdown>`,
         host,
       );
-      const { page, userEvent } = await import("vitest/browser");
+      const { userEvent } = await import("vitest/browser");
       const trigger = host.querySelector<HTMLElement>('[slot="trigger"]')!;
       const neutral = host.querySelector<HTMLElement>('[value="neutral"]')!;
       const disabled = host.querySelector<HTMLElement>('[value="disabled"]')!;
       const danger = host.querySelector<HTMLElement>('[value="danger"]')!;
-      await page.elementLocator(trigger).click();
+      await openMenu(host.querySelector("wa-dropdown")!, trigger);
       await userEvent.keyboard("{ArrowDown}");
       await userEvent.keyboard("{Home}");
       await expect.poll(() => document.activeElement).toBe(neutral);
