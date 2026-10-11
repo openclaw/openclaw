@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import MarkdownIt from "markdown-it";
 import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import {
   CONTROL_UI_TOKEN_SESSION_KEY_PREFIX,
   DEVICE_AUTH_STORAGE_KEY_PREFIX,
@@ -177,7 +176,7 @@ h1{margin:0 0 16px;color:var(--text-strong);font-size:clamp(30px,5vw,40px);font-
 
 export function publicSessionTitle(title: string): string {
   return (
-    truncateUtf16Safe(redactToolPayloadText(stripInternalMetadataForDisplay(title)), 200).trim() ||
+    truncateUtf16Safe(stripInternalMetadataForDisplay(title), 200).trim() ||
     "Shared conversation"
   );
 }

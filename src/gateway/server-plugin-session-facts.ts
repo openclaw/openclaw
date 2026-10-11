@@ -22,7 +22,6 @@ import { sessionClassificationForRow } from "./session-classification.js";
 import {
   prepareFactsRead,
   safeText,
-  sessionFactsRedactionPolicy,
   type SelectedFacts,
   type SelectedPrFacts,
 } from "./session-facts-read.js";
@@ -75,7 +74,6 @@ const readScopes = new WeakMap<
     policy: object | undefined;
     access: number;
     profiles: number;
-    redaction: ReturnType<typeof sessionFactsRedactionPolicy>;
     scopes: Map<string, ReadScope>;
   }
 >();
@@ -173,7 +171,6 @@ export async function withTrustedPluginSessionFacts<T>(
       const policy = context.getCommittedRuntimeConfig?.();
       const access = readGatewayAccessRevision();
       const profiles = readUserProfileVersion();
-      const redaction = sessionFactsRedactionPolicy();
       const assertAuthority = () => {
         assertCurrent();
         if (
@@ -183,8 +180,7 @@ export async function withTrustedPluginSessionFacts<T>(
           getRuntimeConfigSnapshotMetadata()?.revision !== configRevision ||
           context.getCommittedRuntimeConfig?.() !== policy ||
           readGatewayAccessRevision() !== access ||
-          readUserProfileVersion() !== profiles ||
-          sessionFactsRedactionPolicy() !== redaction
+          readUserProfileVersion() !== profiles
         ) {
           throw new Error("Session read authority changed; retry the request");
         }
@@ -210,8 +206,7 @@ export async function withTrustedPluginSessionFacts<T>(
           entry.configRevision !== configRevision ||
           entry.policy !== policy ||
           entry.access !== access ||
-          entry.profiles !== profiles ||
-          entry.redaction !== redaction
+          entry.profiles !== profiles
         ) {
           entry = {
             config,
@@ -219,7 +214,6 @@ export async function withTrustedPluginSessionFacts<T>(
             policy,
             access,
             profiles,
-            redaction,
             scopes: new Map(),
           };
           readScopes.set(projection, entry);
@@ -435,7 +429,6 @@ export async function withTrustedPluginSessionFacts<T>(
           result = Object.freeze({
             scope: authority?.token,
             revision: randomUUID(),
-            redactionRevision: redaction.revision,
             sessions,
             ...(currentRoster.selected.people !== undefined
               ? { people: currentRoster.selected.people }

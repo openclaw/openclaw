@@ -19,7 +19,6 @@ import {
   FsSafeError,
 } from "../infra/fs-safe.js";
 import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
-import { redactSecrets } from "../logging/redact.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -86,8 +85,6 @@ const MAX_ADAPTIVE_READ_MAX_BYTES = 128 * 1024;
 const ADAPTIVE_READ_CONTEXT_SHARE = 0.1;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 const MAX_ADAPTIVE_READ_PAGES = 4;
-// `.env` files are credential stores; `.envrc` and general config files remain source-shaped.
-const ENV_FILE_PATH_RE = /(?:^|[/\\])(?:\.env(?:\.[^/\\]+)?|[^/\\]+\.env)$/i;
 
 type OpenClawReadToolOptions = {
   modelContextWindowTokens?: number;
@@ -1052,10 +1049,7 @@ export function createOpenClawReadTool(
         `read:${filePath}`,
         options?.imageSanitization,
       );
-      const modelVisibleResult = ENV_FILE_PATH_RE.test(filePath)
-        ? redactSecrets(sanitizedResult)
-        : sanitizedResult;
-      return normalizeReadResultDetails(modelVisibleResult);
+      return normalizeReadResultDetails(sanitizedResult);
     },
   };
 }

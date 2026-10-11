@@ -184,10 +184,10 @@ Submitting a SessionManager append transfers its ordinary JSON payload to the
 manager by reference. Treat the payload as immutable from submission, including
 while an asynchronous append is pending; nested objects and arrays are frozen.
 Append receipts and transcript views share that immutable payload. Create a new
-value for a later update. Custom JSON
-representations are normalized before transcript redaction and persistence.
-If redaction policy changes after a tool result commits, the runtime creates a
-replacement for the model context while preserving the committed transcript bytes.
+value for a later update. Custom JSON representations are normalized before
+persistence. Tool arguments, tool results, and transcript text are not
+secret-masked; image and provider replay metadata still receive structural
+normalization.
 
 An admitted iterator owns its invocation scope and call lease for its lifetime.
 Advancing or closing it executes plugin code in that scope without creating a

@@ -19,7 +19,7 @@ import {
   readCommittedTranscriptMessageSequence,
   rememberCommittedTranscriptMessageSequences,
 } from "./session-accessor.sqlite-transcript-sequences.js";
-import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
+import { sanitizeTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
 import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-turn.js";
 import { resolveSessionTranscriptRuntimeTarget } from "./session-accessor.transcript-target.js";
 import { appendTranscriptMessage, emitTranscriptUpdate } from "./session-accessor.transcript.js";
@@ -143,7 +143,7 @@ export async function appendTranscriptMessages<TMessage>(
     messages: options.messages.map((append) => ({
       ...append,
       eventId: append.eventId ?? randomUUID(),
-      message: redactTranscriptMessageForStorage(append.message, options),
+      message: sanitizeTranscriptMessageForStorage(append.message),
       now: append.now ?? Date.now(),
     })),
     updateMode: "none",

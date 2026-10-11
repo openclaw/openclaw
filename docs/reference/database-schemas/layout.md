@@ -132,7 +132,7 @@ Canonical user messages may include the optional private field
 transcript recorder stores the first model-facing text, including prompt-hook
 prepend/append context or a model-prompt replacement, before provider dispatch.
 The ordinary `content` remains the original user transcript. Projection text is
-stored after transcript redaction and before deterministic timestamp and sender
+stored without secret masking and before deterministic timestamp and sender
 normalization. Both the first dispatch and replay use that recorded text, then
 apply the same normalization.
 

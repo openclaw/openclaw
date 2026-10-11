@@ -106,9 +106,7 @@ function safePreview(event: TrajectoryEvent): string {
       return `prompt skipped${reason ? `: ${reason}` : ""}`;
     }
     case "tool.call":
-      // Tool arguments may contain secrets or user text; tail output shows only
-      // the tool name and a redacted placeholder.
-      return `${toolName(data)} {...redacted...}`;
+      return `${toolName(data)} ${JSON.stringify(data?.arguments ?? {})}`;
     case "tool.timeout":
       return `${toolName(data)} timeout`;
     case "tool.result":
@@ -131,7 +129,7 @@ function formatProgressLine(event: TrajectoryEvent): string {
   const sessionKey = event.sessionKey ?? event.sessionId;
   const sessionLabel = formatTextCell(sanitizeTerminalText(sessionKey), SESSION_KEY_PAD);
   const typeLabel = formatTextCell(sanitizeTerminalText(event.type), EVENT_TYPE_PAD);
-  const preview = safePreview(event);
+  const preview = sanitizeTerminalText(safePreview(event));
   return [formatTimestamp(event.ts).padEnd(9), typeLabel, sessionLabel, preview]
     .join(" ")
     .trimEnd();
