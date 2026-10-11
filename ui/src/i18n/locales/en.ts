@@ -3913,6 +3913,7 @@ export const en: TranslationMap & {
       failureInvalidReference:
         "Use a public HTTPS URL without credentials or attach a local file by a safe path.",
       failureFileNotFound: "File not found. Check the path and try again.",
+      failureTooLarge: "Too large to send. Send a smaller file or raise mediaMaxMb in the config.",
       failureUnsupportedFormat:
         "Rejected by the local attachment allowlist. Send a supported file type.",
       history: "History",

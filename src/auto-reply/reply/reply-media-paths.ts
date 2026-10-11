@@ -27,6 +27,7 @@ import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entri
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { HostReadMediaTypeError, LocalMediaAccessError } from "../../media/local-media-access.js";
+import { MediaLimitError } from "../../media/media-limit-error.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import { resolveOutboundAttachmentFromUrl } from "../../media/outbound-attachment.js";
@@ -80,6 +81,12 @@ function resolveReplyMediaFailureCode(error: unknown): ReplyMediaFailure["code"]
       (current instanceof LocalMediaAccessError && current.code === "unsupported-media-type")
     ) {
       return "unsupported-format";
+    }
+    if (
+      current instanceof MediaLimitError ||
+      (current instanceof FsSafeError && current.code === "too-large")
+    ) {
+      return "too-large";
     }
     current = current.cause;
   }

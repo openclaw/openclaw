@@ -241,6 +241,7 @@ function formatTuiAssistantContent(message: unknown, contentText: string): strin
     if (
       (code === "file-not-found" ||
         code === "unsupported-format" ||
+        code === "too-large" ||
         code === "delivery-failed" ||
         code === "invalid-reference") &&
       (kind === "image" || kind === "audio" || kind === "video" || kind === "document")
