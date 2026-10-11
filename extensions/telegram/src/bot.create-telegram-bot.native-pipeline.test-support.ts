@@ -59,7 +59,7 @@ const http = useTelegramHttpFixture();
 type ReplyResolver = NonNullable<Parameters<typeof dispatchInboundMessage>[0]["replyResolver"]>;
 const replySpy = vi.fn<ReplyResolver>();
 const buildModelsProviderData = vi.fn(defaultTelegramBotDeps.buildModelsProviderData);
-const listSkillCommandsForAgents = vi.fn(defaultTelegramBotDeps.listSkillCommandsForAgents);
+const prepareSkillCommandsForAgents = vi.fn(defaultTelegramBotDeps.prepareSkillCommandsForAgents);
 const pendingUpdates = new Set<Promise<void>>();
 
 async function settleUpdates(): Promise<void> {
@@ -73,7 +73,7 @@ export const harness: {
   replySpy: Mock<ReplyResolver>;
   transcribeFirstAudio: typeof transcribeFirstAudio;
   settleUpdates: typeof settleUpdates;
-  listSkillCommandsForAgents: typeof listSkillCommandsForAgents;
+  prepareSkillCommandsForAgents: typeof prepareSkillCommandsForAgents;
   telegramBotDepsForTest: TelegramBotDeps;
 } = {
   get state() {
@@ -82,11 +82,11 @@ export const harness: {
   replySpy,
   transcribeFirstAudio,
   settleUpdates,
-  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
   telegramBotDepsForTest: {
     ...defaultTelegramBotDeps,
     buildModelsProviderData,
-    listSkillCommandsForAgents,
+    prepareSkillCommandsForAgents,
   },
 };
 const bots: Array<{ bot: Bot; abort: AbortController }> = [];
@@ -295,9 +295,9 @@ beforeEach(async () => {
   };
   replySpy.mockReset().mockResolvedValue({ text: "Test response" });
   transcribeFirstAudio.mockReset();
-  listSkillCommandsForAgents
+  prepareSkillCommandsForAgents
     .mockReset()
-    .mockImplementation(defaultTelegramBotDeps.listSkillCommandsForAgents);
+    .mockImplementation(defaultTelegramBotDeps.prepareSkillCommandsForAgents);
   buildModelsProviderData.mockReset().mockResolvedValue({
     byProvider: new Map(),
     providers: [],

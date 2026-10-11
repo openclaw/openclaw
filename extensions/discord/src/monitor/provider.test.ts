@@ -41,7 +41,7 @@ const {
   isNativeCommandsExplicitlyDisabledMock,
   isVerboseMock,
   listNativeCommandSpecsForConfigMock,
-  listSkillCommandsForAgentsMock,
+  prepareSkillCommandsForAgentsMock,
   monitorLifecycleMock,
   reconcileAcpThreadBindingsOnStartupMock,
   resolveDiscordAccountMock,
@@ -320,8 +320,8 @@ describe("monitorDiscordProvider", () => {
     providerTesting.setListNativeCommandSpecsForConfig((...args) =>
       listNativeCommandSpecsForConfigMock(...args),
     );
-    providerTesting.setListSkillCommandsForAgents(
-      (...args) => listSkillCommandsForAgentsMock(...args) as never,
+    providerTesting.setPrepareSkillCommandsForAgents(
+      (...args) => prepareSkillCommandsForAgentsMock(...args) as never,
     );
     providerTesting.setIsVerbose(() => isVerboseMock());
     providerTesting.setShouldLogVerbose(() => shouldLogVerboseMock());

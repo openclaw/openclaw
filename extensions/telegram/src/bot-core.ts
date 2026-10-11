@@ -309,21 +309,22 @@ export async function createTelegramBotCore(
     telegramDeps,
     resolveTelegramGroupConfig,
   };
-  const { nativeCommandNames, nativeCommandCallbackDispatcher } = registerTelegramNativeCommands({
-    ...botContext,
-    cfg,
-    accountId: account.accountId,
-    telegramCfg,
-    mediaMaxBytes,
-    nativeEnabled,
-    nativeSkillsEnabled,
-    resolveGroupPolicy,
-    shouldSkipUpdate,
-    telegramDeps: {
-      ...telegramDeps,
-      sendMessageTelegram: defaultTelegramNativeCommandDeps.sendMessageTelegram,
-    },
-  });
+  const { nativeCommandNames, nativeCommandCallbackDispatcher } =
+    await registerTelegramNativeCommands({
+      ...botContext,
+      cfg,
+      accountId: account.accountId,
+      telegramCfg,
+      mediaMaxBytes,
+      nativeEnabled,
+      nativeSkillsEnabled,
+      resolveGroupPolicy,
+      shouldSkipUpdate,
+      telegramDeps: {
+        ...telegramDeps,
+        sendMessageTelegram: defaultTelegramNativeCommandDeps.sendMessageTelegram,
+      },
+    });
   const messageContext = {
     ...botContext,
     nativeCommandNames,

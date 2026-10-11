@@ -4,7 +4,7 @@ import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
 import { applySessionModelSelection } from "openclaw/plugin-sdk/model-session-runtime";
 import {
-  formatModelsAvailableHeader,
+  formatModelsAvailableHeaderAsync,
   MODEL_PICKER_CHANGED_MESSAGE,
 } from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -367,7 +367,7 @@ export function createTelegramCallbackRouter({
         }
         const agentId = paginationMatch[2]?.trim() || (await resolveSessionState()).agentId;
         const result = await retryModelAction(async () => {
-          const skillCommands = telegramDeps.listSkillCommandsForAgents({
+          const skillCommands = await telegramDeps.prepareSkillCommandsForAgents({
             cfg: runtimeCfg,
             agentIds: [agentId],
           });
@@ -470,7 +470,7 @@ export function createTelegramCallbackRouter({
             totalPages,
             modelNames: modelData.modelMenu?.modelNames ?? modelData.modelNames,
           });
-          const text = `${formatModelsAvailableHeader({
+          const text = `${await formatModelsAvailableHeaderAsync({
             provider,
             total: models.length,
             cfg: runtimeCfg,
