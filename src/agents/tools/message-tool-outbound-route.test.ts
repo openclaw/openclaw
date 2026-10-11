@@ -128,6 +128,18 @@ describe("resolveOutboundActionRoute canonicalization", () => {
   it("returns undefined when neither a target nor a current source resolves", () => {
     expect(route({ args: {} })).toBeUndefined();
   });
+
+  it("substitutes the routable source target only on the source channel", () => {
+    const source = { currentChannelId: "12345", currentMessagingTarget: "67890" };
+    expect(
+      route({ args: { target: "12345" }, currentChannelProvider: "telegram", ...source }),
+    ).toBe("telegram\u0000default\u000067890");
+    // On another channel the same id is a different recipient, as delivery treats it.
+    expect(route({ args: { target: "12345" }, currentChannelProvider: "discord", ...source })).toBe(
+      KEY_12345,
+    );
+    expect(route({ args: {}, currentChannelProvider: "discord", ...source })).toBeUndefined();
+  });
 });
 
 function expectReserved(result: TurnSendReserveResult): TurnSendReservation {

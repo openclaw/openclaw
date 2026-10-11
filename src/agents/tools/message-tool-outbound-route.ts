@@ -33,6 +33,7 @@ export function resolveOutboundActionRoute(params: {
   args: Record<string, unknown>;
   channel?: string | null;
   resolveAccountId: (route: { channel: string; target: string }) => string | undefined;
+  currentChannelProvider?: string;
   currentChannelId?: string;
   currentChatType?: ChatType;
   currentMessagingTarget?: string;
@@ -41,6 +42,14 @@ export function resolveOutboundActionRoute(params: {
   if (!channel) {
     return undefined;
   }
+  // Source identifiers only name a destination on the source channel, matching delivery's
+  // current-source check (message-action-routing.ts). On another channel an equal id is a
+  // different recipient.
+  const sourceChannel = normalizeMessageChannel(params.currentChannelProvider);
+  const source =
+    !sourceChannel || sourceChannel === channel
+      ? { channelId: params.currentChannelId, messagingTarget: params.currentMessagingTarget }
+      : {};
   let deliveryAliasTarget: string | undefined;
   try {
     deliveryAliasTarget = resolveActionDeliveryTargetAlias(params.action, params.args, {
@@ -60,7 +69,7 @@ export function resolveOutboundActionRoute(params: {
   }
   const target = targets[0];
   const currentTargets = new Set(
-    [params.currentMessagingTarget, params.currentChannelId]
+    [source.messagingTarget, source.channelId]
       .filter((value): value is string => Boolean(value))
       .map((value) => canonicalizeRouteTarget(channel, value)),
   );
@@ -68,7 +77,7 @@ export function resolveOutboundActionRoute(params: {
   // or current-source send resolves to the concrete current target so it shares one
   // ledger slot with conversations_send to the same peer; fail open when that target is
   // unknown, mirroring the multi-target bail. Provider/account keys prevent cross-send suppression.
-  const currentSourceTarget = params.currentMessagingTarget ?? params.currentChannelId;
+  const currentSourceTarget = source.messagingTarget ?? source.channelId;
   const isCurrentSource = !target || currentTargets.has(target);
   const routeTarget = isCurrentSource ? currentSourceTarget : target;
   if (!routeTarget) {
