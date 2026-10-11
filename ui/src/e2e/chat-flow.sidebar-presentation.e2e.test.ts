@@ -746,13 +746,14 @@ suite.define(() => {
       expect(await unreadBadge.boundingBox()).toEqual(restingBadge);
       expect((await unreadTitle.boundingBox())?.x).toBe(restingTitle?.x);
       const hoverWidth = await unreadTitle.evaluate((element) => element.clientWidth);
-      const actionReserve = await unreadRow.evaluate((element) =>
-        Number.parseFloat(
-          getComputedStyle(element).getPropertyValue("--session-row-actions-reserve"),
-        ),
+      const hoverTitle = expectDefined(await unreadTitle.boundingBox(), "hover title");
+      const hoverActions = expectDefined(
+        await unreadRow.locator(".session-row-actions").boundingBox(),
+        "hover actions",
       );
-      // The leading badge stays fixed while the title reserves the full action width.
-      expect(restingWidth - hoverWidth).toBeCloseTo(actionReserve, 0);
+      // The badge stays fixed while surfaced actions have room beside the title.
+      expect(hoverWidth).toBeLessThan(restingWidth);
+      expect(hoverTitle.x + hoverTitle.width).toBeLessThanOrEqual(hoverActions.x);
       await page.mouse.move(900, 400);
       await unreadBadge.waitFor({ state: "visible" });
       await unreadRow.locator("[data-sidebar-session-archive]").focus();
