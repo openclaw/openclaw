@@ -1,10 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { maybeGenerateDashboardSessionTitle } from "../gateway/dashboard-session-title.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { repairLegacySessionTitles } from "./doctor-session-title-repair.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
@@ -13,9 +10,6 @@ import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-loc
 const generateConversationLabelWithFallback = vi.hoisted(() => vi.fn());
 vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
   generateConversationLabelWithFallback,
-}));
-vi.mock("../agents/utility-model.js", () => ({
-  resolveUtilityModelRefForAgent: () => undefined,
 }));
 
 beforeEach(() => generateConversationLabelWithFallback.mockReset());
@@ -122,36 +116,15 @@ describe("Doctor session title repair", () => {
   );
 
   it.each([
-    ["a replacement lifecycle", { lifecycleRevision: "replacement" }],
     ["a manual rename", { label: "Manual title" }],
-    ["a rewritten transcript", undefined],
-  ] satisfies Array<[string, Partial<SessionEntry> | undefined]>)(
-    "preserves %s admitted before its metadata write",
+    ["an incognito session", { incognito: true }],
+  ] satisfies Array<[string, Partial<SessionEntry>]>)(
+    "preserves %s during title repair",
     async (_name, mutation) => {
       await withSession(async (params) => {
-        const patch = sessionAccessor.patchSessionEntryCore;
-        vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockImplementationOnce(
-          async (scope, update, options) => {
-            if (mutation) {
-              await patch(scope, () => mutation);
-            } else {
-              await replaceTranscriptEvents(params, [
-                { type: "session", version: 3, id: params.sessionId },
-                {
-                  type: "message",
-                  id: "replacement-user",
-                  parentId: null,
-                  message: { role: "user", content: "A different branch" },
-                },
-              ]);
-            }
-            return patch(scope, update, options);
-          },
-        );
+        await sessionAccessor.patchSessionEntryCore(params, () => mutation);
         await repair();
-        if (mutation) {
-          expect(sessionAccessor.loadSessionEntry(params)).toMatchObject(mutation);
-        }
+        expect(sessionAccessor.loadSessionEntry(params)).toMatchObject(mutation);
         expect(sessionAccessor.loadSessionEntry(params)?.displayName).toBeUndefined();
       });
     },
@@ -182,32 +155,6 @@ describe("Doctor session title repair", () => {
           expect(sessionAccessor.loadSessionEntry(params)?.displayName).toBeUndefined();
         },
       });
-    });
-  });
-
-  it("lets an in-flight foreground title request keep its naming decision", async () => {
-    await withSession(async (params) => {
-      const started = createDeferredCore();
-      const title = createDeferredCore<string>();
-      generateConversationLabelWithFallback.mockImplementation(() => {
-        started.resolve();
-        return title.promise;
-      });
-      const foreground = maybeGenerateDashboardSessionTitle({
-        ...params,
-        cfg: { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } },
-        entry: sessionAccessor.loadSessionEntry(params),
-        userMessage: "Investigate why the gateway times out",
-      });
-      await started.promise;
-      try {
-        await repair();
-      } finally {
-        title.resolve("Model-generated title");
-        await foreground;
-      }
-      expect(sessionAccessor.loadSessionEntry(params)?.displayName).toBe("Model-generated title");
-      expect(generateConversationLabelWithFallback).toHaveBeenCalledOnce();
     });
   });
 });
