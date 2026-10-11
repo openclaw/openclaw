@@ -952,6 +952,15 @@ ownership while it is stopped. Schemas, stored bytes, retention, and update
 behavior are unchanged; published updaters need no migration for these
 process-local facts.
 
+Transcript projection readers carry generation, raw sequence, mutation time, and
+cold-state facts through their existing synchronous read snapshot. Bounded context
+consumers reuse those facts for watermark and hot-state reads; managed native writes,
+rollback, and the end of the snapshot retire them. Activity recap selection, ancestry,
+and byte-bounded pages share that same snapshot rather than reopening it for each
+step. The SQL projections that exclude large payloads remain in the database.
+These facts do not replace live permission or replay-admission checks. No schema,
+retention, stored bytes, or update behavior changes.
+
 ### Approval, placement, and workspace receipts
 
 Ordinary turn preparation retains workspace snapshots, conversation bindings,
