@@ -9,6 +9,7 @@ export function createGatewayDatabaseWorkersVitestConfig(
   const config = createScopedVitestConfig(gatewayDatabaseWorkerTestFiles, {
     dir: ".",
     env,
+    environment: "node",
     fileParallelism: true,
     intersectIncludeFile: true,
     isolate: false,

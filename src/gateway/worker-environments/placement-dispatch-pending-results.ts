@@ -322,6 +322,19 @@ export async function recoverPendingWorkspaceResults(
                 throw new Error("Recovered workspace result lost its active environment owner");
               }
             };
+            const destroyResultEnvironment = async () => {
+              if (!preserveEnvironment && !finishBlockedMove) {
+                const assertMoveCurrent = await prepareGatewayMove(
+                  active,
+                  turnClaim,
+                  recovery.assertCurrent,
+                );
+                await destroyPendingEnvironment(
+                  active,
+                  assertMoveCurrent ?? recovery.assertCurrent,
+                );
+              }
+            };
             const completeResult = () => {
               assertPreservedEnvironment();
               return preserveEnvironment
@@ -336,16 +349,6 @@ export async function recoverPendingWorkspaceResults(
                     turnClaim,
                     ...(finishBlockedMove ? { destination: "reclaimed", currentCheck } : {}),
                   });
-            };
-            const destroyResultEnvironment = async () => {
-              if (!preserveEnvironment && !finishBlockedMove) {
-                const authorize = await prepareGatewayMove(
-                  active,
-                  turnClaim,
-                  recovery.assertCurrent,
-                );
-                await destroyPendingEnvironment(active, authorize ?? recovery.assertCurrent);
-              }
             };
             const settleRecoveredResult = async (
               result: Pick<
