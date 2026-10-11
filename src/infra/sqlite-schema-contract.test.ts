@@ -231,6 +231,77 @@ describe.each([false, true])("assertSqliteSchemaContains (statement cache: %s)",
     }
   });
 
+  it.each([
+    ["records", ""],
+    ["RECORDS", ""],
+    ["records", "CREATE TABLE pragma_index_list (id INTEGER);"],
+    ["RECORDS", "CREATE TABLE pragma_index_list (id INTEGER);"],
+  ])("checks triggers with target casing %s and fallback %s", (target, fallback) => {
+    const schema = `
+      CREATE TABLE Records (value INTEGER);
+      CREATE TRIGGER record_insert AFTER INSERT ON ${target} BEGIN SELECT 1; END;
+      ${fallback}
+    `;
+    const database = createDatabase(schema);
+    try {
+      expect(collectSqliteSchemaIssues(database, schema)).toEqual([]);
+      database.exec("DROP TRIGGER record_insert;");
+      expect(collectSqliteSchemaIssues(database, schema)).toEqual([
+        {
+          code: "missing-or-drifted-trigger",
+          objectName: "record_insert",
+          message: "missing or drifted trigger record_insert",
+        },
+      ]);
+      database.exec(`CREATE TRIGGER record_insert AFTER INSERT ON ${target} BEGIN SELECT 2; END;`);
+      expect(collectSqliteSchemaIssues(database, schema)).toEqual([
+        {
+          code: "missing-or-drifted-trigger",
+          objectName: "record_insert",
+          message: "missing or drifted trigger record_insert",
+        },
+        {
+          code: "unexpected-trigger",
+          objectName: "record_insert",
+          message: "unexpected trigger record_insert",
+        },
+      ]);
+      database.exec(
+        `CREATE TRIGGER unexpected_insert AFTER INSERT ON ${target} BEGIN SELECT 3; END;`,
+      );
+      expect(collectSqliteSchemaIssues(database, schema)).toContainEqual({
+        code: "unexpected-trigger",
+        objectName: "unexpected_insert",
+        message: "unexpected trigger unexpected_insert",
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps non-ASCII-distinct trigger targets separate", () => {
+    const schema = `
+      CREATE TABLE "ÉRecords" (value INTEGER);
+      CREATE TABLE "éRecords" (value INTEGER);
+      CREATE TRIGGER upper_insert AFTER INSERT ON "Érecords" BEGIN SELECT 1; END;
+      CREATE TRIGGER lower_insert AFTER INSERT ON "érecords" BEGIN SELECT 2; END;
+    `;
+    const database = createDatabase(schema);
+    try {
+      expect(collectSqliteSchemaIssues(database, schema)).toEqual([]);
+      database.exec("DROP TRIGGER lower_insert;");
+      expect(collectSqliteSchemaIssues(database, schema)).toEqual([
+        {
+          code: "missing-or-drifted-trigger",
+          objectName: "lower_insert",
+          message: "missing or drifted trigger lower_insert",
+        },
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
   it.each(["", "CREATE TEMP VIEW pragma_index_xinfo AS SELECT 1 AS id;"])(
     "keeps main index terms separate from temp shadows with fallback %s",
     (fallback) => {
