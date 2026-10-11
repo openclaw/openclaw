@@ -659,7 +659,7 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
             const result = reply?.result;
             assertAdmissionCurrent();
             // Only a newer owner publication warrants another read; scoped witnesses keep their fence.
-            if (!scopedWitness && registry.memo !== memo) {
+            if (!scopedWitness && memo.next) {
               continue;
             }
             witness.acceptEntries(result?.status === "available" ? result.entries : []);

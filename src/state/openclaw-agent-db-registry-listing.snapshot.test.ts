@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import type { OpenClawAgentDatabaseRegistryReadResult } from "./openclaw-agent-db-contract.js";
 
@@ -176,4 +177,30 @@ it("rejects unavailable facts after authority changes", async () => {
   await expect(prepareOpenClawAgentDatabaseRegistrySnapshotRead(options).read()).rejects.toThrow(
     failure,
   );
+});
+
+it("refuses a replaced registry without retrying against another database's memo", async () => {
+  const firstReply = createDeferred<OpenClawAgentDatabaseRegistryReadResult>();
+  const secondReply = createDeferred<OpenClawAgentDatabaseRegistryReadResult>();
+  mocks.read
+    .mockImplementationOnce(() => firstReply.promise)
+    .mockImplementationOnce(() => secondReply.promise)
+    .mockRejectedValue(new Error("Unexpected retry without a registry publication"));
+  const first = prepareOpenClawAgentDatabaseRegistrySnapshotRead(options).read();
+  const second = prepareOpenClawAgentDatabaseRegistrySnapshotRead({
+    path: "/fixture/other/state.sqlite",
+  }).read();
+  try {
+    firstReply.resolve({ status: "available", entries });
+    await expect(first).rejects.toThrow("registry changed");
+    secondReply.resolve({ status: "available", entries: [] });
+    await expect(second).resolves.toMatchObject({
+      result: { status: "available", entries: [] },
+    });
+    expect(mocks.read).toHaveBeenCalledTimes(2);
+  } finally {
+    firstReply.resolve({ status: "available", entries });
+    secondReply.resolve({ status: "available", entries: [] });
+    await Promise.allSettled([first, second]);
+  }
 });
