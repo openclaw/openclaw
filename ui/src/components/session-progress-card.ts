@@ -16,17 +16,15 @@ import {
   type ComposerProgressDisclosureContext,
 } from "./session-progress-disclosure-controller.ts";
 
-export type SessionProgressCardPlacement = "board" | "composer" | "details";
+type SessionProgressCardPlacement = "board" | "composer" | "details";
 
-export const REFRESH_STATUS_LABEL_KEYS: Record<
-  SessionProgressCardRefreshState,
-  Parameters<typeof t>[0]
-> = {
-  pending: "sessionProgressCard.refresh.pending",
-  failed: "sessionProgressCard.refresh.failed",
-  timeout: "sessionProgressCard.refresh.timeout",
-  updated: "sessionProgressCard.refresh.updated",
-};
+const REFRESH_STATUS_LABEL_KEYS: Record<SessionProgressCardRefreshState, Parameters<typeof t>[0]> =
+  {
+    pending: "sessionProgressCard.refresh.pending",
+    failed: "sessionProgressCard.refresh.failed",
+    timeout: "sessionProgressCard.refresh.timeout",
+    updated: "sessionProgressCard.refresh.updated",
+  };
 
 export type SessionProgressCardRefreshAction = {
   state?: SessionProgressCardRefreshState;
@@ -65,7 +63,7 @@ function renderRefresh(card: ProgressCard, action?: SessionProgressCardRefreshAc
     ${pending ? icons.loader : action.state === "updated" ? icons.check : icons.refresh}
   </button>`;
 }
-export type PresentedProgressStepStatus = ProgressCardStep["status"] | "paused";
+type PresentedProgressStepStatus = ProgressCardStep["status"] | "paused";
 
 const PROGRESS_MARKDOWN_CACHE_LIMIT = 16;
 const PROGRESS_MARKDOWN_CACHE_MAX_CHARS = 140_000;
@@ -88,20 +86,19 @@ export function sanitizedProgressMarkdown(markdown: string): string {
   return sanitized;
 }
 
-export const STATUS_LABEL_KEYS: Record<ProgressCardStep["status"], Parameters<typeof t>[0]> = {
+const STATUS_LABEL_KEYS: Record<ProgressCardStep["status"], Parameters<typeof t>[0]> = {
   completed: "sessionProgressCard.status.completed",
   in_progress: "sessionProgressCard.status.inProgress",
   pending: "sessionProgressCard.status.pending",
 };
 
-export const TERMINAL_RUN_OUTCOMES: Partial<
-  Record<SessionRunStatus, "completed" | "failed" | "stopped">
-> = {
-  done: "completed",
-  failed: "failed",
-  killed: "stopped",
-  timeout: "failed",
-};
+const TERMINAL_RUN_OUTCOMES: Partial<Record<SessionRunStatus, "completed" | "failed" | "stopped">> =
+  {
+    done: "completed",
+    failed: "failed",
+    killed: "stopped",
+    timeout: "failed",
+  };
 
 class ProgressActivityTimeDirective extends AsyncDirective {
   private timestamp = 0;
@@ -259,7 +256,7 @@ export function promoteFirstProgressBar(sanitizedHtml: string): string {
   return template.innerHTML;
 }
 
-export function renderProgressCardMarkdown(
+function renderProgressCardMarkdown(
   markdown: string | undefined,
   options: { promoteProgress?: boolean } = {},
 ) {
@@ -335,7 +332,7 @@ function renderProgressCardAction(
   </button>`;
 }
 
-export function progressCardPresentation(
+function progressCardPresentation(
   card: ProgressCard,
   sessionStatus?: SessionRunStatus,
   startedAt?: number,

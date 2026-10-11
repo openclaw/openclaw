@@ -7,10 +7,8 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
-import {
-  appendSqliteTrajectoryRuntimeEvents,
-  loadSqliteTrajectoryRuntimeEvents,
-} from "../../trajectory/runtime-store.sqlite.js";
+import { loadSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
+import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.test-support.js";
 import * as archiveWorkers from "./session-accessor.sqlite-archive.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";

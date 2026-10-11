@@ -1,13 +1,10 @@
-import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { BackgroundPreference } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import {
   normalizeTabIconPreference,
   normalizeUiAppearancePreference,
   UI_APPEARANCE_PREFERENCE_KEYS,
 } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
-import { USER_PREFS_VALUE_BYTES } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
-import type { SessionsListResult } from "../api/types.ts";
 import { DEFAULT_SIDEBAR_ENTRIES } from "../app-navigation.ts";
 import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import type { ApplicationContext } from "./context.ts";
@@ -221,7 +218,6 @@ export async function writeProfileAppearancePrefs(
 export async function readProfileAppearancePrefs(
   client: GatewayBrowserClient,
   profileId: string,
-  options?: ProfilePreferencesReadOptions,
 ): Promise<ServerUiPrefs | null> {
   const params = {
     keys: [
@@ -229,63 +225,7 @@ export async function readProfileAppearancePrefs(
       ...Object.values(UI_NAVIGATION_PREFERENCE_KEYS),
     ],
   };
-  let result = await loadUserPreferences(client, profileId, params);
-  const canMigrate = () =>
-    Boolean(
-      options?.isCurrent() &&
-      (typeof options.canMigrate === "function" ? options.canMigrate() : options.canMigrate),
-    );
-  if (
-    result.status === "ok" &&
-    !Object.hasOwn(result.entries, UI_NAVIGATION_PREFERENCE_KEYS.sidebarEntries) &&
-    canMigrate()
-  ) {
-    try {
-      const legacy = asRecord(asRecord(asRecord(options?.configObject)?.ui)?.prefs);
-      const ordered =
-        SYNCED_PREFS.sidebarEntries.extract(legacy?.sidebarEntries) ?? DEFAULT_SIDEBAR_ENTRIES;
-      const pinned = await readLegacyPinnedSidebarEntries(client, canMigrate);
-      if (!pinned || !canMigrate()) {
-        if (!options?.isCurrent()) {
-          return null;
-        }
-        throw new Error("Legacy navigation import deferred because write access changed.");
-      }
-      // Configuration owns the previous order; shared pin flags also supplied favorites
-      // without a config entry. Only access-scoped inventory contributes missing refs.
-      const sidebarEntries = [...new Set([...ordered, ...pinned])];
-      if (
-        new TextEncoder().encode(JSON.stringify(sidebarEntries)).length > USER_PREFS_VALUE_BYTES
-      ) {
-        throw new Error(
-          "Legacy navigation exceeds the profile preference size limit; no favorites were imported.",
-        );
-      }
-      // Even a confirmed empty inventory gets one marker value. Later shared pins
-      // must not resurrect a personal unpin, including standalone gateways.
-      if (!canMigrate()) {
-        if (!options?.isCurrent()) {
-          return null;
-        }
-        throw new Error("Legacy navigation import deferred because write access changed.");
-      }
-      const migrated = await saveUserPreferences(client, {
-        entries: { [UI_NAVIGATION_PREFERENCE_KEYS.sidebarEntries]: sidebarEntries },
-        expectedEntries: { [UI_NAVIGATION_PREFERENCE_KEYS.sidebarEntries]: null },
-      });
-      if (!options?.isCurrent() || migrated.status === "no_durable_identity") {
-        return null;
-      }
-      result = await loadUserPreferences(client, profileId, params);
-    } catch (error) {
-      if (!options?.isCurrent()) {
-        return null;
-      }
-      // The successful profile read still owns appearance and navigation scope.
-      // Only sidebar hydration is incomplete; its caller retains the scoped mirror.
-      options.onSidebarEntriesUnavailable?.(error);
-    }
-  }
+  const result = await loadUserPreferences(client, profileId, params);
   if (result.status !== "ok") {
     return null;
   }
@@ -309,77 +249,6 @@ export async function readProfileAppearancePrefs(
   return prefs;
 }
 
-/** Offset pages carry explicit coverage; missing, inconsistent, or moving coverage is not empty. */
-async function readLegacyPinnedSidebarEntries(
-  client: GatewayBrowserClient,
-  isCurrent: () => boolean,
-): Promise<string[] | null> {
-  const entries = new Set<string>();
-  let offset = 0;
-  let total: number | undefined;
-  for (;;) {
-    if (!isCurrent()) {
-      return null;
-    }
-    const page = await client.request<SessionsListResult>("sessions.list", {
-      source: "sidebar",
-      rowMode: "compact",
-      pinned: true,
-      archived: "all",
-      includeGlobal: true,
-      includeUnknown: true,
-      limit: 200,
-      offset,
-    });
-    if (!isCurrent()) {
-      return null;
-    }
-    if (
-      !Array.isArray(page.sessions) ||
-      page.count !== page.sessions.length ||
-      !Number.isSafeInteger(page.totalCount) ||
-      page.totalCount === undefined ||
-      page.totalCount < 0 ||
-      (page.offset ?? 0) !== offset ||
-      typeof page.hasMore !== "boolean" ||
-      (total !== undefined && total !== page.totalCount)
-    ) {
-      throw new Error(
-        "Legacy pinned-session inventory is incomplete or changed; no favorites were imported.",
-      );
-    }
-    total = page.totalCount;
-    for (const row of page.sessions) {
-      if (
-        row.pinned !== true ||
-        typeof row.key !== "string" ||
-        !row.key.trim() ||
-        entries.has(row.key)
-      ) {
-        throw new Error(
-          "Legacy pinned-session inventory is incomplete or changed; no favorites were imported.",
-        );
-      }
-      entries.add(row.key);
-    }
-    const consumed = offset + page.count;
-    if (!page.hasMore) {
-      if (page.nextOffset !== null || consumed !== total || entries.size !== total) {
-        throw new Error(
-          "Legacy pinned-session inventory is incomplete; no favorites were imported.",
-        );
-      }
-      return [...entries].map((key) => "session:" + key);
-    }
-    if (page.count === 0 || page.nextOffset !== consumed || consumed >= total) {
-      throw new Error(
-        "Legacy pinned-session pagination did not advance; no favorites were imported.",
-      );
-    }
-    offset = consumed;
-  }
-}
-
 /** Called only after the existing async reader boundary, with the profile owner held by reference. */
 export async function loadProfileAppearancePrefs(
   client: GatewayBrowserClient,
@@ -393,28 +262,10 @@ export async function loadProfileAppearancePrefs(
     return false;
   }
   const isCurrent = () => requestId === state.requestId && (options?.isCurrent() ?? true);
-  let sidebarEntriesReady = true;
-  let sidebarEntriesError: unknown;
-  const prefs = await readProfileAppearancePrefs(
-    client,
-    profileId,
-    options
-      ? {
-          ...options,
-          isCurrent,
-          onSidebarEntriesUnavailable: (error) => {
-            sidebarEntriesReady = false;
-            sidebarEntriesError = error;
-          },
-        }
-      : undefined,
-  );
+  const prefs = await readProfileAppearancePrefs(client, profileId);
   if (!isCurrent() || !prefs) {
     return false;
   }
-  state.appearance = { profileId, scope, prefs, sidebarEntriesReady };
-  if (!sidebarEntriesReady) {
-    options?.onSidebarEntriesUnavailable?.(sidebarEntriesError);
-  }
+  state.appearance = { profileId, scope, prefs };
   return true;
 }

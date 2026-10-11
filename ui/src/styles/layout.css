@@ -1250,68 +1250,6 @@ openclaw-settings-save-indicator:empty {
   flex: 0 0 auto;
 }
 
-.sidebar-session-filter-summary {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex: 0 1 auto;
-  min-width: 0;
-  height: 18px;
-  padding: 0 4px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  cursor: default;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-/* The lead slot stacks the filter glyph (owner avatar or archive mark) under the
-   clear icon; hover swaps them so the summary spends no width on a second control. */
-.sidebar-session-filter-summary__lead {
-  display: inline-grid;
-  place-items: center;
-  width: 14px;
-  height: 14px;
-  flex: 0 0 auto;
-}
-
-.sidebar-session-filter-summary__lead > * {
-  grid-area: 1 / 1;
-  display: inline-flex;
-  transition: opacity var(--duration-fast) ease;
-}
-
-.sidebar-session-filter-summary__clear,
-.sidebar-session-filter-summary:is(:hover, :focus-visible) .sidebar-session-filter-summary__glyph {
-  opacity: 0;
-}
-
-.sidebar-session-filter-summary:is(:hover, :focus-visible) .sidebar-session-filter-summary__clear {
-  opacity: 1;
-}
-
-.sidebar-session-filter-summary .viewer-avatar {
-  width: 14px;
-  height: 14px;
-  border-color: var(--bg-elevated);
-}
-
-.sidebar-session-filter-summary__label,
-.sidebar-footer-branch__name {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.sidebar-session-filter-summary__sep {
-  margin: 0 4px;
-}
-
 .sidebar-session-toolbar__button.sidebar-session-sort {
   margin-left: auto;
 }
@@ -1693,15 +1631,6 @@ openclaw-settings-save-indicator:empty {
 }
 
 @media (hover: none), (pointer: coarse) {
-  /* No hover on touch: the clear icon is the resting lead glyph. */
-  .sidebar-session-filter-summary__glyph {
-    opacity: 0;
-  }
-
-  .sidebar-session-filter-summary__clear {
-    opacity: 0.55;
-  }
-
   /* Touch has no hover, so the chevron must be the resting state or
      catalog collapsibility becomes undiscoverable. */
   .sidebar-session-group-toggle__lead--branded .sidebar-session-catalog-provider-icon {
@@ -1848,8 +1777,6 @@ openclaw-settings-save-indicator:empty {
     color var(--duration-fast) ease;
 }
 
-.sidebar-session-filter-summary:hover,
-.sidebar-session-filter-summary:focus-visible,
 .sidebar-session-catalog-load-more:hover:not(:disabled),
 .sidebar-session-catalog-load-more:focus-visible,
 .sidebar-session-catalog-project__head:hover,
@@ -2565,13 +2492,6 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   color: var(--muted);
 }
 
-.sidebar-customize-menu__provenance {
-  margin: 0 8px 6px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.35;
-}
-
 .sidebar-customize-menu__item {
   display: flex;
   align-items: center;
@@ -3010,8 +2930,7 @@ a:is(
     .sidebar-issues-panel__navigation-link,
     .sidebar-approval-row__open-session,
     .sidebar-footer-build
-  ):where(:not([target="_blank" i], [data-new-tab-action])),
-.sidebar-more-menu a:where(:not([target="_blank" i], [data-new-tab-action])) {
+  ):where(:not([target="_blank" i], [data-new-tab-action])) {
   cursor: var(--cursor-action);
 }
 
@@ -4218,7 +4137,6 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   flex: 0 0 auto;
 }
 
-.sidebar-session-filter-summary__lead svg,
 .sidebar-footer-branch__icon svg {
   width: 12px;
   height: 12px;
