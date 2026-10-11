@@ -5,7 +5,7 @@ import { SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
 import type { CronFieldKey, CronFormState, CronFieldErrors } from "../../lib/cron/types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
-import { LitContent } from "../../lit/lit-content.tsx";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import type { CronProps } from "./view-types.ts";
 type BlockingField = {
   label: string;
@@ -191,16 +191,18 @@ export function CronSelect(props: FormProps & CronSelectOptions) {
   const error = () => (props.errorKey ? props.fieldErrors[props.errorKey] : undefined);
   const control = (
     <LitContent
-      value={(props.channel ? renderChannelPicker : renderPicker)({
-        id: props.inline ? undefined : inputIdForField(props.field),
-        label: props.label,
-        value: props.channel ? selected() || "last" : selected(),
-        options: props.options,
-        disabled: props.disabled,
-        invalid: props.errorKey ? Boolean(error()) : undefined,
-        describedBy: error() && props.errorKey ? errorIdForField(props.errorKey) : undefined,
-        onChange: (value) => props.onFormChange({ [props.field]: value }),
-      })}
+      render={() =>
+        (props.channel ? renderChannelPicker : renderPicker)({
+          id: props.inline ? undefined : inputIdForField(props.field),
+          label: props.label,
+          value: props.channel ? selected() || "last" : selected(),
+          options: props.options,
+          disabled: props.disabled,
+          invalid: props.errorKey ? Boolean(error()) : undefined,
+          describedBy: error() && props.errorKey ? errorIdForField(props.errorKey) : undefined,
+          onChange: (value) => props.onFormChange({ [props.field]: value }),
+        })
+      }
     />
   );
   return (

@@ -262,6 +262,17 @@ describe("WhatsApp QA adapter cleanup through the suite", () => {
         await vi.advanceTimersByTimeAsync(100);
         expect(mocks.heartbeat).not.toHaveBeenCalled();
       }
+      if (
+        failureAt === "driver close" ||
+        failureAt === "heartbeat stop" ||
+        failureAt === "lease release"
+      ) {
+        await expect(transport.cleanupWithoutGateway()).rejects.toBe(failure);
+        expect(mocks.closeDriver).toHaveBeenCalledOnce();
+        expect(mocks.heartbeatStop).toHaveBeenCalledOnce();
+        expect(mocks.release).toHaveBeenCalledOnce();
+        created = undefined;
+      }
     },
   );
 

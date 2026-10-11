@@ -10,7 +10,7 @@ import { formatUiExternalText } from "../../lib/format-error.ts";
 import "../../components/modal-dialog.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/lit-content.tsx";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import { channelDocsUrl } from "./hub-meta.ts";
 import { ChannelConfig } from "./view.config.tsx";
 import { NostrCard } from "./view.nostr.tsx";
@@ -211,9 +211,11 @@ export function renderChannelDetail(params: {
       <div class="channels-detail">
         <div class="channels-detail__header">
           <LitContent
-            value={renderChannelIcon(params.channelId, params.label, "cover", {
-              pluginIconUrl: params.pluginIconUrl,
-            })}
+            render={() =>
+              renderChannelIcon(params.channelId, params.label, "cover", {
+                pluginIconUrl: params.pluginIconUrl,
+              })
+            }
           />
           <div class="channels-detail__header-actions">
             <a

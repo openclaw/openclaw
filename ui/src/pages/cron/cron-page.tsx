@@ -11,8 +11,7 @@ import { getCronRunsViewState } from "../../lib/cron/runs.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectI18n, t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/lit-content.tsx";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, LitContent } from "../../lit/solid-bridge.ts";
 import { CronPageController } from "./cron-page-controller.ts";
 import { reserveCronEditorClearance } from "./editor-clearance.ts";
 import {
@@ -136,7 +135,9 @@ export function CronPageContent(props: { controller: CronPageController; revisio
       <SettingsPageHeader
         title={header().title}
         subtitle={header().subtitle}
-        actions={header().actions === nothing ? undefined : <LitContent value={header().actions} />}
+        actions={
+          header().actions === nothing ? undefined : <LitContent render={() => header().actions} />
+        }
       />
       <CronRunTranscriptView controller={props.controller.runTranscript} revision={revision} />
       <SettingsWorkspace>

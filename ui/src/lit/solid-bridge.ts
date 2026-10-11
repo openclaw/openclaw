@@ -1,11 +1,14 @@
 import { render, spread } from "@solidjs/web";
+import { nothing, render as renderLit } from "lit";
 import {
   createComponent,
+  createEffect,
   createRenderEffect,
   createSignal,
   flush,
   onCleanup,
   runWithOwner,
+  untrack,
 } from "solid-js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { shellLayoutOwnerForHost } from "../app/shell-layout-owner.ts";
@@ -217,6 +220,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         source = [...this.#content.childNodes];
       }
       this.#mountedApplication = this.#application;
+      const layout = !this.#solidOwned ? shellLayoutOwnerForHost(this) : undefined;
       this.#dispose = render(() => {
         const [revision, setRevision] = createSignal(0);
         this.#notify = () => setRevision((value) => value + 1);
@@ -234,17 +238,16 @@ export function defineSolidBridge<Props extends object, Methods extends object =
             },
           });
         }
-        const owner = this.#solidOwned ? undefined : shellLayoutOwnerForHost(this);
-        const host = this.#host;
+        const renderContent = () => content(props, this.#host);
         const view = () =>
-          owner
+          layout
             ? createComponent(ShellLayoutProvider, {
-                value: { owner, host: this },
+                value: { owner: layout, host: this },
                 get children() {
-                  return content(props, host);
+                  return renderContent();
                 },
               })
-            : content(props, host);
+            : renderContent();
         return this.#application
           ? createComponent(ApplicationProvider, {
               value: this.#application,
@@ -296,4 +299,34 @@ export function defineSolidBridge<Props extends object, Methods extends object =
   return function SolidBridge(props: ComponentProps<Props, Methods>): JSX.Element {
     return BridgeElement.render(props);
   };
+}
+
+/** Unported stateless templates exclusively own this adapter's descendants. */
+export function LitContent(props: {
+  render: () => unknown;
+  tag?: "span" | "div" | "code";
+  class?: string;
+}) {
+  // Host shape stays fixed while the template updates.
+  const tag = untrack(() => props.tag ?? "span");
+  const host = document.createElement(tag);
+  if (tag === "span") {
+    host.style.display = "contents";
+  }
+  const className = untrack(() => props.class);
+  if (className) {
+    host.className = className;
+  }
+  let part: ReturnType<typeof renderLit> | undefined;
+  createEffect(
+    () => props.render(),
+    (template) => {
+      part = renderLit(template, host, { host });
+    },
+  );
+  onCleanup(() => {
+    part?.setConnected(false);
+    renderLit(nothing, host);
+  });
+  return host;
 }

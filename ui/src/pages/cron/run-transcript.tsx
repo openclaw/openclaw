@@ -6,7 +6,7 @@ import type { CronRunLogEntry } from "../../api/types.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/lit-content.tsx";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import { attachHistoryActivity } from "../chat/chat-history-request.ts";
 import { mergeChatTranscriptPages } from "../chat/chat-transcript-pages.ts";
 import { renderChatHistoryBoundary } from "../chat/components/chat-history-boundary.ts";
@@ -177,7 +177,7 @@ export function CronRunTranscriptView(props: {
           {!state().loading && !state().error && state().messages.length === 0 ? (
             <p>{t("cron.runEntry.transcriptEmpty")}</p>
           ) : null}
-          <LitContent value={transcript()} />
+          <LitContent render={() => transcript()} />
         </section>
       ) : null}
     </>

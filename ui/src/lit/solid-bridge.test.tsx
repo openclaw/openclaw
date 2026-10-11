@@ -5,11 +5,11 @@ import { createSignal, flush, onCleanup } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { ShellLayoutOwner } from "../app/shell-layout-owner.ts";
-import { SettingsPageHeader } from "../components/solid/settings-ui.tsx";
-import { SettingsWorkspace } from "../components/solid/settings-workspace.tsx";
+import { ShellLayoutBoundary, ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider, useApplication } from "../lib/reactive/context.ts";
 import { collectGarbageForTest } from "../test-helpers/garbage-collection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "./solid-bridge.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { defineSolidBridge, LitContent, type SolidBridgeElement } from "./solid-bridge.ts";
 
 type Props = { label: string; enabled: boolean; count: number; payload: object | null };
 type Methods = { show(): void; close(): void; setPayload(value: object): object };
@@ -325,29 +325,66 @@ it("releases the old provider when a nearer provider takes over without moving t
   expect(seen).not.toHaveBeenCalled();
 });
 
-it("publishes and clears page layout traits through the connected Lit shell", async () => {
+it("publishes a Lit-hosted page's layout traits to the existing shell owner", async () => {
   defineSolidBridge(
-    "openclaw-solid-layout-test",
+    "openclaw-solid-lit-layout-test",
+    (props: { active: boolean }) => (
+      <ShellLayoutBoundary traits={{ toolbarHeader: props.active }}>
+        <h1>Page header</h1>
+      </ShellLayoutBoundary>
+    ),
+    { properties: { active: { default: true, attribute: false } } },
+  );
+  const main = document.createElement("main");
+  main.className = "content";
+  document.body.append(main);
+  const owner = new ShellLayoutOwner();
+  owner.contentRef(main);
+  const host = document.createElement("openclaw-solid-lit-layout-test") as SolidBridgeElement<{
+    active: boolean;
+  }>;
+  main.append(host);
+  await host.updateComplete;
+  expect(main.classList.contains("content--toolbar-header")).toBe(true);
+  host.active = false;
+  await host.updateComplete;
+  expect(main.classList.contains("content--toolbar-header")).toBe(false);
+  host.active = true;
+  await host.updateComplete;
+  expect(main.classList.contains("content--toolbar-header")).toBe(true);
+  host.remove();
+  await Promise.resolve();
+  expect(main.classList.contains("content--toolbar-header")).toBe(false);
+});
+
+it("preserves the inherited layout scope of a Solid-owned page", () => {
+  const LayoutBridge = defineSolidBridge(
+    "openclaw-solid-owned-layout-test",
     () => (
-      <SettingsWorkspace>
-        <SettingsPageHeader title="Automations" />
-      </SettingsWorkspace>
+      <ShellLayoutBoundary traits={{ settingsPage: true }}>
+        <h1>Settings</h1>
+      </ShellLayoutBoundary>
     ),
     { properties: {} },
   );
-  const content = document.createElement("main");
-  content.className = "content";
-  document.body.append(content);
+  const main = document.createElement("main");
+  main.className = "content";
+  const route = document.createElement("div");
+  main.append(route);
+  document.body.append(main);
   const owner = new ShellLayoutOwner();
-  owner.contentRef(content);
-  const host = document.createElement("openclaw-solid-layout-test") as SolidBridgeElement<object>;
-  content.append(host);
-  await host.updateComplete;
-  expect(content.classList.contains("content--settings-workspace")).toBe(true);
-  expect(content.classList.contains("content--toolbar-header")).toBe(true);
-  host.remove();
-  await Promise.resolve();
-  expect(content.className).toBe("content");
+  owner.contentRef(main);
+  const view = mountSolid(
+    () => (
+      <ShellLayoutProvider value={{ owner, host: route }}>
+        <LayoutBridge />
+      </ShellLayoutProvider>
+    ),
+    { container: route },
+  );
+  expect(main.classList.contains("content--settings-page")).toBe(true);
+  view.unmount();
+  expect(main.classList.contains("content--settings-page")).toBe(false);
 });
 
 it("releases a disconnected Solid root while the custom element itself is retained", async () => {
@@ -365,4 +402,40 @@ it("releases a disconnected Solid root while the custom element itself is retain
   expect(control.deref()).toBeUndefined();
   expect(weak.deref()).toBeUndefined();
   expect(host.isConnected).toBe(false);
+});
+
+it("updates a Lit leaf without replacing its input and releases it with its Solid owner", () => {
+  const [label, setLabel] = createSignal("First");
+  const view = mountSolid(() => (
+    <LitContent render={() => html`<label>${label()}<input /></label>`} />
+  ));
+  try {
+    flush();
+    const input = view.container.querySelector("input")!;
+    input.value = "Draft";
+    setLabel("Second");
+    flush();
+    expect(view.container.textContent).toBe("Second");
+    expect(view.container.querySelector("input")).toBe(input);
+    expect(input.value).toBe("Draft");
+  } finally {
+    view.unmount();
+  }
+  expect(view.container.childNodes).toHaveLength(0);
+});
+
+it("keeps sanitized content directly inside its styled host", () => {
+  const view = mountSolid(() => (
+    <LitContent
+      tag="div"
+      class="chat-text"
+      render={() =>
+        html`<p>Summary</p>
+          <pre>Result</pre>`
+      }
+    />
+  ));
+  flush();
+  expect(view.container.querySelector(".chat-text > p")?.textContent).toBe("Summary");
+  expect(view.container.querySelector(".chat-text > :last-child")?.tagName).toBe("PRE");
 });

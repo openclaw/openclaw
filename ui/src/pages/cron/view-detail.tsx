@@ -7,7 +7,7 @@ import { SettingsSection, SettingsPage } from "../../components/solid/settings-u
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/lit-content.tsx";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import { AdminRequired, ErrorBanner, EnabledSwitch, JobMenu } from "./view-controls.tsx";
 import { Editor } from "./view-editor.tsx";
 import { TriggerIndicator } from "./view-job-status.tsx";
@@ -142,27 +142,29 @@ function DetailHeader(
 function DetailTabs(props: CronProps) {
   return (
     <LitContent
-      value={renderHubTabs({
-        id: "cron-detail",
-        panelId: "cron-detail-panel",
-        className: "cron-tabs",
-        variant: "sub",
-        active: props.detailTab,
-        tabs: [
-          {
-            value: "settings",
-            label: t("cron.detail.settingsTab"),
-            testId: "cron-detail-tab-settings",
-          },
-          {
-            value: "history",
-            label: t("cron.detail.historyTitle"),
-            testId: "cron-detail-tab-history",
-          },
-        ],
-        ariaLabel: t("cron.detail.tabsLabel"),
-        onSelect: props.onDetailTabChange,
-      })}
+      render={() =>
+        renderHubTabs({
+          id: "cron-detail",
+          panelId: "cron-detail-panel",
+          className: "cron-tabs",
+          variant: "sub",
+          active: props.detailTab,
+          tabs: [
+            {
+              value: "settings",
+              label: t("cron.detail.settingsTab"),
+              testId: "cron-detail-tab-settings",
+            },
+            {
+              value: "history",
+              label: t("cron.detail.historyTitle"),
+              testId: "cron-detail-tab-history",
+            },
+          ],
+          ariaLabel: t("cron.detail.tabsLabel"),
+          onSelect: props.onDetailTabChange,
+        })
+      }
     />
   );
 }

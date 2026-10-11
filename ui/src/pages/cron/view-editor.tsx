@@ -9,7 +9,7 @@ import { providerIdFromModelRef } from "../../components/provider-icon.ts";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import type { CronFormState } from "../../lib/cron/types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/lit-content.tsx";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import { DeliverySection, Advanced } from "./view-delivery.tsx";
 import {
   collectBlockingFields,
@@ -203,7 +203,7 @@ function PromptSection(
               <LitContent
                 tag="code"
                 class="hljs"
-                value={html`${unsafeHTML(highlightCodeHtml(payloadText(), codeLanguage()))}`}
+                render={() => html`${unsafeHTML(highlightCodeHtml(payloadText(), codeLanguage()))}`}
               />
             </pre>
           ) : (
@@ -262,23 +262,25 @@ function PromptSection(
             errorId={errorIdForField("payloadModel")}
             control={
               <LitContent
-                value={renderModelPicker({
-                  id: "cron-payload-model-picker",
-                  label: modelLabel(),
-                  value: props.form.payloadModel,
-                  options: [
-                    { value: "", label: t("quickSettings.model.default") },
-                    ...modelOptions(),
-                  ],
-                  custom: {
-                    id: inputIdForField("payloadModel"),
-                    label: t("cron.form.customModel"),
-                    placeholder: t("cron.form.modelPlaceholder"),
-                    invalid: Boolean(modelError()),
-                    describedBy: modelError() ? errorIdForField("payloadModel") : undefined,
-                  },
-                  onChange: (payloadModel) => props.onFormChange({ payloadModel }),
-                })}
+                render={() =>
+                  renderModelPicker({
+                    id: "cron-payload-model-picker",
+                    label: modelLabel(),
+                    value: props.form.payloadModel,
+                    options: [
+                      { value: "", label: t("quickSettings.model.default") },
+                      ...modelOptions(),
+                    ],
+                    custom: {
+                      id: inputIdForField("payloadModel"),
+                      label: t("cron.form.customModel"),
+                      placeholder: t("cron.form.modelPlaceholder"),
+                      invalid: Boolean(modelError()),
+                      describedBy: modelError() ? errorIdForField("payloadModel") : undefined,
+                    },
+                    onChange: (payloadModel) => props.onFormChange({ payloadModel }),
+                  })
+                }
               />
             }
           />

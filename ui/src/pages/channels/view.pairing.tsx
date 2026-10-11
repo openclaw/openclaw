@@ -12,7 +12,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/lit-content.tsx";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import { ChannelRefresh } from "./view.shared.tsx";
 import type { ChannelsProps } from "./view.types.ts";
 
@@ -42,34 +42,38 @@ function renderFilters(props: ChannelsProps) {
       <label>
         <span>{t("channels.pairing.channelFilter")}</span>
         <LitContent
-          value={renderChannelPicker({
-            label: t("channels.pairing.channelFilter"),
-            value: props.pairingChannelFilter ?? "",
-            options: [
-              { value: "", label: t("channels.pairing.allChannels"), kind: "neutral" },
-              ...channels().map(([value, label]) => ({ value, label })),
-            ],
-            onChange: (value) => props.onPairingFilterChange(value || null, null),
-          })}
+          render={() =>
+            renderChannelPicker({
+              label: t("channels.pairing.channelFilter"),
+              value: props.pairingChannelFilter ?? "",
+              options: [
+                { value: "", label: t("channels.pairing.allChannels"), kind: "neutral" },
+                ...channels().map(([value, label]) => ({ value, label })),
+              ],
+              onChange: (value) => props.onPairingFilterChange(value || null, null),
+            })
+          }
         />
       </label>
       <label>
         <span>{t("channels.pairing.accountFilter")}</span>
         <LitContent
-          value={renderPicker({
-            label: t("channels.pairing.accountFilter"),
-            value: props.pairingAccountFilter ?? "",
-            options: [
-              { value: "", label: t("channels.pairing.allAccounts") },
-              ...accountsForChannel().map((account) => ({
-                value: account.accountId,
-                label: accountName(account),
-              })),
-            ],
-            disabled: !props.pairingChannelFilter,
-            onChange: (value) =>
-              props.onPairingFilterChange(props.pairingChannelFilter, value || null),
-          })}
+          render={() =>
+            renderPicker({
+              label: t("channels.pairing.accountFilter"),
+              value: props.pairingAccountFilter ?? "",
+              options: [
+                { value: "", label: t("channels.pairing.allAccounts") },
+                ...accountsForChannel().map((account) => ({
+                  value: account.accountId,
+                  label: accountName(account),
+                })),
+              ],
+              disabled: !props.pairingChannelFilter,
+              onChange: (value) =>
+                props.onPairingFilterChange(props.pairingChannelFilter, value || null),
+            })
+          }
         />
       </label>
     </div>

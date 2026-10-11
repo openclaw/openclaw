@@ -14,7 +14,7 @@ import { channelSnapshotEntryIsActive, resolveChannelAccounts } from "../../lib/
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/lit-content.tsx";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import { renderChannelDetail as ChannelDetail } from "./view.detail.tsx";
 import { renderChannelPairingPrompt, renderChannelPairingQueue } from "./view.pairing.tsx";
 import { ChannelRefresh, resolveChannelDisplayState } from "./view.shared.tsx";
@@ -246,9 +246,11 @@ function ConnectedRow(params: { channelId: string; props: ChannelsProps }) {
       onClick={() => params.props.onShowDetail(params.channelId)}
     >
       <LitContent
-        value={renderChannelIcon(params.channelId, label(), "tile", {
-          pluginIconUrl: params.props.presentation.pluginIconUrls[params.channelId],
-        })}
+        render={() =>
+          renderChannelIcon(params.channelId, label(), "tile", {
+            pluginIconUrl: params.props.presentation.pluginIconUrls[params.channelId],
+          })
+        }
       />
       <div class="settings-row__text">
         <span class="settings-row__title">{label()}</span>
@@ -282,9 +284,11 @@ function AvailableRow(params: { channelId: string; props: ChannelsProps }) {
         onClick={() => params.props.onShowDetail(params.channelId)}
       >
         <LitContent
-          value={renderChannelIcon(params.channelId, label(), "tile", {
-            pluginIconUrl: params.props.presentation.pluginIconUrls[params.channelId],
-          })}
+          render={() =>
+            renderChannelIcon(params.channelId, label(), "tile", {
+              pluginIconUrl: params.props.presentation.pluginIconUrls[params.channelId],
+            })
+          }
         />
         <span class="settings-row__text">
           <span class="settings-row__title">{label()}</span>

@@ -10,7 +10,7 @@ import { isCronJobActiveFailure, isCronJobRunning } from "../../lib/cron-status.
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/lit-content.tsx";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
 import { AdminRequired, ErrorBanner, EnabledSwitch, JobMenu } from "./view-controls.tsx";
 import {
@@ -91,35 +91,37 @@ export function ListView(props: CronProps) {
 function ListTabs(props: CronProps) {
   return (
     <LitContent
-      value={renderHubTabs({
-        id: "cron-list",
-        panelId: "cron-list-panel",
-        className: "cron-tabs",
-        active: props.listTab === "activity" ? "activity" : props.jobsEnabledFilter,
-        tabs: [
-          ...ENABLED_TABS.map((tab) => ({
-            value: tab.value,
-            label: t(tab.labelKey),
-            testId: `cron-tab-${tab.value}`,
-          })),
-          {
-            value: "activity",
-            label: t("cron.list.activityTab"),
-            testId: "cron-list-tab-activity",
+      render={() =>
+        renderHubTabs({
+          id: "cron-list",
+          panelId: "cron-list-panel",
+          className: "cron-tabs",
+          active: props.listTab === "activity" ? "activity" : props.jobsEnabledFilter,
+          tabs: [
+            ...ENABLED_TABS.map((tab) => ({
+              value: tab.value,
+              label: t(tab.labelKey),
+              testId: `cron-tab-${tab.value}`,
+            })),
+            {
+              value: "activity",
+              label: t("cron.list.activityTab"),
+              testId: "cron-list-tab-activity",
+            },
+          ],
+          ariaLabel: t("cron.list.viewLabel"),
+          onSelect: (value) => {
+            if (value === "activity") {
+              props.onListTabChange("activity");
+              return;
+            }
+            props.onListTabChange("tasks");
+            if (value !== props.jobsEnabledFilter) {
+              void props.onJobsFiltersChange({ cronJobsEnabledFilter: value });
+            }
           },
-        ],
-        ariaLabel: t("cron.list.viewLabel"),
-        onSelect: (value) => {
-          if (value === "activity") {
-            props.onListTabChange("activity");
-            return;
-          }
-          props.onListTabChange("tasks");
-          if (value !== props.jobsEnabledFilter) {
-            void props.onJobsFiltersChange({ cronJobsEnabledFilter: value });
-          }
-        },
-      })}
+        })
+      }
     />
   );
 }
@@ -237,14 +239,16 @@ function JobsTable(
         </For>
       )}
       <LitContent
-        value={renderCronJobsPagination({
-          jobsShown: props.jobs.length,
-          jobsTotal: props.jobsTotal,
-          hasMore: props.jobsHasMore,
-          loading: props.loading,
-          loadingMore: props.jobsLoadingMore,
-          onLoadMore: props.onLoadMoreJobs,
-        })}
+        render={() =>
+          renderCronJobsPagination({
+            jobsShown: props.jobs.length,
+            jobsTotal: props.jobsTotal,
+            hasMore: props.jobsHasMore,
+            loading: props.loading,
+            loadingMore: props.jobsLoadingMore,
+            onLoadMore: props.onLoadMoreJobs,
+          })
+        }
       />
     </div>
   );

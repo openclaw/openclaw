@@ -10,7 +10,7 @@ import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx"
 import { i18n } from "../../i18n/index.ts";
 import { formatChannelExtraValue, resolveChannelConfigValue } from "../../lib/channels/index.ts";
 import { projectI18n, t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/lit-content.tsx";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import type { ChannelsProps } from "./view.types.ts";
 
 function resolveSchemaNode(schema: JsonSchema | null, path: string[]): JsonSchema | null {
@@ -89,7 +89,7 @@ export function ChannelConfig(params: { channelId: string; props: ChannelsProps 
           }
         >
           <div class="config-form">
-            <LitContent value={form()} />
+            <LitContent render={() => form()} />
           </div>
           <Show when={extraFields().length > 0}>
             <div>

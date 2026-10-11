@@ -34,7 +34,8 @@ declare module "@solidjs/web" {
           "onWa-after-hide"?: (event: CustomEvent<void>) => void;
         };
       "wa-dropdown-item": HTMLAttributes<WaDropdownItem> &
-        Properties<WaDropdownItem> & { value?: WaDropdownItem["value"] };
+        Properties<WaDropdownItem> &
+        Partial<Pick<WaDropdownItem, "value" | "type" | "variant" | "disabled">>;
       "wa-popover": LegacyAttributes<WaPopover> &
         Partial<Pick<WaPopover, "for" | "placement">> & {
           "onWa-show"?: (event: Event) => void;

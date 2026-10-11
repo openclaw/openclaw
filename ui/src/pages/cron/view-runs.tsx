@@ -15,7 +15,7 @@ import {
   formatCompactTokenCount,
 } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/lit-content.tsx";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import { cronRunEntryMatchesLink } from "./route-model.ts";
 import type { CronProps } from "./view-types.ts";
 registerEnglishCatalog(registerCronEnglish);
@@ -484,7 +484,7 @@ function Run(props: {
       <LitContent
         tag="div"
         class="cron-run-entry__body chat-text"
-        value={html`${unsafeHTML(toSanitizedMarkdownHtml(bodySource()))}`}
+        render={() => html`${unsafeHTML(toSanitizedMarkdownHtml(bodySource()))}`}
       />
     </div>
   );
