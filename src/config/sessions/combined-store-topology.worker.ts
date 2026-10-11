@@ -42,7 +42,7 @@ export function readCombinedSessionStoreTopology(
         selections.map(([key, selection]): [string, ResolvedGatewaySessionStoreTargets | Error] => {
           try {
             return [
-              String(key),
+              key,
               resolveGatewaySessionStoreTargets(request.config, {
                 ...selection,
                 includeIncognito: false,
@@ -50,7 +50,7 @@ export function readCombinedSessionStoreTopology(
               }),
             ];
           } catch (error) {
-            return [String(key), error instanceof Error ? error : new Error(String(error))];
+            return [key, error instanceof Error ? error : new Error(String(error))];
           }
         }),
       )

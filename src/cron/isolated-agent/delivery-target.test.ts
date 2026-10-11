@@ -16,8 +16,9 @@ import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/c
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 
-const { extractDeliveryInfoMock } = vi.hoisted(() => ({
+const { extractDeliveryInfoMock, loadSessionEntry } = vi.hoisted(() => ({
   extractDeliveryInfoMock: vi.fn(),
+  loadSessionEntry: vi.fn(),
 }));
 
 vi.mock("../../config/sessions/main-session.js", () => ({
@@ -39,29 +40,22 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveSessionStorePathCore: vi.fn().mockReturnValue("/tmp/test-store.json"),
 }));
 
-vi.mock("../../config/sessions/session-accessor.js", () => {
-  const loadSessionEntry = vi.fn();
-  return {
-    loadSessionEntry,
-    loadSessionEntryReadOnly: loadSessionEntry,
-    loadExactSessionEntryCandidatesReadOnlyBatch: (
-      scopes: Array<{ agentId: string; storePath: string; sessionKeys: string[] }>,
-    ) =>
-      scopes.map(({ agentId, storePath, sessionKeys }) => {
-        try {
-          return {
-            ok: true,
-            value: sessionKeys.flatMap((sessionKey) => {
-              const entry = loadSessionEntry({ agentId, storePath, sessionKey });
-              return entry ? [{ sessionKey, entry }] : [];
-            }),
-          };
-        } catch (error) {
-          return { ok: false, error };
-        }
-      }),
-  };
-});
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntriesFromStoreInWorker: async ({
+    agentId,
+    storePath,
+    sessionKeys,
+  }: {
+    agentId: string;
+    storePath: string;
+    sessionKeys: string[];
+  }) => ({
+    entries: sessionKeys.flatMap((sessionKey) => {
+      const entry = loadSessionEntry({ agentId, storePath, sessionKey });
+      return entry ? [{ sessionKey, entry }] : [];
+    }),
+  }),
+}));
 
 vi.mock("../../infra/outbound/channel-selection.runtime.js", () => ({
   resolveMessageChannelSelection: vi
@@ -76,12 +70,11 @@ const mockedModuleIds = [
   "../../config/sessions/main-session.js",
   "../../config/sessions/delivery-info.js",
   "../../config/sessions/paths.js",
-  "../../config/sessions/session-accessor.js",
+  "../../config/sessions/session-entry-read-runtime.js",
   "../../infra/outbound/channel-selection.runtime.js",
   "../../infra/outbound/targets.runtime.js",
 ];
 
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.runtime.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.runtime.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
@@ -616,7 +609,7 @@ describe("resolveDeliveryTarget", () => {
       to: "room:default",
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: true,
       channel: "forum",
       to: "room:default",

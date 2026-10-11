@@ -334,13 +334,15 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const explicitSessionLabel = normalizeOptionalString(p.label);
     const preparedDisplayName = normalizeOptionalString(p.displayName);
     const titleAgentId = explicitlyRequestedAgent.agentId;
+    if (!authority.ensureActive()) {
+      return;
+    }
     const existingTargetEntry = explicitlyRequestedKey
       ? (
           await loadGatewaySessionEntryReadOnlyInWorker({
             cfg,
             key: explicitlyRequestedKey,
             agentId: titleAgentId,
-            assertActive: commitGuard,
           })
         ).entry
       : undefined;
@@ -498,9 +500,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       ADMIN_SCOPE,
       clientScopes,
     ).allowed;
-    if (!authority.ensureActive()) {
-      return;
-    }
     const catalogWait = createSessionModelCatalogWait([signal, client?.connectionSignal]);
     const createParams: Parameters<typeof createGatewaySession>[0] = {
       cfg,

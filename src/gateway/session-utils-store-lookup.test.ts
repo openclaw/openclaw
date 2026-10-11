@@ -4,6 +4,7 @@ import { err } from "@openclaw/normalization-core/result";
 import { describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
+import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
@@ -53,7 +54,6 @@ import {
 } from "./session-utils-store-lookup.js";
 import { withQualifiedGatewaySessionStoreTarget } from "./session-utils-store-retained.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
-import { loadCombinedSessionStoreForGatewayCore } from "./session-utils.js";
 
 vi.mock("./github-publication-availability.js", async () => {
   const actual = await vi.importActual<typeof import("./github-publication-availability.js")>(

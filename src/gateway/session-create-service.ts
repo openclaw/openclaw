@@ -23,7 +23,6 @@ import {
 } from "../auto-reply/reply/session-fork.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
-import { readResolvedSessionEntryInWorker } from "../config/sessions/session-accessor.entry.js";
 import {
   createSessionEntryWithTranscript,
   type SessionEntryCreateWithTranscriptOptions,
@@ -100,6 +99,7 @@ import type {
 } from "./session-create-service.types.js";
 import {
   finalizeSessionCreateTarget,
+  readRequestedSessionCreateTarget,
   readSessionCreateTarget,
   validateSessionCreateIncognitoTarget,
 } from "./session-create-target.js";
@@ -217,22 +217,8 @@ export async function createGatewaySession(
   if (params.initialEntry?.pluginOwnerId && !authorizedPluginCreation) {
     return invalidSessionRequest("trusted plugin session owner is not authorized");
   }
-  const initialTargetEntry = explicitTargetKey
-    ? explicitIncognito
-      ? (
-          await loadGatewaySessionEntryReadOnlyInWorker({
-            cfg: params.cfg,
-            key: explicitTargetKey,
-            agentId,
-            assertActive: commitGuard,
-          })
-        ).entry
-      : await readResolvedSessionEntryInWorker({
-          cfg: params.cfg,
-          sessionKey: explicitTargetKey,
-          agentId,
-        })
-    : undefined;
+  const explicitTarget = await readRequestedSessionCreateTarget(params, agentId, explicitTargetKey);
+  const initialTargetEntry = explicitTarget?.entry;
   if (
     explicitTargetKey &&
     isAgentHarnessSessionKey(explicitTargetKey) &&
@@ -306,12 +292,14 @@ export async function createGatewaySession(
   }
 
   const targetSessionKey = explicitTargetKey ?? buildDashboardSessionKey(agentId, { incognito });
-  const target = await resolveGatewaySessionStoreTargetInWorker({
-    cfg: params.cfg,
-    key: targetSessionKey,
-    agentId,
-    assertActive: commitGuard,
-  });
+  const target =
+    explicitTarget ??
+    (await resolveGatewaySessionStoreTargetInWorker({
+      cfg: params.cfg,
+      key: targetSessionKey,
+      agentId,
+      assertActive: commitGuard,
+    }));
   const initializingSessionFailure = () =>
     unavailableSessionRequest(
       `Session ${target.canonicalKey} is still initializing; retry creation later.`,

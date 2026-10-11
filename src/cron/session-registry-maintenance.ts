@@ -12,7 +12,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createRetainedAgentDatabaseMatcherFromSnapshot } from "../state/agent-deletion-discovery.js";
 import { prepareAgentDatabaseDeletionSnapshotRead } from "../state/agent-deletion-journal.read.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
-import { loadCronJobsStore, resolveCronJobsStorePath } from "./store.js";
+import { loadCronJobsStore } from "./store.js";
 
 const log = createSubsystemLogger("cron/maintenance");
 
@@ -57,8 +57,7 @@ type RunningCronJobIds =
 
 async function readRunningCronJobIds(): Promise<RunningCronJobIds> {
   try {
-    const cronStorePath = resolveCronJobsStorePath();
-    const runningJobs = (await loadCronJobsStore(cronStorePath)).jobs.filter(
+    const runningJobs = (await loadCronJobsStore()).jobs.filter(
       (job) => typeof job.state?.runningAtMs === "number",
     );
     // A running detached job may have been retargeted after its session was created. Keep its

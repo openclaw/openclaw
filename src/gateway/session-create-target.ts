@@ -70,6 +70,16 @@ export async function validateSessionCreateIncognitoTarget(
   return { ok: true, value: undefined };
 }
 
+export async function readRequestedSessionCreateTarget(
+  params: CreateGatewaySessionParams,
+  agentId: string,
+  key: string | undefined,
+) {
+  return key
+    ? await loadGatewaySessionEntryReadOnlyInWorker({ cfg: params.cfg, key, agentId })
+    : undefined;
+}
+
 // The caller holds target lifecycle custody from this reread through commit and rollback.
 export async function readSessionCreateTarget(
   params: CreateGatewaySessionParams,

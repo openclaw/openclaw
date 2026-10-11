@@ -26,6 +26,17 @@ paths are migration debt, not a pattern to extend. The
 [migration inventory](/reference/database-schemas/worker-access-inventory) separates
 candidate main-thread paths from SQL already executing in workers.
 
+Cold session creation uses the existing session-entry worker for requested-key
+and parent lookups. Personal default selection reads profile links and its selected
+credential through the existing shared-state and auth-store readers; credential
+authority still applies at the creation effect. Default cron loads resolve their
+saved partition in the same worker operation that loads the jobs. A queued load
+uses the committed partition when that operation starts, without host recapture.
+Memory initialization and status consume source invalidation and vector completeness
+from the index-facts postimage. The publication worker owns vector extension loading
+and retirement, while the retrieval worker owns read-only capability probing.
+These paths add no schema, retention, or update contract.
+
 Managed outgoing media cleanup uses the same retained session reader as media
 serving. Durable session discovery and entry reads execute in the existing
 read workers; bound incognito reads use their actor. Cleanup distinguishes an
@@ -235,9 +246,10 @@ This changes no schemas, retention, stored bytes, or update behavior.
 Gateway combined listings, search preparation, cron owner discovery, delivery
 context recovery, and ordered runtime candidate selection await the existing
 session history/discovery worker. Target selection returns logical and physical
-store facts together; the Gateway consumes them without native SQLite reads.
+store facts together; durable reads do not run SQLite on the Gateway thread.
 Combined topology and row reads share the federation policy used by the native
-maintenance entrypoint. Incognito rows remain with their process-held actor.
+maintenance entrypoint. Bound incognito rows remain with their process-held actor;
+unbound incognito stores retain their existing process-local native owner.
 
 Ordinary discovery keeps one captured roster and listing through completion.
 Later registry, path, or row changes are observed on the next owner preparation;

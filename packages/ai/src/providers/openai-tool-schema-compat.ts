@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
 import { SCHEMA_MAP_KEYS, SCHEMA_NESTED_KEYS } from "./schema-walk.js";
+import { truncateToolSchemaDepth, wasToolSchemaTruncated } from "./tool-schema-depth.js";
 import { normalizeToolSchema } from "./tool-schema-normalization.js";
 
 /** Repairs recoverable OpenAI tool-schema shapes before canonical normalization. */
@@ -35,12 +36,23 @@ export function findOpenAIStrictSchemaViolations(
   path: string,
   options?: { requireObjectRoot?: boolean },
 ): string[] {
+  const bounded = truncateToolSchemaDepth(schema);
+  return wasToolSchemaTruncated(bounded)
+    ? [`${path}.depth`]
+    : collectStrictSchemaViolations(bounded, path, options);
+}
+
+function collectStrictSchemaViolations(
+  schema: unknown,
+  path: string,
+  options?: { requireObjectRoot?: boolean },
+): string[] {
   if (Array.isArray(schema)) {
     if (options?.requireObjectRoot) {
       return [`${path}.type`];
     }
     return schema.flatMap((item, index) =>
-      findOpenAIStrictSchemaViolations(item, `${path}[${index}]`),
+      collectStrictSchemaViolations(item, `${path}[${index}]`),
     );
   }
   if (!schema || typeof schema !== "object") {
@@ -90,7 +102,7 @@ export function findOpenAIStrictSchemaViolations(
       continue;
     }
     for (const [entryKey, value] of Object.entries(schemaMap)) {
-      violations.push(...findOpenAIStrictSchemaViolations(value, `${path}.${key}.${entryKey}`));
+      violations.push(...collectStrictSchemaViolations(value, `${path}.${key}.${entryKey}`));
     }
   }
   // Only recurse through JSON Schema applicators. Annotation payloads such as
@@ -98,7 +110,7 @@ export function findOpenAIStrictSchemaViolations(
   for (const key of SCHEMA_NESTED_KEYS) {
     const value = record[key];
     if (value && typeof value === "object") {
-      violations.push(...findOpenAIStrictSchemaViolations(value, `${path}.${key}`));
+      violations.push(...collectStrictSchemaViolations(value, `${path}.${key}`));
     }
   }
 

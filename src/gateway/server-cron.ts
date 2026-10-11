@@ -596,11 +596,8 @@ export function buildGatewayCronService(params: {
       const completion = await finalizeCronCompletionAnnouncement({
         deliveryAttemptFence,
         job,
-        suppressionReason: summaryIsSilent ? "silent" : undefined,
-        text:
-          !summaryIsSilent && typeof result.summary === "string" && result.summary.trim()
-            ? redactCronCommandSummaryForExternalDelivery(result.summary)
-            : undefined,
+        text: redactCronCommandSummaryForExternalDelivery(result.summary ?? ""),
+        diagnostics: result.diagnostics,
         runStartedAtMs: job.state.runningAtMs,
         abortSignal,
         deps: params.deps,
