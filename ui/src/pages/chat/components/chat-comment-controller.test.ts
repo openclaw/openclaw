@@ -1,11 +1,12 @@
 import { nothing, render } from "lit";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import "../../../lib/toast.ts";
 import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayload,
 } from "../attachment-payload-store.ts";
+import { createComposerContainer } from "../chat-composer.test-support.ts";
 import { createChatProps } from "../chat-view.test-helpers.ts";
 import { renderChat } from "../chat-view.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
@@ -22,9 +23,21 @@ type CommentControllerElement = HTMLElement & {
   updateComplete: Promise<unknown>;
 };
 
+beforeEach(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+});
+
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   for (const id of payloads) {
     releaseChatAttachmentPayload(id);
   }
@@ -96,7 +109,7 @@ async function mountComments(additional: ChatAttachment[] = []) {
 
 describe("comment actions outside the transcript", () => {
   it("keeps an editor across draft renders and retires it when composition is disabled", async () => {
-    const container = document.createElement("div");
+    const container = createComposerContainer();
     onTestFinished(() => {
       render(nothing, container);
     });

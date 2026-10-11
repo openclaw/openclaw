@@ -248,9 +248,11 @@ describe("OpenAI embedding provider HTTP contract", () => {
       buildRequestFields: () => fields,
     });
 
-    await expect(provider.embedBatch(["first", "second"])).rejects.toThrow(
-      "fixture embeddings failed (model: fixture-model, batch size: 2): expected 2 vectors, got 1",
-    );
+    await expect(provider.embedBatch(["first", "second"])).rejects.toMatchObject({
+      code: "INVALID_EMBEDDING_RESPONSE",
+      message:
+        "fixture embeddings failed (model: fixture-model, batch size: 2): expected 2 vectors, got 1",
+    });
     expect(server.requests).toHaveLength(1);
     expect(server.requests[0]?.body).toEqual({
       model: "fixture-model",
@@ -466,9 +468,10 @@ describe("OpenAI embedding provider HTTP contract", () => {
           server.requests[0]?.response.writeHead(503).end("fixture rejected");
           await expect(outcome).resolves.toMatchObject({
             error: {
-              message: expect.stringContaining(
-                "openai embeddings failed (model: text-embedding-3-small, batch size: 1) (503)",
-              ),
+              name: "ProviderHttpError",
+              status: 503,
+              message:
+                "openai embeddings failed (model: text-embedding-3-small, batch size: 1) (503): fixture rejected",
             },
           });
           // Promise.all rejects early; it must not cancel the still-running sibling.

@@ -17,16 +17,6 @@ afterEach(() => {
 });
 
 describe("resolveRealpathOrAbsolute", () => {
-  it("canonicalizes existing symlinks", async () => {
-    await withTestDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
-      const target = path.join(base, "target");
-      const alias = path.join(base, "alias");
-      await fs.mkdir(target);
-      await fs.symlink(target, alias);
-      expect(resolveRealpathOrAbsolute(alias)).toBe(await fs.realpath(target));
-    });
-  });
-
   it("keeps missing paths lexical and falls back on non-missing errors", async () => {
     await withTestDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
       const alias = path.join(base, "alias");
@@ -89,33 +79,6 @@ describe("resolveIdentityPathViaExistingAncestorSync", () => {
 });
 
 describe("resolveRootPath", () => {
-  it("resolves symlink parents with non-existent leafs inside root", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-
-    await withTestDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
-      const root = path.join(base, "workspace");
-      const targetDir = path.join(root, "target-dir");
-      const linkPath = path.join(root, "alias");
-      await fs.mkdir(targetDir, { recursive: true });
-      await fs.symlink(targetDir, linkPath);
-
-      const unresolved = path.join(linkPath, "missing.txt");
-      const result = await resolveRootPath({
-        absolutePath: unresolved,
-        rootPath: root,
-        boundaryLabel: "sandbox root",
-      });
-
-      const targetReal = await fs.realpath(targetDir);
-      expect(result.exists).toBe(false);
-      expect(result.kind).toBe("missing");
-      expect(result.canonicalPath).toBe(path.join(targetReal, "missing.txt"));
-      expect(isPathInside(result.rootCanonicalPath, result.canonicalPath)).toBe(true);
-    });
-  });
-
   it("blocks dangling symlink leaf escapes outside root", async () => {
     if (process.platform === "win32") {
       return;

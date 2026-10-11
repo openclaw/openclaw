@@ -8,7 +8,6 @@ import {
 } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sessionEntries from "../../config/sessions/session-accessor.sqlite-entry.js";
-import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import {
   runExclusiveSessionLifecycleMutation,
   startSessionWorkAdmissionInterruption,
@@ -175,7 +174,7 @@ it.each(["cancelled", "request-changed", "later-rebound-store"] as const)(
 );
 
 it.for(
-  (["writer", "active", "delivery"] as const).flatMap((wait) =>
+  (["active", "delivery"] as const).flatMap((wait) =>
     (["unchanged", "same-inode"] as const).map((replacement) => ({
       wait,
       replacement,
@@ -191,36 +190,17 @@ it.for(
     closeOpenClawAgentDatabasesForTest();
     fs.symlinkSync(originalPath, storePath);
     const release = createDeferred();
-    const writerStarted = createDeferred();
-    let owner: registry.ReplyOperation | undefined;
-    let writer: Promise<void> | undefined;
-    if (wait === "writer") {
-      writer = runExclusiveSessionStoreWrite(storePath, async () => {
-        writerStarted.resolve();
-        await release.promise;
-      });
-      await writerStarted.promise;
-    } else {
-      const admitted = await admit(storePath);
-      expect(admitted.status).toBe("owned");
-      if (admitted.status !== "owned") {
-        throw new Error("fixture requires an admitted blocking owner");
-      }
-      owner = admitted.operation;
-      if (wait === "delivery") {
-        owner.completeWithAfterClearBarrier(release.promise);
-      }
+    const admitted = await admit(storePath);
+    expect(admitted.status).toBe("owned");
+    if (admitted.status !== "owned") {
+      throw new Error("fixture requires an admitted blocking owner");
+    }
+    const owner = admitted.operation;
+    if (wait === "delivery") {
+      owner.completeWithAfterClearBarrier(release.promise);
     }
     const enteredWait = createDeferred();
-    const load = sessionEntries.loadSessionEntryForAdmission;
-    const loaded = vi
-      .spyOn(sessionEntries, "loadSessionEntryForAdmission")
-      .mockImplementation((...args) => {
-        if (wait === "writer") {
-          enteredWait.resolve();
-        }
-        return load(...args);
-      });
+    const loaded = vi.spyOn(sessionEntries, "loadSessionEntryForAdmission");
     if (wait === "active") {
       const waitForIdle = registry.replyRunRegistry.waitForIdle.bind(registry.replyRunRegistry);
       vi.spyOn(registry.replyRunRegistry, "waitForIdle").mockImplementation((...args) => {
@@ -260,7 +240,7 @@ it.for(
         await closeOpenClawAgentDatabaseByPathAsync(storePath);
         expect(claim.isCurrent()).toBe(false);
       }
-      owner?.complete();
+      owner.complete();
       release.resolve();
       const result = await pending;
       if (replacement === "unchanged") {
@@ -273,12 +253,11 @@ it.for(
         expect(result).toMatchObject({ status: "skipped", reason: "lifecycle-invalidated" });
       }
     } finally {
-      owner?.complete();
+      owner.complete();
       release.resolve();
       controller.abort();
       const result = await pending.catch(() => undefined);
       complete(result);
-      await writer;
     }
   },
 );

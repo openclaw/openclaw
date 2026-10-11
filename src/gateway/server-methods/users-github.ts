@@ -10,7 +10,7 @@ import {
 import { resolveSystemGitHubIdentityStatus } from "../../agents/github-tool-identity.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import type { PersonalGitHubAction } from "../github-personal-oauth.js";
-import { preparePersonalGitHubAction } from "./github-personal-authorization.js";
+import { preparePersonalGitHubActionV2 } from "./github-personal-authorization.js";
 import type {
   GatewayRequestHandlers,
   GatewayRequestHandlerOptions,
@@ -18,14 +18,14 @@ import type {
 } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
 
-function runPersonalGitHub(
+async function runPersonalGitHub(
   options: Pick<GatewayRequestHandlerOptions, "client" | "context" | "signal" | "respond">,
   fallbackError: string,
   run: (
     action: PersonalGitHubAction,
     service: NonNullable<GatewayRequestContext["githubOAuthService"]>["personal"],
   ) => unknown,
-): void | Promise<void> {
+): Promise<void> {
   const fail = (error: unknown) =>
     options.respond(
       false,
@@ -33,20 +33,13 @@ function runPersonalGitHub(
       errorShape(ErrorCodes.FORBIDDEN, error instanceof Error ? error.message : fallbackError),
     );
   try {
-    const action = preparePersonalGitHubAction(options);
+    const action = await preparePersonalGitHubActionV2(options);
     const service = options.context.githubOAuthService?.personal;
     if (!service) {
       throw new Error("GitHub connections are unavailable; retry after Gateway startup.");
     }
-    const result = run(action, service);
-    if (result instanceof Promise) {
-      return result
-        .then((value) => {
-          action.assertCurrent();
-          options.respond(true, value);
-        })
-        .catch(fail);
-    }
+    const result = await run(action, service);
+    action.assertCurrent();
     options.respond(true, result);
   } catch (error) {
     fail(error);
@@ -88,16 +81,16 @@ export const usersGitHubHandlers: GatewayRequestHandlers = {
     "users.github.authorize.cancel",
     validateUsersGitHubAuthorizeCancelParams,
     (options) =>
-      runPersonalGitHub(options, "My GitHub authorization failed.", (action, service) => ({
-        cancelled: service.cancelAuthorization(action, options.params.requestId),
+      runPersonalGitHub(options, "My GitHub authorization failed.", async (action, service) => ({
+        cancelled: await service.cancelAuthorizationAsync(action, options.params.requestId),
       })),
   ),
   "users.github.disconnect": defineValidatedGatewayMethod(
     "users.github.disconnect",
     validateUsersGitHubDisconnectParams,
     (options) =>
-      runPersonalGitHub(options, "My GitHub disconnect failed.", (action, service) => {
-        service.disconnect(action);
+      runPersonalGitHub(options, "My GitHub disconnect failed.", async (action, service) => {
+        await service.disconnectAsync(action);
         return { disconnected: true };
       }),
   ),

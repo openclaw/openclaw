@@ -271,15 +271,14 @@ export const ChatCommentController = defineSolidBridge<ChatCommentControllerProp
     }
 
     // Only the admitted comment set and read scope affect the editor lifetime.
-    createEffect(
-      () => view.props.readSignal,
-      (signal) => {
-        retireEditor();
-        signal?.addEventListener("abort", retireEditor, { once: true });
-        return () => signal?.removeEventListener("abort", retireEditor);
-      },
-    );
-    createEffect(() => view.sessionKey, retireEditor);
+    const readScope = createMemo(() => [view.props.readSignal, view.sessionKey] as const, {
+      equals: (previous, next) => previous[0] === next[0] && previous[1] === next[1],
+    });
+    createEffect(readScope, ([signal]) => {
+      retireEditor();
+      signal?.addEventListener("abort", retireEditor, { once: true });
+      return () => signal?.removeEventListener("abort", retireEditor);
+    });
     const editingScope = createMemo(
       () => ({
         attachments: view.props.attachments,

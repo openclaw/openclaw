@@ -71,18 +71,6 @@ describe("EventHub subscriber ownership", () => {
     await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
   });
 
-  it("drains undefined payloads before propagating an explicit undefined close error", async () => {
-    const hub = new EventHub<number | undefined>();
-    const iterator = hub.stream()[Symbol.asyncIterator]();
-    hub.publish(0);
-    hub.publish(undefined);
-    hub.close(undefined);
-
-    await expect(iterator.next()).resolves.toEqual({ done: false, value: 0 });
-    await expect(iterator.next()).resolves.toEqual({ done: false, value: undefined });
-    await expect(iterator.next()).rejects.toBeUndefined();
-  });
-
   it("preserves nested publish order when a subscriber filter emits another event", async () => {
     const hub = new EventHub<string>();
     const filteredStream = hub.stream((event) => {

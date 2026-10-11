@@ -25,34 +25,6 @@ import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js"
 
 const log = createSubsystemLogger("auto-reply/commands-system-prompt");
 
-function resolveCommandSkillsEligibility(params: {
-  agentId: string;
-  config: HandleCommandsParams["cfg"];
-  sessionEntry: HandleCommandsParams["sessionEntry"] | undefined;
-  sessionKey: string | undefined;
-}): SkillEligibilityContext {
-  const withRemote = (nodeSkills: NonNullable<SkillEligibilityContext["nodeSkills"]>) => ({
-    nodeSkills,
-    remote: getRemoteSkillEligibility({ advertiseExecNode: nodeSkills.canExec }),
-  });
-  try {
-    return withRemote(
-      resolveNodeExecEligibility({
-        cfg: params.config,
-        sessionEntry: params.sessionEntry,
-        sessionKey: params.sessionKey,
-        agentId: params.agentId,
-      }),
-    );
-  } catch {
-    try {
-      return withRemote({ canExec: false });
-    } catch {
-      return { nodeSkills: { canExec: false } };
-    }
-  }
-}
-
 async function resolveCommandSkillsPrompt(params: {
   agentId: string;
   config: HandleCommandsParams["cfg"];
@@ -65,66 +37,50 @@ async function resolveCommandSkillsPrompt(params: {
   executionWorkspaceFileHost?: "gateway";
   skillsSnapshot?: SkillSnapshot;
 }): Promise<string> {
-  let skillsSnapshot: SkillSnapshot;
-  try {
-    skillsSnapshot = (
-      await resolveReusableWorkspaceSkillSnapshot({
-        workspaceDir: resolveAgentWorkspaceDir(params.config, params.agentId),
-        executionWorkspaceDir: params.executionWorkspaceDir,
-        executionWorkspaceFileHost: params.executionWorkspaceFileHost,
-        config: params.config,
-        agentId: params.agentId,
-        resolveEligibility: () => ({
-          ...params.eligibility,
-          remote: getRemoteSkillEligibility({
-            advertiseExecNode: params.eligibility?.nodeSkills?.canExec ?? false,
-          }),
-        }),
-        existingSnapshot: params.skillsSnapshot,
-        skillFilter: params.skillsSnapshot?.skillFilter,
-        skillOverrides: params.skillsSnapshot?.skillOverrides,
-        watch: false,
-      })
-    ).snapshot;
-  } catch {
-    return "";
-  }
+  const { snapshot: skillsSnapshot } = await resolveReusableWorkspaceSkillSnapshot({
+    workspaceDir: resolveAgentWorkspaceDir(params.config, params.agentId),
+    executionWorkspaceDir: params.executionWorkspaceDir,
+    executionWorkspaceFileHost: params.executionWorkspaceFileHost,
+    config: params.config,
+    agentId: params.agentId,
+    resolveEligibility: () => params.eligibility,
+    existingSnapshot: params.skillsSnapshot,
+    skillFilter: params.skillsSnapshot?.skillFilter,
+    skillOverrides: params.skillsSnapshot?.skillOverrides,
+    watch: false,
+  });
   if (params.sandboxed) {
-    try {
-      // Sandboxed prompt inspection must not fall back to host skill snapshots:
-      // those paths can be unreadable inside the container.
-      const sandboxWorkspace = await ensureSandboxWorkspaceForSession({
-        skillsSnapshot,
-        config: params.config,
-        agentId: params.sandboxAgentId,
-        sessionKey: params.sessionKey,
-        workspaceDir: params.workspaceDir,
-      });
-      if (!sandboxWorkspace) {
-        return "";
-      }
-      if (sandboxWorkspace.containerWorkdir) {
-        const { prompt } = await resolveRuntimeSkillsPrompt({
-          sandbox: {
-            enabled: true,
-            containerWorkdir: sandboxWorkspace.containerWorkdir,
-            skillsEligibility: sandboxWorkspace.skillsEligibility,
-            skillsWorkspaceDir: sandboxWorkspace.skillsWorkspaceDir || undefined,
-            skillUsagePaths: sandboxWorkspace.skillUsagePaths,
-            workspaceAccess: sandboxWorkspace.workspaceAccess,
-          },
-          skillsAnchorWorkspace: sandboxWorkspace.workspaceDir,
-          skillsSnapshot,
-          config: params.config,
-          agentId: params.agentId,
-        });
-        return prompt;
-      }
-      // Existing third-party backends may not expose the optional workdir
-      // resolver yet. Preserve their previous host-snapshot inspection path.
-    } catch {
+    // Sandboxed prompt inspection must not fall back to host skill snapshots:
+    // those paths can be unreadable inside the container.
+    const sandboxWorkspace = await ensureSandboxWorkspaceForSession({
+      skillsSnapshot,
+      config: params.config,
+      agentId: params.sandboxAgentId,
+      sessionKey: params.sessionKey,
+      workspaceDir: params.workspaceDir,
+    });
+    if (!sandboxWorkspace) {
       return "";
     }
+    if (sandboxWorkspace.containerWorkdir) {
+      const { prompt } = await resolveRuntimeSkillsPrompt({
+        sandbox: {
+          enabled: true,
+          containerWorkdir: sandboxWorkspace.containerWorkdir,
+          skillsEligibility: sandboxWorkspace.skillsEligibility,
+          skillsWorkspaceDir: sandboxWorkspace.skillsWorkspaceDir || undefined,
+          skillUsagePaths: sandboxWorkspace.skillUsagePaths,
+          workspaceAccess: sandboxWorkspace.workspaceAccess,
+        },
+        skillsAnchorWorkspace: sandboxWorkspace.workspaceDir,
+        skillsSnapshot,
+        config: params.config,
+        agentId: params.agentId,
+      });
+      return prompt;
+    }
+    // Existing third-party backends may not expose the optional workdir
+    // resolver yet. Preserve their previous host-snapshot inspection path.
   }
 
   return skillsSnapshot.prompt;
@@ -159,16 +115,19 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
     sessionKey: params.sessionKey,
     classificationSessionKey: toolPolicySessionKey,
   });
-  const skillsEligibility = resolveCommandSkillsEligibility({
+  const nodeSkills = resolveNodeExecEligibility({
     agentId: sessionAgentId,
-    config: params.cfg,
+    cfg: params.cfg,
     sessionEntry: targetSessionEntry,
     sessionKey: params.sessionKey,
   });
   const skillsPrompt = await resolveCommandSkillsPrompt({
     agentId: sessionAgentId,
     config: params.cfg,
-    eligibility: skillsEligibility,
+    eligibility: {
+      nodeSkills,
+      remote: getRemoteSkillEligibility({ advertiseExecNode: nodeSkills.canExec }),
+    },
     sandboxAgentId: sandboxRuntime.classificationAgentId,
     sandboxed: sandboxRuntime.sandboxed,
     sessionKey: toolPolicySessionKey,
@@ -179,29 +138,24 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
     ),
     skillsSnapshot: targetSessionEntry?.skillsSnapshot,
   });
-  let tools: Awaited<ReturnType<typeof createOpenClawCodingToolsAsync>>;
-  try {
-    tools = await createOpenClawCodingToolsAsync({
-      config: params.cfg,
-      agentId: sessionAgentId,
-      workspaceDir,
-      sessionKey: toolPolicySessionKey,
-      allowGatewaySubagentBinding: true,
-      messageProvider: params.command.channel,
-      groupId: targetSessionEntry?.groupId ?? undefined,
-      groupChannel: targetSessionEntry?.groupChannel ?? undefined,
-      groupSpace: targetSessionEntry?.space ?? undefined,
-      spawnedBy: targetSessionEntry?.spawnedBy ?? undefined,
-      senderId: params.command.senderId,
-      senderName: params.ctx.SenderName,
-      senderUsername: params.ctx.SenderUsername,
-      senderE164: params.ctx.SenderE164,
-      modelProvider: params.provider,
-      modelId: params.model,
-    });
-  } catch {
-    tools = [];
-  }
+  const tools = await createOpenClawCodingToolsAsync({
+    config: params.cfg,
+    agentId: sessionAgentId,
+    workspaceDir,
+    sessionKey: toolPolicySessionKey,
+    allowGatewaySubagentBinding: true,
+    messageProvider: params.command.channel,
+    groupId: targetSessionEntry?.groupId ?? undefined,
+    groupChannel: targetSessionEntry?.groupChannel ?? undefined,
+    groupSpace: targetSessionEntry?.space ?? undefined,
+    spawnedBy: targetSessionEntry?.spawnedBy ?? undefined,
+    senderId: params.command.senderId,
+    senderName: params.ctx.SenderName,
+    senderUsername: params.ctx.SenderUsername,
+    senderE164: params.ctx.SenderE164,
+    modelProvider: params.provider,
+    modelId: params.model,
+  });
   const toolNames = tools.map((t) => t.name);
   const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
   const accountId = params.command.accountId ?? params.ctx.AccountId;
