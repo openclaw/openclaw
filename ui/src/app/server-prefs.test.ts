@@ -34,7 +34,11 @@ afterEach(() => {
 });
 
 function expectPatch(request: RequestMock, prefs: Record<string, unknown>) {
-  const params = { raw: JSON.stringify({ ui: { prefs } }), note: "control-ui prefs sync" };
+  const params = {
+    raw: JSON.stringify({ ui: { prefs } }),
+    note: "control-ui prefs sync",
+    response: "summary",
+  };
   expect(request).toHaveBeenCalledWith("config.patch", params);
 }
 
@@ -317,6 +321,7 @@ describe("server preferences", () => {
     expect(request.mock.calls[1]?.[1]).toEqual({
       raw: JSON.stringify({ ui: { prefs: { themeMode: "light" } } }),
       note: "control-ui prefs sync",
+      response: "summary",
     });
   });
 
