@@ -45,11 +45,11 @@ import {
   findGitHubPublicationPullRequest,
   reconcileGitHubPublicationPullRequest,
 } from "./github-publication-pull-requests.js";
+import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
 import {
   readKnownGitHubPublicationPullRequestUrls,
   recoverGitHubPublicationWorkspace,
 } from "./github-publication-recovery.js";
-import { projectGitHubPublicationResult } from "./github-publication-store.js";
 import { prepareGitHubPublicationTarget } from "./github-publication-target.js";
 import { prepareGitHubPublicationWorkflowGuard } from "./github-publication-workflows.js";
 import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";

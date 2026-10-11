@@ -1,11 +1,10 @@
-import { html, nothing } from "lit";
-import { renderSettingsStatus } from "../../components/settings-ui.ts";
-import { t } from "../../i18n/index.ts";
+import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import type { ModelProviderAuthKind, ModelProviderCard } from "./data.ts";
 
-registerModelControlsEnglish();
+registerEnglishCatalog(registerModelControlsEnglish);
 
 const AUTH_STATUS: Record<
   ModelProviderAuthKind,
@@ -21,16 +20,19 @@ const AUTH_STATUS: Record<
 function renderAuthStatus(card: ModelProviderCard) {
   const auth = card.auth;
   if (!auth) {
-    return nothing;
+    return undefined;
   }
   const status = AUTH_STATUS[auth.kind];
   const label = t(status.labelKey);
   const detail = auth.expiryLabel
     ? t("modelProviders.expiresIn", { time: auth.expiryLabel })
     : undefined;
-  return html`
-    <span title=${detail ?? label}> ${renderSettingsStatus({ kind: status.kind, label })} </span>
-  `;
+  return (
+    <span title={detail ?? label}>
+      {" "}
+      <SettingsStatus kind={status.kind} label={label} />{" "}
+    </span>
+  );
 }
 
 export function hasProviderCredentials(card: ModelProviderCard): boolean {
@@ -49,65 +51,75 @@ export function hasVerifiedProvider(card: ModelProviderCard): boolean {
 
 export function renderProviderStatus(card: ModelProviderCard) {
   if (card.checkingModels) {
-    return renderSettingsStatus({
-      kind: "muted",
-      label: t("chat.modelControls.checkingProviderModels", { providers: card.displayName }),
-    });
+    return (
+      <SettingsStatus
+        kind={"muted"}
+        label={t("chat.modelControls.checkingProviderModels", { providers: card.displayName })}
+      />
+    );
   }
   if (needsAuthAttention(card)) {
     return renderAuthStatus(card);
   }
   if (card.catalogStatus === "auth-rejected") {
-    return renderSettingsStatus({ kind: "danger", label: t("modelProviders.status.denied") });
+    return <SettingsStatus kind={"danger"} label={t("modelProviders.status.denied")} />;
   }
   if (card.catalogStatus === "unavailable") {
-    return renderSettingsStatus({
-      kind: "warn",
-      label: t("modelProviders.status.modelsUnavailable"),
-    });
+    return <SettingsStatus kind={"warn"} label={t("modelProviders.status.modelsUnavailable")} />;
   }
   if (!hasProviderCredentials(card)) {
     return renderAuthStatus(card);
   }
   const verified = hasVerifiedProvider(card);
   const ready = verified && card.availableModelCount > 0;
-  return renderSettingsStatus({
-    kind: ready ? "ok" : "muted",
-    label: t(
-      ready
-        ? "modelProviders.status.ready"
-        : verified
-          ? "modelProviders.status.ok"
-          : "modelProviders.status.configured",
-    ),
-  });
+  return (
+    <SettingsStatus
+      kind={ready ? "ok" : "muted"}
+      label={t(
+        ready
+          ? "modelProviders.status.ready"
+          : verified
+            ? "modelProviders.status.ok"
+            : "modelProviders.status.configured",
+      )}
+    />
+  );
 }
 
 export function renderMutationMessage(message: ModelProviderRowMessage | undefined) {
   if (!message) {
-    return nothing;
+    return undefined;
   }
-  return html`
-    <div class="callout ${message.kind}" role=${message.kind === "error" ? "alert" : "status"}>
-      ${message.text}
-    </div>
-    ${message.warning ? html`<div class="callout warning" role="status">${message.warning}</div>` : nothing}
-  `;
+  return (
+    <>
+      <div class={"callout " + message.kind} role={message.kind === "error" ? "alert" : "status"}>
+        {message.text}
+      </div>
+      {message.warning ? (
+        <div class="callout warning" role="status">
+          {message.warning}
+        </div>
+      ) : undefined}
+    </>
+  );
 }
 
-export function renderModelProviderConnectAction(
-  props: {
-    onConnect: () => void;
-    connectDisabled: boolean;
-  },
-  primary = false,
-) {
-  return html`<button
-    class=${primary ? "btn primary" : "btn"}
-    data-models-connect
-    ?disabled=${props.connectDisabled}
-    @click=${props.onConnect}
-  >
-    ${t("modelProviders.login.action")}
-  </button>`;
+export type ModelProviderConnectActionProps = {
+  onConnect: () => void;
+  connectDisabled: boolean;
+  primary?: boolean;
+  compact?: boolean;
+};
+
+export function ModelProviderConnectAction(props: ModelProviderConnectActionProps) {
+  return (
+    <button
+      class={["btn", { primary: props.primary, "btn--sm": props.compact }]}
+      data-models-connect
+      disabled={props.connectDisabled}
+      onClick={() => props.onConnect()}
+    >
+      {t("modelProviders.login.action")}
+    </button>
+  );
 }
