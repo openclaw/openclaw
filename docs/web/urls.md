@@ -278,9 +278,9 @@ messages and assistant final answers with Markdown formatting in the Control UI'
 chat layout and typeface, offers a copy control on code blocks, and closes with a
 short OpenClaw introduction for readers who are new to it. Tool output,
 reasoning, files, images, executable widgets, internal metadata, and hidden
-messages are omitted. Credential-pattern redaction is best effort, not a
-guarantee that sensitive prose is detected. Review the conversation before
-publishing and remember that future messages become public too.
+messages are omitted. Included text is not secret-masked. Review the conversation
+for credentials and other sensitive content before publishing; future messages
+become public too.
 
 The latest public view checks for updates approximately every 15 seconds while
 visible. **Older messages** opens earlier pages without automatic refresh;

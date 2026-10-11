@@ -69,7 +69,7 @@ async function installCodexHarnessFixture(stateDir: string, config: OpenClawConf
     path.join(pluginDir, "package.json"),
     JSON.stringify({
       name: "@openclaw/codex",
-      version: "2026.8.1",
+      version: "2026.9.9",
       type: "module",
       openclaw: { extensions: ["./index.js"] },
     }),

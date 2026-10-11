@@ -2720,8 +2720,7 @@ describe("google transport stream", () => {
     expect(functionResponse).toMatchObject({ name: "lookup" });
     expect(functionResponse.response.output).toContain('"city":"Paris"');
     expect(functionResponse.response.output).toContain('"temperatureC":21');
-    expect(functionResponse.response.output).toContain('"apiToken":"');
-    expect(functionResponse.response.output).not.toContain("secret-token-123");
+    expect(functionResponse.response.output).toContain('"apiToken":"secret-token-123"');
   });
 
   it.each([

@@ -120,11 +120,16 @@ describe("onepassword list with SQLite grants", () => {
     const key = grantKey(invocation.agentId, "selected");
     await grants.register(key, grant("selected"));
     await grants.register("unrelated", grant("unrelated", "other"));
-    const { db } = openOpenClawStateDatabase({ env });
-    const corrupt = db.prepare(
-      "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = 'onepassword' AND namespace = 'grants' AND entry_key = ?",
-    );
-    corrupt.run("{", "unrelated");
+    const corruptRow = async (entryKey: string) => {
+      // Raw corruption fixtures need exclusive ownership before readers reopen.
+      await closeOpenClawStateDatabaseAsync();
+      const { db } = openOpenClawStateDatabase({ env });
+      db.prepare(
+        "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = 'onepassword' AND namespace = 'grants' AND entry_key = ?",
+      ).run("{", entryKey);
+      await closeOpenClawStateDatabaseAsync();
+    };
+    await corruptRow("unrelated");
     expect((await setup(["selected"], grants).list()).details).toMatchObject({
       ok: true,
       items: [{ slug: "selected", standingGrantActive: true }],
@@ -134,7 +139,7 @@ describe("onepassword list with SQLite grants", () => {
       ok: false,
       error: { code: "PLUGIN_STATE_CORRUPT" },
     });
-    corrupt.run("{", key);
+    await corruptRow(key);
     expect((await setup(["selected"], grants).list()).details).toMatchObject({
       ok: false,
       error: { code: "PLUGIN_STATE_CORRUPT" },
@@ -146,6 +151,7 @@ describe("onepassword list with SQLite grants", () => {
     for (const slug of ["null-value", "expired-row"]) {
       await grants.register(grantKey(invocation.agentId, slug), grant(slug));
     }
+    await closeOpenClawStateDatabaseAsync();
     const { db } = openOpenClawStateDatabase({ env });
     db.prepare("UPDATE plugin_state_entries SET value_json = 'null' WHERE entry_key = ?").run(
       grantKey(invocation.agentId, "null-value"),
@@ -154,8 +160,8 @@ describe("onepassword list with SQLite grants", () => {
       NOW,
       grantKey(invocation.agentId, "expired-row"),
     );
-    const rows = () => db.prepare("SELECT * FROM plugin_state_entries ORDER BY entry_key").all();
-    const before = rows();
+    const before = db.prepare("SELECT * FROM plugin_state_entries ORDER BY entry_key").all();
+    await closeOpenClawStateDatabaseAsync();
     expect((await setup(["null-value", "expired-row"], grants).list()).details).toMatchObject({
       ok: true,
       items: [
@@ -163,7 +169,11 @@ describe("onepassword list with SQLite grants", () => {
         { slug: "null-value", standingGrantActive: false },
       ],
     });
-    expect(rows()).toEqual(before);
+    await closeOpenClawStateDatabaseAsync();
+    const { db: reopened } = openOpenClawStateDatabase({ env });
+    expect(reopened.prepare("SELECT * FROM plugin_state_entries ORDER BY entry_key").all()).toEqual(
+      before,
+    );
   });
 
   it("skips grant reads without an agent and never retries a rejected bulk read", async () => {

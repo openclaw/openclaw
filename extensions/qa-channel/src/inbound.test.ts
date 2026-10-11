@@ -122,14 +122,14 @@ describe("handleQaInbound", () => {
       2,
       expect.objectContaining({
         text: "tool result",
-        toolCalls: [{ name: "search", arguments: { query: "[redacted]" } }],
+        toolCalls: [{ name: "search", arguments: { query: "qa" } }],
       }),
     );
     expect(sendQaBusMessage).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({
         text: "final answer",
-        toolCalls: [{ name: "search", arguments: { query: "[redacted]" } }],
+        toolCalls: [{ name: "search", arguments: { query: "qa" } }],
       }),
     );
   });

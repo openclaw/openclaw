@@ -719,14 +719,16 @@ describe("host-owned current admission annotation", () => {
     );
   });
 
-  it("never restores upstream text removed by storage redaction", async () => {
+  it("preserves admitted upstream text independently of diagnostic redaction patterns", async () => {
     await withAdmission(
       async (f) => {
         const before = await loadTranscriptEvents(f.target);
-        await expect(f.annotate(nativeAnnotation("prompt", "private-value"))).rejects.toThrow(
-          "redacted",
-        );
-        expect(await loadTranscriptEvents(f.target)).toEqual(before);
+        await f.annotate(nativeAnnotation("prompt", "private-value"));
+        expect(f.recorder.getPersistedMessage?.()).toMatchObject({
+          content: "prompt",
+          __openclaw: { upstreamUserText: "private-value" },
+        });
+        expect(await loadTranscriptEvents(f.target)).toHaveLength(before.length);
       },
       { config: { logging: { redactPatterns: ["private-value"] } } },
     );

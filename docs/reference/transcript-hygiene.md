@@ -39,6 +39,13 @@ context or persisted transcripts. Reads of `.env` files also preserve their text
 Logging and diagnostic exports retain secret masking; history size limits,
 media handling, and provider replay normalization described below still apply.
 
+Previously masked history stays as stored; removed text cannot be reconstructed.
+An interrupted private completion from an older release can fail exact-input
+retry validation if its committed input was masked. The retry remains rejected
+rather than treating different secret values as the same input. Start a new
+request after checking the previous attempt's outcome; do not blindly repeat
+actions with side effects.
+
 ## Delivered command exchanges
 
 Slash commands and their delivered replies from the shared dispatcher are ordinary
