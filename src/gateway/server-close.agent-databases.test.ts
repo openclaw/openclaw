@@ -44,6 +44,7 @@ import { getActiveSecretsRuntimeSnapshotState } from "../secrets/runtime-state.j
 import { createDeferredCore } from "../shared/deferred.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
+import { readProcessAgentDatabaseLeasesInWorker } from "../state/openclaw-agent-db-lease-process.read.js";
 import {
   assertNoOpenClawAgentDatabaseLeasesReadOnly,
   OpenClawAgentDatabaseLeaseActiveError,
@@ -805,6 +806,10 @@ it("rejects Gateway closure when an agent handle cannot close and retains its le
     expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: fixture.state.env })).toThrow(
       OpenClawAgentDatabaseLeaseActiveError,
     );
+    // Shutdown diagnostics name the retained lease through the state reader Worker.
+    await expect(
+      readProcessAgentDatabaseLeasesInWorker({ env: fixture.state.env }),
+    ).resolves.toEqual([expect.objectContaining({ agentId: "main" })]);
   } finally {
     restoreClose?.();
     await fixture.cleanup();

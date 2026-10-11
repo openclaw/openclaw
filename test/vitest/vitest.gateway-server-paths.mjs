@@ -550,6 +550,7 @@ export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server-worker-environment-startup.state.test.ts",
   // A failed native close permanently fences this process's metadata owner.
   "src/gateway/server-close.agent-databases.test.ts",
+  "src/gateway/server-close.final-step-failure.test.ts",
   "src/gateway/server-close.placement.test.ts",
   "src/gateway/server-close.progress-card.test.ts",
   "src/gateway/server-close.question-publication.test.ts",

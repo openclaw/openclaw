@@ -23,13 +23,16 @@ import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-clean
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { settlesWithin } from "../shared/settle-within.js";
-import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import {
   collectGatewayProcessMemoryUsageMb,
   measureGatewayCloseStep,
   recordGatewayRestartTrace,
 } from "./restart-trace.js";
 import type { ChatRunState } from "./server-chat-state.js";
+import {
+  closeFinalOwnerDependenciesThenAgentDatabases,
+  reportRetainedAgentDatabaseLeases,
+} from "./server-close-agent-databases.js";
 import { WEBSOCKET_CLOSE_GRACE_MS } from "./server-constants.js";
 import type { GatewayMaintenanceHandles } from "./server-maintenance-lifecycle.js";
 import {
@@ -532,6 +535,7 @@ async function closeGatewayResources(
     await measureCloseStep("scheduler", () => params.stopScheduler());
     // A sibling Gateway retains metadata before its registry exists. Only the
     // final owner may retire shared state and process-wide plugin caches.
+    let finalOwnerCloseRan = false;
     try {
       const registryClose = await measureCloseStep("plugin-registry", () =>
         params.closePluginRegistry(async (retireRegistry) => {
@@ -541,18 +545,19 @@ async function closeGatewayResources(
           );
           return measureCloseStep("plugin-metadata", () =>
             params.pluginMetadata.close(async (retire) => {
+              finalOwnerCloseRan = true;
               await measureCloseStep("shared-swarm-scheduler", () =>
                 closeSwarmScheduler().catch(recordResourceCleanupFailure),
               );
-              await measureCloseStep("prepared-models", closePreparedModelRuntimeSnapshots);
-              await measureCloseStep(
-                "transcript-workers",
-                closeSessionTranscriptReconcileWorkerPool,
+              await closeFinalOwnerDependenciesThenAgentDatabases(
+                [
+                  ["prepared-models", closePreparedModelRuntimeSnapshots],
+                  ["transcript-workers", closeSessionTranscriptReconcileWorkerPool],
+                  ["metadata-retirement", retire],
+                  ["retirement-cleanup", () => cleanupWork.runWhenIdle(() => {})],
+                ],
+                measureCloseStep,
               );
-              await measureCloseStep("metadata-retirement", retire);
-              await measureCloseStep("retirement-cleanup", () => cleanupWork.runWhenIdle(() => {}));
-              // Releasing agent leases still writes shared state; keep its owner alive until then.
-              await measureCloseStep("agent-databases", closeOpenClawAgentDatabasesAsync);
               await measureCloseStep("debug-proxy", () =>
                 finalizeActiveDebugProxyCaptures().catch(recordResourceCleanupFailure),
               );
@@ -574,6 +579,9 @@ async function closeGatewayResources(
           );
         }),
       );
+      if (!finalOwnerCloseRan) {
+        shutdownLog.info("final owner close skipped; another Gateway retains plugin metadata");
+      }
       for (const error of registryClose.memoryErrors) {
         shutdownLog.warn(`memory-managers: ${formatErrorMessage(error)}`);
         recordShutdownWarning(warnings, "memory-managers");
@@ -589,6 +597,10 @@ async function closeGatewayResources(
       }
     } catch (error) {
       resourceCleanupErrors.push(error);
+      if (!finalOwnerCloseRan) {
+        // Only the final owner releases agent leases; report any this failure leaves behind.
+        await reportRetainedAgentDatabaseLeases("plugin registry close failure");
+      }
     }
   }
   const durationMs = Date.now() - start;

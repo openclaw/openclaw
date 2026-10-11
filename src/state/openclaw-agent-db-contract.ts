@@ -77,4 +77,11 @@ export type OpenClawAgentDatabaseOwnerInspection =
   | { status: "unowned" }
   | { status: "unreadable" };
 
+/** A shared-state agent-database lease row still attributed to the reading process. */
+export type ProcessAgentDatabaseLease = {
+  leaseId: string;
+  agentId: string;
+  openedAt: number;
+};
+
 export const SESSION_PARTICIPANTS_TABLE = "session_participants";
