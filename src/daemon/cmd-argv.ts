@@ -1,5 +1,36 @@
-import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { assertNoCmdLineBreak } from "./cmd-set.js";
+
+function encodeCmdScriptLiterals(value: string, options: { delayedExpansion?: boolean }): string {
+  const encoded = value.replace(/%/g, "%%");
+  return options.delayedExpansion === false ? encoded : encoded.replace(/!/g, "^!");
+}
+
+// CommandLineToArgvW keeps a quote when the preceding backslash run is even.
+// Double that run, and emit 2n+1 backslashes before an embedded quote.
+function escapeCmdQuotesAndTrailingSlashes(value: string): string {
+  let escaped = "";
+  let slashes = 0;
+  for (const char of value) {
+    if (char === "\\") {
+      slashes += 1;
+      continue;
+    }
+    if (char === '"') {
+      escaped += `${"\\".repeat(slashes * 2 + 1)}"`;
+      slashes = 0;
+      continue;
+    }
+    if (slashes > 0) {
+      escaped += "\\".repeat(slashes);
+      slashes = 0;
+    }
+    escaped += char;
+  }
+  if (slashes > 0) {
+    escaped += "\\".repeat(slashes * 2);
+  }
+  return escaped;
+}
 
 export function quoteCmdScriptArg(
   value: string,
@@ -9,20 +40,51 @@ export function quoteCmdScriptArg(
   if (!value) {
     return '""';
   }
-  const quoted = value.replace(/"/g, '\\"').replace(/%/g, "%%");
-  const escaped = options.delayedExpansion === false ? quoted : quoted.replace(/!/g, "^!");
+  const escaped = encodeCmdScriptLiterals(value, options);
   if (!/[ \t"&|<>^()%!]/g.test(value)) {
     return escaped;
   }
-  return `"${escaped}"`;
+  return `"${escapeCmdQuotesAndTrailingSlashes(escaped)}"`;
+}
+
+function decodeCmdScriptLiterals(value: string): string {
+  return value.replace(/\^!/g, "!").replace(/%%/g, "%");
 }
 
 export function parseCmdScriptCommandLine(value: string): string[] {
-  // Script renderer escapes quotes (`\"`) and cmd expansions (`%%`, `^!`).
-  // Keep all other backslashes literal so Windows drive/UNC paths survive.
-  return splitArgsPreservingQuotes(value, { escapeMode: "backslash-quote-only" }).map((argument) =>
-    argument.replace(/\^!/g, "!").replace(/%%/g, "%"),
-  );
+  // An even backslash run leaves the quote as a boundary, including a quote
+  // that opens after `=`. An odd run is a literal quote. %% and ^! decode after.
+  const args: string[] = [];
+  let current = "";
+  let quoted = false;
+  for (const char of value) {
+    if (!quoted && /\s/.test(char)) {
+      if (current.length > 0) {
+        args.push(decodeCmdScriptLiterals(current));
+        current = "";
+      }
+      continue;
+    }
+    if (char !== '"') {
+      current += char;
+      continue;
+    }
+    let slashes = 0;
+    while (current.endsWith("\\")) {
+      current = current.slice(0, -1);
+      slashes += 1;
+    }
+    if (slashes % 2 === 1) {
+      current += `${"\\".repeat((slashes - 1) / 2)}"`;
+      continue;
+    }
+    current += "\\".repeat(slashes / 2);
+    quoted = !quoted;
+  }
+  if (current.length > 0) {
+    args.push(decodeCmdScriptLiterals(current));
+  }
+  return args;
 }
 
 export function stripTrailingCmdRedirections(commandLine: string): string | null {
@@ -72,10 +134,28 @@ export function stripTrailingCmdRedirections(commandLine: string): string | null
       if (
         char === "\r" ||
         char === "\n" ||
-        (char === "\\" && commandLine[index + 1] === '"') ||
         (char === "^" && (!quoted || commandLine[index + 1] === '"'))
       ) {
         return null;
+      }
+      if (char === "\\") {
+        let slashCount = 0;
+        let cursor = index;
+        while (commandLine[cursor] === "\\") {
+          slashCount += 1;
+          cursor += 1;
+        }
+        if (commandLine[cursor] !== '"') {
+          index += 1;
+          continue;
+        }
+        // An odd run is still an escaped quote whose boundary is not exact.
+        if (slashCount % 2 === 1) {
+          return null;
+        }
+        index = cursor + 1;
+        quoted = !quoted;
+        continue;
       }
       if (char === '"') {
         quoted = !quoted;

@@ -296,6 +296,157 @@ describe("readScheduledTaskCommand", () => {
     }
   }
 
+  it("parses script with quoted arguments containing spaces", async () => {
+    await withScheduledTaskScript(
+      {
+        // Use forward slashes which work in Windows cmd and avoid escape parsing issues.
+        scriptLines: ["@echo off", '"C:/Program Files/Node/node.exe" gateway.js'],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["C:/Program Files/Node/node.exe", "gateway.js"],
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
+  it("keeps the next argument outside a doubled trailing-backslash quote", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: ["@echo off", 'node "C:\\Program Files\\OpenClaw\\\\" SENTINEL-NEXT'],
+      },
+      async (env) => {
+        expect((await readScheduledTaskCommand(env))?.programArguments).toEqual([
+          "node",
+          "C:\\Program Files\\OpenClaw\\",
+          "SENTINEL-NEXT",
+        ]);
+      },
+    );
+  });
+
+  it("keeps a quoted flag value that contains a space", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: ["@echo off", 'node gateway.js --label="with space"'],
+      },
+      async (env) => {
+        expect((await readScheduledTaskCommand(env))?.programArguments).toEqual([
+          "node",
+          "gateway.js",
+          "--label=with space",
+        ]);
+      },
+    );
+  });
+
+  it("reads a quoted working directory that ends with a backslash", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: ["@echo off", 'cd /d "C:\\Program Files\\OpenClaw\\\\"', "node gateway.js"],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js"],
+          workingDirectory: "C:\\Program Files\\OpenClaw\\",
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
+  it("decodes CMD literals in an unquoted working directory", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: ["@echo off", "cd /d C:\\literal%%root%%\\caret^!dir", "node gateway.js"],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result?.workingDirectory).toBe("C:\\literal%root%\\caret!dir");
+      },
+    );
+  });
+
+  it("decodes CMD literals in a legacy trailing-backslash working directory", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: ["@echo off", 'cd /d "C:\\literal%%root%%\\caret^!dir\\"', "node gateway.js"],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result?.workingDirectory).toBe("C:\\literal%root%\\caret!dir\\");
+      },
+    );
+  });
+
+  it("reads an unquoted working directory that contains spaces", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: ["@echo off", "cd /d C:\\Program Files\\OpenClaw", "node gateway.js"],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js"],
+          workingDirectory: "C:\\Program Files\\OpenClaw",
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
+  it("reads legacy quoted working directories that ended with a single backslash", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: ["@echo off", 'cd /d "C:\\Program Files\\OpenClaw\\"', "node gateway.js"],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js"],
+          workingDirectory: "C:\\Program Files\\OpenClaw\\",
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
+  it("reads legacy UTF-8 scripts with CJK paths written before the encoding fix", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: ["@echo off", 'cd /d "C:\\Users\\苗振\\.openclaw"', "node gateway.js"],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js"],
+          workingDirectory: "C:\\Users\\苗振\\.openclaw",
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
+  it("reads marked ANSI scripts with CJK paths under a CJK code page (#107416)", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: ["@echo off", 'cd /d "C:\\Users\\苗振\\.openclaw"', "node gateway.js"],
+        scriptEncoding: "gbk",
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js"],
+          workingDirectory: "C:\\Users\\苗振\\.openclaw",
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
   it("reads back GBK launchers whose bytes are also valid UTF-8 (隆) without corruption", async () => {
     // GBK "隆" is C2 A1, which UTF-8 accepts as "¡"; the marker keeps readback
     // from sniffing these bytes as UTF-8 and parsing a corrupted path.
