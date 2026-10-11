@@ -1,4 +1,3 @@
-import { createNativeCommandItem } from "./event-projector-command.test-support.js";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -19,68 +18,83 @@ function notify(
 
 registerCodexEventProjectorTestLifecycle();
 
-describe("Codex Code Mode transcript projection", () => {
-  it.each([{ tool: "apply_patch", failed: true }])(
-    "keeps the canonical $tool item when failed=$failed",
-    async ({ tool, failed }) => {
+describe("Codex native patch and Code Mode transcript projection", () => {
+  it.each([
+    { nativeItem: true, failed: true, directCall: undefined },
+    { nativeItem: true, failed: false, directCall: undefined },
+    { nativeItem: false, failed: true, directCall: undefined },
+    { nativeItem: false, failed: true, directCall: "custom" },
+    { nativeItem: false, failed: true, directCall: "function" },
+  ])(
+    "counts a patch once with nativeItem=$nativeItem, failed=$failed and directCall=$directCall",
+    async ({ nativeItem, failed, directCall }) => {
       const projector = await createProjector();
       const outerCallId = "code-mode-patch-exec";
       const nativeCallId = "code-mode-patch-file-change";
-      const patchInput =
-        "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n*** End Patch\n";
+      const callId = nativeItem ? nativeCallId : outerCallId;
+      const patchInput = nativeItem
+        ? "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n*** End Patch\n"
+        : "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+# Inventory audit\n\n- **Data records:** 8\n*** End Patch";
 
       await notify(projector, "rawResponseItem/completed", {
         item: {
-          type: "custom_tool_call",
+          type: directCall === "function" ? "function_call" : "custom_tool_call",
           call_id: outerCallId,
-          name: "exec",
-          input:
-            tool === "apply_patch"
-              ? `const result = await tools.apply_patch(${JSON.stringify(patchInput)});\ntext(result);\n`
-              : 'text(await tools.exec_command({cmd: "exit 1"}));',
-        },
-      });
-      await notify(projector, "item/completed", {
-        item:
-          tool === "apply_patch"
-            ? {
-                type: "fileChange",
-                id: nativeCallId,
-                changes: [{ path: "runtime-tool-fixture-patch.txt", kind: { type: "add" } }],
-                status: failed ? "failed" : "completed",
-              }
-            : createNativeCommandItem({
-                id: nativeCallId,
-                command: "exit 1",
-                status: failed ? "failed" : "completed",
-                exitCode: failed ? 1 : 0,
+          name: directCall ? "apply_patch" : "exec",
+          ...(directCall === "function"
+            ? { arguments: JSON.stringify({ input: patchInput }) }
+            : {
+                input: directCall
+                  ? patchInput
+                  : `const patch = ${JSON.stringify(patchInput)};\ntext(await tools.apply_patch(patch));`,
               }),
-      });
-      await notify(projector, "rawResponseItem/completed", {
-        item: {
-          type: "custom_tool_call_output",
-          call_id: outerCallId,
-          output: [
-            {
-              type: "input_text",
-              text: `Script ${tool === "apply_patch" && failed ? "failed" : "completed"}\nWall time 6.0 seconds\nOutput:\n`,
-            },
-            {
-              type: "input_text",
-              text:
-                tool === "apply_patch"
-                  ? failed
-                    ? "Script error: patch failed"
-                    : "{}"
-                  : JSON.stringify({
-                      wall_time_seconds: 0.1,
-                      exit_code: failed ? 1 : 0,
-                      output: "command output",
-                    }),
-            },
-          ],
         },
       });
+      if (nativeItem) {
+        await notify(projector, "item/completed", {
+          item: {
+            type: "fileChange",
+            id: nativeCallId,
+            changes: [{ path: "runtime-tool-fixture-patch.txt", kind: { type: "add" } }],
+            status: failed ? "failed" : "completed",
+          },
+        });
+      }
+      const output = {
+        item: {
+          type: directCall === "function" ? "function_call_output" : "custom_tool_call_output",
+          call_id: outerCallId,
+          output: directCall
+            ? "apply_patch verification failed: invalid hunk at line 4, '' is not a valid hunk header."
+            : [
+                {
+                  type: "input_text",
+                  text: `Script ${failed ? "failed" : "completed"}\nWall time 0.0 seconds\nOutput:\n`,
+                },
+                {
+                  type: "input_text",
+                  text: failed
+                    ? nativeItem
+                      ? "Script error: patch failed"
+                      : "Script error:\napply_patch verification failed: invalid hunk at line 4, '' is not a valid hunk header."
+                    : "{}",
+                },
+              ],
+        },
+      };
+      await notify(projector, "rawResponseItem/completed", output);
+      await notify(projector, "rawResponseItem/completed", output);
+
+      if (!nativeItem) {
+        await notify(projector, "item/completed", {
+          item: {
+            type: "fileChange",
+            id: "corrected-patch",
+            changes: [{ path: "runtime-tool-fixture-patch.txt", kind: { type: "add" } }],
+            status: "completed",
+          },
+        });
+      }
 
       const result = projector.buildResult(buildEmptyToolTelemetry());
       const patchCalls = result.messagesSnapshot.flatMap((message) => {
@@ -88,26 +102,41 @@ describe("Codex Code Mode transcript projection", () => {
           return [];
         }
         return message.content.filter(
-          (block) => block.type === "toolCall" && "name" in block && block.name === tool,
+          (block) =>
+            block.type === "toolCall" &&
+            "name" in block &&
+            block.name === "apply_patch" &&
+            block.id === callId,
         );
       });
       expect(patchCalls).toHaveLength(1);
-      expect(patchCalls[0]).toMatchObject({ id: nativeCallId, name: tool });
+      expect(patchCalls[0]).toMatchObject({ id: callId, name: "apply_patch" });
       expect(
         result.messagesSnapshot.filter(
-          (message) => message.role === "toolResult" && message.toolName === tool,
+          (message) => message.role === "toolResult" && message.toolCallId === callId,
         ),
-      ).toEqual([expect.objectContaining({ toolCallId: nativeCallId, isError: failed })]);
-      expect(result.messagesSnapshot).toContainEqual(
-        expect.objectContaining({
-          role: "toolResult",
-          toolCallId: outerCallId,
-          toolName: "exec",
-          __openclaw: expect.objectContaining({
-            toolOutput: { source: "provider-response", modelInput: "unverified" },
+      ).toEqual([expect.objectContaining({ toolCallId: callId, isError: failed })]);
+      expect(result.toolMetas).toEqual([
+        expect.objectContaining({ toolName: "apply_patch", isError: failed }),
+        ...(!nativeItem
+          ? [expect.objectContaining({ toolName: "apply_patch", isError: false })]
+          : []),
+      ]);
+      if (!nativeItem) {
+        expect(result.lastToolError).toBeUndefined();
+      }
+      if (nativeItem) {
+        expect(result.messagesSnapshot).toContainEqual(
+          expect.objectContaining({
+            role: "toolResult",
+            toolCallId: outerCallId,
+            toolName: "exec",
+            __openclaw: expect.objectContaining({
+              toolOutput: { source: "provider-response", modelInput: "unverified" },
+            }),
           }),
-        }),
-      );
+        );
+      }
     },
   );
 
