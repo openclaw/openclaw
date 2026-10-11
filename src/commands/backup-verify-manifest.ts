@@ -491,9 +491,7 @@ export function verifyBackupSqliteCoverage(
             (verified.role === "agent" && verified.agentId === required.agentId)),
       )
     ) {
-      throw new Error(
-        `Backup lacks verified canonical SQLite coverage for ${required.sourcePath}.`,
-      );
+      throw new Error(`Backup lacks verified SQLite database coverage for ${required.sourcePath}.`);
     }
   }
 }

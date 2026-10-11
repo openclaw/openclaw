@@ -3,6 +3,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { withSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
 import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
@@ -94,17 +95,19 @@ export function addSessionMember(
         params.expectedEntry,
       );
       const db = getSessionMemberKysely(database);
-      const result = executeSqliteQuerySync(
-        database.db,
-        db
-          .insertInto("session_members")
-          .values({
-            session_key: sessionKey,
-            identity_id: identityId,
-            added_by: addedBy,
-            added_at: addedAt,
-          })
-          .onConflict((conflict) => conflict.columns(["session_key", "identity_id"]).doNothing()),
+      const result = withSqliteDatabaseWriteScope(database.db, [sessionKey], () =>
+        executeSqliteQuerySync(
+          database.db,
+          db
+            .insertInto("session_members")
+            .values({
+              session_key: sessionKey,
+              identity_id: identityId,
+              added_by: addedBy,
+              added_at: addedAt,
+            })
+            .onConflict((conflict) => conflict.columns(["session_key", "identity_id"]).doNothing()),
+        ),
       );
       const changed = (result.numAffectedRows ?? 0n) > 0n;
       if (changed) {
@@ -161,12 +164,14 @@ export function removeSessionMember(
       ) {
         return null;
       }
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .deleteFrom("session_members")
-          .where("session_key", "=", sessionKey)
-          .where("identity_id", "=", normalizedIdentityId),
+      withSqliteDatabaseWriteScope(database.db, [sessionKey], () =>
+        executeSqliteQuerySync(
+          database.db,
+          db
+            .deleteFrom("session_members")
+            .where("session_key", "=", sessionKey)
+            .where("identity_id", "=", normalizedIdentityId),
+        ),
       );
       publishCommittedSessionMembership(
         database,
