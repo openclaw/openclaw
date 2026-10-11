@@ -16,7 +16,7 @@ afterEach(() => {
 });
 
 it.skipIf(process.platform === "win32")(
-  "keeps launchd and systemd node commands runnable after npm removes its exec cache",
+  "keeps generated node commands runnable after npm removes its exec cache",
   async () => {
     const home = tempDirs.make("openclaw-npx-node-");
     const sourceRoot = path.join(home, ".npm", "_npx", "hash", "node_modules", "openclaw");
@@ -56,8 +56,6 @@ it.skipIf(process.platform === "win32")(
     expect(plan.installationMessage).toContain(
       "npx -y openclaw@latest --profile npx-test node install --force",
     );
-    const launchd = await stageLaunchAgent({ env, stdout: new PassThrough(), ...plan });
-    const launchdCommand = await readLaunchAgentProgramArgumentsFromFile(launchd.plistPath);
     const unit = buildSystemdUnit(plan);
     const systemdCommand = parseSystemdExecStart(
       unit
@@ -65,11 +63,24 @@ it.skipIf(process.platform === "win32")(
         .find((line) => line.startsWith("ExecStart="))!
         .slice("ExecStart=".length),
     );
-    expect(launchdCommand?.programArguments).toEqual(plan.programArguments);
     expect(systemdCommand).toEqual(plan.programArguments);
+    const commands = [systemdCommand];
+    if (process.platform === "darwin") {
+      const launchd = await stageLaunchAgent({ env, stdout: new PassThrough(), ...plan });
+      const launchdCommand = await readLaunchAgentProgramArgumentsFromFile(launchd.plistPath);
+      if (!launchdCommand) {
+        throw new Error("Could not read the generated LaunchAgent command");
+      }
+      expect(launchdCommand.programArguments).toEqual(plan.programArguments);
+      commands.push(launchdCommand.programArguments);
+    }
     await fs.rm(path.join(home, ".npm"), { recursive: true });
-    for (const command of [launchdCommand!.programArguments, systemdCommand]) {
-      const result = spawnSync(command[0], command.slice(1), { encoding: "utf8" });
+    for (const command of commands) {
+      const [program, ...args] = command;
+      if (!program) {
+        throw new Error("Generated node service command has no executable");
+      }
+      const result = spawnSync(program, args, { encoding: "utf8" });
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout.trim()).toBe("node service fixture");
     }
