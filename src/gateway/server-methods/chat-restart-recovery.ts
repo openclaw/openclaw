@@ -406,7 +406,12 @@ export function resolveRestartSafeChatAdmission(params: {
 }
 
 export function buildRestartSafeChatTranscriptState(params: {
-  admission: RestartSafeChatAdmission;
+  // This serializer reads only the durable identity facts; visibility belongs to
+  // the terminal write, so callers are not forced to invent a visibility claim.
+  admission: Pick<
+    RestartSafeChatAdmission,
+    "priorTerminalSourceRunId" | "requestFingerprint" | "retryExpectedState"
+  >;
   clientRunId: string;
   startedAt: number;
   sourceIngress: "control-ui" | "internal";
