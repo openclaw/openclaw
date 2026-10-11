@@ -31,7 +31,7 @@ export function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement
   const [notice, setNotice] = createSignal("", { ownedWrite: true });
   const [settings, setSettings] = createSignal<McpAppSettings | null>(null, { ownedWrite: true });
   const [values, setValues] = createSignal<McpAppSettings["values"]>({}, { ownedWrite: true });
-  let View: (typeof import("../mcp-app-view.ts"))["McpAppView"] | undefined;
+  let View: (typeof import("../mcp-app-view.tsx"))["McpAppView"] | undefined;
   let generation = 0;
   let mounted = true;
   const launchIdentity = () => {

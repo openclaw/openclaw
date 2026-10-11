@@ -19,7 +19,6 @@ import {
   resolveNpmChannelTag,
 } from "../../infra/update-check.js";
 import { readDevUpdateTarget } from "../../infra/update-dev-target.js";
-import { createFreeBsdPkgOwnershipInspection } from "../../infra/update-freebsd-pkg-ownership.js";
 import {
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
@@ -38,6 +37,7 @@ import {
 } from "../../infra/update-runner-install-surface.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { createSystemPackageOwnershipInspection } from "../../infra/update-system-package-ownership.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -153,7 +153,7 @@ export async function resolveUpdateCommandTarget(
         timeoutMs,
       } = prepared;
       // Initialization and confirmations can outlive the earlier admission snapshot.
-      const pkgOwnership = createFreeBsdPkgOwnershipInspection(updateStepTimeoutMs);
+      const pkgOwnership = createSystemPackageOwnershipInspection(updateStepTimeoutMs);
       await pkgOwnership.assertUnowned(discoveredRoot);
       let { devTarget } = prepared;
       let root = prepared.servicePlan?.rootRedirect?.root ?? discoveredRoot;

@@ -10,8 +10,6 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { createPlacementLifecycleWorkerOps } from "./placement-lifecycle-store.js";
-import { createPlacementMoveOps } from "./placement-move-intent.js";
-import { readWorkerPlacementMoveAuthorityInDatabase } from "./placement-read-projection.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
 import { readPublishedPlacementProjection } from "./placement-read-publication.js";
 import { createPlacementReadStore } from "./placement-read-store.js";
@@ -129,7 +127,6 @@ export function createWorkerSessionPlacementStore(
       instanceId: runtime.instanceId,
       now: options.now,
     }),
-    getPlacementMove: createPlacementMoveOps(runtime).getPlacementMove,
     ...createPlacementLifecycleWorkerOps({
       path,
       now: options.now,
@@ -146,16 +143,15 @@ export function createWorkerSessionPlacementStore(
       return registerWorkerTurnClaimClosedHandler(path, handler);
     },
 
+    /** @deprecated Await getAsync for preparation; retain native reads only at final effect guards. */
     get(sessionId: string): WorkerSessionPlacementRecord | undefined {
+      warnPluginSdkDeprecation({
+        family: "worker-placement-sync-readers",
+        method: "get",
+        replacement: "getAsync",
+        compatibility: "Synchronous reads retain their immediate current-row result.",
+      });
       return withWorkspaceResultConflict(find(read(), required(sessionId, "session id")));
-    },
-
-    readCurrentMoveAuthority(sessionId: string) {
-      const authority = readWorkerPlacementMoveAuthorityInDatabase(
-        read(),
-        required(sessionId, "session id"),
-      );
-      return { ...authority, placement: withWorkspaceResultConflict(authority.placement) };
     },
 
     prepareTurnClaimAuthority(claim: WorkerSessionTurnClaim): Promise<PlacementTurnClaimAuthority> {
@@ -319,6 +315,12 @@ export function createWorkerSessionPlacementStore(
 
     /** @deprecated Await getManyAsync; retained through the next Plugin SDK major. */
     getMany(sessionIds: readonly string[]): ReadonlyMap<string, WorkerSessionPlacementRecord> {
+      warnPluginSdkDeprecation({
+        family: "worker-placement-sync-readers",
+        method: "getMany",
+        replacement: "getManyAsync",
+        compatibility: "Synchronous reads retain their immediate current-row result.",
+      });
       const normalizedIds = [
         ...new Set(sessionIds.map((sessionId) => required(sessionId, "session id"))),
       ];
@@ -402,13 +404,27 @@ export function createWorkerSessionPlacementStore(
       return current;
     },
 
+    /** @deprecated Await listForReconcileAsync; retained through the next Plugin SDK major. */
     listForReconcile(sessionKey?: string): WorkerSessionPlacementRecord[] {
+      warnPluginSdkDeprecation({
+        family: "worker-placement-sync-readers",
+        method: "listForReconcile",
+        replacement: "listForReconcileAsync",
+        compatibility: "Synchronous reads retain their immediate current-row result.",
+      });
       return readWorkerPlacementsForReconcileInDatabase(read(), sessionKey).map((record) =>
         withWorkspaceResultConflict(record)!,
       );
     },
 
+    /** @deprecated Await listAsync; retained through the next Plugin SDK major. */
     list(): WorkerSessionPlacementRecord[] {
+      warnPluginSdkDeprecation({
+        family: "worker-placement-sync-readers",
+        method: "list",
+        replacement: "listAsync",
+        compatibility: "Synchronous reads retain their immediate current-row result.",
+      });
       return readWorkerPlacementsInDatabase(read()).map((record) =>
         withWorkspaceResultConflict(record)!,
       );

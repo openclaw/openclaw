@@ -2,6 +2,9 @@ openclaw-plugin-settings-editor {
   display: block;
   min-width: 0;
 }
+openclaw-plugin-settings-groups {
+  display: contents;
+}
 .plugin-editor {
   container-type: inline-size;
 }
@@ -84,7 +87,8 @@ openclaw-plugin-settings-editor {
   grid-row: 1;
   min-width: 0;
 }
-.plugin-editor__control > .settings-row {
+.plugin-editor__control > .settings-row,
+.plugin-editor__control > .lit-content > .settings-row {
   padding: 0;
   min-height: 0;
   background: transparent;

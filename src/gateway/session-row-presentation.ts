@@ -1,5 +1,8 @@
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
-import { SESSION_ROW_DETAIL_FIELDS } from "../../packages/gateway-protocol/src/session-row-fields.js";
+import {
+  SESSION_DASHBOARD_ROW_FIELDS,
+  SESSION_ROW_DETAIL_FIELDS,
+} from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
@@ -39,7 +42,7 @@ type PresentationOptions = Omit<
   "now" | "active" | "subagentRuns" | "preparedFacts"
 > & {
   includeActivitySummary?: boolean;
-  rowMode?: "compact";
+  rowMode?: SessionsListParams["rowMode"];
   omitSentinelChildren?: boolean;
   childArchiveFilter?: SessionsListParams["archived"];
 };
@@ -56,7 +59,7 @@ function toProjectedSessionSharingTarget(record: records.MaterializedRow): Sessi
 }
 
 type PublicationRows = WeakMap<
-  records.MaterializedRow,
+  records.MaterializedRow["materialized"],
   {
     facts: readonly unknown[];
     views: Map<string, Readonly<GatewaySessionRow>>;
@@ -100,15 +103,26 @@ export function prepareSessionRowPublication(
   const view: PublicationView = (context) => {
     const revision = projection.state.revision;
     let publication = publications.get(projection);
-    if (!publication || publication.context !== context || publication.revision !== revision) {
-      // Row facts own row-view invalidation; list revisions only retire list views.
+    if (!publication) {
       publication = {
         context,
         revision,
-        rows: publication?.rows ?? new WeakMap(),
+        rows: new WeakMap(),
         lists: new Map(),
       };
       publications.set(projection, publication);
+      const { lists } = publication;
+      projection.onSelectionChange(() => lists.clear());
+      projection.onFactsChange(() => {
+        // Retire wire snapshots even when no reader returns after a publication or disposal.
+        for (const list of lists.values()) {
+          list.rows = undefined;
+        }
+      });
+    } else if (publication.context !== context || publication.revision !== revision) {
+      publication.context = context;
+      publication.revision = revision;
+      publication.lists.clear();
     }
     return publication;
   };
@@ -250,7 +264,8 @@ export function prepareProjectedSessionPresentation(
     }
     // Keep invariant row facts out of each recipient's encoded signature. The publication
     // owns these views; in-place preview/profile/lineage updates retire the whole row's views.
-    let published = publicationRows?.get(record);
+    // The materialization owns these views; the resident row survives its replacement.
+    let published = publicationRows?.get(record.materialized);
     if (publicationRows) {
       const liveModel = resolveProjectedAgentRunModel({
         agentId: record.agentId,
@@ -259,7 +274,6 @@ export function prepareProjectedSessionPresentation(
       });
       const temporal = runState(record.key, record.entry);
       const facts = [
-        record.materialized,
         record.profileRevision,
         record.lastMessagePreview,
         record.fallbackModel,
@@ -303,7 +317,7 @@ export function prepareProjectedSessionPresentation(
       const previous = published?.facts;
       if (!previous || !facts.every((fact, index) => fact === previous[index])) {
         published = { facts, views: new Map(), target: toProjectedSessionSharingTarget(record) };
-        publicationRows.set(record, published);
+        publicationRows.set(record.materialized, published);
       }
     }
     const views = published?.views;
@@ -394,7 +408,14 @@ export function prepareProjectedSessionPresentation(
         row.activitySummary = { ...row.activitySummary, canEnsure: canEnsure === true };
       }
     }
-    if (options.rowMode === "compact") {
+    if (options.rowMode === "dashboard") {
+      for (const field of Object.keys(row)) {
+        if (!SESSION_DASHBOARD_ROW_FIELDS.has(field)) {
+          Reflect.deleteProperty(row, field);
+        }
+      }
+      row.rowMode = "dashboard";
+    } else if (options.rowMode === "compact") {
       for (const field of SESSION_ROW_DETAIL_FIELDS) {
         delete row[field];
       }

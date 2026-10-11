@@ -28,7 +28,7 @@ import {
 import { replaceConfigFile } from "../config.js";
 import * as diskBudget from "./disk-budget.js";
 import { deleteSessionEntryLifecycle, resetSessionEntryLifecycle } from "./session-accessor.js";
-import * as sessionScope from "./session-accessor.sqlite-scope.js";
+import * as archivePublication from "./session-archive-publication.js";
 import * as archivePruningOwner from "./session-history-archive-pruning.js";
 import {
   createSessionHistoryBudgetFixture,
@@ -115,7 +115,7 @@ describe("SQLite post-commit history maintenance", () => {
       }
       const entered = createDeferred();
       const release = createDeferred();
-      const run = sessionScope.runExclusiveSqliteSessionWrite;
+      const publish = archivePublication.publishSessionStateArchivesInWorker;
       let paused = false;
       const measure = diskBudget.measureSessionPhysicalDiskUsage;
       const measurement = vi
@@ -130,26 +130,14 @@ describe("SQLite post-commit history maintenance", () => {
           return result;
         });
       const writer = vi
-        .spyOn(sessionScope, "runExclusiveSqliteSessionWrite")
-        .mockImplementation(<T>(...args: Parameters<typeof run<T>>) => {
-          const [scope, operation, label, ...rest] = args;
-          return run(
-            scope,
-            async () => {
-              if (
-                !paused &&
-                boundary === "publication writer" &&
-                label === "session.archive.publish-prepare"
-              ) {
-                paused = true;
-                entered.resolve();
-                await release.promise;
-              }
-              return operation();
-            },
-            label,
-            ...rest,
-          );
+        .spyOn(archivePublication, "publishSessionStateArchivesInWorker")
+        .mockImplementation(async (params) => {
+          if (!paused && boundary === "publication writer") {
+            paused = true;
+            entered.resolve();
+            await release.promise;
+          }
+          return publish(params);
         });
       const sweep = enforceSqliteSessionHistoryDiskBudget({
         storePath,

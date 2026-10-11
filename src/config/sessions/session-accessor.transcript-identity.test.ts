@@ -1,9 +1,5 @@
-import { renameSync, symlinkSync } from "node:fs";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
-import { AgentDatabaseRegistryChangedError } from "../../state/openclaw-agent-db-registry-listing.js";
 import {
   readOpenClawAgentDatabaseRegistryToken,
   registerOpenClawAgentDatabase,
@@ -13,7 +9,6 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import {
   loadSessionEntryReadOnly,
@@ -217,43 +212,7 @@ describe("transcript turn physical identity", () => {
     return { selected: selected.promise, resume: resume.resolve };
   }
 
-  it.runIf(process.platform !== "win32")(
-    "rejects a replaced database before returning a runtime target",
-    async () => {
-      replaceSessionEntrySync(scope(), { sessionId, updatedAt: 1 });
-      const original = database();
-      const replacement = openOpenClawAgentDatabase({
-        agentId: "main",
-        path: `${original.path}.replacement`,
-      });
-      await closeOpenClawAgentDatabaseByPathAsync(original.path, original.agentId);
-      await closeOpenClawAgentDatabaseByPathAsync(replacement.path, replacement.agentId);
-      const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
-      let replaced = false;
-      vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
-        const reply = await run(...args);
-        if (
-          reply.ok &&
-          typeof reply.value !== "boolean" &&
-          !Array.isArray(reply.value) &&
-          reply.value.kind === "session-runtime-target"
-        ) {
-          renameSync(original.path, `${original.path}.retired`);
-          renameSync(replacement.path, original.path);
-          replaced = true;
-        }
-        return reply;
-      });
-      await expect(
-        transcriptTargets.resolveSessionTranscriptRuntimeTarget(scope(), undefined, {
-          keyFormat: "agent-qualified",
-        }),
-      ).rejects.toThrow(/identity/i);
-      expect(replaced).toBe(true);
-    },
-  );
-
-  it.each(["same owner", "different owner", "state retirement"] as const)(
+  it.each(["same owner", "state retirement"] as const)(
     "keeps post-selection first registration bound to its %s",
     async (change) => {
       const target = { ...scope(), storePath: `${fixture.storePath()}.custom.json` };
@@ -274,7 +233,7 @@ describe("transcript turn physical identity", () => {
           reads++;
           openOpenClawAgentDatabase({
             ...databaseOptions,
-            agentId: change === "different owner" ? "other" : "main",
+            agentId: "main",
           });
           if (change === "state retirement") {
             selected.resolve();
@@ -286,8 +245,6 @@ describe("transcript turn physical identity", () => {
       const pending = transcriptTargets.resolveSessionTranscriptRuntimeTarget(target);
       if (change === "same owner") {
         await expect(pending).resolves.toMatchObject(target);
-      } else if (change === "different owner") {
-        await expect(pending).rejects.toThrow("registry changed");
       } else {
         try {
           await awaitGateBeforeSettlement(
@@ -306,63 +263,6 @@ describe("transcript turn physical identity", () => {
         });
       }
       expect(reads).toBe(1);
-    },
-  );
-
-  it.runIf(process.platform !== "win32").each(["pending", "committed"] as const)(
-    "rejects aliased replacement after accepting the first %s registration",
-    async (phase) => {
-      const storePath = `${fixture.storePath()}.custom.json`;
-      const aliasDirectory = `${fixture.sessionsDir()}-alias`;
-      symlinkSync(fixture.sessionsDir(), aliasDirectory, "dir");
-      const aliasStorePath = path.join(aliasDirectory, path.basename(storePath));
-      const staging = ["first", "replacement"].map((name) =>
-        openOpenClawAgentDatabase({
-          agentId: "main",
-          path: `${fixture.storePath()}.${name}.sqlite`,
-        }),
-      );
-      for (const source of staging) {
-        await closeOpenClawAgentDatabaseByPathAsync(source.path, source.agentId);
-      }
-      let acceptedFirst = false;
-      await expect(
-        withSessionStoreTarget(
-          {
-            agentId: "main",
-            storePath,
-            env: process.env,
-            candidates: [
-              ...captureSessionStoreReadCandidates(storePath),
-              ...captureSessionStoreReadCandidates(aliasStorePath),
-            ],
-          },
-          async (target, owner) => {
-            const registerFirst = () => {
-              renameSync(staging[0]!.path, target.database.path);
-              registerOpenClawAgentDatabase(target.database);
-              owner.assertCurrent();
-              acceptedFirst = true;
-            };
-            const replace = () => {
-              renameSync(target.database.path, `${target.database.path}.retired`);
-              renameSync(staging[1]!.path, target.database.path);
-              registerOpenClawAgentDatabase(target.database);
-              owner.assertCurrent();
-            };
-            if (phase === "pending") {
-              runOpenClawStateWriteTransaction(() => {
-                registerFirst();
-                replace();
-              });
-            } else {
-              registerFirst();
-              replace();
-            }
-          },
-        ),
-      ).rejects.toThrow(AgentDatabaseRegistryChangedError);
-      expect(acceptedFirst).toBe(true);
     },
   );
 

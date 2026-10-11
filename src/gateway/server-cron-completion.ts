@@ -2,12 +2,31 @@ import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-rep
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveControlUiAutomationRunUrl } from "../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { CronResultConversation } from "../cron/conversation-result.js";
+import {
+  bindCronResultConversation,
+  commitCronConversationResult,
+  resolveCronResultConversation,
+} from "../cron/conversation-result.js";
 import type { CronCompletionDeliveryFence } from "../cron/delivery-attempt-fence.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
-import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
+import { normalizeDirectCronDeliveryPayloads } from "../cron/isolated-agent/delivery-payload-normalization.js";
+import {
+  resolveDeliveryTarget,
+  requiresExternalCronDelivery,
+} from "../cron/isolated-agent/delivery-target.js";
+import {
+  createCronRunDiagnosticsFromError,
+  mergeCronRunDiagnostics,
+} from "../cron/run-diagnostics.js";
 import { createCronExecutionId } from "../cron/run-id.js";
 import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
-import type { CronDeliveryTrace, CronJob, CronResolvedDeliveryState } from "../cron/types.js";
+import type {
+  CronDeliveryTrace,
+  CronStoredJob,
+  CronResolvedDeliveryState,
+  CronRunDiagnostics,
+} from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { getChildLogger } from "../logging.js";
 
@@ -26,9 +45,10 @@ export function pickDefined<T extends Record<string, unknown>>(
 
 export async function finalizeCronCompletionAnnouncement(params: {
   deliveryAttemptFence: CronCompletionDeliveryFence | null;
-  job: CronJob;
+  job: CronStoredJob;
   text?: string;
   suppressionReason?: NormalizeReplySkipReason;
+  diagnostics?: CronRunDiagnostics;
   runStartedAtMs?: number;
   abortSignal?: AbortSignal;
   deps: CliDeps;
@@ -58,6 +78,7 @@ export async function finalizeCronCompletionAnnouncement(params: {
     delivered: false,
     failureNotification: { status: "not-requested" },
   };
+  let diagnostics = params.diagnostics;
   const finish = (deliveryAttempted: boolean) => ({
     deliveryAttempted,
     delivered: deliveryState.delivered,
@@ -65,9 +86,13 @@ export async function finalizeCronCompletionAnnouncement(params: {
     deliverySuppressionReason: deliveryState.deliverySuppressionReason,
     deliveryState,
     delivery: { ...delivery, delivered: deliveryState.delivered },
+    ...(diagnostics ? { diagnostics } : {}),
   });
-  if (params.text === undefined) {
-    deliveryState.deliverySuppressionReason = params.suppressionReason ?? "empty";
+  const normalized = normalizeDirectCronDeliveryPayloads({
+    deliveryPayloads: [{ text: params.text }],
+  });
+  if (normalized.kind === "suppress") {
+    deliveryState.deliverySuppressionReason = params.suppressionReason ?? normalized.reason;
     return finish(false);
   }
 
@@ -79,57 +104,147 @@ export async function finalizeCronCompletionAnnouncement(params: {
         ? undefined
         : createCronExecutionId(params.job.id, params.runStartedAtMs),
   });
-  // Command summaries are already redacted; adding the link earlier would strip its URL.
-  const text = inspectUrl ? `${params.text}\nInspect: ${inspectUrl}` : params.text;
   const abortSignal = params.abortSignal ?? new AbortController().signal;
-  let deliveryMayHaveReachedRecipient = false;
+  let mayHaveReachedRecipient = false;
   try {
-    const result = await retryTransientDirectCronDelivery({
-      jobId: params.job.id,
-      label: params.label,
-      signal: abortSignal,
-      shouldRetryError: () => !deliveryMayHaveReachedRecipient,
-      run: () =>
-        sendCronAnnouncePayloadStrict({
-          deps: params.deps,
-          cfg,
-          agentId,
-          jobId: params.job.id,
-          target: {
-            channel: plan.channel,
-            to: plan.to,
-            threadId: plan.threadId,
-            accountId: plan.accountId,
-            sessionKey: resolveCronDeliverySessionKey(params.job),
-          },
-          payload: { text },
-          abortSignal,
-          ...(params.runStartedAtMs === undefined
-            ? {}
-            : {
-                completion: {
-                  job: params.job,
-                  runStartedAt: params.runStartedAtMs,
-                  deliveryAttemptFence: params.deliveryAttemptFence,
-                },
-              }),
-          onDeliveryAttempt: (reachedRecipient) => {
-            deliveryMayHaveReachedRecipient ||= reachedRecipient;
-          },
-        }),
+    const resolved = await resolveDeliveryTarget(cfg, agentId, {
+      ...plan,
+      sessionKey: resolveCronDeliverySessionKey(params.job),
+      sessionTarget: params.job.sourceConversation ? params.job.sessionTarget : undefined,
+      sourceConversation: params.job.sourceConversation,
     });
-    if (result.status === "sent") {
+    if (!resolved.ok && requiresExternalCronDelivery(plan, resolved)) {
+      throw resolved.error;
+    }
+    let conversationResult: CronResultConversation = {};
+    let conversationError: string | undefined;
+    const conversationParams = {
+      config: cfg,
+      agentId,
+      delivery: resolved,
+      source: params.job.sourceConversation,
+      sourceSessionKey: resolveCronDeliverySessionKey(params.job),
+      deliveryAttemptFence: params.deliveryAttemptFence,
+    };
+    try {
+      conversationResult = await resolveCronResultConversation(conversationParams);
+    } catch (error) {
+      if (!resolved.ok) {
+        throw error;
+      }
+      conversationError = formatErrorMessage(error);
+    }
+    let { conversation } = conversationResult;
+    let effectivePayloads = normalized.payload;
+    diagnostics = mergeCronRunDiagnostics(diagnostics, conversationResult.diagnostics);
+    if ((conversation || resolved.ok) && params.runStartedAtMs === undefined) {
+      throw new Error("cron result is missing its occurrence start time");
+    }
+    if (!resolved.ok && !conversation) {
+      throw resolved.error;
+    }
+    if (resolved.ok) {
+      const result = await sendCronAnnouncePayloadStrict({
+        deps: params.deps,
+        cfg,
+        agentId,
+        jobId: params.job.id,
+        target: { ...resolved, sessionKey: resolved.sessionRoute?.sessionKey },
+        payload: normalized.payload,
+        inspectionUrl: inspectUrl,
+        abortSignal,
+        ...(params.runStartedAtMs === undefined
+          ? {}
+          : {
+              completion: {
+                job: params.job,
+                runStartedAt: params.runStartedAtMs,
+                deliveryAttemptFence: params.deliveryAttemptFence,
+              },
+            }),
+        onDeliveryAttempt: (reachedRecipient) => {
+          mayHaveReachedRecipient ||= reachedRecipient;
+        },
+      });
+      if (result.status !== "sent") {
+        if (result.skipReason) {
+          deliveryState.deliverySuppressionReason = result.skipReason;
+        } else {
+          const uncertain = result.reason === "adapter_returned_no_identity";
+          deliveryState.status = uncertain ? "unknown" : "not-delivered";
+          deliveryState.delivered = uncertain ? undefined : false;
+          deliveryState.error = `cron delivery ${uncertain ? "outcome is unknown" : "was suppressed"}: ${result.reason}`;
+          if (uncertain) {
+            diagnostics = mergeCronRunDiagnostics(
+              diagnostics,
+              createCronRunDiagnosticsFromError(
+                "delivery",
+                "result may have been delivered but was not added to the conversation",
+                { severity: "warn" },
+              ),
+            );
+          }
+        }
+        return finish(true);
+      }
       deliveryState.status = "delivered";
       deliveryState.delivered = true;
-    } else {
-      const uncertain = result.reason === "adapter_returned_no_identity";
-      deliveryState.status = uncertain ? "unknown" : "not-delivered";
-      deliveryState.delivered = uncertain ? undefined : false;
-      deliveryState.error = `cron delivery ${uncertain ? "outcome is unknown" : "was suppressed"}: ${result.reason}`;
+      effectivePayloads = result.payloads;
+      try {
+        const bound = await bindCronResultConversation(conversationParams);
+        conversation = bound.conversation;
+        conversationError = undefined;
+      } catch (error) {
+        conversationError = formatErrorMessage(error);
+      }
     }
+    if (conversationError) {
+      throw new Error(conversationError);
+    }
+    if (conversation && params.runStartedAtMs !== undefined && effectivePayloads.length > 0) {
+      const committed = await commitCronConversationResult({
+        config: cfg,
+        agentId,
+        jobId: params.job.id,
+        runStartedAt: params.runStartedAtMs,
+        conversation,
+        payloads: effectivePayloads,
+        signal: abortSignal,
+        deliveryAttemptFence: params.deliveryAttemptFence,
+      });
+      if (!committed.ok) {
+        throw new Error(committed.reason);
+      }
+      diagnostics = mergeCronRunDiagnostics(diagnostics, committed.diagnostics);
+    }
+    deliveryState.status = "delivered";
+    deliveryState.delivered = true;
     return finish(true);
   } catch (err) {
     const deliveryError = formatErrorMessage(err);
+    if (deliveryState.delivered) {
+      diagnostics = mergeCronRunDiagnostics(
+        diagnostics,
+        createCronRunDiagnosticsFromError(
+          "delivery",
+          `result was delivered but was not added to the conversation: ${deliveryError}`,
+          { severity: "warn" },
+        ),
+      );
+      return finish(true);
+    }
+    if (mayHaveReachedRecipient) {
+      deliveryState.status = "unknown";
+      deliveryState.delivered = undefined;
+      diagnostics = mergeCronRunDiagnostics(
+        diagnostics,
+        createCronRunDiagnosticsFromError(
+          "delivery",
+          "result may have been delivered but was not added to the conversation",
+          { severity: "warn" },
+        ),
+      );
+    }
     params.logger.warn(
       { jobId: params.job.id, err: deliveryError },
       `cron: ${params.label} delivery failed`,

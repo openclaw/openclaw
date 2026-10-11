@@ -54,10 +54,14 @@ registerSessionMaintenancePreserveKeysProvider(async ({ native }) => {
       )
     : undefined;
   try {
-    const readCandidates = current
-      ? (await import("./subagent-registry.store.sqlite.js"))
-          .loadSubagentMaintenanceCandidatesInDatabase
-      : undefined;
+    let readCandidates:
+      | typeof import("./subagent-registry.store.sqlite.js").loadSubagentMaintenanceCandidatesInDatabase
+      | undefined;
+    if (current) {
+      const { loadSubagentMaintenanceCandidatesInDatabase } =
+        await import("./subagent-registry.store.sqlite.js");
+      readCandidates = loadSubagentMaintenanceCandidatesInDatabase;
+    }
     // The owning writer publishes revisions across the asynchronous snapshot interval.
     const version = current?.writeRevision();
     const prepared = await prepareSubagentMaintenanceRunsSnapshotForRead(
@@ -102,7 +106,6 @@ registerSessionMaintenancePreserveKeysProvider(async ({ native }) => {
         return keys;
       },
       dispose() {
-        prepared.dispose();
         current?.dispose();
       },
       subagentRunBasis: prepared.basis,

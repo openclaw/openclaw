@@ -1,9 +1,10 @@
-import { render } from "lit";
 import { expect } from "vitest";
 import type { CronJob } from "../../api/types.ts";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import type { CronProps } from "./view-types.ts";
-import { renderCron } from "./view.ts";
+import { CronView } from "./view.tsx";
 
 export function createCronViewJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
   return {
@@ -20,7 +21,19 @@ export function createCronViewJob(id: string, overrides: Partial<CronJob> = {}):
   } as CronJob;
 }
 
-function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
+export function scheduledJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
+  return createCronViewJob(id, {
+    name: "Nightly digest",
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload: { kind: "agentTurn", message: "digest" },
+    state: {},
+    ...overrides,
+  });
+}
+
+export function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
   return {
     loading: false,
     hasLoaded: true,
@@ -93,7 +106,8 @@ function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
 
 export function renderCronView(overrides: Partial<CronProps> = {}) {
   const container = document.createElement("div");
-  render(renderCron(createCronViewProps(overrides)), container);
+  mountSolid(() => CronView(createCronViewProps(overrides)), { container });
+  flush();
   return container;
 }
 
@@ -128,7 +142,7 @@ export function selectSegmented(control: HTMLElement) {
 export function findToggleByLabel(container: Element, label: string) {
   return (
     Array.from(container.querySelectorAll(".settings-toggle")).find((toggle) =>
-      toggle.textContent?.includes(label),
+      (toggle.closest(".settings-row--toggle") ?? toggle).textContent?.includes(label),
     ) ?? null
   );
 }

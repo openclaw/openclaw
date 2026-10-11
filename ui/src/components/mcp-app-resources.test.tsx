@@ -1,21 +1,18 @@
-import { createSignal } from "solid-js";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
 import {
   createApplicationGateway,
-  createSolidApplicationContextProvider,
-} from "../test-helpers/solid-application-context.tsx";
+  createApplicationContextProvider,
+} from "../test-helpers/application-context.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import {
   MCP_APP_RESOURCE_MENTION_EVENT,
-  McpAppResources,
   type McpAppResourceMentionDetail,
-} from "./mcp-app-resources.ts";
+} from "./mcp-app-resources.tsx";
 
 function mountResources() {
   const client = new GatewayBrowserClient({ url: "ws://gateway.example.test" });
@@ -37,12 +34,20 @@ function mountResources() {
       subscribe: () => () => {},
     }),
   };
-  const [sessionKey, setSessionKey] = createSignal("agent:main:main");
-  const mounted = mountSolid(() => <McpAppResources sessionKey={sessionKey()} agentId="main" />, {
-    // SAFETY: This component only consumes the Gateway and agent selection capabilities.
-    wrapper: createSolidApplicationContextProvider(context as ApplicationContext).wrapper,
+  // SAFETY: This component only consumes the Gateway and agent selection capabilities.
+  const container = createApplicationContextProvider(context as ApplicationContext);
+  const picker = Object.assign(document.createElement("openclaw-mcp-app-resources"), {
+    sessionKey: "agent:main:main",
+    agentId: "main",
   });
-  return { ...mounted, request, setSessionKey, publishEvent };
+  container.append(picker);
+  document.body.append(container);
+  onTestFinished(() => container.remove());
+  const setSessionKey = async (sessionKey: string) => {
+    picker.sessionKey = sessionKey;
+    await picker.updateComplete;
+  };
+  return { container, request, setSessionKey, publishEvent };
 }
 
 async function searchResources(container: HTMLElement) {
@@ -148,7 +153,7 @@ it("keeps resource ownership through discovery reorder and ignores previous-sess
   }>();
   request.mockReturnValueOnce(pending.promise);
   container.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
-  setSessionKey("agent:main:next");
+  await setSessionKey("agent:main:next");
   flush();
   pending.resolve({
     resources: [{ type: "resource_link", uri: "file:///old.txt", name: "Old resource" }],

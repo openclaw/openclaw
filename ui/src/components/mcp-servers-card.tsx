@@ -360,7 +360,7 @@ function McpServersCardContent(props: McpServersCardProps) {
   );
 }
 
-export const McpServersCard = defineSolidBridge<McpServersCardProps>(
+defineSolidBridge<McpServersCardProps>(
   "openclaw-mcp-servers-card",
   (props) => <McpServersCardContent {...props} />,
   {

@@ -21,6 +21,7 @@ import {
   classifyOpenClawAgentDatabaseReadError,
   recordOpenClawAgentDatabaseReadOpenFailure,
 } from "./openclaw-agent-db-read-error.js";
+import { registerOpenClawAgentDatabaseSyncResource } from "./openclaw-agent-db-resources.js";
 import {
   assertCanonicalAgentPersistenceVersion,
   assertExistingAgentSchemaOwner,
@@ -152,7 +153,7 @@ export function withFreshOpenClawAgentDatabaseReadOnly<T>(
 /** Open one existing agent database without creating, registering, migrating, or adopting it. */
 export function openOpenClawAgentDatabaseReadOnly(
   options: OpenClawAgentDatabaseOptions,
-  behavior: { allowExtension?: boolean } = {},
+  behavior: { allowExtension?: boolean; lifecycle?: "agent" } = {},
 ): OpenClawAgentDatabaseReadOnlyOpenResult {
   const agentId = normalizeAgentId(options.agentId);
   const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
@@ -186,6 +187,7 @@ export function openOpenClawAgentDatabaseReadOnly(
     throw error;
   }
   let closed = false;
+  let unregister: (() => void) | undefined;
   const close = () => {
     if (closed) {
       return;
@@ -194,6 +196,8 @@ export function openOpenClawAgentDatabaseReadOnly(
       db.close();
     }
     closed = true;
+    unregister?.();
+    unregister = undefined;
   };
   try {
     enableNodeSqliteKyselyStatementCache(db);
@@ -213,6 +217,14 @@ export function openOpenClawAgentDatabaseReadOnly(
     // Worker admission loads file-bound proof before a read transaction prevents it.
     if (!isMainThread) {
       hasOpenClawAgentCanonicalValidation(database);
+    }
+    if (behavior.lifecycle === "agent") {
+      unregister = registerOpenClawAgentDatabaseSyncResource({
+        agentId,
+        path: pathname,
+        revoke: close,
+        close,
+      });
     }
     return { found: true, database };
   } catch (error) {
