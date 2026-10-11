@@ -174,6 +174,31 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/agents/auth-profiles/sqlite-json.ts",
+    [
+      {
+        tier: "W",
+        operations: ["readAuthProfileRows"],
+        evidence:
+          "Only auth-profiles/store.worker.ts, plugin-model-catalog.worker.ts, and sqlite-readonly-native-payload.ts's auth-profile-rows worker call this batched reader; synchronous SDK cell readers remain T1.",
+      },
+    ],
+  ],
+  [
+    "src/agents/auth-profiles/shared-store-bootstrap.ts",
+    [
+      {
+        tier: "T2",
+        operations: [
+          "readSharedAuthLegacyRowsFromDatabase",
+          "hasPendingSharedAuthCleanupInDatabase",
+        ],
+        evidence:
+          "First-load legacy shared-auth admission and migration only: initializeFreshSharedAuthStore skips already-inspected ownership; shared-store-bootstrap.worker.ts and Doctor own remaining callers.",
+      },
+    ],
+  ],
+  [
     "src/plugin-state/plugin-state-store.reads.ts",
     [
       {
@@ -1127,9 +1152,10 @@ const reviewedOperations = new Map([
           "insertSandboxRegistryRowInDatabase",
           "insertSandboxRegistryRowIfMissingInDatabase",
           "readRegistryRows",
+          "readSandboxRegistryRowInDatabase",
         ],
         evidence:
-          "Registry mutations, including reservation and removal-intent selection, run only through registry-write.worker.ts -> executeSandboxRegistryCommand; import only registry-import.worker.ts. List helpers run through openclaw-state-read-registry.ts in the read worker. The row reader remains T1 for released synchronous sandbox callbacks held across provider waits and deferred process launch; see worker-access.md.",
+          "Registry mutations, including reservation and removal-intent selection, run only through registry-write.worker.ts -> executeSandboxRegistryCommand; import only registry-import.worker.ts. Read helpers run through openclaw-state-read-registry.ts in the read worker. Synchronous sandbox effect checks consume registry-currentness.ts facts maintained by committed receipts.",
       },
     ],
   ],
@@ -1194,6 +1220,12 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T2",
+        operations: ["createWorktreeRemovalClaimsGuard", "releaseWorktreeRunLeaseRow"],
+        evidence:
+          "Synchronous removal-lock assertion immediately before filesystem/Git deletion and process-exit lock cleanup. Ordinary cleanup consumes the existing worker lease census.",
+      },
+      {
+        tier: "T2",
         operations: [
           "listRegistryWorktreesForMigration",
           "rewriteRegistryWorktreePathsForMigration",
@@ -1214,6 +1246,12 @@ const reviewedOperations = new Map([
     "src/agents/worktrees/run-lease-owner.ts",
     [
       {
+        tier: "T2",
+        operations: ["collectLiveRunLeases"],
+        evidence:
+          "Native caller is registry.ts assertWorktreeRemovalAvailable, a removal lock primitive; ordinary runtime lease reads and writes dispatch through shared-state workers.",
+      },
+      {
         tier: "W",
         operations: ["readWorktreeRunLeaseStateInDatabase", "assertRegistryMutationCustody"],
         evidence:
@@ -1225,10 +1263,16 @@ const reviewedOperations = new Map([
     "src/agents/worktrees/run-lease-store.kernel.ts",
     [
       {
+        tier: "T2",
+        operations: ["releaseWorktreeRunLeaseInDatabase"],
+        evidence:
+          "Native invocation is registry.ts process-exit lock cleanup; normal release dispatches through registry-run-end.worker.ts.",
+      },
+      {
         tier: "W",
         operations: ["admitWorktreeRunLeaseInDatabase"],
         evidence:
-          "worktrees/dispatch.worker.ts registers admission through WorkerWriteOperationContext.writeAdmitted; src/state/openclaw-state-worker-registry.ts loads the handler. Shared release/lease cleanup remain T1.",
+          "worktrees/dispatch.worker.ts registers admission through WorkerWriteOperationContext.writeAdmitted; src/state/openclaw-state-worker-registry.ts loads the handler. Native exit cleanup is classified separately as a lock primitive.",
       },
     ],
   ],
@@ -2082,7 +2126,7 @@ const workerModules = new Set([
   "packages/memory-host-sdk/src/memory-entry-origins.ts", // Private memory SDK origin queries serve search and origin workers only.
 
   "src/agents/mcp-oauth-store.kernel.ts", // MCP OAuth write dispatcher and shared-state read worker only.
-  "src/agents/harness/native-hook-relay-store.kernel.ts", // native-hook-relay-store.worker.ts owns runtime SQL; clear is test-only.
+  "src/agents/harness/native-hook-relay-store.kernel.ts", // native-hook-relay-store.worker.ts owns all runtime SQL.
 
   "src/agents/subagents/completion/subagent-completion-queue-receipt.ts", // Completion mutation kernel runs through the session-delivery worker.
 
