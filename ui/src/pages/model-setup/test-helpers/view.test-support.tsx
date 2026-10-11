@@ -1,9 +1,10 @@
-import { render } from "lit";
+import { createSignal, flush } from "solid-js";
 import { vi } from "vitest";
 import type { SystemAgentSetupDetectResult } from "../../../api/types.ts";
-import { renderModelSetup } from "../view.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { ModelSetupView, type ModelSetupViewProps } from "../view.tsx";
 
-export type ModelSetupViewProps = Parameters<typeof renderModelSetup>[0];
+export type { ModelSetupViewProps } from "../view.tsx";
 
 export const detected: SystemAgentSetupDetectResult = {
   candidates: [
@@ -137,10 +138,34 @@ export function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupV
   };
 }
 
+const roots = new Map<
+  HTMLElement,
+  { update: (view: ModelSetupViewProps) => void; dispose: () => void }
+>();
+
+export function renderSetup(view: ModelSetupViewProps, container: HTMLElement): void {
+  const root = roots.get(container);
+  if (root) {
+    root.update({ ...view });
+  } else {
+    const [current, setCurrent] = createSignal({ ...view });
+    const { unmount: dispose } = mountSolid(() => <ModelSetupView {...current()} />, { container });
+    roots.set(container, { update: setCurrent, dispose });
+  }
+  flush();
+}
+
+export function disposeViews(): void {
+  for (const root of roots.values()) {
+    root.dispose();
+  }
+  roots.clear();
+}
+
 export function mount(viewProps: ModelSetupViewProps): HTMLDivElement {
   const container = document.createElement("div");
   document.body.append(container);
-  render(renderModelSetup(viewProps), container);
+  renderSetup(viewProps, container);
   return container;
 }
 
