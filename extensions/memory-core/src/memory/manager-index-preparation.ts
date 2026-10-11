@@ -83,6 +83,7 @@ export function prepareMemoryIndexChunks({
         .every(
           (line, index) =>
             (!line.trim() || /^ {0,3}#{1,6}(?:\s|$)/u.test(line)) &&
+            !line.includes("<!--") &&
             line.trimEnd() === (sourceLines[previous.startLine + index - 1] ?? "").trimEnd(),
         )
     ) {

@@ -3,6 +3,21 @@ import { describe, expect, it } from "vitest";
 import { prepareMemoryIndexChunks } from "./manager-index-preparation.js";
 
 describe("heading chunks at the indexing boundary", () => {
+  it("retains invalid project scope on a heading with an unterminated annotation", () => {
+    const { chunks } = prepareMemoryIndexChunks({
+      entry: { path: "MEMORY.md", mtimeMs: 1 },
+      source: "memory",
+      content: "# Private <!-- project: alpha-key\n- Global neighbor. <!-- trigger: global -->",
+      pathClassification: { curatedRoot: true, originClass: "agent" },
+      chunking: { tokens: 400, overlap: 80 },
+      hardMaxInputTokens: 8192,
+    });
+    expect(chunks.map(({ text, projectKey }) => ({ text, projectKey }))).toEqual([
+      { text: "# Private <!-- project: alpha-key", projectKey: "!invalid-project-annotation" },
+      { text: "- Global neighbor.", projectKey: null },
+    ]);
+  });
+
   it("keeps a heading fragment with its containing curated entry's annotations", () => {
     const { chunks } = prepareMemoryIndexChunks({
       entry: { path: "MEMORY.md", mtimeMs: 1 },
