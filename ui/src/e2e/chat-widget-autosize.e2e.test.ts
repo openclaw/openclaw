@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
+import type { ChatMessageCache } from "../pages/chat/session-message-cache.ts";
 import type { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -69,7 +70,7 @@ suite.define(() => {
         sessionKey,
         authMethod: "trusted-proxy",
         authMode: "trusted-proxy",
-        heldMethods: ["canvas.document.view"],
+        heldMethods: ["canvas.document.view", "chat.startup", "chat.history"],
         methodResponses: { "canvas.document.view": canvasView(html) },
         historyMessages: [
           ...Array.from({ length: 12 }, (_, index) => ({
@@ -98,6 +99,8 @@ suite.define(() => {
         ],
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await gateway.waitForRequest("chat.startup");
+      await gateway.resolveDeferred("chat.startup");
       await gateway.waitForRequest("canvas.document.view");
       await gateway.resolveDeferred("canvas.document.view");
       const frame = page.locator(".chat-tool-card__preview-frame");
@@ -115,13 +118,23 @@ suite.define(() => {
       );
       const preview = page.locator('.chat-tool-card__preview[data-content-kind="canvas-html"]');
       const learnedHeight = (await preview.boundingBox())!.height;
-      await page.locator(".chat-pane-cache__pane--active").evaluate(async (element) => {
-        const pane = element as HTMLElement & { sessionSnapshotStore?: SessionSnapshotStore };
-        if (!pane.sessionSnapshotStore) {
-          throw new Error("Missing transcript snapshot owner");
-        }
-        await pane.sessionSnapshotStore.flush();
-      });
+      const savedHeight = await page
+        .locator(".chat-pane-cache__pane--active")
+        .evaluate(async (element, widgetKey) => {
+          const pane = element as HTMLElement & {
+            sessionSnapshotStore?: SessionSnapshotStore;
+            chatMessagesBySession?: ChatMessageCache;
+          };
+          const entry = [...(pane.chatMessagesBySession ?? [])].find(
+            ([, value]) => value.snapshot.widgetHeights?.[widgetKey] === 700,
+          );
+          if (!pane.sessionSnapshotStore || !entry) {
+            throw new Error("Missing measured widget snapshot");
+          }
+          await pane.sessionSnapshotStore.flush();
+          return (await pane.sessionSnapshotStore.read(entry[0]))?.widgetHeights?.[widgetKey];
+        }, `canvas:${documentId}`);
+      expect(savedHeight).toBe(700);
       await page.addInitScript(() => {
         window.widgetReloadFrames = [];
         window.widgetReloadRecording = true;
