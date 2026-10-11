@@ -21,7 +21,7 @@ export function projectClaudeCliNativeCatalog(
   cliOnly: boolean,
 ): ModelCatalogSnapshot {
   const listing = snapshot.providerOutcomes?.find(
-    (outcome) => outcome.provider === CLAUDE_CLI_RUNTIME_ID && outcome.status === "ready",
+    (outcome) => outcome.provider === CLAUDE_CLI_RUNTIME_ID && outcome.listedModelIds !== undefined,
   );
   const nativeOnly = cliOnly && listing !== undefined;
   const listed = new Set(listing?.listedModelIds ?? []);
@@ -97,8 +97,8 @@ export function createUnlistedClaudeCliWildcardCheck(params: {
       params
         .outcomes()
         ?.flatMap((outcome) =>
-          outcome.provider === CLAUDE_CLI_RUNTIME_ID && outcome.status === "ready"
-            ? (outcome.listedModelIds ?? [])
+          outcome.provider === CLAUDE_CLI_RUNTIME_ID && outcome.listedModelIds !== undefined
+            ? outcome.listedModelIds
             : [],
         ),
     );

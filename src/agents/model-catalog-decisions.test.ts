@@ -729,7 +729,7 @@ describe("catalog decisions with prepared CLI auth directories", () => {
     });
   });
 
-  it("lights up the Claude CLI sign-in wildcard only for models the Claude CLI catalog lists", async () => {
+  it.each(["ready", "unavailable"] as const)("keeps CLI menu on %s", async (status) => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
       cliBackendsTesting.setDepsForTest({
         resolvePluginSetupCliBackend: () => undefined,
@@ -774,7 +774,7 @@ describe("catalog decisions with prepared CLI auth directories", () => {
             providerOutcomes: [
               {
                 provider: "claude-cli",
-                status: "ready",
+                status,
                 listedModelIds: ["claude-listed"],
               },
             ],

@@ -184,6 +184,11 @@ OpenClaw release:
         discovery. API-only users and users with both API and native credentials
         keep their existing API catalog behavior.
 
+        If a menu refresh fails temporarily, the picker keeps the last accepted
+        menu for the same authentication state. A successful refresh replaces
+        that menu, including when access becomes more restrictive. Changing
+        authentication discards the retained menu.
+
         New sessions select saved subscription credentials by account order and
         use protected file-descriptor forwarding, including tokens saved with
         `openclaw models auth paste-token --provider anthropic`. API keys saved for

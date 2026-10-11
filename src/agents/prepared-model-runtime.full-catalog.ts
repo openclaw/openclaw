@@ -15,7 +15,6 @@ import {
 import { loadBundledProviderStaticCatalogContextModels } from "./embedded-agent-runner/model.static-catalog.js";
 import { createPreparedConfiguredRuntimeModelLookup } from "./embedded-agent-runner/model.static-id.js";
 import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
-import { projectClaudeCliNativeCatalog } from "./model-catalog-cli-wildcard.js";
 import {
   enrichHarnessRows,
   modelCatalogRouteVariantKey,
@@ -197,25 +196,22 @@ export async function prepareFullCatalogFacts(
       input.config,
       input.env,
     );
-    const completeModelCatalog = projectClaudeCliNativeCatalog(
-      {
-        ...modelCatalog,
-        staticEntries:
-          input.config.models?.mode === "replace"
-            ? []
-            : dedupeByKey(
-                // Static hooks also answer runtime provider aliases; publish canonical rows once.
-                [...providerStaticModels, ...manifestStaticModels].map((model) => {
-                  const entry = modelCatalogRowToEntry(model);
-                  entry.provider = normalizeProvider(entry.provider);
-                  return entry;
-                }),
-                createModelCatalogIdentityKeyResolver(),
-              ),
-        ...(providerOutcomes.length > 0 ? { providerOutcomes } : {}),
-      },
-      !agentFacts.credentials.anthropic,
-    );
+    const completeModelCatalog: ModelCatalogSnapshot = {
+      ...modelCatalog,
+      staticEntries:
+        input.config.models?.mode === "replace"
+          ? []
+          : dedupeByKey(
+              // Static hooks also answer runtime provider aliases; publish canonical rows once.
+              [...providerStaticModels, ...manifestStaticModels].map((model) => {
+                const entry = modelCatalogRowToEntry(model);
+                entry.provider = normalizeProvider(entry.provider);
+                return entry;
+              }),
+              createModelCatalogIdentityKeyResolver(),
+            ),
+      ...(providerOutcomes.length > 0 ? { providerOutcomes } : {}),
+    };
     if (catalogMode === "live") {
       fullModelCatalogSnapshots.add(completeModelCatalog);
     }
@@ -494,8 +490,22 @@ export function prepareModelCatalogPublication(
     ).toSorted(compareModelCatalogEntries);
   // Route dedupe follows another round of normalization callbacks; acquire its policy afresh.
   const routeKeyOf = createModelCatalogIdentityKeyResolver();
+  const providerOutcomes: NonNullable<ModelCatalogSnapshot["providerOutcomes"]>[number][] = [];
+  for (const outcome of catalog.providerOutcomes ?? []) {
+    const accepted = previous?.providerOutcomes?.find(
+      (candidate) => candidate.provider === outcome.provider,
+    );
+    providerOutcomes.push(
+      outcome.status !== "ready" &&
+        retainedProviders.has(normalizeProvider(outcome.provider)) &&
+        accepted?.listedModelIds !== undefined
+        ? { ...outcome, listedModelIds: accepted.listedModelIds }
+        : outcome,
+    );
+  }
   const published: ModelCatalogSnapshot = {
     ...catalog,
+    providerOutcomes,
     entries: retain(catalog.entries, previous?.entries ?? []),
     routeVariants: retain(catalog.routeVariants, previous?.routeVariants ?? [], (entry) =>
       JSON.stringify([routeKeyOf(entry), entry.api, entry.baseUrl, entry.nativeRuntime]),
