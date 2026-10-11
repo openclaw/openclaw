@@ -1,4 +1,4 @@
-import { nothing } from "lit";
+import { createSignal, onCleanup } from "solid-js";
 import { vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
 import type { CronJob, CronJobsListResult } from "../../api/types.ts";
@@ -8,21 +8,33 @@ import {
   notifyGatewayObservers,
 } from "../../app/gateway-observers.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
-import type { CronState } from "../../lib/cron/types.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { CronPageController } from "./cron-page-controller.ts";
+import { CronPageContent } from "./cron-page.tsx";
 
-type CronTestPage = HTMLElement & {
-  context: ApplicationContext;
-  routeSearch: string;
-  updateComplete: Promise<boolean>;
-  requestUpdate: () => void;
-  render: () => typeof nothing;
-  cron: CronState;
-  cronModelSuggestions: string[];
-  patchForm: (patch: Partial<CronState["cronForm"]>) => void;
-};
+export type CronTestPage = HTMLElement &
+  Pick<
+    CronPageController,
+    | "context"
+    | "routeSearch"
+    | "cron"
+    | "cronModelSuggestions"
+    | "patchForm"
+    | "deliveryDirectory"
+    | "closePanel"
+    | "submitForm"
+    | "selectJob"
+    | "removeJob"
+  > & {
+    settle: () => Promise<void>;
+    refreshView: () => void;
+    hideView: () => void;
+  };
 
 export function waitForCronPage(assertion: () => void) {
-  return vi.waitFor(assertion, { interval: 1 });
+  return waitForSolid(assertion);
 }
 
 type TestGateway = ApplicationContext["gateway"] & {
@@ -162,12 +174,58 @@ export function createPage(
   context: ApplicationContext,
   options: { render?: boolean } = {},
 ): CronTestPage {
-  const page = document.createElement("openclaw-cron-page") as CronTestPage;
-  page.context = context;
-  if (!options.render) {
-    page.render = () => nothing;
-  }
+  // SAFETY: The native mount host receives the controller facade below before it is returned.
+  const page = document.createElement("section") as CronTestPage;
   document.body.append(page);
+  let controller!: CronPageController;
+  let hideView!: () => void;
+  const provider = createSolidApplicationContextProvider(context);
+  const mounted = mountSolid(
+    () => {
+      const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+      const [visible, setVisible] = createSignal(options.render ?? false);
+      hideView = () => setVisible(false);
+      controller = new CronPageController(context, page, () => setRevision((value) => value + 1));
+      controller.activate();
+      onCleanup(() => controller.dispose());
+      return (
+        <>{visible() ? <CronPageContent controller={controller} revision={revision} /> : null}</>
+      );
+    },
+    { container: page, wrapper: provider.wrapper },
+  );
+  for (const key of [
+    "context",
+    "routeSearch",
+    "cron",
+    "cronModelSuggestions",
+    "deliveryDirectory",
+  ] as const) {
+    Object.defineProperty(page, key, {
+      get: () => controller[key],
+      set: (value) => {
+        if (key === "routeSearch") {
+          controller.setRouteSearch(value);
+        } else {
+          Reflect.set(controller, key, value);
+        }
+      },
+    });
+  }
+  for (const key of ["patchForm", "closePanel", "submitForm", "selectJob", "removeJob"] as const) {
+    Object.defineProperty(page, key, { value: controller[key].bind(controller) });
+  }
+  page.refreshView = () => controller.publish();
+  page.hideView = hideView;
+  page.settle = async () => {
+    await Promise.resolve();
+    flush();
+  };
+  page.remove = () => {
+    mounted.unmount();
+    HTMLElement.prototype.remove.call(page);
+  };
+  flush();
   return page;
 }
 
