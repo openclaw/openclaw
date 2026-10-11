@@ -11,6 +11,8 @@ export type { JSX } from "@solidjs/web";
 // Keep ambient tag contracts independent of renderer modules: SDK declarations include this file.
 type LegacyAttributes<T extends HTMLElement> = JSX.HTMLAttributes<T> & JSX.Properties<T>;
 
+type ElementProperties<T> = { [Key in keyof T as `prop:${string & Key}`]?: T[Key] };
+
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
@@ -18,6 +20,7 @@ declare module "@solidjs/web" {
         "prop:active": string;
         activation: "auto" | "manual";
         "without-scroll-controls": boolean;
+        "onWa-tab-show"?: (event: CustomEvent<{ name: string }>) => void;
       };
       "wa-tab": HTMLAttributes<WaTab> & {
         panel: string;
@@ -28,12 +31,33 @@ declare module "@solidjs/web" {
         name: string;
         "prop:active": boolean;
       };
+      "resizable-divider": Omit<HTMLAttributes<HTMLElement>, "onResize"> & {
+        "prop:orientation": "horizontal" | "vertical";
+        "prop:label": string;
+        "prop:splitRatio": number;
+        "prop:minRatio": number;
+        "prop:maxRatio": number;
+        "prop:measureRatio": () => number;
+        "prop:measureSize": () => number;
+        onResize: (event: CustomEvent<{ splitRatio: number }>) => void;
+        "onResize-end": () => void;
+      };
       "openclaw-tooltip": HTMLAttributes<HTMLElementTagNameMap["openclaw-tooltip"]> & {
         "prop:content"?: string;
+        "prop:describe"?: boolean;
         placement?: HTMLElementTagNameMap["openclaw-tooltip"]["placement"];
         "open-on-click"?: boolean;
         "auto-size"?: boolean;
       };
+      "openclaw-viewer-facepile": HTMLAttributes<
+        HTMLElementTagNameMap["openclaw-viewer-facepile"]
+      > &
+        ElementProperties<
+          Pick<
+            HTMLElementTagNameMap["openclaw-viewer-facepile"],
+            "staticParticipants" | "totalCount" | "maxVisible" | "personActivity"
+          >
+        >;
       "openclaw-agent-row-chip": HTMLAttributes<HTMLElement> & {
         "prop:agentId"?: string;
       };
@@ -44,12 +68,16 @@ declare module "@solidjs/web" {
       "wa-dropdown": HTMLAttributes<WaDropdown> &
         Properties<WaDropdown> & {
           placement?: WaDropdown["placement"];
+          "onWa-show"?: (event: Event) => void;
+          "onWa-hide"?: (event: Event) => void;
           "onWa-select"?: (event: CustomEvent<{ item: WaDropdownItem }>) => void;
           "onWa-after-hide"?: (event: CustomEvent<void>) => void;
         };
       "wa-dropdown-item": HTMLAttributes<WaDropdownItem> &
         Properties<WaDropdownItem> &
-        Partial<Pick<WaDropdownItem, "value" | "type" | "variant" | "disabled">>;
+        Partial<Pick<WaDropdownItem, "value" | "type" | "variant" | "disabled">> & {
+          "onSubmenu-opening"?: (event: CustomEvent<{ item: HTMLElement }>) => void;
+        };
       "wa-popover": LegacyAttributes<WaPopover> &
         Partial<Pick<WaPopover, "for" | "placement">> & {
           distance?: number | `${number}`;
