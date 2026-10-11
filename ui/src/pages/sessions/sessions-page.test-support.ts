@@ -26,7 +26,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type { SessionsPageArchive } from "./archive-actions.ts";
 import { buildSessionsListQuery } from "./list-query.ts";
 import type { SessionsRouteData } from "./route.ts";
-import { SessionsPageController } from "./sessions-controller.ts";
+import { SessionsPageController } from "./sessions-page.ts";
 import { SessionsPageContent } from "./sessions-page.tsx";
 
 export type TestSessionsPage = HTMLElement & {

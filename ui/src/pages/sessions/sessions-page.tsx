@@ -9,12 +9,11 @@ import { i18n } from "../../i18n/index.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectI18n, t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import { LitContent } from "../../lit/template-content.tsx";
+import { defineSolidBridge, LitContent } from "../../lit/solid-bridge.ts";
 import "../../styles/settings.css";
 import type { SessionsRouteData } from "./route.ts";
 import { SessionManagementMenu } from "./session-menu.tsx";
-import { SessionsPageController } from "./sessions-controller.ts";
+import { SessionsPageController } from "./sessions-page.ts";
 import { SessionsView } from "./view.tsx";
 
 export function SessionsPageContent(props: { controller: SessionsPageController }) {

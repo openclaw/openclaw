@@ -1,4 +1,3 @@
-import { html } from "lit";
 import { createMemo } from "solid-js";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -61,9 +60,6 @@ function AgentsHomePageContent(props: { active: boolean }) {
     />
   );
 }
-
-export const header = true;
-export const render = () => html`<openclaw-agents-home-page></openclaw-agents-home-page>`;
 
 export const AgentsHomePage = defineSolidBridge(
   "openclaw-agents-home-page",

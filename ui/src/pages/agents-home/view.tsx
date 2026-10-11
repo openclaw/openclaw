@@ -12,7 +12,7 @@ import { registerAvatarGatewayReset } from "../../lib/identity-avatar-context.ts
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { projectI18n, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
-import { LitContent } from "../../lit/template-content.tsx";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import "../../styles/agents-home.css";
 
 registerEnglishCatalog(registerAgentsHomeEnglish);
