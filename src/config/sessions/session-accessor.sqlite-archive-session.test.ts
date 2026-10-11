@@ -248,29 +248,33 @@ describe("SQLite transcript archive sessions", () => {
       "synthetic archived payload",
     );
     const deleted = await deleteArchivedSession(sessionKey);
-    using nativeScope = vi
+    const nativeScope = vi
       .spyOn(sessionDeletion, "hasPreparedNativeSessionDeletion")
       .mockReturnValue(true);
-    using statements = vi.spyOn(database.db, "prepare");
-    await expect(
-      publishSessionStateArchives(
-        { agentId: "main", path: database.path, env: testState.env },
-        deleted.archivedTranscripts,
-      ),
-    ).resolves.toEqual(deleted.archivedTranscripts);
-    expect(
-      statements.mock.calls.filter(([query]) =>
-        /\b(?:update|insert into)\s+"?session_transcript_archives\b/iu.test(query),
-      ),
-    ).toEqual([]);
-    expect(readArchiveLines(deleted.archivedTranscripts[0]?.archivedPath)).toEqual([
-      JSON.stringify(event),
-    ]);
-    expect(
-      database.db
-        .prepare("SELECT publish_attempts FROM session_transcript_archives WHERE session_id = ?")
-        .get(sessionId),
-    ).toEqual({ publish_attempts: 2 });
+    try {
+      using statements = vi.spyOn(database.db, "prepare");
+      await expect(
+        publishSessionStateArchives(
+          { agentId: "main", path: database.path, env: testState.env },
+          deleted.archivedTranscripts,
+        ),
+      ).resolves.toEqual(deleted.archivedTranscripts);
+      expect(
+        statements.mock.calls.filter(([query]) =>
+          /\b(?:update|insert into)\s+"?session_transcript_archives\b/iu.test(query),
+        ),
+      ).toEqual([]);
+      expect(readArchiveLines(deleted.archivedTranscripts[0]?.archivedPath)).toEqual([
+        JSON.stringify(event),
+      ]);
+      expect(
+        database.db
+          .prepare("SELECT publish_attempts FROM session_transcript_archives WHERE session_id = ?")
+          .get(sessionId),
+      ).toEqual({ publish_attempts: 2 });
+    } finally {
+      nativeScope.mockRestore();
+    }
   });
 
   it("joins a failed publisher and recovers its committed archive after result recording fails", async () => {
@@ -838,38 +842,59 @@ function observeArchiveMetadata(afterExecute: (type: string, result: unknown) =>
   const withWorker = sessionWorker.withSessionEntryWorker;
   return vi
     .spyOn(sessionWorker, "withSessionEntryWorker")
-    .mockImplementation((options, identity, assertCurrent, run, ...rest) =>
-      withWorker(
-        options,
+    .mockImplementation(
+      (
+        databaseOptions,
         identity,
         assertCurrent,
-        (execution, source, context) =>
-          run(
-            {
-              ...execution,
-              get fileIdentity() {
-                return execution.fileIdentity;
+        withExecution,
+        onCommit,
+        retainedExecution,
+        signal,
+        prepare,
+        onTransaction,
+        onAdmission,
+        releaseSource,
+        operationMode,
+      ) =>
+        withWorker(
+          databaseOptions,
+          identity,
+          assertCurrent,
+          (execution, owner, context) =>
+            withExecution(
+              {
+                ...execution,
+                get fileIdentity() {
+                  return execution.fileIdentity;
+                },
+                runExisting(readSource, read, readOptions) {
+                  return execution.runExisting(
+                    readSource,
+                    (worker) =>
+                      read({
+                        execute: async (command, requestOptions) => {
+                          const result = await worker.execute(command, requestOptions);
+                          await afterExecute(command.type, result);
+                          return result;
+                        },
+                      }),
+                    readOptions,
+                  );
+                },
               },
-              runExisting(source, run, options) {
-                return execution.runExisting(
-                  source,
-                  (worker) =>
-                    run({
-                      execute: async (command, options) => {
-                        const result = await worker.execute(command, options);
-                        await afterExecute(command.type, result);
-                        return result;
-                      },
-                    }),
-                  options,
-                );
-              },
-            },
-            source,
-            context,
-          ),
-        ...rest,
-      ),
+              owner,
+              context,
+            ),
+          onCommit,
+          retainedExecution,
+          signal,
+          prepare,
+          onTransaction,
+          onAdmission,
+          releaseSource,
+          operationMode,
+        ),
     );
 }
 
