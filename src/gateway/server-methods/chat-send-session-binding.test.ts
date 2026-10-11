@@ -19,6 +19,7 @@ import {
 } from "../../config/sessions/session-sharing-store.native.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
+import { readUserTurnPromptReactionSource } from "../../sessions/user-turn-transcript-admission.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
@@ -210,6 +211,9 @@ it.each(admissionScenarios)(
         const dashboardRead = options.replyOptions?.dashboardReadAdmission;
         expect(Boolean(dashboardRead)).toBe(dashboardReadAllowed);
         owned = observeDispatch.mock.calls.at(-1)?.[0];
+        expect(Boolean(readUserTurnPromptReactionSource(owned?.userTurn.recorder))).toBe(
+          dashboardReadAllowed,
+        );
         const prepared = options.replyOptions?.onSessionPrepared;
         const runStarted = options.replyOptions?.onAgentRunStart;
         const capability = options.replyOptions?.skillLibraryAuthoring;

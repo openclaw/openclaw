@@ -165,6 +165,33 @@ Details: [Thinking + reasoning directives](/tools/thinking) and [Token use](/ref
 
 Details: [Configuration](/gateway/config-agents/messages-and-talk#messages) and channel docs.
 
+## Agent reactions to WebChat prompts
+
+During an admitted WebChat turn, the agent can acknowledge the current prompt with
+the existing message tool:
+
+```json
+{ "action": "react", "emoji": "👍" }
+```
+
+Omit the target and message ID: the host binds this action to the committed current
+prompt and the running agent's identity. Set `remove: true` with the same emoji to
+remove that agent's reaction. Repeating an add or removal is a no-op. The reaction
+appears in session history and live updates; it does not mirror to an inherited
+external channel. External reactions still require the normal channel routing and
+external message ID.
+
+Queued turns bind the reaction to their own committed prompt when execution
+begins. Steering updates the current prompt only after the new input is committed
+and consumed by the running agent; pending or rejected input does not retarget a
+reaction. Collected inputs use their committed combined prompt.
+
+Acknowledgment reactions do not replace the final answer. Omit `final` or set
+`final: false` when more work follows. Only an explicit `final: true` addition,
+requested as the complete response, can count as source-reply completion. Removals,
+no-ops, dry runs, and failed reactions never count. Normal message-tool permissions
+still apply, and the current-prompt capability expires with its admitted turn.
+
 ## Silent replies
 
 The silent token `NO_REPLY` (case-insensitive, so `no_reply` also matches) is reserved for sessions connected to external message channels and is never delivered as user-visible text. Subagents, the Control UI, and other internal sessions must return a result or continue unfinished work; a silent token cannot complete their task. When a turn also has pending tool media, such as generated TTS audio, OpenClaw strips the silent text but still delivers the media attachment.

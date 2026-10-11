@@ -1,10 +1,47 @@
 import { expect, it } from "vitest";
+import { isChatBubbleMode, setChatBubbleMode } from "../pages/chat/chat-bubble-mode.ts";
 import {
   loadSettings,
   normalizeChatMessageMaxWidth,
   saveSettings,
   settingsKeyForGateway,
 } from "./settings.ts";
+
+it("persists canonical bubble sessions only for their Gateway", () => {
+  const stored = Object.keys(localStorage).map((key) => [key, localStorage.getItem(key)!] as const);
+  try {
+    const settings = loadSettings();
+    const scopedKey = settingsKeyForGateway(settings.gatewayUrl);
+    saveSettings({
+      ...settings,
+      chatBubbleSessionKeys: [" main ", "AGENT:MAIN:MAIN", "agent:main:other"],
+    });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").chatBubbleSessionKeys).toEqual([
+      "agent:main:main",
+      "agent:main:other",
+    ]);
+    expect(isChatBubbleMode(loadSettings(settings.gatewayUrl), "main")).toBe(true);
+    const otherGateway = "ws://other-bubbles.example:18789";
+    localStorage.removeItem(settingsKeyForGateway(otherGateway));
+    expect(loadSettings(otherGateway).chatBubbleSessionKeys).toBeUndefined();
+    saveSettings({ ...loadSettings(otherGateway), chatBubbleSessionKeys: ["agent:main:third"] });
+    expect(loadSettings(settings.gatewayUrl).chatBubbleSessionKeys).toEqual([
+      "agent:main:main",
+      "agent:main:other",
+    ]);
+    const withoutMain = setChatBubbleMode(loadSettings(settings.gatewayUrl), "main", false);
+    const withoutOther = setChatBubbleMode(withoutMain, "agent:main:other", false);
+    saveSettings({ ...loadSettings(settings.gatewayUrl), ...withoutOther });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
+      "chatBubbleSessionKeys",
+    );
+  } finally {
+    localStorage.clear();
+    for (const [key, value] of stored) {
+      localStorage.setItem(key, value);
+    }
+  }
+});
 
 it("normalizes and persists browser-local chat message width", () => {
   const stored = Object.keys(localStorage).map((key) => [key, localStorage.getItem(key)!] as const);
