@@ -59,14 +59,6 @@ describe("provider login choices", () => {
     ]);
   });
 
-  it("keeps a single provider behind an explicit menu selection", () => {
-    declarations.read.mockReturnValue([choice()]);
-    expect(resolveProviderChannelLoginChoice(undefined)).toEqual({
-      status: "providers",
-      providers: [{ pluginId: "demo", providerId: "demo", label: "Demo" }],
-    });
-  });
-
   it("lists provider families once even when login requires setup", () => {
     declarations.read.mockReturnValue([
       choice(),

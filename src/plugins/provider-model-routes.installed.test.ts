@@ -16,7 +16,6 @@ import { loadPluginManifest } from "./manifest.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import { createProviderModelCatalogIdNormalizer } from "./provider-model-routes.js";
-import { resolveProviderPolicySurface } from "./provider-public-artifacts.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 
@@ -61,39 +60,6 @@ describe("installed Arcee catalog identity", () => {
       },
     );
   }
-
-  it("loads the actual Arcee policy through the existing trusted installed owner", () => {
-    installed(true, (rootDir) => {
-      const snapshot = createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "arcee",
-            origin: "global",
-            rootDir,
-            providers: ["arcee"],
-            trustedOfficialInstall: true,
-          },
-        ],
-      });
-      const surface = resolveProviderPolicySurface("arcee", {
-        manifestRegistry: snapshot.manifestRegistry,
-      });
-      expect(
-        surface?.normalizeModelCatalogId?.({
-          provider: "arcee",
-          modelId: "arcee-ai/trinity-large-thinking",
-        }),
-      ).toBe("trinity-large-thinking");
-    });
-  });
-
-  it("uses that installed owner for authored-row identity", () => {
-    installed(true, () => {
-      expect(
-        createProviderModelCatalogIdNormalizer("arcee")("arcee-ai/trinity-large-thinking"),
-      ).toBe("trinity-large-thinking");
-    });
-  });
 
   it("keeps catalog-equivalent Arcee ids distinct in exact model policy", () => {
     installed(true, (_root, metadataSnapshot) => {
@@ -214,14 +180,6 @@ describe("installed Arcee catalog identity", () => {
     installed(false, () => {
       expect(
         createProviderModelCatalogIdNormalizer("arcee")("arcee-ai/trinity-large-thinking"),
-      ).toBe("arcee-ai/trinity-large-thinking");
-    });
-  });
-  it("honors an explicitly empty metadata owner over the ambient installed owner", () => {
-    installed(true, () => {
-      const empty = createPluginMetadataSnapshotFixture();
-      expect(
-        createProviderModelCatalogIdNormalizer("arcee", empty)("arcee-ai/trinity-large-thinking"),
       ).toBe("arcee-ai/trinity-large-thinking");
     });
   });

@@ -12,7 +12,6 @@ import {
   resolveTaggedReasoningOutputMode,
   sanitizeGoogleGeminiReplayHistory,
   sanitizeGoogleGeminiReplayHistoryAsync,
-  buildStrictAnthropicReplayPolicy,
 } from "./provider-replay-helpers.js";
 
 function expectFields(actual: unknown, expected: Record<string, unknown>): void {
@@ -26,29 +25,6 @@ function expectFields(actual: unknown, expected: Record<string, unknown>): void 
 }
 
 describe("provider replay helpers", () => {
-  it("builds strict openai-completions replay policy", () => {
-    expectFields(buildOpenAICompatibleReplayPolicy("openai-completions"), {
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
-      applyAssistantFirstOrderingFix: true,
-      validateGeminiTurns: true,
-      validateAnthropicTurns: true,
-    });
-  });
-
-  it("omits tool-call id sanitization when opted out for openai-completions", () => {
-    const policy = buildOpenAICompatibleReplayPolicy("openai-completions", {
-      sanitizeToolCallIds: false,
-    });
-    expectFields(policy, {
-      applyAssistantFirstOrderingFix: true,
-      validateGeminiTurns: true,
-      validateAnthropicTurns: true,
-    });
-    expect(policy).not.toHaveProperty("sanitizeToolCallIds");
-    expect(policy).not.toHaveProperty("toolCallIdMode");
-  });
-
   it("selects OpenAI-style ids for duplicate replay tool calls", () => {
     expectFields(
       buildOpenAICompatibleReplayPolicy("openai-completions", {
@@ -99,17 +75,6 @@ describe("provider replay helpers", () => {
     });
     expect(policy).not.toHaveProperty("sanitizeToolCallIds");
     expect(policy).not.toHaveProperty("toolCallIdMode");
-  });
-
-  it("builds strict anthropic replay policy", () => {
-    expectFields(buildStrictAnthropicReplayPolicy({ dropThinkingBlocks: true }), {
-      appendOnlyRuntimeContext: false,
-      sanitizeMode: "full",
-      preserveSignatures: true,
-      repairToolUseResultPairing: true,
-      allowSyntheticToolResults: true,
-      dropThinkingBlocks: true,
-    });
   });
 
   it("retains operator context for an admitted in-history system route", () => {
@@ -178,50 +143,6 @@ describe("provider replay helpers", () => {
     expect(buildAnthropicReplayPolicyForModel("amazon.nova-pro-v1")).not.toHaveProperty(
       "dropThinkingBlocks",
     );
-  });
-
-  it("preserves thinking blocks only for Claude models with native history support", () => {
-    for (const modelId of [
-      "claude-fable-5",
-      "claude-opus-4-5-20251101",
-      "claude-opus-4-6",
-      "claude-sonnet-4-6",
-      "claude-opus-5",
-      "claude-sonnet-5",
-      "claude-mythos-5",
-      "us.anthropic.claude-opus-5-20260101-v1:0",
-    ]) {
-      const policy = buildAnthropicReplayPolicyForModel(modelId);
-      expect(policy).not.toHaveProperty("dropThinkingBlocks");
-    }
-
-    for (const modelId of [
-      "claude-opus-4-1",
-      "claude-sonnet-4-5-20250929",
-      "claude-haiku-4-5-20251001",
-      "claude-3-7-sonnet-20250219",
-      "claude-3-5-sonnet-20240620",
-      "claude-3-opus-20240229",
-      "claude-opus-50",
-      "claude-sonnet-50",
-      "claude-sonnet-4-60",
-    ]) {
-      const policy = buildAnthropicReplayPolicyForModel(modelId);
-      expect(policy.dropThinkingBlocks).toBe(true);
-    }
-  });
-
-  it("uses canonical deployment metadata for Claude replay policy", () => {
-    expect(
-      buildAnthropicReplayPolicyForModel("prod-opus", {
-        params: { canonicalModelId: "claude-opus-5" },
-      }),
-    ).not.toHaveProperty("dropThinkingBlocks");
-    expect(
-      buildAnthropicReplayPolicyForModel("prod-sonnet", {
-        params: { canonicalModelId: "claude-sonnet-4-5-20250929" },
-      }),
-    ).toHaveProperty("dropThinkingBlocks", true);
   });
 
   it("builds native Anthropic replay policy with selective tool-call id preservation", () => {

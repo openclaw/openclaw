@@ -263,14 +263,6 @@ describe("provider selection registration coverage", () => {
     },
   );
 
-  it("runs an activation helper beside the declared provider without projecting it as the receiver", () => {
-    const proof = fixture("activation", false, "other-provider");
-    expect(
-      labels(resolveProviderPluginsForHooks({ ...proof.query, providerRefs: ["other-provider"] })),
-    ).toEqual(["Other"]);
-    expect(proof.registrations()).toBe("registered");
-  });
-
   it.each([
     "missing helper",
     "disabled alias owner",

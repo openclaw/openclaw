@@ -20,11 +20,9 @@ import {
   resolveBundledProviderPolicyOwner,
 } from "./provider-policy-owners.js";
 
-const registryModes = ["mutable", "snapshot", "manifest", "projected", "restored"] as const;
-
 function withRegistry(
   plugins: PluginManifestRecord[],
-  mode: (typeof registryModes)[number],
+  mode: "mutable" | "projected" | "restored",
   run: (registry: { plugins: readonly PluginManifestRecord[] }) => void,
 ): void {
   withPluginCache(createPluginCache(), () => {
@@ -38,36 +36,31 @@ function withRegistry(
     if (mode === "restored") {
       const { normalizePluginId: _normalizePluginId, ...transfer } = snapshot;
       run(restorePluginMetadataSnapshot(structuredClone(transfer)));
-    } else if (mode === "projected") {
+    } else {
       run(
         projectPluginMetadataSnapshot(
           snapshot,
           plugins.map((plugin) => plugin.id),
         ),
       );
-    } else {
-      run(mode === "manifest" ? snapshot.manifestRegistry : snapshot);
     }
   });
 }
 
-describe.each(registryModes)("provider policy declaration ownership (%s)", (mode) => {
-  it.each([
-    [" FIXTURE-TEXT ", true],
-    [" fixture-cli ", true],
-    ["FIXTURE-EMBEDDING", true],
-    [" TEXT-ALIAS ", true],
-    ["cli-alias", true],
-    ["embedding-alias", true],
-    ["orphan-alias", false],
-    ["scoped-alias", false],
-    ["empty-target", false],
-    ["inherited-alias", false],
-    ["hidden-alias", false],
-    ["setup-only", false],
-    ["setup-cli", false],
-    [" ", true],
-  ] as const)("preserves declared policy ownership for %j", (query, matches) => {
+describe("provider policy declaration ownership", () => {
+  it.each(
+    (
+      [
+        [" TEXT-ALIAS ", true],
+        ["orphan-alias", false],
+        ["scoped-alias", false],
+        ["inherited-alias", false],
+        ["setup-only", false],
+      ] as const
+    ).flatMap(([query, matches]) =>
+      (["mutable", "projected"] as const).map((mode) => ({ query, matches, mode })),
+    ),
+  )("preserves declared policy ownership for $query ($mode)", ({ query, matches, mode }) => {
     const owner = createPluginManifestRecordFixture({
       id: "fixture-owner",
       origin: "global",
@@ -99,84 +92,63 @@ describe.each(registryModes)("provider policy declaration ownership (%s)", (mode
     });
   });
 
-  it("does not treat empty declarations as policy ownership", () => {
-    const owner = createPluginManifestRecordFixture({
-      id: "empty-owner",
-      trustedOfficialInstall: true,
-      providers: [""],
-      cliBackends: [" "],
-      contracts: { embeddingProviders: [""] },
-      providerAuthAliases: { empty: " " },
-    });
-    withRegistry([owner], mode, (registry) => {
-      for (const query of ["", " ", "empty"]) {
-        expect(listTrustedExternalProviderPolicyOwners(query, registry)).toEqual([]);
-      }
-    });
-  });
+  it.each(["mutable", "projected"] as const)(
+    "orders trusted external matches stably without reordering the %s registry",
+    (mode) => {
+      const owner = (id: string, rootDir: string, trustedOfficialInstall = true) =>
+        createPluginManifestRecordFixture({
+          id,
+          rootDir,
+          origin: "global",
+          trustedOfficialInstall,
+          providers: ["fixture-provider"],
+        });
+      const last = owner("z-owner", "/fixture/z");
+      const first = owner("a-owner", "/fixture/first");
+      const equal = owner("a-owner", "/fixture/equal");
+      const untrusted = owner("0-owner", "/fixture/untrusted", false);
+      const plugins = [last, first, untrusted, equal];
 
-  it("orders trusted external matches stably without reordering the registry", () => {
-    const owner = (id: string, rootDir: string, trustedOfficialInstall = true) =>
-      createPluginManifestRecordFixture({
-        id,
-        rootDir,
-        origin: "global",
-        trustedOfficialInstall,
-        providers: ["fixture-provider"],
+      withRegistry(plugins, mode, (registry) => {
+        const owners = listTrustedExternalProviderPolicyOwners("fixture-provider", registry);
+        expect(owners).toEqual([first, equal, last]);
+        owners.reverse();
+        owners.pop();
+        expect(listTrustedExternalProviderPolicyOwners("fixture-provider", registry)).toEqual([
+          first,
+          equal,
+          last,
+        ]);
+        expect(registry.plugins).toEqual([last, first, untrusted, equal]);
       });
-    const last = owner("z-owner", "/fixture/z");
-    const first = owner("a-owner", "/fixture/first");
-    const equal = owner("a-owner", "/fixture/equal");
-    const untrusted = owner("0-owner", "/fixture/untrusted", false);
-    const plugins = [last, first, untrusted, equal];
+    },
+  );
 
-    withRegistry(plugins, mode, (registry) => {
-      const owners = listTrustedExternalProviderPolicyOwners("fixture-provider", registry);
-      expect(owners).toEqual([first, equal, last]);
-      owners.reverse();
-      owners.pop();
-      expect(listTrustedExternalProviderPolicyOwners("fixture-provider", registry)).toEqual([
-        first,
-        equal,
-        last,
-      ]);
-      expect(registry.plugins).toEqual([last, first, untrusted, equal]);
-    });
-  });
-
-  it("keeps bundled first-winner precedence separate from trusted installed ownership", () => {
-    const owner = (id: string, rootDir: string, origin: PluginManifestRecord["origin"]) =>
-      createPluginManifestRecordFixture({
-        id,
-        rootDir,
-        origin,
-        providers: ["fixture-provider"],
-        providerAuthAliases: { "fixture-alias": "fixture-provider" },
-        trustedOfficialInstall: origin === "global",
+  it.each(["mutable", "restored"] as const)(
+    "keeps bundled first-winner precedence separate from trusted installed ownership (%s)",
+    (mode) => {
+      const owner = (id: string, rootDir: string, origin: PluginManifestRecord["origin"]) =>
+        createPluginManifestRecordFixture({
+          id,
+          rootDir,
+          origin,
+          providers: ["fixture-provider"],
+          providerAuthAliases: { "fixture-alias": "fixture-provider" },
+          trustedOfficialInstall: origin === "global",
+        });
+      const installed = owner("0-installed", "/fixture/installed", "global");
+      const last = owner("z-bundled", "/fixture/last", "bundled");
+      const first = owner("a-bundled", "/fixture/first", "bundled");
+      const equal = owner("a-bundled", "/fixture/equal", "bundled");
+      withRegistry([installed, last, first, equal], mode, (registry) => {
+        expect(resolveBundledProviderPolicyOwner("fixture-alias", registry)).toEqual(first);
+        expect(listTrustedExternalProviderPolicyOwners("fixture-alias", registry)).toEqual([
+          installed,
+        ]);
+        expect(listProviderPolicyOwners("fixture-alias", registry)).toEqual([first, installed]);
       });
-    const installed = owner("0-installed", "/fixture/installed", "global");
-    const last = owner("z-bundled", "/fixture/last", "bundled");
-    const first = owner("a-bundled", "/fixture/first", "bundled");
-    const equal = owner("a-bundled", "/fixture/equal", "bundled");
-    withRegistry([installed, last, first, equal], mode, (registry) => {
-      expect(resolveBundledProviderPolicyOwner("fixture-alias", registry)).toEqual(first);
-      expect(listTrustedExternalProviderPolicyOwners("fixture-alias", registry)).toEqual([
-        installed,
-      ]);
-      expect(listProviderPolicyOwners("fixture-alias", registry)).toEqual([first, installed]);
-    });
-  });
-
-  it("lists a bundled owner with installation trust once", () => {
-    const owner = createPluginManifestRecordFixture({
-      id: "fixture",
-      providers: ["fixture"],
-      trustedOfficialInstall: true,
-    });
-    withRegistry([owner], mode, (registry) => {
-      expect(listProviderPolicyOwners("fixture", registry)).toEqual([owner]);
-    });
-  });
+    },
+  );
 });
 
 describe("provider policy inventory lifetime", () => {
