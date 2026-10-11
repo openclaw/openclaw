@@ -1,5 +1,1 @@
-export {
-  ImageLightbox,
-  type ImageLightboxElement,
-  type ImageLightboxProps,
-} from "./image-lightbox.tsx";
+import "./image-lightbox.tsx";
