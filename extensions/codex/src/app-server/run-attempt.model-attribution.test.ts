@@ -14,7 +14,11 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi, type TestPluginApiInput } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { ensureAuthProfileStore, resolveAuthProfileOrder } from "openclaw/plugin-sdk/provider-auth";
+import {
+  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
+  resolveAuthProfileOrder,
+} from "openclaw/plugin-sdk/provider-auth";
 import { resolveProviderIdForAuth } from "openclaw/plugin-sdk/provider-auth-aliases";
 import { describe, expect, it, vi } from "vitest";
 import plugin from "../../index.js";
@@ -195,7 +199,12 @@ describe("registered Codex harness model attribution", () => {
     });
     vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(transport.client);
     const runtime = createPluginRuntimeMock({
-      modelAuth: { ensureAuthProfileStore, resolveAuthProfileOrder, resolveProviderIdForAuth },
+      modelAuth: {
+        ensureAuthProfileStore,
+        ensureAuthProfileStoreAsync,
+        resolveAuthProfileOrder,
+        resolveProviderIdForAuth,
+      },
       config: { current: () => ({ plugins: { entries: { codex: { config: pluginConfig } } } }) },
       state: stateRuntime.state,
     });

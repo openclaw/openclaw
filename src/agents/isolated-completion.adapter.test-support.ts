@@ -56,7 +56,9 @@ export function createIsolatedCompletionBoundaryFixture(
       logicalRef: { provider, model: modelId },
       ...snapshot.createStores(),
     }));
-  const authStore = vi.spyOn(modelAuth, "ensureAuthProfileStore").mockReturnValue(params.authStore);
+  const authStore = vi
+    .spyOn(modelAuth, "ensureAuthProfileStoreAsync")
+    .mockResolvedValue(params.authStore);
   const ensurePlugin = vi
     .spyOn(runtimePlugin, "ensureSelectedAgentHarnessPlugin")
     .mockResolvedValue(undefined);

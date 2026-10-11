@@ -452,7 +452,7 @@ type AgentDatabaseRegistryListOptions = OpenClawStateDatabaseOptions & {
   includeIncompatibleSchemaVersions?: boolean;
 };
 
-export class AgentDatabaseRegistryChangedError extends Error {
+class AgentDatabaseRegistryChangedError extends Error {
   constructor(message = "Agent database registry changed during discovery; retry the read.") {
     super(message);
     this.name = "AgentDatabaseRegistryChangedError";
