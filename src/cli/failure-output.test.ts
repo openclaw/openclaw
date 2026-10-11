@@ -191,22 +191,30 @@ describe("formatCliJsonFailure", () => {
 });
 
 describe("formatCliFailureLines", () => {
-  it.each([false, true])(
-    "keeps update reasons before an updater marker exists (json=%s)",
-    (json) => {
-      const reason = "global-install-failed: original package-manager failure";
-      const output = formatCliFailureLines({
-        title: "The CLI command failed.",
-        error: new Error(reason, { cause: new Error("private nested diagnostic") }),
-        argv: ["node", "openclaw", "--profile", "work", "update", ...(json ? ["--json"] : [])],
-        env: {},
-      }).join("\n");
+  it.each([
+    ["--profile", "work", "update"],
+    ["--profile", "work", "update", "--json"],
+    ["plugins", "update", "--all"],
+    ["--profile", "work", "plugins", "update", "codex"],
+    ["--log-level", "debug", "plugins", "update", "codex"],
+  ])("keeps update recovery reasons without diagnostic flags: %j", (...args) => {
+    const reason =
+      "Package convergence must wait until the updating parent releases its install records. Run openclaw update repair.";
+    const token = "sk-abcdefghijklmnopqrstuv";
+    const output = formatCliFailureLines({
+      title: "The CLI command failed.",
+      error: new Error(`${reason} Authorization: Bearer ${token}`, {
+        cause: new Error("private nested diagnostic"),
+      }),
+      argv: ["node", "openclaw", ...args],
+      env: {},
+    }).join("\n");
 
-      expect(output).toContain(reason);
-      expect(output).not.toContain("private nested diagnostic");
-      expect(output).not.toContain("Stack:");
-    },
-  );
+    expect(output).toContain(reason);
+    expect(output).not.toContain(token);
+    expect(output).not.toContain("private nested diagnostic");
+    expect(output).not.toContain("Stack:");
+  });
 
   it("emits expected guidance only when not already written even with debug output", () => {
     const env = { OPENCLAW_DEBUG: "1" };

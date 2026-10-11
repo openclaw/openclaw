@@ -4,7 +4,6 @@ import type { PluginsRefreshResult } from "../../packages/gateway-protocol/src/s
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { resolveConfiguredRuntimePluginInstallCandidate } from "../commands/doctor/shared/configured-runtime-plugin-installs.js";
 import { collectConfiguredRuntimePluginIds } from "../commands/doctor/shared/configured-runtime-plugin-owners.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
@@ -21,6 +20,7 @@ import type {
   OfficialExternalPluginCatalogEntry,
   OfficialExternalPluginCatalogFeed,
 } from "../plugins/official-external-plugin-catalog.types.js";
+import { resolveConfiguredRuntimePluginInstallCandidate } from "../plugins/official-runtime-plugins.js";
 import type { PluginPackageInstall } from "../plugins/package-manifest.types.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
