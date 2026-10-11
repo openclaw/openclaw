@@ -38,6 +38,24 @@ afterEach(() => {
 });
 
 describe("createApplicationConfigCapability", () => {
+  it("keeps the bubble lab off until bootstrap enables it and publishes disablement", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(Response.json({ chatBubblesEnabled: true }))
+        .mockResolvedValueOnce(Response.json({ chatBubblesEnabled: false })),
+    );
+    const config = createApplicationConfigCapability({ resourceBasePath: "" });
+    const listener = vi.fn();
+    config.subscribe(listener);
+    expect(config.current.chatBubblesEnabled).toBe(false);
+    await config.refresh();
+    expect(config.current.chatBubblesEnabled).toBe(true);
+    await config.refresh();
+    expect(config.current.chatBubblesEnabled).toBe(false);
+    expect(listener.mock.calls.map(([value]) => value.chatBubblesEnabled)).toEqual([true, false]);
+  });
   it("publishes upload policy changes and keeps the default enabled", async () => {
     const fetchMock = vi
       .fn()
