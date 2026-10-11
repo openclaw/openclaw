@@ -351,7 +351,6 @@ describe("registered memory_search through Gateway /tools/invoke (infra)", () =>
                 defaults: {
                   workspace,
                   skipBootstrap: true,
-                  heartbeat: { every: "0m" },
                   model: { primary: "fixture/unused" },
                 },
                 entries: { main: {} },

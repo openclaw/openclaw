@@ -1,11 +1,9 @@
 import hljs from "highlight.js/lib/core";
-import { render, type LitElement } from "lit";
+import { render } from "lit";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { SparklineSample } from "../../components/sparkline-tile.tsx";
 import { i18n } from "../../i18n/index.ts";
 import { zh_CN } from "../../i18n/locales/zh-CN.ts";
 import "./debug-overlay.ts";
@@ -14,143 +12,19 @@ import "./debug-page.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import {
+  createDebugApplicationContext,
+  createProps,
+  diagnosticResponse,
+  expectSnapshots,
+  mountDebugPage,
+  normalizedText,
+  updateOverlayVitals,
+  type TestDebugPage,
+  type TestDebugOverlay,
+  type TestSparkline,
+} from "./view.test-support.ts";
 import { renderDebug } from "./view.ts";
-
-type DebugProps = Parameters<typeof renderDebug>[0];
-type TestDebugPage = HTMLElement & {
-  readonly updateComplete: Promise<boolean>;
-  requestUpdate: () => void;
-  callDebugMethod: () => Promise<void>;
-  context: ApplicationContext;
-  debugCallError: string | null;
-  debugCallMethod: string;
-  debugCallResult: string | null;
-  debugDiagnosticsError: string | null;
-  debugHealth: unknown;
-  debugHeartbeat: unknown;
-  debugLanes: unknown[];
-  debugModels: unknown[];
-  debugStatus: unknown;
-  loadDiagnostics: () => Promise<void>;
-};
-
-type TestDebugOverlay = LitElement & {
-  context: ApplicationContext;
-  toggle: () => void;
-};
-
-type TestSparkline = LitElement & { samples: readonly SparklineSample[] };
-
-async function updateOverlayVitals(overlay: TestDebugOverlay): Promise<void> {
-  await overlay.updateComplete;
-  await overlay.querySelector<LitElement>("openclaw-debug-overlay-content")?.updateComplete;
-  for (const tile of overlay.querySelectorAll<TestSparkline>("openclaw-sparkline")) {
-    await tile.updateComplete;
-  }
-}
-
-function createDebugApplicationContext(
-  request: (method: string) => Promise<unknown>,
-  phase: ApplicationGatewaySnapshot["phase"] = "connected",
-): ApplicationContext {
-  const client = { request } as unknown as GatewayBrowserClient;
-  const gateway = {
-    snapshot: {
-      phase,
-      client: phase === "connected" ? client : null,
-      hello: gatewayHelloForMethods(["system.info"]),
-      offlineStable: phase === "offline",
-    } as ApplicationGatewaySnapshot,
-    eventLog: [],
-    subscribe: () => () => undefined,
-    subscribeEventLog: () => () => undefined,
-  } as unknown as ApplicationContext["gateway"];
-  const settingsAgentSelection = {
-    state: { selectedId: "main" },
-    subscribe: () => () => undefined,
-  } as unknown as ApplicationContext["settingsAgentSelection"];
-  return { settingsAgentSelection, basePath: "", gateway } as ApplicationContext;
-}
-
-async function mountDebugPage(
-  request: (method: string) => Promise<unknown>,
-): Promise<TestDebugPage> {
-  const page = document.createElement("openclaw-debug-page") as TestDebugPage;
-  page.context = createDebugApplicationContext(request);
-  document.body.append(page);
-  await vi.waitFor(() => expect(page.debugStatus).not.toBeNull());
-  return page;
-}
-
-function diagnosticResponse(method: string, marker = "initial"): unknown {
-  switch (method) {
-    case "status":
-      return { version: marker };
-    case "health":
-      return { marker, ok: true };
-    case "models.list":
-      return { models: [{ id: marker }] };
-    case "last-heartbeat":
-      return { source: marker };
-    case "diagnostics.lanes":
-      return {
-        ts: 1,
-        lanes: [
-          {
-            lane: marker,
-            activeCount: 1,
-            queuedCount: 2,
-            maxConcurrent: 1,
-            draining: false,
-            generation: 0,
-            blockedBy: "lane",
-          },
-        ],
-        dynamic: null,
-      };
-    default:
-      throw new Error(`Unexpected diagnostics method: ${method}`);
-  }
-}
-
-function expectSnapshots(page: TestDebugPage, marker: string): void {
-  expect(page.debugStatus).toEqual({ version: marker });
-  expect(page.debugHealth).toEqual({ marker, ok: true });
-  expect(page.debugModels).toEqual([{ id: marker }]);
-  expect(page.debugHeartbeat).toEqual({ source: marker });
-  expect(page.debugLanes).toEqual([expect.objectContaining({ lane: marker })]);
-}
-
-function createProps(overrides: Partial<DebugProps> = {}): DebugProps {
-  return {
-    connected: true,
-    offlineStable: false,
-    loading: false,
-    status: null,
-    health: null,
-    models: [],
-    heartbeat: null,
-    lanes: [],
-    dynamic: null,
-    diagnosticsError: null,
-    eventLog: [],
-    methods: [],
-    callMethod: "",
-    callParams: "{}",
-    callResult: null,
-    callError: null,
-    onCallMethodChange: () => undefined,
-    onCallParamsChange: () => undefined,
-    onRefresh: () => undefined,
-    onOpenOverlay: () => undefined,
-    onCall: () => undefined,
-    ...overrides,
-  };
-}
-
-function normalizedText(element: Element | null | undefined): string | undefined {
-  return element?.textContent?.replace(/\s+/gu, " ").trim();
-}
 
 beforeEach(async () => {
   vi.stubGlobal("localStorage", createStorageMock());
@@ -179,6 +53,48 @@ afterEach(async () => {
 });
 
 describe("renderDebug", () => {
+  it.each([
+    [true, 1, "Scheduler Enabled · 1 total jobs"],
+    [true, 0, "Scheduler Enabled · 0 total jobs"],
+    [false, 2, "Scheduler Disabled · 2 total jobs"],
+  ] as const)(
+    "uses canonical scheduler=%s and total=%s while retaining raw protocol data",
+    (enabled, jobs, text) => {
+      const container = document.createElement("div");
+      const status = {
+        heartbeat: { defaultAgentId: "main", agents: [{ enabled: false, every: "disabled" }] },
+      };
+      const health = { heartbeatSeconds: 0, agents: [] };
+      render(
+        renderDebug(
+          createProps({
+            status,
+            health,
+            automations: { enabled, triggersEnabled: true, jobs, nextWakeAtMs: null },
+          }),
+        ),
+        container,
+      );
+      const sections = container.querySelectorAll(".settings-section");
+      expect(normalizedText(sections[0])).toContain(text);
+      expect(normalizedText(sections[0])).toContain("none scheduled");
+      expect(normalizedText(sections[0])).not.toContain("defaultAgentId");
+      expect(normalizedText(sections[1])).toContain("Raw protocol inspection");
+      const raw = sections[1]?.querySelectorAll("pre");
+      expect(JSON.parse(raw?.[0]?.textContent ?? "null")).toEqual(status);
+      expect(JSON.parse(raw?.[1]?.textContent ?? "null")).toEqual(health);
+    },
+  );
+
+  it("shows unavailable diagnostics instead of claiming a disabled scheduler", () => {
+    const container = document.createElement("div");
+    render(renderDebug(createProps({ diagnosticsError: "cron.status unavailable" })), container);
+    const summary = container.querySelector(".settings-section");
+    expect(normalizedText(summary)).toContain("Unavailable");
+    expect(normalizedText(summary)).toContain("cron.status unavailable");
+    expect(normalizedText(summary)).not.toContain("Scheduler Disabled");
+  });
+
   it("retains event payload DOM and only highlights changed diagnostics", () => {
     const container = document.createElement("div");
     const events = Array.from({ length: 250 }, (_, index) => ({
@@ -225,13 +141,13 @@ describe("renderDebug", () => {
           ...nextProps,
           status: { version: "updated" },
           health: { ok: true },
-          heartbeat: { source: "updated" },
+          automations: { enabled: true, triggersEnabled: true, jobs: 2, nextWakeAtMs: null },
           models: [{ id: "updated" }],
           callResult: '{"result":"updated"}',
         }),
         container,
       );
-      expect(highlight).toHaveBeenCalledTimes(5);
+      expect(highlight).toHaveBeenCalledTimes(4);
       expect(container.textContent).toContain("updated");
 
       render(renderDebug({ ...props, eventLog: [] }), container);
@@ -281,8 +197,8 @@ describe("renderDebug", () => {
 
   it.each<{
     label: string;
-    lane: DebugProps["lanes"][number];
-    dynamic: DebugProps["dynamic"];
+    lane: Parameters<typeof renderDebug>[0]["lanes"][number];
+    dynamic: Parameters<typeof renderDebug>[0]["dynamic"];
     text: string;
     saturated: boolean;
     queued: boolean;
@@ -357,7 +273,7 @@ describe("DebugPage", () => {
       let holdLive = false;
       const request = vi.fn(
         async (method: string, _params?: unknown, _options?: { signal?: AbortSignal }) => {
-          if (holdLive && (method === "last-heartbeat" || method === "diagnostics.lanes")) {
+          if (holdLive && (method === "cron.status" || method === "diagnostics.lanes")) {
             await pending.promise;
             return diagnosticResponse(method, "stale");
           }
@@ -433,7 +349,7 @@ describe("DebugPage", () => {
     },
   );
 
-  it("polls live lanes and heartbeat while full snapshots change only on Refresh", async () => {
+  it("polls live lanes and automations while full snapshots change only on Refresh", async () => {
     vi.useFakeTimers();
     let marker = "initial";
     const pendingRefresh = deferred();
@@ -454,7 +370,12 @@ describe("DebugPage", () => {
       expect(page.debugStatus).toEqual({ version: "initial" });
       expect(page.debugHealth).toEqual({ marker: "initial", ok: true });
       expect(page.debugModels).toEqual([{ id: "initial" }]);
-      expect(page.debugHeartbeat).toEqual({ source: "live" });
+      expect(page.debugAutomations).toEqual({
+        enabled: true,
+        triggersEnabled: true,
+        jobs: 4,
+        nextWakeAtMs: null,
+      });
       expect(page.debugLanes).toEqual([expect.objectContaining({ lane: "live" })]);
       expect(normalizedText(page.querySelector(".command-lane-row"))).toContain("live");
       marker = "manual";
@@ -580,6 +501,62 @@ describe("DebugPage", () => {
 });
 
 describe("DebugOverlay", () => {
+  it("shows canonical job outcomes, redacts reasons, and omits compatibility alias noise", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn(async (method: string) =>
+      method === "sessions.list"
+        ? { sessions: [] }
+        : method === "system.info"
+          ? {}
+          : diagnosticResponse(method),
+    );
+    const overlay = document.createElement("openclaw-debug-overlay") as TestDebugOverlay;
+    overlay.context = createDebugApplicationContext(request);
+    Object.assign(overlay.context.gateway, {
+      eventLog: [
+        { ts: 3, event: "heartbeat", payload: { status: "skipped", reason: "alias only" } },
+        {
+          ts: 2,
+          event: "cron",
+          payload: {
+            jobId: "monitor-42",
+            runId: "run-17",
+            action: "finished",
+            status: "skipped",
+            error: "owner unavailable; token=synthetic-private-token",
+            job: { payload: { message: "private prompt" } },
+            summary: "private scratch",
+          },
+        },
+        {
+          ts: 1,
+          event: "cron",
+          payload: { action: "finished", status: "error", error: "No route" },
+        },
+      ],
+    });
+    document.body.append(overlay);
+    try {
+      overlay.toggle();
+      await vi.advanceTimersByTimeAsync(0);
+      await updateOverlayVitals(overlay);
+      const rows = overlay.querySelectorAll(".debug-overlay__events li");
+      expect(rows).toHaveLength(2);
+      expect(normalizedText(rows[0])).toContain(
+        "cron · Job monitor-42 · Run run-17 · skipped · owner unavailable",
+      );
+      expect(normalizedText(rows[0])).not.toContain("synthetic-private-token");
+      expect(normalizedText(rows[0])).not.toContain("private prompt");
+      expect(normalizedText(rows[0])).not.toContain("private scratch");
+      expect(normalizedText(rows[1])).toContain("cron · error · No route");
+      expect(normalizedText(rows[1])).not.toContain("Job");
+      expect(normalizedText(rows[1])).not.toContain("Run");
+    } finally {
+      overlay.remove();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps vitals live while an active-run read is pending and minimizes invisible work", async () => {
     vi.useFakeTimers();
     const heldRuns = deferred<unknown>();

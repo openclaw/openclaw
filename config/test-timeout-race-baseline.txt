@@ -44,7 +44,6 @@ src/config/sessions/session-transcript-reconcile-memory.test.ts	3
 src/config/sessions/session-transcript-reconcile.native-exit.test.ts	2
 src/cron/isolated-agent/model-preflight.runtime.test.ts	2
 src/cron/isolated-agent/model-preflight.runtime.transport.test.ts	4
-src/cron/service.wake-now-real-heartbeat.test.ts	2
 src/daemon/schtasks.env-case.real.test.ts	4
 src/gateway/desktop/computer-authority.runtime.test.ts	1
 src/gateway/gateway-active-memory.test.ts	1

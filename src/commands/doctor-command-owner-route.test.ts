@@ -8,7 +8,7 @@ import { readConfigFileSnapshot } from "../config/config.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
-import { resolveHeartbeatDeliveryTargetWithSessionRoute } from "../infra/outbound/targets.js";
+import { resolveProactiveDeliveryTargetWithSessionRoute } from "../infra/outbound/targets.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -55,7 +55,7 @@ it.each([false, true])(
           await fs.writeFile(`${configPath}.bak.1`, JSON.stringify(config()));
         }
         expect(
-          await resolveHeartbeatDeliveryTargetWithSessionRoute({ cfg, agentId: "main" }),
+          await resolveProactiveDeliveryTargetWithSessionRoute({ cfg, agentId: "main" }),
         ).toMatchObject({ channel: "none", reason: "no-route" });
         await using ctx = await withPluginRuntimeRegistryScope(registry, () =>
           prepareDoctorContext(configPath),
@@ -70,7 +70,7 @@ it.each([false, true])(
           expect(saved.config.commands?.ownerAllowFrom).toEqual([`discord:user:${owner}`]);
           expect(
             await withPluginRuntimeRegistryScope(registry, () =>
-              resolveHeartbeatDeliveryTargetWithSessionRoute({
+              resolveProactiveDeliveryTargetWithSessionRoute({
                 cfg: saved.config,
                 agentId: "main",
               }),
@@ -206,11 +206,11 @@ function config(ownerEntry = `discord:user:${owner}`): OpenClawConfig {
 it("keeps a Discord owner's direct heartbeat route and command authority through Doctor", async () => {
   const original = config();
   expect(
-    await resolveHeartbeatDeliveryTargetWithSessionRoute({ cfg: original, agentId: "main" }),
+    await resolveProactiveDeliveryTargetWithSessionRoute({ cfg: original, agentId: "main" }),
   ).toMatchObject({ channel: "discord", to: `user:${owner}`, chatType: "direct" });
   const migrated = migrateLegacyCommandOwners(original, []);
   expect(
-    await resolveHeartbeatDeliveryTargetWithSessionRoute({ cfg: migrated, agentId: "main" }),
+    await resolveProactiveDeliveryTargetWithSessionRoute({ cfg: migrated, agentId: "main" }),
   ).toMatchObject({ channel: "discord", to: `user:${owner}`, chatType: "direct" });
   expect(migrated.commands?.ownerAllowFrom).toEqual([`discord:user:${owner}`]);
   for (const senderId of [owner, "100000000000000002"]) {

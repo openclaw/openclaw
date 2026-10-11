@@ -3,6 +3,7 @@ import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-work
 import type { CronActiveJobMarker } from "../active-jobs.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
+import type { CronServiceRunOptions } from "../service-contract.js";
 import { assertCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import { ownsStreamSource } from "../stream-schedule.js";
@@ -10,7 +11,7 @@ import type { CronJob, CronPayload } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import { findJobOrThrow, hasActiveCronRun, isJobEnabled } from "./jobs-scheduling.js";
-import { assertSupportedJobSpec } from "./jobs-validation.js";
+import { assertExecutionPolicy, assertSupportedJobSpec } from "./jobs-validation.js";
 import { locked } from "./locked.js";
 import { markManualCronJobActive } from "./ops-shared.js";
 import { releaseReservationOwnership, releaseReservedCronRuns } from "./run-admission-mutation.js";
@@ -81,6 +82,7 @@ export type ManualRunOptions = {
   commitGuard?: () => void;
   scheduleOwnershipAtMs?: number;
   payload?: CronPayload;
+  delivery?: CronServiceRunOptions["delivery"];
   terminalTracker?: ManualRunTerminalTracker;
   owningCronLaneTaskMarker?: CommandLaneTaskMarker;
   evaluateTrigger?: boolean;
@@ -417,6 +419,7 @@ export async function prepareManualRun(
       wasEnabled: opts?.onExit ? false : isJobEnabled(job),
       ...(onExit ? { onExit } : {}),
       ...(opts?.payload ? { payload: structuredClone(opts.payload) } : {}),
+      ...(opts?.delivery ? { delivery: structuredClone(opts.delivery) } : {}),
       ...(opts?.evaluateTrigger ? { evaluateTrigger: true } : {}),
       ...(opts?.streamBatch !== undefined ? { streamBatch: opts.streamBatch } : {}),
       ...(opts?.streamScheduleKey !== undefined
@@ -507,6 +510,23 @@ export async function activatePreparedManualRun(
       return { ok: true, ran: false, reason: "invalid-spec" } as const;
     }
 
+    let delivery = job.delivery;
+    if (prepared.delivery) {
+      const configured = job.delivery;
+      delivery = {
+        mode: "announce",
+        ...configured,
+        ...prepared.delivery,
+        // Routing cannot widen the persisted account, owner, silent, or DM policy.
+        ...(configured?.target === "owner"
+          ? { target: "owner", to: undefined, threadId: undefined }
+          : {}),
+        ...(configured?.accountId ? { accountId: configured.accountId } : {}),
+        ...(configured?.mode === "none" ? { mode: "none" } : {}),
+        ...(configured?.directPolicy === "block" ? { directPolicy: "block" } : {}),
+      };
+      assertExecutionPolicy({ ...job, delivery });
+    }
     const activation = await activateQueuedCronRun({
       state,
       job,
@@ -553,6 +573,7 @@ export async function activatePreparedManualRun(
     const executionJob = structuredClone({
       ...activatedJob,
       payload: payload ?? activatedJob.payload,
+      ...(prepared.delivery ? { delivery } : {}),
     });
     if (isImmediateCronRunMode(mode)) {
       executionJob.state.nextRunAtMs = prepared.scheduleOwnershipAtMs;

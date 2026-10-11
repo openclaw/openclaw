@@ -153,7 +153,6 @@ export type AgentRunInputContext = {
   transcriptPrompt?: string;
   currentInboundEventKind?: InboundEventKind;
   inputProvenance?: InputProvenance;
-  heartbeatEventQueueSessionKey?: string;
   extraSystemPrompt?: string;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];

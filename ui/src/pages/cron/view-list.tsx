@@ -1,6 +1,5 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, For } from "solid-js";
-import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
 import type { CronJobsEnabledFilter, CronJob } from "../../api/types.ts";
 import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
@@ -256,7 +255,6 @@ function JobRow(
 ) {
   const displayName = () => props.job.displayName ?? props.job.name;
   const description = () => props.job.description?.trim();
-  const systemOwned = () => isSystemMonitorDeclaration(props.job.declarationKey);
   const nextRunAtMs = () => props.job.state?.nextRunAtMs;
   const hasNextRun = () => typeof nextRunAtMs() === "number" && Number.isFinite(nextRunAtMs());
   return (
@@ -272,7 +270,7 @@ function JobRow(
             <span class="cron-table__name-text">{displayName()}</span>
             {props.job.trigger ? <TriggerIndicator /> : undefined}
           </span>
-          {systemOwned() ? undefined : <openclaw-agent-row-chip prop:agentId={props.job.agentId} />}
+          <openclaw-agent-row-chip prop:agentId={props.job.agentId} />
           {description() || !props.job.enabled ? (
             <span class="cron-table__name-meta">
               {description() ? (
@@ -330,7 +328,7 @@ function JobRow(
           >
             <Icon name="play" />
           </button>
-          {systemOwned() ? undefined : <EnabledSwitch {...props} job={props.job} compact />}
+          <EnabledSwitch {...props} job={props.job} compact />
           <JobMenu {...props} job={props.job} />
         </span>
       ) : undefined}

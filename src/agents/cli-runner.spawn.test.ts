@@ -194,7 +194,7 @@ describe("runCliAgent spawn path", () => {
       provider: "claude-cli",
       model: "claude-opus-4-7",
       promptChars: 42,
-      trigger: "heartbeat",
+      trigger: "event",
       useResume: true,
       cliSessionId: "claude-session-secret",
       resolvedSessionId: "claude-session-secret",
@@ -202,7 +202,7 @@ describe("runCliAgent spawn path", () => {
       hasHistoryPrompt: false,
     });
 
-    expect(logLine).toContain("trigger=heartbeat");
+    expect(logLine).toContain("trigger=event");
     expect(logLine).toContain("useResume=true");
     expect(logLine).toContain("session=present");
     expect(logLine).toContain("reuse=reusable");

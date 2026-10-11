@@ -8,7 +8,10 @@ import {
   type ImageContent,
   type UserMessage,
 } from "../../../llm/types.js";
-import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../../../sessions/input-provenance.js";
+import {
+  INTER_SESSION_PROMPT_PREFIX_BASE,
+  readInterSessionPromptEnvelope,
+} from "../../../sessions/input-provenance.js";
 import { hasPersistedMedia, MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
 import { buildLateMediaAttachedProjection } from "../../../sessions/user-turn-transcript.js";
 import {
@@ -48,7 +51,7 @@ const runtimeContextDetailsSchema = z.object({
   runtimeContextCarrier: z.literal(true),
   fragments: z.array(
     z.object({
-      kind: z.enum(["runtime-instruction", "conversation-data", "heartbeat-outcome"]),
+      kind: z.enum(["runtime-instruction", "conversation-data"]),
       text: z.string(),
     }),
   ),
@@ -462,17 +465,14 @@ export function installModelPromptProjection(params: {
                   prependContext: params.prependContext,
                   appendContext: params.appendContext,
                 }));
-        // Inter-session input keeps its stored source-provenance envelope as the model-facing
-        // text, now and in history. A shorter routed body would either drop that safety text
-        // from replayed history or make the next request rewrite this turn's bytes. Comparing
-        // the whole stored text also covers forwarded bodies that carry their own envelope.
-        if (
-          frozen === undefined &&
-          text !== undefined &&
-          firstText?.startsWith(INTER_SESSION_PROMPT_PREFIX_BASE) === true &&
-          !text.includes(firstText)
-        ) {
-          text = firstText;
+        // Keep the source envelope without discarding authorized prompt enrichment.
+        const envelope =
+          frozen === undefined && firstText ? readInterSessionPromptEnvelope(firstText) : undefined;
+        if (text !== undefined && envelope && firstText) {
+          const prefix = firstText.slice(0, envelope.length);
+          if (!text.startsWith(prefix)) {
+            text = prefix + text;
+          }
         }
         if (
           text !== undefined &&

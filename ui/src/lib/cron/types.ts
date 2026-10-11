@@ -38,11 +38,18 @@ export type CronFormState = {
   scheduleExact: boolean;
   staggerAmount: string;
   staggerUnit: "seconds" | "minutes";
+  activeHoursEnabled: boolean;
+  activeHoursStart: string;
+  activeHoursEnd: string;
+  activeHoursTimezone: string;
+  idleOnly: boolean;
+  payloadSkipIfScratchEmpty: boolean;
+  deliveryTarget: "" | "owner";
+  deliveryDirectPolicy: "" | "allow" | "block";
   triggerEnabled: boolean;
   triggerScript: string;
   triggerOnce: boolean;
   sessionTarget: "main" | "isolated" | "current" | `session:${string}`;
-  wakeMode: CronJob["wakeMode"];
   // System-owned payloads are always payloadLocked; the form only
   // displays it, never submits it.
   payloadKind: CronPayload["kind"];
@@ -51,6 +58,7 @@ export type CronFormState = {
   payloadModel: string;
   payloadThinking: string;
   payloadLightContext: boolean;
+  payloadIncludeReasoning: boolean;
   deliveryMode: "" | CronDelivery["mode"];
   deliveryChannel: string;
   deliveryTo: string;
@@ -75,12 +83,16 @@ export type CronFieldKey =
   | "everyAmount"
   | "cronExpr"
   | "staggerAmount"
+  | "activeHoursStart"
+  | "activeHoursEnd"
+  | "activeHoursTimezone"
   | "triggerScript"
   | "payloadText"
   | "payloadModel"
   | "payloadThinking"
   | "timeoutSeconds"
   | "deliveryMode"
+  | "deliveryDirectPolicy"
   | "deliveryTo"
   | "failureAlertAfter"
   | "failureAlertCooldownSeconds";

@@ -210,7 +210,6 @@ describe("Gateway route model reuse", () => {
               defaults: {
                 workspace: gateway.state.workspaceDir,
                 skipBootstrap: true,
-                heartbeat: { every: "0m" },
                 model: { primary: `${PROVIDERS[0]}/stable`, fallbacks: [] },
                 models: Object.fromEntries(
                   PROVIDERS.flatMap((provider) =>

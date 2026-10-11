@@ -1,13 +1,40 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
+import {
+  createReplyOperation,
+  type ReplyOperation,
+} from "../../auto-reply/reply/reply-run-registry.js";
+import { deriveGatewaySessionLifecycleProjectionPatch } from "../../gateway/session-lifecycle-state.js";
+import { onAgentEventForRun, type AgentEventPayload } from "../../infra/agent-events.js";
+import { createAutomationResultRecorder } from "../../infra/agent-run-registry.automation.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { onGatewayWorkMetricsChanged } from "../../infra/gateway-work-metrics-events.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { expectObjectFields } from "../../test-utils/mock-call-assertions.js";
+import {
+  clearCronJobActive,
+  isCronActiveJobMarkerCurrent,
+  markCronJobActive,
+} from "../active-jobs.js";
+import { isCronExecutionIdle } from "../execution-idle.js";
+import { waitForCronExecutionIdle } from "../service/execution-idle.js";
+import { runWithCronAdmission } from "../service/run-admission-capacity.js";
+import { createCronServiceState } from "../service/state.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   callGatewayMock,
+  appendSessionRuntimeContextMock,
   dispatchCronDeliveryMock,
   loadRunCronIsolatedAgentTurn,
   resolveCronDeliveryPlanMock,
   resolveCronPayloadOutcomeMock,
+  readCronScratchSnapshotMock,
   runWithModelFallbackMock,
   mockRunCronFallbackPassthrough,
   resolveDeliveryTargetMock,
@@ -123,6 +150,373 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     },
   );
 
+  it.each([
+    { mode: "announce", blocked: false },
+    { mode: "none", blocked: false },
+    { mode: "announce", blocked: true },
+  ] as const)(
+    "executes with missing owner route, mode=$mode and DM block=$blocked",
+    async ({ mode, blocked }) => {
+      mockRunCronFallbackPassthrough();
+      const summary =
+        "Owner delivery unavailable (no-route); configure an authorized owner DM or edit this automation's delivery";
+      resolveCronDeliveryPlanMock.mockReturnValue({
+        mode,
+        target: "owner",
+        requested: mode === "announce",
+      });
+      resolveDeliveryTargetMock.mockResolvedValue({
+        ok: false,
+        mode: "explicit",
+        channel: "none",
+        error: new Error(summary),
+        ...(blocked ? { deliverySuppressionReason: "channel_transform" } : {}),
+      });
+      const result = await runTurn({
+        job: makeIsolatedAgentJobFixture({ delivery: { mode, target: "owner" } }),
+      });
+      expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect(result.status).toBe("ok");
+      expectDispatch({
+        deliveryRequested: mode === "announce",
+        skipDelivery: blocked ? "channel_transform" : undefined,
+        resolvedDelivery: expect.objectContaining({ ok: false, error: expect.any(Error) }),
+      });
+    },
+  );
+
+  it("defers a prepared run when its active window closes before inference", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-02T09:00:00Z"));
+    try {
+      mockRunCronFallbackPassthrough();
+      runEmbeddedAgentMock.mockImplementationOnce(async (request) => {
+        clock.mockReturnValue(Date.parse("2026-10-02T11:00:00Z"));
+        await request.onExecutionStarted?.();
+        throw new Error("a deferred run must not continue");
+      });
+      const result = await runTurn({
+        job: makeIsolatedAgentJobFixture({
+          activeHours: { start: "09:00", end: "10:00", timezone: "UTC" },
+        }),
+      });
+      expect(result).toMatchObject({
+        status: "skipped",
+        executionStarted: false,
+        admissionDeferred: true,
+      });
+      expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it.for(["resume", "abort", "revoke", "started-error"] as const)(
+    "retains one isolated invocation through late foreground admission: %s",
+    async (completion, { signal }) => {
+      mockRunCronFallbackPassthrough();
+      const cfg = { agents: { entries: { main: {} } } };
+      const job = makeIsolatedAgentJobFixture({
+        agentId: "main",
+        schedule: { kind: "on-exit", command: "observed-command" },
+        idleOnly: true,
+        delivery: { mode: "none" },
+      });
+      const scheduler = createTestGatewayScheduler();
+      const state = createCronServiceState({
+        scheduler,
+        storePath: "/tmp/isolated-idle-unused/jobs.json",
+        cronEnabled: true,
+        log: { debug() {}, info() {}, warn() {}, error() {} },
+        enqueueSystemEvent() {
+          throw new Error("An isolated turn must not enqueue a replacement event");
+        },
+        async runIsolatedAgentJob() {
+          throw new Error("The admitted isolated invocation must not be restarted");
+        },
+        isExecutionIdle: (candidate, ownSessionKey) =>
+          isCronExecutionIdle(cfg, candidate, "main", ownSessionKey),
+      });
+      const marker = markCronJobActive("test-job", { agentId: "main" });
+      const controller = new AbortController();
+      const abortSignal = AbortSignal.any([controller.signal, signal]);
+      const assertCurrent = () => {
+        if (!isCronActiveJobMarkerCurrent(marker)) {
+          throw new Error("Synthetic cron occurrence retired");
+        }
+      };
+      const idleWait = createDeferred();
+      const attempts: string[] = [];
+      const inference: string[] = [];
+      const terminals: AgentEventPayload[] = [];
+      let unsubscribeLifecycle = () => {};
+      const started = vi.fn<NonNullable<RunCronAgentTurnParams["onExecutionStarted"]>>();
+      let foreground: ReplyOperation | undefined;
+      let invocationContext: ReturnType<typeof getAgentRunContext>;
+      const unsubscribe = onGatewayWorkMetricsChanged(() => {
+        if (foreground && marker?.idleAdmissionWait && state.runAdmission.active === 0) {
+          idleWait.resolve();
+        }
+      });
+      runEmbeddedAgentMock.mockImplementationOnce(async (request) => {
+        attempts.push(request.runId);
+        unsubscribeLifecycle = onAgentEventForRun(request.runId, (event) => {
+          if (
+            event.stream === "lifecycle" &&
+            (event.data.phase === "end" || event.data.phase === "error")
+          ) {
+            terminals.push(event);
+          }
+        });
+        invocationContext = getAgentRunContext(request.runId);
+        foreground = createReplyOperation({
+          sessionKey: "agent:main:chat:isolated-late-foreground",
+          sessionId: "isolated-late-foreground",
+          resetTriggered: false,
+          turnKind: "visible",
+        });
+        await request.onExecutionStarted?.();
+        expect(state.runAdmission.active).toBe(1);
+        expect(isCronActiveJobMarkerCurrent(marker)).toBe(true);
+        expect(marker?.idleAdmissionWait).toBeUndefined();
+        expect(getAgentRunContext(request.runId)).toBe(invocationContext);
+        inference.push(request.runId);
+        if (completion === "started-error") {
+          throw new Error("Started isolated execution failed");
+        }
+        return { payloads: [{ text: "Observed exit handled" }], meta: { agentMeta: {} } };
+      });
+      const waitForIdle: NonNullable<RunCronAgentTurnParams["waitForIdle"]> = (
+        ownSessionKey,
+        waiterSignal,
+      ) =>
+        waitForCronExecutionIdle(state, job, {
+          activeJobMarker: marker,
+          ownSessionKey,
+          signal: waiterSignal ?? abortSignal,
+          assertCurrent,
+        });
+      const pending = runWithCronAdmission(
+        state,
+        () =>
+          runTurn({
+            cfg,
+            agentId: "main",
+            job,
+            abortSignal,
+            assertCurrent,
+            waitForIdle,
+            onExecutionStarted: started,
+          }),
+        undefined,
+        abortSignal,
+      );
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(idleWait.promise, pending, "late idle admission was bypassed"),
+          signal,
+        );
+        expect(attempts).toHaveLength(1);
+        expect(invocationContext).toBeDefined();
+        expect(getAgentRunContext(attempts[0]!)).toBe(invocationContext);
+        expect(isCronActiveJobMarkerCurrent(marker)).toBe(true);
+        expect(state.runAdmission.active).toBe(0);
+        expect(inference).toEqual([]);
+        expect(started).not.toHaveBeenCalled();
+        expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
+        expect(foreground?.abortSignal.aborted).toBe(false);
+
+        if (completion === "abort") {
+          controller.abort(new Error("Stop isolated idle run"));
+        } else {
+          if (completion === "revoke") {
+            clearCronJobActive("test-job", marker);
+          }
+          foreground?.complete();
+        }
+        const outcome = await withinTest(pending, signal);
+        expect(outcome.kind).toBe("admitted");
+        if (outcome.kind !== "admitted") {
+          throw new Error("The original isolated admission was lost");
+        }
+        expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+        expect(attempts).toHaveLength(1);
+        expect(getAgentRunContext(attempts[0]!)).toBeUndefined();
+        expect(state.runAdmission.active).toBe(0);
+        expect(terminals).toHaveLength(1);
+        const terminal = terminals[0]!;
+        const projection = deriveGatewaySessionLifecycleProjectionPatch({
+          entry: {
+            updatedAt: 2,
+            startedAt: 1,
+            endedAt: 2,
+            lastRunId: "prior-completed-run",
+            lastRunError: "prior timeout",
+          },
+          event: terminal,
+        });
+        if (completion === "resume" || completion === "started-error") {
+          expect(terminal.data.executionStarted).not.toBe(false);
+          expect(terminal.data.providerStarted).not.toBe(false);
+          expect(projection).toMatchObject({
+            status: completion === "resume" ? "done" : "failed",
+            lastRunId: attempts[0],
+          });
+        } else {
+          expect(terminal.data).toMatchObject({ executionStarted: false, providerStarted: false });
+          expect(projection).toEqual({});
+        }
+        if (completion === "resume") {
+          expect(outcome.value.status).toBe("ok");
+          expect(inference).toEqual(attempts);
+          expect(started).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ runId: attempts[0] }),
+          );
+          expect(dispatchCronDeliveryMock).toHaveBeenCalledOnce();
+        } else if (completion === "started-error") {
+          expect(outcome.value).toMatchObject({
+            status: "error",
+            executionStarted: true,
+            error: "Started isolated execution failed",
+          });
+          expect(inference).toEqual(attempts);
+          expect(started).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ runId: attempts[0] }),
+          );
+          expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
+        } else {
+          expect(outcome.value).toMatchObject({
+            status: "error",
+            executionStarted: false,
+            error:
+              completion === "abort"
+                ? "Stop isolated idle run"
+                : "Synthetic cron occurrence retired",
+          });
+          expect(inference).toEqual([]);
+          expect(started).not.toHaveBeenCalled();
+          expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
+          expect(foreground?.abortSignal.aborted).toBe(false);
+        }
+      } finally {
+        controller.abort(new Error("Isolated idle proof cleanup"));
+        foreground?.complete();
+        unsubscribe();
+        await Promise.allSettled([pending]);
+        unsubscribeLifecycle();
+        clearCronJobActive("test-job", marker);
+        await scheduler.stop();
+      }
+    },
+  );
+
+  it("supplies bounded job scratch and warns before replacing a partial view", async () => {
+    mockRunCronFallbackPassthrough();
+    readCronScratchSnapshotMock.mockResolvedValueOnce({
+      jobId: "test-job",
+      state: {
+        currentRevision: 3,
+        scratch: { content: "x".repeat(2200), revision: 3, updatedAtMs: 1 },
+      },
+    });
+    await runTurn();
+    const prompt = runEmbeddedAgentMock.mock.calls[0]?.[0]?.prompt;
+    expect(prompt).toContain("Automation scratch (revision 3)");
+    expect(prompt).toContain("x".repeat(2000));
+    expect(prompt).not.toContain("x".repeat(2001));
+    expect(prompt).toContain("reread the complete scratch before replacing it");
+  });
+
+  it.each(["no_change", "needs_attention"] as const)(
+    "settles the structured %s outcome through ordinary delivery",
+    async (outcome) => {
+      mockRunCronFallbackPassthrough();
+      await useRealOutcome();
+      resolveCronDeliveryPlanMock.mockReturnValue({
+        requested: true,
+        mode: "announce",
+        channel: "messagechat",
+        to: "test-target",
+      });
+      runEmbeddedAgentMock.mockImplementationOnce(async ({ runId }) => {
+        createAutomationResultRecorder(
+          runId,
+          "test-job",
+        )({ outcome, summary: "Inspection complete" });
+        return {
+          payloads: [{ text: "Inspection complete" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      });
+      const result = await runTurn();
+      expect(result).toMatchObject({ status: "ok", summary: `${outcome}: Inspection complete` });
+      expectDispatch({ skipDelivery: outcome === "no_change" ? "silent" : undefined });
+      expect(appendSessionRuntimeContextMock).toHaveBeenCalledTimes(
+        outcome === "no_change" ? 0 : 1,
+      );
+    },
+  );
+
+  it.each(["test-session-id", "retired-creator"])(
+    "records an isolated result only in its captured creating conversation (%s)",
+    async (sourceSessionId) => {
+      mockRunCronFallbackPassthrough();
+      runEmbeddedAgentMock.mockImplementationOnce(async ({ runId }) => {
+        createAutomationResultRecorder(
+          runId,
+          "test-job",
+        )({
+          outcome: "needs_attention",
+          summary: "Inspection complete",
+        });
+        return { payloads: [{ text: "Inspection complete" }], meta: { agentMeta: {} } };
+      });
+      const result = await runTurn({
+        job: makeIsolatedAgentJobFixture({
+          sourceConversation: { sessionKey: "agent:main:creator", sessionId: sourceSessionId },
+          delivery: { mode: "announce", channel: "messagechat", to: "external-recipient" },
+        }),
+      });
+      expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      if (sourceSessionId === "retired-creator") {
+        expect(result).toMatchObject({
+          status: "error",
+          error: "Automation result creating conversation was replaced before settlement",
+        });
+        expect(appendSessionRuntimeContextMock).not.toHaveBeenCalled();
+      } else {
+        expect(result.status).toBe("ok");
+        expect(appendSessionRuntimeContextMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            scope: expect.objectContaining({
+              sessionKey: "agent:main:creator",
+              sessionId: sourceSessionId,
+            }),
+          }),
+        );
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "includes reasoning only when explicitly requested (%s)",
+    async (includeReasoning) => {
+      mockRunCronFallbackPassthrough();
+      await useRealOutcome();
+      const reasoning = { text: "Inspection reasoning", isReasoning: true };
+      const answer = { text: "Inspection complete" };
+      runEmbeddedAgentMock.mockResolvedValueOnce({
+        payloads: [reasoning, answer],
+        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+      });
+      await runTurn({
+        job: makeIsolatedAgentJobFixture({
+          payload: { kind: "agentTurn", message: "inspect", includeReasoning },
+        }),
+      });
+      expectDispatch({ deliveryPayloads: includeReasoning ? [reasoning, answer] : [answer] });
+    },
+  );
+
   it("preserves a run-level error with partial text when delivery is pending", async () => {
     mockAgentRun({
       ...failedRun,
@@ -207,12 +601,12 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     expectObjectFields(await runTurn(), testCase.expected);
   });
 
-  it("preserves a heartbeat-only accepted child handoff failure as a cron error", async () => {
-    const heartbeatPayload = { text: "HEARTBEAT_OK" };
+  it("preserves a silent accepted child handoff failure as a cron error", async () => {
+    const silentPayload = { text: "NO_REPLY" };
     const error = "cron child-session handoff timed out before producing a final assistant payload";
-    mockChildRun([heartbeatPayload]);
-    mockAnnounceOutcome([heartbeatPayload], heartbeatPayload.text, {
-      deliveryDisposition: { kind: "heartbeat", controlOnly: true },
+    mockChildRun([silentPayload]);
+    mockAnnounceOutcome([silentPayload], silentPayload.text, {
+      deliveryDisposition: { kind: "silent", controlOnly: true },
     });
     dispatchCronDeliveryMock.mockImplementationOnce(() => ({
       disposition: { kind: "error", error },
@@ -225,8 +619,8 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     }));
     const result = await runTurn();
     expectObjectFields(result, { status: "error", error, delivered: false });
-    expect(result.summary).not.toBe(heartbeatPayload.text);
-    expect(result.outputText).not.toBe(heartbeatPayload.text);
+    expect(result.summary).not.toBe(silentPayload.text);
+    expect(result.outputText).not.toBe(silentPayload.text);
   });
 
   it("preserves structured-parent delivery failures after accepting a child", async () => {

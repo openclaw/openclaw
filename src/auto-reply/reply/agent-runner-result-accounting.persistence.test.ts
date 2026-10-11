@@ -576,9 +576,9 @@ it("keeps queued diagnostic supplements behind source send policy", async () => 
   expect(await fixture.deliverQueued()).toEqual([]);
 });
 
-it("accounts a completed compaction before an empty heartbeat skips reply preparation", async () => {
+it("accounts a completed compaction before an empty internal event skips reply preparation", async () => {
   const fixture = await createFixture();
-  fixture.context.isHeartbeat = true;
+  fixture.context.followupRun.run.inputProvenance = { kind: "internal_system", sourceTool: "cron" };
   fixture.context.followupRun.run.terminalReplyExpectation = "optional";
   fixture.recordCompaction({ currentContextTokens: 40 });
   fixture.context.execution.result.payloads = [];

@@ -1,6 +1,5 @@
 import type { ProviderRefusalReview } from "@openclaw/llm-core/diagnostics";
 import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
-import type { HeartbeatToolResponse } from "../../auto-reply/heartbeat-tool-response.js";
 import type {
   CliSessionBinding,
   SessionContextBudgetStatus,
@@ -290,8 +289,6 @@ export type EmbeddedAgentRunResult = {
   asyncWorkStarted?: true;
   /** Completed core yield settlement, not a requester-visible final reply. */
   requesterContinuationSettled?: true;
-  // Structured heartbeat outcome recorded by the heartbeat response tool.
-  heartbeatToolResponse?: HeartbeatToolResponse;
   successfulCronAdds?: number;
 };
 

@@ -13,7 +13,7 @@ const agentId = z
   .regex(/^[a-z0-9][a-z0-9_-]*$/u)
   .max(128);
 
-const clawRemovalSourceIdentitySchema = z
+export const clawRemovalSourceIdentitySchema = z
   .object({ canonicalPath: text, key: text, birthtime: text })
   .strict()
   .refine((value) => {
@@ -24,7 +24,7 @@ const clawRemovalSourceIdentitySchema = z
       return false;
     }
   }, "Invalid original database identity.");
-const clawRemovalLeaseSchema = z
+export const clawRemovalLeaseSchema = z
   .object({ scope: z.literal("core:agent-deletion"), key: agentId, owner: text })
   .strict();
 

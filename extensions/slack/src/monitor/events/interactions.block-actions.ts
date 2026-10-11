@@ -667,15 +667,20 @@ async function enqueueSlackBlockActionEvent(
     normalizeOptionalString(params.parsed.typedActionWithText.action_ts) ??
       params.parsed.typedBody.trigger_id,
   ].filter(Boolean);
-  enqueueSlackInteractionEvent(eventPayload, route, {
-    contextKey: contextParts.join(":"),
-    deliveryContext: {
-      channel: "slack",
-      to: deferredTarget?.target,
-      accountId: params.ctx.accountId,
-      threadId: params.parsed.threadTs,
+  enqueueSlackInteractionEvent(
+    eventPayload,
+    route,
+    {
+      contextKey: contextParts.join(":"),
+      deliveryContext: {
+        channel: "slack",
+        to: deferredTarget?.target,
+        accountId: params.ctx.accountId,
+        threadId: params.parsed.threadTs,
+      },
     },
-  });
+    params.ctx.runtime.log,
+  );
 }
 
 function buildSlackConfirmationBlocks(params: {

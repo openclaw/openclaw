@@ -211,7 +211,6 @@ Use `bindings` to route Feishu/Lark DMs or groups to different agents.
   agents: {
     ownership: "explicit",
     defaults: {
-      heartbeat: { agentId: "main" },
       systemAgent: { agentId: "main" },
     },
     entries: {

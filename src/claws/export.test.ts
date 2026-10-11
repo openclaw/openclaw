@@ -5,8 +5,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeCronJobCreate } from "../cron/normalize.js";
+import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import { cronStoreKey } from "../cron/store/key.js";
+import { upsertCronJobRow, deleteCronJobRowInDatabase } from "../cron/store/row-codec.js";
 import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { applyClawAddPlan } from "./add.js";
 import { exportClawAgent } from "./export.js";
 import { buildClawAddPlan } from "./lifecycle.js";
@@ -48,12 +53,13 @@ vi.mock("./source-limits.js", async (importOriginal) => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  lifecycleStateTestControl.afterRead = undefined;
-  vi.unstubAllEnvs();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
+    cleanup();
+    lifecycleStateTestControl.afterRead = undefined;
+    vi.unstubAllEnvs();
+  });
 });
 
 async function installedFixture(
@@ -183,7 +189,28 @@ async function installedFixture(
           return { ok: true, path: "config", config, mcpServers: servers };
         },
       }),
-    cronGateway: { add: async () => ({ id: "scheduler-daily" }) },
+    cronGateway: {
+      add: async (input) => {
+        const job = normalizeCronJobCreate(input);
+        if (!job) {
+          throw new Error("Invalid fixture cron input");
+        }
+        const env = { OPENCLAW_STATE_DIR: join(root, "state") };
+        return upsertCronJobRow(
+          openOpenClawStateDatabase({ env }).db,
+          cronStoreKey(resolveCronJobsStorePathFromConfig(config, env)),
+          {
+            ...job,
+            enabled: job.enabled ?? true,
+            id: "scheduler-daily",
+            createdAtMs: 1,
+            updatedAtMs: 1,
+            state: {},
+          },
+          0,
+        );
+      },
+    },
   });
   if (added.status !== "complete") {
     throw new Error(
@@ -294,6 +321,53 @@ describe("exportClawAgent", () => {
       code: "tool_profile_consent_required",
     });
   });
+
+  it.each(["deleted", "disabled", "message", "policy", "scratch"])(
+    "rejects %s cron state instead of exporting a stale declaration",
+    async (change) => {
+      const fixture = await installedFixture();
+      const storePath = resolveCronJobsStorePathFromConfig(fixture.config, fixture.env);
+      const { loadCronJobsStoreWithConfigJobsReadOnly } = await import("../cron/store.js");
+      const job = (await loadCronJobsStoreWithConfigJobsReadOnly(storePath, fixture.env)).store
+        .jobs[0]!;
+      if (change === "scratch") {
+        const { writeCronJobScratch } = await import("../cron/scratch-store.js");
+        expect(
+          await writeCronJobScratch({
+            storePath,
+            jobId: job.id,
+            content: "Operator checklist",
+            expectedRevision: 0,
+            options: { env: fixture.env },
+          }),
+        ).toMatchObject({ ok: true });
+      } else {
+        const db = openOpenClawStateDatabase({ env: fixture.env }).db;
+        if (change === "deleted") {
+          deleteCronJobRowInDatabase(db, cronStoreKey(storePath), job.id);
+        } else {
+          upsertCronJobRow(
+            db,
+            cronStoreKey(storePath),
+            {
+              ...job,
+              ...(change === "disabled" ? { enabled: false } : {}),
+              ...(change === "message"
+                ? { payload: { kind: "agentTurn", message: "Current operator instruction" } }
+                : {}),
+              ...(change === "policy" ? { idleOnly: true } : {}),
+            },
+            0,
+          );
+        }
+      }
+      const out = join(fixture.root, "stale-cron-export");
+      await expect(exportClawAgent("worker", out, fixture.exportOptions)).rejects.toMatchObject({
+        code: "cron_jobs_unavailable",
+      });
+      await expect(stat(out)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 
   it("writes a grouped package from one installed agent", async () => {
     const agentProfile: ClawOpenClawProfile["agent"] = {

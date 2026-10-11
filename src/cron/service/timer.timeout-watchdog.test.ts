@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createCronRegressionState,
   createIsolatedRegressionJob,
@@ -22,6 +22,12 @@ import { stop } from "./ops-lifecycle.js";
 import type { CronServiceDeps, CronServiceState } from "./state.js";
 import { executeJobCoreWithTimeout, runMissedJobs } from "./timer.js";
 import { onTimer } from "./timer.test-support.js";
+
+beforeAll(() => {
+  // SQLite admission compares monotonic deadlines across the host and workers.
+  vi.setConfig({ fakeTimers: { toNotFake: ["hrtime"] } });
+  return () => vi.resetConfig();
+});
 
 const SCHEDULED_AT = Date.parse("2026-05-10T09:00:00.000Z");
 const fixtures = setupCronRegressionFixtures({
@@ -232,56 +238,53 @@ describe("cron execution watchdogs", () => {
     }
   });
 
-  it.each(["heartbeat"] as const)(
-    "restarts the %s watchdog from the effective heartbeat timeout at handoff",
-    async (kind) => {
-      const job = dueJob(`heartbeat-handoff-${kind}`, {
+  it.each(["timeout", "cancel"] as const)(
+    "retains the main session-event %s owner through queued admission",
+    async (mode) => {
+      const job = dueJob(`main-session-${mode}`, {
         sessionTarget: "main",
-        wakeMode: "now",
-        payload: { kind: "heartbeat" },
-        agentId: "   ",
-        sessionKey: "agent:ops:main",
-        schedule: { kind: "every", everyMs: 60_000, anchorMs: SCHEDULED_AT - 60_000 },
+        payload: { kind: "systemEvent", text: "Deliver the reminder" },
       });
-      const started = createDeferred<AbortSignal | undefined>();
-      const resolveHeartbeatTimeoutMs = vi.fn(() => 15 * 60_000);
-      const requestHeartbeatAndWait = vi.fn<
-        NonNullable<CronServiceDeps["requestHeartbeatAndWait"]>
-      >(async (_wake, { abortSignal, onAttemptStarted }) => {
-        onAttemptStarted?.();
-        started.resolve(abortSignal);
-        await new Promise<void>((resolve) => {
-          if (abortSignal?.aborted) {
-            resolve();
-          } else {
-            abortSignal?.addEventListener("abort", () => resolve(), { once: true });
-          }
-        });
-        return { status: "failed", reason: "aborted" };
-      });
-      const { state, advance } = await fixture(job, {
-        nowMs: Date.now,
-        defaultAgentId: "main",
-        resolveHeartbeatTimeoutMs,
-        requestHeartbeatAndWait,
-      });
-      const timer = onTimer(state);
-      let settled = false;
-      void timer.then(() => {
-        settled = true;
-      });
-      const signal = await started.promise;
-      await advance(10 * 60_000 + 1);
-      expect(signal?.aborted).toBe(false);
-      expect(settled).toBe(false);
-      await advance(5 * 60_000);
-      await timer;
-      expect(signal?.aborted).toBe(true);
-      expect(settled).toBe(true);
-      expect(resolveHeartbeatTimeoutMs).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ source: "interval", intent: "scheduled", agentId: "ops" }),
+      const queued = createDeferred<AbortSignal | undefined>();
+      const admitted = createDeferred();
+      const started = createDeferred();
+      const release = createDeferred<{ status: "ok"; summary: string }>();
+      const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(
+        async ({ abortSignal, onLaneWait, onExecutionStarted }) => {
+          onLaneWait?.({ waiting: true });
+          queued.resolve(abortSignal);
+          await admitted.promise;
+          onLaneWait?.({ waiting: false });
+          onExecutionStarted?.({ jobId: job.id, phase: "model_call_started" });
+          started.resolve();
+          return await release.promise;
+        },
       );
-      expect(requireJob(state, job.id).state.lastError).toContain("job execution timed out");
+      const { state, advance } = await fixture(job, { runSessionEvent });
+      const timer = onTimer(state);
+      try {
+        const signal = await queued.promise;
+        await advance(10 * 60_000 + 1);
+        expect(signal?.aborted).toBe(false);
+        admitted.resolve();
+        await started.promise;
+        if (mode === "timeout") {
+          await advance(10 * 60_000 + 1);
+        } else {
+          requestActiveCronJobCancellation(job.id, "Cancelled by operator.");
+        }
+        await timer;
+        expect(signal?.aborted).toBe(true);
+        expect(requireJob(state, job.id).state.lastError).toContain(
+          mode === "timeout" ? "job execution timed out" : "Cancelled by operator.",
+        );
+        expect(runSessionEvent).toHaveBeenCalledOnce();
+      } finally {
+        stop(state);
+        admitted.resolve();
+        release.resolve({ status: "ok", summary: "late" });
+        await drain(timer, release.promise);
+      }
     },
   );
 
@@ -362,29 +365,35 @@ describe("cron execution watchdogs", () => {
       runIsolatedAgentJob: runner.run,
     });
     const timer = onTimer(state);
-    const signal = await runner.started.promise;
-    await advance(60_100);
-    expect(signal?.aborted).toBe(false);
-    expect(cleanupTimedOutAgentRun).not.toHaveBeenCalled();
-    await advance(539_900);
-    expect(signal?.aborted).toBe(false);
-    expect(cleanupTimedOutAgentRun).not.toHaveBeenCalled();
-    await advance(600_000);
-    await timer;
-    expect(signal?.aborted).toBe(true);
-    expect(signal?.reason).toMatchObject({
-      name: "TimeoutError",
-      message: expect.stringContaining("job execution timed out"),
-    });
-    expect(requireJob(state, job.id).state.lastStatus).toBe("error");
-    expect(requireJob(state, job.id).state.lastError).toContain("job execution timed out");
-    expect(requireJob(state, job.id).state.lastError).toContain("context-engine");
-    expect(cleanupTimedOutAgentRun).toHaveBeenCalledExactlyOnceWith({
-      job: expect.objectContaining({ id: job.id }),
-      timeoutMs: 1_200_000,
-      execution: { ...execution, phase: "context_engine" },
-    });
-    expect(onIsolatedAgentSetupTimeout).not.toHaveBeenCalled();
+    try {
+      const signal = await runner.started.promise;
+      await advance(60_100);
+      expect(signal?.aborted).toBe(false);
+      expect(cleanupTimedOutAgentRun).not.toHaveBeenCalled();
+      await advance(539_900);
+      expect(signal?.aborted).toBe(false);
+      expect(cleanupTimedOutAgentRun).not.toHaveBeenCalled();
+      await advance(600_000);
+      await timer;
+      expect(signal?.aborted).toBe(true);
+      expect(signal?.reason).toMatchObject({
+        name: "TimeoutError",
+        message: expect.stringContaining("job execution timed out"),
+      });
+      expect(requireJob(state, job.id).state.lastStatus).toBe("error");
+      expect(requireJob(state, job.id).state.lastError).toContain("job execution timed out");
+      expect(requireJob(state, job.id).state.lastError).toContain("context-engine");
+      expect(cleanupTimedOutAgentRun).toHaveBeenCalledExactlyOnceWith({
+        job: expect.objectContaining({ id: job.id }),
+        timeoutMs: 1_200_000,
+        execution: { ...execution, phase: "context_engine" },
+      });
+      expect(onIsolatedAgentSetupTimeout).not.toHaveBeenCalled();
+    } finally {
+      stop(state);
+      runner.result.resolve({ status: "ok", summary: "late" });
+      await drain(timer, runner.result.promise);
+    }
   });
 
   it("re-arms the pre-execution watchdog when a fallback runner returns to setup (#82811)", async () => {
@@ -415,56 +424,59 @@ describe("cron execution watchdogs", () => {
       runIsolatedAgentJob: runner.run,
     });
     const timer = onTimer(state);
-    const signal = await runner.started.promise;
-    await advance(60_100);
-    await timer;
-    const diagnostic =
-      "cron: isolated agent run stalled before execution start (last phase: runtime-plugins)";
-    const result = requireJob(state, job.id);
-    expect(signal?.aborted).toBe(true);
-    expect(result.state.lastStatus).toBe("error");
-    expect(result.state.lastError).toBe(diagnostic);
-    expect(result.state.lastDiagnosticSummary).toBe(diagnostic);
-    expect(result.state.lastDiagnostics).toEqual({
-      summary: diagnostic,
-      entries: [{ source: "cron-setup", severity: "error", message: diagnostic, ts: SCHEDULED_AT }],
-    });
-    expect(cleanupTimedOutAgentRun).toHaveBeenCalledOnce();
-    expect(sendCronFailureAlert).toHaveBeenCalledExactlyOnceWith({
-      job: expect.objectContaining({ id: job.id }),
-      routing: { defaultAgentId: "main" },
-      payload: {
-        text: 'Automation "before agent reply unhandled regression" failed 1 times\nCause: timeout',
-      },
-      runAtMs: expect.any(Number),
-      channel: "telegram",
-      to: "12345",
-      mode: "announce",
-      accountId: undefined,
-      threadId: undefined,
-      inheritSessionThread: false,
-      onDeliverySettled: expect.any(Function),
-    });
+    try {
+      const signal = await runner.started.promise;
+      await advance(60_100);
+      await timer;
+      const diagnostic =
+        "cron: isolated agent run stalled before execution start (last phase: runtime-plugins)";
+      const result = requireJob(state, job.id);
+      expect(signal?.aborted).toBe(true);
+      expect(result.state.lastStatus).toBe("error");
+      expect(result.state.lastError).toBe(diagnostic);
+      expect(result.state.lastDiagnosticSummary).toBe(diagnostic);
+      expect(result.state.lastDiagnostics).toEqual({
+        summary: diagnostic,
+        entries: [
+          { source: "cron-setup", severity: "error", message: diagnostic, ts: SCHEDULED_AT },
+        ],
+      });
+      expect(cleanupTimedOutAgentRun).toHaveBeenCalledOnce();
+      expect(sendCronFailureAlert).toHaveBeenCalledExactlyOnceWith({
+        job: expect.objectContaining({ id: job.id }),
+        routing: { defaultAgentId: "main" },
+        payload: {
+          text: 'Automation "before agent reply unhandled regression" failed 1 times\nCause: timeout',
+        },
+        runAtMs: expect.any(Number),
+        channel: "telegram",
+        to: "12345",
+        mode: "announce",
+        accountId: undefined,
+        threadId: undefined,
+        inheritSessionThread: false,
+        onDeliverySettled: expect.any(Function),
+      });
+    } finally {
+      stop(state);
+      runner.result.resolve({ status: "ok", summary: "late" });
+      await drain(timer, runner.result.promise);
+    }
   });
 
-  it("disables the outer watchdog for an unlimited main system-event heartbeat", async () => {
-    const job = dueJob("unlimited-systemEvent", {
+  it("keeps an explicitly unlimited main agent turn running", async () => {
+    const job = dueJob("unlimited-main-agent", {
       sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "check heartbeat work" },
+      payload: { kind: "agentTurn", message: "Continue the work", timeoutSeconds: 0 },
     });
     const started = createDeferred();
     const release = createDeferred();
     const { state, advance } = await fixture(job, {
-      nowMs: Date.now,
-      defaultAgentId: "main",
-      resolveHeartbeatTimeoutMs: vi.fn(() => undefined),
-      requestHeartbeatAndWait: vi.fn(async (_wake, { onQueued, onAttemptStarted }) => {
-        onQueued?.();
-        onAttemptStarted?.();
+      runSessionEvent: vi.fn(async ({ onExecutionStarted }) => {
+        onExecutionStarted?.({ jobId: job.id, phase: "model_call_started" });
         started.resolve();
         await release.promise;
-        return { status: "ran" as const, durationMs: 1 };
+        return { status: "ok" as const };
       }),
     });
     const timer = onTimer(state);
@@ -474,43 +486,48 @@ describe("cron execution watchdogs", () => {
     });
     try {
       await started.promise;
-      await advance(20 * 60_000);
+      await advance(61 * 60_000);
       expect(settled).toBe(false);
       release.resolve();
       await timer;
       expect(requireJob(state, job.id).state.lastStatus).toBe("ok");
     } finally {
+      stop(state);
       release.resolve();
-      await timer;
+      await drain(timer, release.promise);
     }
   });
 
-  it("keeps the cron deadline while a heartbeat-backed trigger is still evaluating", async () => {
-    const job = dueJob("heartbeat-trigger-watchdog", {
+  it("bounds a main session-event trigger before runner admission", async () => {
+    const job = dueJob("main-event-trigger-watchdog", {
       sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "check heartbeat work" },
+      payload: { kind: "systemEvent", text: "Deliver the reminder" },
       schedule: { kind: "every", everyMs: 60_000, anchorMs: SCHEDULED_AT - 60_000 },
       trigger: { script: "return { fire: true };" },
     });
     const started = createDeferred();
-    const resolveHeartbeatTimeoutMs = vi.fn(() => 15 * 60_000);
+    const release = createDeferred<{ kind: "evaluated"; fire: false }>();
+    const runSessionEvent = vi.fn(async () => ({ status: "ok" as const }));
     const { state, advance } = await fixture(job, {
-      nowMs: Date.now,
-      defaultAgentId: "main",
-      resolveHeartbeatTimeoutMs,
-      requestHeartbeatAndWait: vi.fn(async () => ({ status: "ran" as const, durationMs: 1 })),
+      runSessionEvent,
       evaluateCronTrigger: vi.fn(async () => {
         started.resolve();
-        return await new Promise<never>(() => {});
+        return await release.promise;
       }),
     });
     const timer = onTimer(state);
-    await started.promise;
-    await advance(10 * 60_000 + 1);
-    await timer;
-    expect(resolveHeartbeatTimeoutMs).not.toHaveBeenCalled();
-    expect(state.deps.requestHeartbeatAndWait).not.toHaveBeenCalled();
-    expect(requireJob(state, job.id).state.lastError).toContain("job execution timed out");
+    try {
+      await started.promise;
+      await advance(60_001);
+      await timer;
+      expect(runSessionEvent).not.toHaveBeenCalled();
+      expect(requireJob(state, job.id).state.lastError).toContain(
+        "setup timed out before runner start",
+      );
+    } finally {
+      stop(state);
+      release.resolve({ kind: "evaluated", fire: false });
+      await drain(timer, release.promise);
+    }
   });
 });

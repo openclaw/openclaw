@@ -7,6 +7,7 @@ import { resolveSandboxHostPort } from "../agents/sandbox-host.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { resolveCanvasNodeCapability } from "../canvas/constants.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import type { DeferredHookWake } from "../cron/service/wake.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import type { GatewayTlsRuntime } from "../infra/tls/gateway.js";
@@ -99,6 +100,7 @@ export async function createGatewayHttpTransport(params: {
   isStartupPluginRuntimeReady?: () => boolean;
   getGatewayRequestContext?: () => GatewayRequestContext | undefined;
   httpRequestLifetime?: GatewayHttpRequestLifetime;
+  deferHookWake?: DeferredHookWake;
   deps: CliDeps;
   log: { info: (msg: string) => void; warn: (msg: string) => void };
   logHooks: ReturnType<typeof createSubsystemLogger>;
@@ -163,6 +165,7 @@ export async function createGatewayHttpTransport(params: {
         createGatewayHookDispatcher({
           deps: params.deps,
           logHooks: params.logHooks,
+          deferHookWake: params.deferHookWake,
           ...(params.getGatewayRequestContext
             ? { resolveGatewayContext: params.getGatewayRequestContext }
             : {}),

@@ -7,14 +7,37 @@ import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/r
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
 import { modelTransportRoutesMatch } from "../../agents/model-compat-catalog.js";
+import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import {
   findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
 } from "../../config/model-provider-config.js";
+import { resolveCronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import type { FollowupRun } from "./queue.js";
 import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
-import { getReplySystemEventContext } from "./system-event-session-key.js";
+
+export function resolveReplyScheduledToolPolicy(
+  run: Pick<FollowupRun["run"], "scheduledAutomation" | "scheduledToolPolicy">,
+) {
+  const automation = run.scheduledAutomation;
+  automation?.assertCurrent();
+  if (!automation || run.scheduledToolPolicy) {
+    return run.scheduledToolPolicy;
+  }
+  const job = automation.job;
+  const toolsAllow = job.payload.kind === "agentTurn" ? job.payload.toolsAllow : undefined;
+  return resolveScheduledToolPolicyContext({
+    toolsAllow,
+    scheduledToolPolicy: resolveCronScheduledToolPolicy({
+      toolsAllow,
+      scheduledToolPolicy: job.scheduledToolPolicy,
+      owner: job.owner,
+    }),
+    callerOrigin: job.toolsAllowProvenance?.callerOrigin,
+    execTarget: job.toolsAllowExecTarget,
+  });
+}
 
 export function resolveModelFallbackOptions(
   run: FollowupRun["run"],
@@ -105,8 +128,6 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     preparedRunAdmission: params.preparedRunAdmission,
     messageActionTurnCapability: params.messageActionTurnCapability,
     trigger: resolveReplyRunTrigger(turn),
-    heartbeatEventQueueSessionKey: getReplySystemEventContext(turn.opts)
-      ?.heartbeatEventQueueSessionKey,
     lane: params.runLane,
     fastModeStartedAtMs: params.fastModeStartedAtMs,
     fastModeAutoProgressState: params.fastModeAutoProgressState,
@@ -123,8 +144,10 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     currentInboundContext: turn.followupRun.currentInboundContext,
     extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
     sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
-    // Omit false so heartbeat routes require explicit recipients without changing subagent defaults.
-    ...(turn.isHeartbeat ? { requireExplicitMessageTarget: true as const } : {}),
+    // Scheduled routes are delivery context, never implicit message recipients.
+    ...(turn.followupRun.run.scheduledAutomation
+      ? { requireExplicitMessageTarget: true as const }
+      : {}),
     cleanupBundleMcpOnRunEnd: turn.opts?.cleanupBundleMcpOnRunEnd,
     silentReplyPromptMode: turn.followupRun.run.silentReplyPromptMode,
     suppressNextUserMessagePersistence: params.suppressQueuedUserPersistenceForCandidate,
@@ -132,7 +155,6 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     prepareAssistantTranscriptMessage: turn.opts?.prepareAssistantTranscriptMessage,
     toolsAllow: turn.opts?.toolsAllow,
     disableTools: turn.opts?.disableTools,
-    continuesConversation: turn.opts?.continuesConversation,
     bootstrapContextMode: turn.opts?.bootstrapContextMode,
     bootstrapContextRunKind: params.bootstrapContextRunKind,
     images: params.currentTurnImages.images,

@@ -92,9 +92,9 @@ With local llama.cpp embeddings, `--deep` and `--index` also show available
 server, model, capability, and endpoint diagnostics.
 
 If the `Dreaming` line stays `off` even with `dreaming.enabled: true`, or
-scheduled sweeps never seem to run, the managed dreaming cron depends on the
-default agent's heartbeat firing to trigger reconciliation. See
-[Dreaming](/concepts/dreaming) for scheduling details.
+scheduled sweeps never seem to run, inspect the managed dreaming job with
+`openclaw automations list --all`. See [Dreaming](/concepts/dreaming) for
+scheduling and owner-selection details.
 
 Status also lists any extra search paths from `memory.search.extraPaths`.
 Storage diagnostics show the shared agent database file, WAL, reusable free pages,

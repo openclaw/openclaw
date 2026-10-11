@@ -3,6 +3,7 @@ import { normalizeChatType } from "../../../channels/chat-type.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { logMessageQueuedWithBacklogPolicy } from "../../../logging/diagnostic-runtime.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
+import { getGatewayRestartDrainSignal } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -26,6 +27,7 @@ import {
 } from "./recent-message-ids.js";
 import {
   FOLLOWUP_QUEUES,
+  clearFollowupQueue,
   getExistingFollowupQueue,
   getFollowupQueue,
   trimSummaryElisionsToCap,
@@ -86,6 +88,10 @@ export function enqueueFollowupRun(
   if (isFollowupRunAborted(run)) {
     return false;
   }
+  if (getGatewayRestartDrainSignal().aborted) {
+    completeFollowupRunLifecycle(run);
+    return false;
+  }
   if (options.position === "front") {
     run.protectFromQueueOverflow = true;
   }
@@ -117,6 +123,15 @@ export function enqueueFollowupRun(
     return false;
   }
   if (!markFollowupRunEnqueued(run)) {
+    return false;
+  }
+  // Admission callbacks can synchronously commit drain while this source is being deferred.
+  if (getGatewayRestartDrainSignal().aborted) {
+    completeFollowupRunLifecycle(run);
+    if (FOLLOWUP_QUEUES.get(key) === queue) {
+      clearFollowupQueue(key);
+      clearFollowupDrainCallback(key);
+    }
     return false;
   }
   if (options.steerCandidate) {

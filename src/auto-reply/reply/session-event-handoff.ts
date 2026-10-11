@@ -14,6 +14,7 @@ import {
   readExecRequestOwners,
   withExecRequestOwners,
 } from "../../infra/exec-request-context.js";
+import type { SourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.types.js";
 import {
   resolveSystemEventQueueKey,
   withSystemEventOwner,
@@ -33,7 +34,9 @@ import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
 import type { ReplyOperation } from "./reply-run-registry.contracts.js";
+import { settleSessionAutomationTurn } from "./session-event-automation.js";
 import type {
+  ScheduledSessionAutomation,
   SessionEventOutcome,
   SessionEventReceipt,
   SessionEventSource,
@@ -45,6 +48,7 @@ import {
   assertSessionEventSettingsCurrent,
   captureSessionEventTargetForHost,
   getSessionEventRuntimeConfig,
+  intersectSessionEventToolsAllow,
   prepareSessionEventTargetForHost,
   readSessionEventTargetEnvironment,
   resolveSessionEventKey,
@@ -84,6 +88,7 @@ export function enqueueSessionEventForHost(
     onAdopted?: () => void | Promise<void>;
     /** Transfer exact queued occurrences into one ordinary turn without duplicating them. */
     occurrences?: readonly SystemEvent[];
+    scheduledAutomation?: ScheduledSessionAutomation;
     /** Failed promotion retains an existing passive occurrence until ordinary adoption begins. */
     preserveOccurrenceOnRejection?: true;
     /** An explicitly silent source records its result without transport delivery. */
@@ -191,6 +196,16 @@ export function enqueueSessionEventForHost(
   let started = false;
   let admissionStarted = false;
   let deferred = false;
+  let admissionDeferred = false;
+  let admissionDeferredReason: SessionEventOutcome["admissionDeferredReason"];
+  const shouldDeferScheduledStart = () => {
+    const decision = options.scheduledAutomation?.beforeStart?.(operation);
+    if (decision === undefined || decision === true) {
+      return false;
+    }
+    admissionDeferredReason = typeof decision === "string" ? decision : undefined;
+    return true;
+  };
   let adopted = false;
   let operation: ReplyOperation | undefined;
   let replyRunRegistry: (typeof import("./reply-run-registry.js"))["replyRunRegistry"];
@@ -200,10 +215,14 @@ export function enqueueSessionEventForHost(
   let deliverySuppressionReason: NormalizeReplySkipReason | undefined;
   let summary: string | undefined;
   let failure: string | undefined;
+  let nextCheckMs: number | undefined;
+  let sourceDeliveryOutcome: SourceDeliveryOutcome | undefined;
   let settlement: "settling" | "finished" | undefined;
   let settings = options.expectedTarget?.settings;
   let settingsAdmitted = false;
-  const toolsAllow = options.expectedTarget?.toolsAllow;
+  const jobTools = options.scheduledAutomation?.job.payload.toolsAllow;
+  const producerTools = options.expectedTarget?.toolsAllow;
+  const toolsAllow = intersectSessionEventToolsAllow(jobTools, producerTools);
   const assertOwnerCurrent = () => {
     if (settlement === "finished") {
       throw new Error("Session event occurrence is settled");
@@ -223,9 +242,10 @@ export function enqueueSessionEventForHost(
     if (resolveSessionStorePathCore(currentConfig.session?.store, { agentId, env }) !== storePath) {
       throw new Error("Session event destination store changed before settlement");
     }
-    if (isAgentDeletionBlocked(agentId)) {
+    if (isAgentDeletionBlocked(agentId, { env })) {
       throw new Error("Session event agent is being deleted");
     }
+    options.scheduledAutomation?.assertCurrent();
     if (
       operation &&
       (operation.abortSignal.aborted || replyRunRegistry.get(sessionKey) !== operation)
@@ -270,10 +290,53 @@ export function enqueueSessionEventForHost(
       generationLease = replacementLease;
       preparedBinding = replacement;
     }
+    await options.scheduledAutomation?.prepare?.();
     for (let read = generationLease?.prepareRead(); read; read = generationLease?.prepareRead()) {
       await read;
     }
     assertCurrent();
+  };
+  const start = (runId: string) => {
+    assertCurrent();
+    if (started) {
+      return;
+    }
+    options.scheduledAutomation?.onStarted?.();
+    ownership.start();
+    started = true;
+    accept();
+    options.scheduledAutomation?.onExecutionStarted?.({
+      runId,
+      sessionId: operation?.sessionId,
+      sessionKey,
+    });
+  };
+  const prepareStart = async (runId?: string) => {
+    if (started) {
+      await prepareCurrent();
+      return;
+    }
+    const startSignal = operation ? AbortSignal.any([signal, operation.abortSignal]) : signal;
+    await options.scheduledAutomation?.capacity?.resume(startSignal);
+    await prepareCurrent();
+    if (started) {
+      return;
+    }
+    while (shouldDeferScheduledStart()) {
+      if (admissionDeferredReason === "busy" && options.scheduledAutomation?.waitForIdle) {
+        await options.scheduledAutomation.waitForIdle(startSignal, operation);
+        assertCurrent();
+        await options.scheduledAutomation.capacity?.resume(startSignal);
+        await prepareCurrent();
+        continue;
+      }
+      admissionDeferred = true;
+      throw new Error("Automation admission deferred by its current window or foreground activity");
+    }
+    if (runId) {
+      // Commit the policy decision before native binding; later visible progress cannot veto it.
+      start(runId);
+    }
   };
   const finish = () => {
     if (settlement) {
@@ -313,11 +376,15 @@ export function enqueueSessionEventForHost(
         deliveryAttempted,
         deliveryAmbiguous,
         deliverySuppressionReason,
+        admissionDeferredReason: !started ? admissionDeferredReason : undefined,
         admissionDeferred:
           !started &&
-          operation?.result?.kind === "aborted" &&
-          operation.result.code === "aborted_for_supersession",
+          (admissionDeferred ||
+            (operation?.result?.kind === "aborted" &&
+              operation.result.code === "aborted_for_supersession")),
         summary,
+        nextCheckMs,
+        sourceDeliveryOutcome,
         ...(failure ? { error: failure } : {}),
       });
     };
@@ -341,6 +408,9 @@ export function enqueueSessionEventForHost(
     if (options.deliver === false || target?.deliver === false) {
       return;
     }
+    if (kind === "final" && sourceDeliveryOutcome?.satisfiesSourceDelivery) {
+      return;
+    }
     if (!route?.channel || route.channel === INTERNAL_MESSAGE_CHANNEL) {
       // The normal transcript remains the result for internal/WebChat turns.
       // This is not evidence of a transport send.
@@ -357,6 +427,7 @@ export function enqueueSessionEventForHost(
     const deliveryConfig = getSessionEventRuntimeConfig();
     const assertDeliveryCurrent = () => {
       assertCurrent();
+      options.scheduledAutomation?.assertDeliveryCurrent?.();
       if (getSessionEventRuntimeConfig() !== deliveryConfig) {
         throw new Error("Session event delivery policy changed before send");
       }
@@ -373,7 +444,10 @@ export function enqueueSessionEventForHost(
       replyKind: kind,
       abortSignal: signal,
       mirror: false,
-      beforeDeliver: async () => assertDeliveryCurrent(),
+      beforeDeliver: async () => {
+        await options.scheduledAutomation?.beforeDeliver?.();
+        assertDeliveryCurrent();
+      },
       assertCurrent: assertDeliveryCurrent,
     });
     delivered ||= result.delivered;
@@ -449,11 +523,28 @@ export function enqueueSessionEventForHost(
           },
         },
         replyOptions: {
+          scheduledAutomation: options.scheduledAutomation,
+          ...(options.scheduledAutomation
+            ? {
+                sourceReplyDeliveryMode: "automatic" as const,
+                allowEmptyAssistantReplyAsSilent: true,
+              }
+            : {}),
           admittedSessionSettings: settings,
           toolsAllow,
           onDeliberateSilentTerminalReply: () => {
             deliverySuppressionReason = "silent";
           },
+          ...(options.scheduledAutomation?.job.payload.kind === "agentTurn"
+            ? {
+                modelOverride: options.scheduledAutomation.job.payload.model,
+                thinkingLevelOverride: options.scheduledAutomation.job.payload.thinking,
+                timeoutOverrideSeconds: options.scheduledAutomation.job.payload.timeoutSeconds,
+                bootstrapContextMode: options.scheduledAutomation.job.payload.lightContext
+                  ? "lightweight"
+                  : "full",
+              }
+            : {}),
           abortSignal: signal,
           expectedExistingSessionId: target.sessionId || undefined,
           pinExpectedExistingSession: Boolean(target.sessionId),
@@ -480,9 +571,12 @@ export function enqueueSessionEventForHost(
                       throw new Error("Session event lost its original generation owner");
                     }
                     const assertCreationCurrent = generationLease.bindCreation(creation);
+                    const assertNoticeCreationCurrent =
+                      options.scheduledAutomation?.bindSessionCreation?.(creation);
                     return () => {
                       assertOwnerCurrent();
                       assertCreationCurrent();
+                      assertNoticeCreationCurrent?.();
                     };
                   },
                 }
@@ -496,18 +590,31 @@ export function enqueueSessionEventForHost(
                 failure ??= "Session event execution was aborted";
               }
             },
-            beforeStart: prepareCurrent,
-            onStarted: () => {
-              assertCurrent();
-              ownership.start();
-              started = true;
-              accept();
-            },
-            onTerminal: (_runId, outcome) => {
+            beforeStart: () => prepareStart(),
+            ...(options.scheduledAutomation ? { beforeScheduledStart: prepareStart } : {}),
+            onStarted: start,
+            onTerminal: async (runId, outcome, deliveryEvidence) => {
               if (outcome !== "completed") {
                 failure ??= `Session event execution ${outcome}`;
               }
               assertCurrent();
+              if (options.scheduledAutomation) {
+                const automationOutcome = await settleSessionAutomationTurn({
+                  automation: options.scheduledAutomation,
+                  runId,
+                  deliveryEvidence,
+                  cfg,
+                  scope: preparedBinding
+                    ? { agentId, sessionKey, storePath, ...preparedBinding }
+                    : undefined,
+                  assertCurrent,
+                  prepareCurrent,
+                });
+                summary = automationOutcome.summary ?? summary;
+                nextCheckMs = automationOutcome.nextCheckMs;
+                sourceDeliveryOutcome = automationOutcome.sourceDeliveryOutcome;
+                delivered ||= sourceDeliveryOutcome?.satisfiesSourceDelivery === true;
+              }
             },
           },
           onQueuedFollowupReplyBatch: async (batch) => {
@@ -531,6 +638,7 @@ export function enqueueSessionEventForHost(
             onDeferred: () => {
               assertCurrent();
               deferred = true;
+              options.scheduledAutomation?.capacity?.suspend();
               return true;
             },
             onAdopted: async () => {

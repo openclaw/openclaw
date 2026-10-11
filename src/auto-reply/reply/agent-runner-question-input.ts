@@ -52,7 +52,6 @@ export async function runReplyQuestionInput(
   ).trim();
   if (
     !sessionKey ||
-    opts?.isHeartbeat ||
     params.resetTriggered ||
     opts?.messageInjectionDisposition === "accepted" ||
     !external ||

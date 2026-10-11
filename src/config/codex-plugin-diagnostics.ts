@@ -171,11 +171,6 @@ function configuredRefIsEffectiveForAgent(params: {
     return params.selectedModelRefs.has(params.value);
   }
   const agent = resolveAgentConfig(params.cfg, params.agentId);
-  if (params.path.endsWith(".heartbeat.model")) {
-    const heartbeat =
-      agent?.heartbeat?.model?.trim() || params.cfg.agents?.defaults?.heartbeat?.model?.trim();
-    return heartbeat === params.value;
-  }
   if (params.path.endsWith(".utilityModel")) {
     const utilityModel = (agent?.utilityModel ?? params.cfg.agents?.defaults?.utilityModel)?.trim();
     return utilityModel === params.value;

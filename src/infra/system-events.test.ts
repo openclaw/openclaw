@@ -26,7 +26,6 @@ import {
   enqueueSystemEventEntry,
   enqueueSystemEventWithReceipt,
   hasSystemEvents,
-  holdSystemEventDelivery,
   isSystemEventContextChanged,
   peekDeliverableSystemEventEntries,
   peekSystemEventEntries,
@@ -89,7 +88,7 @@ describe("delivery-owned system event selection", () => {
     },
   );
 
-  it("leaves an ordinary occurrence with its owner through periodic and user selection", async () => {
+  it("leaves ordinary and exec occurrences with their exact owners through user selection", async () => {
     const sessionKey = "agent:main:ordinary-event-owner";
     const occurrence = expectDefined(
       enqueueSystemEventEntry("Task completed", { sessionKey }),
@@ -105,11 +104,15 @@ describe("delivery-owned system event selection", () => {
       "ordinary owner",
     );
     enqueueSystemEvent("Passive notice", { sessionKey });
-    const held = expectDefined(
+    const execOccurrence = expectDefined(
       enqueueSystemEventEntry("Exec finished (gateway id=uncertain, code 0)", { sessionKey }),
-      "held completion",
+      "exec completion",
     );
-    holdSystemEventDelivery(sessionKey, [held]);
+    const execCancelled = vi.fn();
+    const execOwner = expectDefined(
+      claimSystemEventTurn(sessionKey, [execOccurrence], execCancelled, "main"),
+      "exec completion owner",
+    );
     expect(peekDeliverableSystemEventEntries(sessionKey).map(({ text }) => text)).toEqual([
       "Passive notice",
     ]);
@@ -123,16 +126,22 @@ describe("delivery-owned system event selection", () => {
     expect(prompt).toContain("Passive notice");
     expect(prompt).not.toContain("Task completed");
     expect(prompt).not.toContain("Sibling completed");
+    expect(prompt).not.toContain(execOccurrence.text);
     expect(peekSystemEventEntries(sessionKey).map(({ id }) => id)).toEqual([
       occurrence.id,
       sibling.id,
-      held.id,
+      execOccurrence.id,
     ]);
     expect(cancelled).not.toHaveBeenCalled();
     owner.start();
-    expect(peekSystemEventEntries(sessionKey).map(({ id }) => id)).toEqual([held.id]);
+    expect(peekSystemEventEntries(sessionKey).map(({ id }) => id)).toEqual([execOccurrence.id]);
     expect(cancelled).not.toHaveBeenCalled();
     expect(owner.cancel()).toBe(false);
+    expect(execCancelled).not.toHaveBeenCalled();
+    execOwner.start();
+    expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+    expect(execOwner.cancel()).toBe(false);
+    expect(execCancelled).not.toHaveBeenCalled();
   });
 
   it("retires ordinary owners on soft restart while keeping passive receipt custody", async () => {
@@ -695,32 +704,24 @@ describe("system events (session routing)", () => {
     expect(second.peekSystemEvents(beta)).toEqual([]);
   });
 
-  it("filters heartbeat/noise lines, returning undefined", async () => {
-    const key = "agent:main:test-heartbeat-filter";
-    enqueueSystemEvent("Read HEARTBEAT.md before continuing", { sessionKey: key });
-    enqueueSystemEvent("heartbeat poll: pending", { sessionKey: key });
-    enqueueSystemEvent("reason periodic: 5m", { sessionKey: key });
+  it("drains ordinary notices regardless of text that formerly selected heartbeat execution", async () => {
+    const key = "agent:main:test-ordinary-notices";
+    const notices = [
+      "Read HEARTBEAT.md before continuing",
+      "heartbeat poll: pending",
+      "reason periodic: 5m",
+      "Exec finished (gateway id=abc12345, code 0)",
+      "Exec failed (abc12345, signal SIGTERM) :: browser auth timed out",
+    ];
+    for (const text of notices) {
+      enqueueSystemEvent(text, { sessionKey: key });
+    }
 
     const result = await drainFormattedEvents(key);
-    expect(result).toBeUndefined();
-    expect(peekSystemEvents(key)).toStrictEqual([]);
-  });
-
-  it.each([
-    "Exec finished (gateway id=abc12345, code 0)",
-    "Exec failed (abc12345, signal SIGTERM) :: browser auth timed out",
-  ])("drains generic events without consuming %s", async (completion) => {
-    const key = "agent:main:test-exec-completion-prefix";
-    enqueueSystemEvent("Model switched to gpt-5.5", { sessionKey: key });
-    enqueueSystemEvent(completion, { sessionKey: key });
-    enqueueSystemEvent("Node connected", { sessionKey: key });
-
-    const result = await drainFormattedEvents(key);
-    expect(result).toContain("Model switched to gpt-5.5");
-    expect(result).toContain("Node connected");
-    expect(peekSystemEvents(key)).toEqual([completion]);
-    expect(await drainFormattedEvents(key)).toBeUndefined();
-    expect(peekSystemEvents(key)).toEqual([completion]);
+    for (const text of notices) {
+      expect(result).toContain(text);
+    }
+    expect(peekSystemEvents(key)).toEqual([]);
   });
 
   it.each([

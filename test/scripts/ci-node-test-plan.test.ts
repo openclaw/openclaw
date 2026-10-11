@@ -3110,7 +3110,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const targets = [
       "src/config/allowed-values.test.ts",
       "src/commands/doctor-heartbeat-cadence-migration.test.ts",
-      "src/infra/heartbeat-runner.ack-token-heartbeat-acks.test.ts",
+      "src/infra/exec-approvals.test.ts",
       "src/infra/runtime-guard.test.ts",
       heavyCli,
       "src/cli/directory-cli.test.ts",
@@ -3132,7 +3132,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const cliFiles = [heavyCli, "src/cli/directory-cli.test.ts", ...fillers("src/cli/fixture", 8)];
     const infraFiles = [
       ...targets.filter((file) => file.startsWith("src/infra/")),
-      ...fillers("src/infra/heartbeat-runner"),
+      ...fillers("src/infra/exec-approvals"),
       ...fillers("src/infra/runtime-guard"),
       ...fillers("src/infra/os-summary", 10),
       ...fillers("src/infra/provider-usage", 10),
@@ -3143,7 +3143,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const inventory = [...configFiles, ...cliFiles, ...infraFiles, ...commandFiles];
     const timings: Record<string, number> = {
       "core-runtime-config": 240,
-      "core-runtime-infra-heartbeat-runner": 170,
+      "core-runtime-infra-approval-exec": 170,
       "core-runtime-infra-system-runtime": 160,
       "core-runtime-infra-misc-os": 170,
       "core-runtime-infra-provider-push": 160,

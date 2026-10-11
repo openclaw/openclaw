@@ -1,5 +1,5 @@
-import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { describe, expect, it } from "vitest";
+import type { MemoryIndexDatabase } from "./memory/manager-database-context.js";
 import { createManagerIndexFixture } from "./memory/manager-index.test-support.js";
 import { testing } from "./tools.js";
 import { createMemorySearchToolOrThrow } from "./tools.test-helpers.js";
@@ -31,10 +31,12 @@ describe("memory_search local provider degradation", () => {
         });
         fixture.provider.beforeEmbedQuery = async () => {
           if (mismatch) {
-            const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
-            db.prepare(
-              "UPDATE memory_index_meta SET value = json_set(value, '$.model', ?) WHERE key = 'memory_index_meta_v1'",
-            ).run("different-embedding-model");
+            const database = Reflect.get(manager, "publishedDatabase") as MemoryIndexDatabase;
+            const meta = database.facts.meta;
+            if (!meta) {
+              throw new Error("Expected the published index metadata");
+            }
+            await database.writeMetadata({ ...meta, model: "different-embedding-model" });
           }
           throw new Error("HTTP 400: synthetic embedding transport failure");
         };

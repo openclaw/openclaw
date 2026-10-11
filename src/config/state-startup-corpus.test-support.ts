@@ -9,9 +9,11 @@ import { listAgentIds } from "../agents/agent-scope-config.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles.js";
 import { acquireReadOnlyPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
 import { runDoctorConfigPreflight } from "../commands/doctor-config-preflight.js";
+import { retireHeartbeatWithDoctor } from "../commands/doctor-heartbeat-retirement.js";
 import { applyLegacyCompatibilityStep } from "../commands/doctor/shared/config-flow-steps.js";
 import { normalizeCompatibilityConfigValues } from "../commands/doctor/shared/legacy-config-core-migrate.js";
 import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import type { CronStoredJob } from "../cron/types.js";
 import { loadGatewayStartupConfigSnapshot } from "../gateway/server-startup-config-helpers.js";
 import { runStartupSessionMaintenanceForTest } from "../gateway/server-startup-session-migration.test-support.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -209,15 +211,19 @@ export function createStateStartupCorpusFixture() {
               sourceRaw: snapshot.parsed,
             });
             fs.writeFileSync(configPath, JSON.stringify(normalized.config));
+            let firstPassJobs: CronStoredJob[] | undefined;
             // Repeat the real repair path: a second run must preserve the same records.
             for (let pass = 0; pass < 2; pass += 1) {
               phase("doctor-repair");
-              await runDoctorConfigPreflight({
+              const preflight = await runDoctorConfigPreflight({
                 observe: false,
                 repairPrefixedConfig: true,
                 doctorOnlyStateMigrations: true,
                 preparePluginMetadataSnapshot: true,
               });
+              phase("heartbeat-retirement");
+              const retired = await retireHeartbeatWithDoctor(preflight.baseConfig, process.env);
+              fs.writeFileSync(configPath, JSON.stringify(retired));
               phase("startup-config-read");
               const initialSnapshotRead = await io.readConfigFileSnapshotWithPluginMetadata();
               phase("startup-config");
@@ -260,6 +266,11 @@ export function createStateStartupCorpusFixture() {
               expect(cron.jobs.find((job) => job.id === fixture.cronJob.id)).toMatchObject(
                 fixture.cronJob,
               );
+              if (firstPassJobs) {
+                expect(cron.jobs).toEqual(firstPassJobs);
+              } else {
+                firstPassJobs = structuredClone(cron.jobs);
+              }
               expect(getUserPreferences(fixture.controlUi.userId)).toMatchObject(
                 fixture.controlUi.settings,
               );

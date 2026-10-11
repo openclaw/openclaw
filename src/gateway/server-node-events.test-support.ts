@@ -1,6 +1,10 @@
 import { vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import type {
+  SessionEventReceipt,
+  SessionEventTarget,
+} from "../auto-reply/reply/session-event-handoff.js";
 import type { DurableMessageBatchSendResult } from "../channels/message/runtime.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -78,7 +82,26 @@ const runtimeMocks = vi.hoisted(() => ({
   },
   deleteMediaBuffer: vi.fn(async () => {}),
   deliverOutboundPayloads: vi.fn(async () => {}),
-  enqueueSystemEvent: vi.fn(),
+  enqueueSystemEventEntry: vi.fn(),
+  captureSessionEventTargetForHost: vi.fn(
+    async (_agentId: string, _sessionKey: string): Promise<SessionEventTarget> => ({
+      sessionId: "captured-session",
+      generation: "captured-generation",
+    }),
+  ),
+  enqueueSessionEventForHost: vi.fn(
+    (
+      _text: string,
+      _options: Parameters<
+        typeof import("../auto-reply/reply/session-event-handoff.js").enqueueSessionEventForHost
+      >[1],
+    ): SessionEventReceipt => ({
+      id: "accepted-event",
+      cancel: () => true,
+      accepted: Promise.resolve({ ok: true }),
+      settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
+    }),
+  ),
   formatForLog: vi.fn((err: unknown) => (err instanceof Error ? err.message : String(err))),
   getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "main" } })),
   INLINE_IMAGE_DURABLE_OMISSION_MARKER:
@@ -89,7 +112,6 @@ const runtimeMocks = vi.hoisted(() => ({
   normalizeChannelId: normalizeChannelIdMock,
   parseMessageWithAttachments: parseMessageWithAttachmentsMock,
   registerApnsRegistration: registerApnsRegistrationMock,
-  requestHeartbeat: vi.fn(),
   resolveSystemMainSessionTarget: vi.fn(() => ({
     agentId: "ops",
     sessionKey: "agent:ops:main",
@@ -177,9 +199,21 @@ vi.mock("../infra/device-pairing.js", async (importOriginal) => ({
   updatePairedDevicePresence: updatePairedDevicePresenceMock,
 }));
 
-vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/heartbeat-wake.js")>()),
-  requestHeartbeat: runtimeMocks.requestHeartbeat,
+vi.mock("../auto-reply/reply/session-event-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../auto-reply/reply/session-event-handoff.js")>()),
+  captureSessionEventTargetForHost: runtimeMocks.captureSessionEventTargetForHost,
+  enqueueSessionEventForHost: runtimeMocks.enqueueSessionEventForHost,
+}));
+
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
+  resolveGatewaySessionStoreTargetInWorker: async ({ key }: { key: string }) => {
+    const lookup = runtimeMocks.loadSessionEntry(key);
+    return {
+      ...lookup,
+      store: lookup.entry ? { [lookup.canonicalKey]: lookup.entry } : {},
+    };
+  },
 }));
 
 vi.mock("../infra/push-apns.js", async (importOriginal) => ({
@@ -190,7 +224,7 @@ vi.mock("../infra/push-apns.js", async (importOriginal) => ({
 
 vi.mock("../infra/system-events.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/system-events.js")>()),
-  enqueueSystemEvent: runtimeMocks.enqueueSystemEvent,
+  enqueueSystemEventEntry: runtimeMocks.enqueueSystemEventEntry,
 }));
 
 vi.mock("../media/store.js", async (importOriginal) => ({

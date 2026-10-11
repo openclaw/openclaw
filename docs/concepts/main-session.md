@@ -17,7 +17,7 @@ Under the hood the main session is an ordinary session with the canonical key
 `agent:<agentId>:main` (for example `agent:main:main`). The suffix is fixed;
 custom `session.mainKey` values are ignored. What makes it special
 is that the default DM scope collapses all direct messages into it, and that
-the rest of the system treats it as the agent's root: heartbeats wake it,
+the rest of the system treats it as the agent's root: proactive automations can target it,
 background work reports back to it, and activity elsewhere flows up to it.
 
 ## Home
@@ -56,7 +56,7 @@ world converges:
 
 - **New sessions.** By default, creating a session queues a system notice in its
   agent's Home conversation with the session key and available title, creator,
-  and creation source. Home sees it on its next turn or scheduled heartbeat;
+  and creation source. Home sees it on its next ordinary conversation turn;
   creation does not trigger an extra wake-up. Set `session.notifyOnCreate: false`
   to opt out. Home itself, drafts, incognito sessions, hidden internal sessions,
   and scheduled cron runs are excluded. Resetting or reopening an existing
@@ -68,15 +68,17 @@ world converges:
   group and room sessions stay isolated while the main session automatically watches them.
   Activity queues up as compact notices — coalesced per conversation, never
   one wake-up per message — and the agent sees them the next time it runs: on
-  your next message or on a scheduled heartbeat. Under `tools.sessions.visibility: "all"`
+  your next message or through a session-event follow-up. Under `tools.sessions.visibility: "all"`
   (the default), the main session can use [session tools](/concepts/session-tool) across the Gateway,
   with cross-agent access governed by `tools.agentToAgent` and on by default;
   its system prompt names watched groups so it knows where recent activity happened.
 - **Background work.** Sub-agents and spawned sessions announce their results
   back to the session that started them, so work the agent kicked off from
   Home reports back to Home.
-- **Heartbeats.** Scheduled heartbeats target the main session, which is what
-  turns queued notices into awareness even when you have not written anything.
+- **Proactive checks.** Ordinary automations can target the main session to
+  perform a scheduled check without a new message. Put required instructions in
+  the job or its scratch; scheduled runs consume only deferred notices assigned
+  to that job. See [Heartbeat migration](/gateway/heartbeat).
 
 ## Memory across resets and conversations
 

@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
@@ -366,42 +365,6 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain('agents.runner.security="allowlist"');
     expect(message).toContain('agents.runner.ask="always"');
   });
-
-  it("warns when heartbeat delivery relies on implicit directPolicy defaults", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          heartbeat: {
-            target: "last",
-          },
-        },
-      },
-    } as OpenClawConfig;
-    await noteSecurityWarnings(cfg);
-    const message = lastMessage();
-    expect(message).toContain("Heartbeat defaults");
-    expect(message).toContain("agents.defaults.heartbeat.directPolicy");
-    expect(message).toContain("direct/DM targets by default");
-  });
-
-  it.each([
-    {
-      name: "list",
-      agents: { list: [{ id: "ops", heartbeat: { target: "last" as const } }] },
-      path: 'heartbeat.directPolicy for agent "ops"',
-    },
-  ])(
-    "warns at the $name agent config path for implicit heartbeat directPolicy",
-    async (testCase) => {
-      const cfg: OpenClawConfigWithLegacyRoster = { agents: testCase.agents };
-      await noteSecurityWarnings(cfg);
-
-      const message = lastMessage();
-      expect(message).toContain('Heartbeat agent "ops"');
-      expect(message).toContain(testCase.path);
-      expect(message).toContain("direct/DM targets by default");
-    },
-  );
 
   it.each([{ channel: "discord", label: "Discord" }])(
     "keeps intentional $label open groupPolicy advisory in Doctor and update lint",

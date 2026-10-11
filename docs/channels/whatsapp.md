@@ -279,7 +279,7 @@ Scope the opt-in to one account under `channels.whatsapp.accounts.<id>.pluginHoo
     Runtime notes:
 
     - pairings persist in the channel allow-store and merge with configured `allowFrom`
-    - scheduled automation and heartbeat recipient fallback use explicit delivery targets or configured `allowFrom`; DM pairing approvals are not implicit cron/heartbeat recipients
+    - scheduled automation recipient fallback uses explicit delivery targets or configured `allowFrom`; DM pairing approvals are not implicit automation recipients
     - same-number self-DMs are allowed unless `selfChatMode: false` or `dmPolicy: "disabled"`; see [Self-chat behavior](/channels/whatsapp#personal-number-and-self-chat-behavior)
     - OpenClaw never auto-pairs outbound `fromMe` DMs (messages you send yourself from the linked device)
 

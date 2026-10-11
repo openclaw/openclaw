@@ -250,7 +250,9 @@ it("keeps cross-store patches native and refuses a source revoked before submiss
           workerGuard: { source: fixture.source },
         }),
       ).resolves.toMatchObject({ label: "native cross-store write" });
-      expect(sql.queries).toContainEqual(expect.stringMatching(/^insert into "session_nodes" /i));
+      expect(sql.executedQueries).toContainEqual(
+        expect.stringMatching(/^insert into "session_nodes" /i),
+      );
       // The statement execution observer distinguishes native work from worker-only writes.
       expect(sql.calls[4]).toHaveBeenCalled();
     } finally {

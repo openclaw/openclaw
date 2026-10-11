@@ -630,7 +630,7 @@ export function createSessionActivitySummaries(deps: {
         event.target?.sessionKey ?? event.sessionKey,
         event.target?.agentId ?? event.agentId,
       );
-      if (!target || getAgentRunContext(event.runId ?? "")?.isHeartbeat) {
+      if (!target) {
         return;
       }
       const state = admit(target);
@@ -648,7 +648,6 @@ export function createSessionActivitySummaries(deps: {
       const runContext = getAgentRunContext(event.runId);
       if (
         event.stream !== "lifecycle" ||
-        runContext?.isHeartbeat ||
         !isDefinitiveRunLifecycle({ phase: event.data.phase, data: event.data })
       ) {
         return;

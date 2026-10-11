@@ -22,7 +22,7 @@ function makeState() {
     log: createNoopLogger(),
     nowMs: () => ENDED_AT,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
 }
@@ -89,12 +89,10 @@ describe("cron dynamic cadence", () => {
         atMs: ENDED_AT,
         consecutiveErrors: 1,
       });
-      expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
+      expect(state.deps.enqueueSessionEvent).not.toHaveBeenCalled();
       expect(deferredNotifications).toHaveLength(1);
       runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
-      expect(state.deps.enqueueSystemEvent).toHaveBeenCalledOnce();
-      expect(state.deps.requestHeartbeat).toHaveBeenCalledOnce();
+      expect(state.deps.enqueueSessionEvent).toHaveBeenCalledOnce();
     },
   );
 

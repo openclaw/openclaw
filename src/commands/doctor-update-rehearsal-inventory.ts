@@ -27,7 +27,6 @@ function assertConfigLayout(config: unknown, stateDir: string): void {
   const expected: Record<string, unknown> = {
     "agents.defaults.workspace": workspace,
     "agents.defaults.cwd": workspace,
-    "agents.defaults.heartbeat.every": "0m",
     "logging.file": path.join(stateDir, "canary.log"),
     "gateway.mode": "local",
     "gateway.bind": "loopback",
@@ -74,7 +73,6 @@ function assertConfigLayout(config: unknown, stateDir: string): void {
       !within(workspace, agentWorkspace) ||
       valueAt(agent, "workspace") !== agentWorkspace ||
       valueAt(agent, "cwd") !== agentWorkspace ||
-      valueAt(agent, "heartbeat.every") !== "0m" ||
       typeof agentDir !== "string" ||
       !path.isAbsolute(agentDir) ||
       !within(stateDir, agentDir)

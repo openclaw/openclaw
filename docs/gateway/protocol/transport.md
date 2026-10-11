@@ -224,8 +224,8 @@ revocation of retained sessions.
 ## Connection keepalives
 
 Authenticated control connections use WebSocket ping/pong keepalives. These are
-separate from [scheduled agent heartbeats](/gateway/heartbeat); disabling agent
-heartbeats does not disable connection monitoring.
+separate from [scheduled automations](/automation/cron-jobs); disabling a
+scheduled check does not disable connection monitoring.
 
 A ping queued behind outgoing data is governed by transport inactivity, including
 partial write progress and incoming traffic. Once its write completes, the peer

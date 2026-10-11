@@ -51,6 +51,8 @@ const schemaMigrationDescriptions = {
   "agent-databases-composite-primary-key": "agent database registry primary key -> agent_id,path",
   "agent-databases-relative-paths-v9": "agent database registry paths -> state-relative paths",
   "audit-events-v2": "audit event ledger -> versioned message lifecycle schema",
+  "automation-policy-fence-v21":
+    "automation policy -> ordinary jobs with a v21 compatibility fence (no table changes)",
   "commitments-retirement-v7": "retired commitments storage -> discarded rows, table, and indexes",
   "state-table-retirement-v10": "retired shared-state tables -> removed tables and indexes",
   "state-table-retirement-v11": "retired skill curator tables -> removed tables and indexes",

@@ -1,12 +1,18 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { resolveAgentMainSessionKey } from "../config/sessions.js";
+import { enqueueSessionEventForHost } from "../auto-reply/reply/session-event-handoff.js";
 import {
-  drainSystemEventEntries,
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   enqueueSystemEventWithReceipt,
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
+import * as gatewayWork from "../process/gateway-work-admission.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -16,7 +22,7 @@ import { CronService, type CronEvent } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { cronStoreKey } from "./store/key.js";
-import type { CronJobCreate } from "./types.js";
+import type { CronDelivery, CronJobCreate } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-one-shot-" });
 const atMs = Date.parse("2025-12-13T00:00:02.000Z");
@@ -37,41 +43,24 @@ const isolatedJob = (overrides: Partial<CronJobCreate> = {}): CronJobCreate =>
     ...overrides,
   });
 
-function sessionKey(target?: { agentId?: string; sessionKey?: string }) {
-  return (
-    target?.sessionKey ??
-    resolveAgentMainSessionKey({ cfg: {}, agentId: target?.agentId ?? "main" })
-  );
-}
-
 async function fixture(
-  options: Partial<
-    Pick<CronServiceDeps, "runIsolatedAgentJob" | "requestHeartbeatAndWait" | "nowMs">
-  > & { removable?: boolean } = {},
+  options: Partial<Pick<CronServiceDeps, "runIsolatedAgentJob" | "runSessionEvent" | "nowMs">> = {},
 ) {
   const store = await makeStorePath();
   const clock = createGatewaySchedulerClock(Date.now());
   const finished = createDeferred<CronEvent>();
-  const enqueueSystemEvent = options.removable
-    ? vi.fn((text: string, opts?: Parameters<CronServiceDeps["enqueueSystemEvent"]>[1]) => {
-        const remove = enqueueSystemEventWithReceipt(text, {
-          sessionKey: sessionKey(opts),
-          contextKey: opts?.contextKey,
-          deliveryContext: opts?.deliveryContext,
-        });
-        return remove ? { accepted: true, remove } : { accepted: false };
-      })
-    : vi.fn();
-  const requestHeartbeat = vi.fn();
+  const enqueueSystemEvent = vi.fn();
+  const enqueueSessionEvent = vi.fn();
+  const runSessionEvent = options.runSessionEvent ?? vi.fn(async () => ({ status: "ok" as const }));
   const deps = {
     scheduler: createTestGatewayScheduler(clock.clock),
     storePath: store.storePath,
     cronEnabled: true,
     log: logger,
     enqueueSystemEvent,
-    requestHeartbeat,
+    enqueueSessionEvent,
+    runSessionEvent,
     nowMs: options.nowMs,
-    requestHeartbeatAndWait: options.requestHeartbeatAndWait,
     runIsolatedAgentJob:
       options.runIsolatedAgentJob ?? vi.fn(async () => ({ status: "ok" as const })),
     onEvent: (event: CronEvent) => {
@@ -86,59 +75,101 @@ async function fixture(
     await service.status();
     service.stop();
     await store.cleanup();
-    resetSystemEventsForTest();
   };
-  const expectEmptyQueue = () => {
-    for (const [, target] of enqueueSystemEvent.mock.calls) {
-      expect(peekSystemEventEntries(sessionKey(target))).toHaveLength(0);
-    }
-  };
-  return { cron, deps, clock, finished: finished.promise, cleanup, expectEmptyQueue };
+  return { cron, deps, clock, finished: finished.promise, cleanup };
 }
 
 describe("CronService one-shot lifecycle", () => {
   it("records overflowed reminders as failures without losing accepted reminders", async () => {
-    const { cron, deps, cleanup } = await fixture({ removable: true });
+    const sessionKey = "agent:main:main";
+    const enqueueReminder = (text: string, contextKey: string) =>
+      enqueueSessionEventForHost(text, {
+        agentId: "main",
+        sessionKey,
+        source: "cron",
+        contextKey,
+      });
+    const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(
+      async ({ text, job }) => {
+        const outcome = await enqueueReminder(text, `cron:${job.id}`).settled;
+        return {
+          status: outcome.status === "completed" ? "ok" : "error",
+          error: outcome.error,
+        };
+      },
+    );
+    const { cron, deps, cleanup } = await fixture({ runSessionEvent });
+    const previousConfig = getRuntimeConfigSnapshot();
+    setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
+    const continuation = vi.spyOn(gatewayWork, "runWithGatewayIndependentRootWorkContinuation");
+    resetSystemEventsForTest();
     try {
+      const removals = Array.from({ length: 20 }, (_, index) =>
+        enqueueSystemEventWithReceipt(`Accepted reminder ${index}`, {
+          sessionKey,
+          contextKey: `accepted:${index}`,
+        }),
+      );
+      expect(removals.every((remove) => remove !== null)).toBe(true);
+      const pending = peekSystemEventEntries(sessionKey);
       const reminders: Array<{ id: string; text: string }> = [];
-      for (let index = 0; index < 23; index++) {
+      for (let index = 0; index < 3; index++) {
         const text = `Reminder ${index}`;
         const job = await cron.add(
           mainJob({
             enabled: false,
             schedule: { kind: "every", everyMs: 3_600_000 },
-            wakeMode: "next-heartbeat",
             payload: { kind: "systemEvent", text },
           }),
         );
         reminders.push({ id: job.id, text });
         await cron.run(job.id, "force");
       }
-      const admitted = drainSystemEventEntries(sessionKey()).map((event) => event.text);
-      expect(admitted).toEqual(reminders.slice(0, 20).map(({ text }) => text));
-      for (const [index, reminder] of reminders.entries()) {
+      expect(peekSystemEventEntries(sessionKey)).toEqual(pending);
+      expect(continuation).not.toHaveBeenCalled();
+      for (const reminder of reminders) {
         const run = readCronRunHistoryPageForTests({
           storeKey: cronStoreKey(deps.storePath),
           jobId: reminder.id,
         }).entries[0];
-        expect(run).toMatchObject(
-          index < 20
-            ? { status: "ok", completionStatus: "succeeded" }
-            : {
-                status: "error",
-                completionStatus: "failed",
-                error: expect.stringContaining("queue is full"),
-              },
-        );
+        expect(run).toMatchObject({
+          status: "error",
+          completionStatus: "failed",
+          error: expect.stringContaining("queue is full"),
+        });
       }
-      expect(deps.requestHeartbeat).toHaveBeenCalledTimes(20);
-      const retry = reminders[20]!;
-      await cron.run(retry.id, "force");
-      expect(drainSystemEventEntries(sessionKey()).map((event) => event.text)).toEqual([
-        retry.text,
+      expect(runSessionEvent).toHaveBeenCalledTimes(3);
+      expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(removals[0]?.()).toBe(true);
+      expect(removals[0]?.()).toBe(false);
+      const retry = reminders[0]!;
+      const receipt = enqueueReminder(retry.text, `cron:${retry.id}`);
+      expect(peekSystemEventEntries(sessionKey)).toEqual([
+        ...pending.slice(1),
+        expect.objectContaining({ id: receipt.id, text: retry.text }),
       ]);
-      expect(cron.getJob(retry.id)?.state.lastRunStatus).toBe("ok");
+      expect(receipt.cancel()).toBe(true);
+      await expect(receipt.settled).resolves.toMatchObject({
+        status: "cancelled",
+        executionStarted: false,
+      });
+      for (const remove of removals.slice(1)) {
+        expect(remove?.()).toBe(true);
+      }
+      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
     } finally {
+      resetSystemEventsForTest();
+      await Promise.allSettled(
+        continuation.mock.results.flatMap((result) =>
+          result.type === "return" ? [result.value] : [],
+        ),
+      );
+      continuation.mockRestore();
+      if (previousConfig) {
+        setRuntimeConfigSnapshot(previousConfig);
+      } else {
+        clearRuntimeConfigSnapshot();
+      }
       await cleanup();
     }
   });
@@ -151,14 +182,16 @@ describe("CronService one-shot lifecycle", () => {
       await clock.advanceTo(atMs);
       await finished;
       expect(cron.getJob(job.id)?.enabled).toBe(false);
-      expect(deps.enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith("hello", {
-        agentId: "main",
-        contextKey: `cron:${job.id}`,
-      });
-      expect(deps.requestHeartbeat).toHaveBeenCalled();
+      expect(deps.runSessionEvent).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          text: "hello",
+          job: expect.objectContaining({ id: job.id, sessionTarget: "main" }),
+        }),
+      );
+      expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
       expect((await cron.update(job.id, { enabled: true })).state.nextRunAtMs).toBeUndefined();
       await clock.advanceBy(1_000);
-      expect(deps.enqueueSystemEvent).toHaveBeenCalledOnce();
+      expect(deps.runSessionEvent).toHaveBeenCalledOnce();
     } finally {
       await cleanup();
     }
@@ -214,7 +247,7 @@ describe("CronService one-shot lifecycle", () => {
         ...(reason ? { deliverySuppressionReason: reason } : {}),
       });
       expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(deps.requestHeartbeat).not.toHaveBeenCalled();
+      expect(deps.runSessionEvent).not.toHaveBeenCalled();
       const retained = cron.getJob(job.id);
       if (completion === "succeeded") {
         expect(retained).toBeUndefined();
@@ -246,80 +279,116 @@ describe("CronService one-shot lifecycle", () => {
     }
   });
 
-  it("removes a queued main-session event when an immediate heartbeat fails", async () => {
-    const requestHeartbeatAndWait = vi.fn(async () => {
-      throw new Error("heartbeat failed");
+  it("reports the exact failed main-session occurrence after durable settlement", async () => {
+    const runSessionEvent = vi.fn(async () => {
+      throw new Error("session execution failed");
     });
-    const { cron, deps, cleanup, expectEmptyQueue } = await fixture({
-      requestHeartbeatAndWait,
-      removable: true,
-    });
+    const { cron, deps, cleanup } = await fixture({ runSessionEvent });
     try {
       const job = await cron.add(
         mainJob({ schedule: { kind: "at", at: new Date(1).toISOString() } }),
       );
-      await cron.run(job.id, "force");
-      expect(requestHeartbeatAndWait).toHaveBeenCalledOnce();
-      expect(deps.requestHeartbeat).not.toHaveBeenCalled();
-      expect(deps.enqueueSystemEvent).toHaveBeenCalledOnce();
-      expectEmptyQueue();
+      await expect(cron.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+      expect(runSessionEvent).toHaveBeenCalledOnce();
+      expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
+      const { entries } = readCronRunHistoryPageForTests({
+        storeKey: cronStoreKey(deps.storePath),
+        jobId: job.id,
+      });
+      expect(entries).toEqual([
+        expect.objectContaining({
+          status: "error",
+          completionStatus: "failed",
+          error: expect.stringContaining("session execution failed"),
+        }),
+      ]);
       expect(cron.getJob(job.id)?.state).toMatchObject({
         lastRunStatus: "error",
-        lastError: expect.stringContaining("heartbeat failed"),
+        lastError: expect.stringContaining("session execution failed"),
       });
     } finally {
       await cleanup();
     }
   });
 
-  it("retries disabled one-shot main wakes without leaving failed-attempt system events", async () => {
-    resetSystemEventsForTest();
-    let now = atMs;
-    const consumedTexts: string[] = [];
-    const requestHeartbeatAndWait = vi.fn(
-      async (opts?: Parameters<NonNullable<CronServiceDeps["requestHeartbeatAndWait"]>>[0]) => {
-        if (requestHeartbeatAndWait.mock.calls.length < 3) {
-          return { status: "skipped" as const, reason: "disabled" };
-        }
-        consumedTexts.push(...drainSystemEventEntries(sessionKey(opts)).map((event) => event.text));
-        return { status: "ran" as const, durationMs: 1 };
-      },
-    );
-    const { cron, deps, cleanup, expectEmptyQueue } = await fixture({
-      requestHeartbeatAndWait,
-      nowMs: () => now,
-      removable: true,
-    });
+  it("disables a skipped one-shot without retrying it", async () => {
+    const runSessionEvent = vi.fn(async () => ({ status: "skipped" as const, error: "disabled" }));
+    const { cron, deps, cleanup } = await fixture({ runSessionEvent, nowMs: () => atMs });
     try {
       const job = await cron.add(mainJob());
-      for (const [attempt, delay] of [
-        [1, 30_000],
-        [2, 90_000],
-      ] as const) {
-        await cron.run(job.id, "due");
-        const stored = cron.getJob(job.id);
-        expect(stored).toMatchObject({
-          enabled: true,
-          state: {
-            lastStatus: "skipped",
-            lastError: "disabled",
-            consecutiveSkipped: attempt,
-            nextRunAtMs: atMs + delay,
-          },
-        });
-        expectEmptyQueue();
-        now = atMs + delay;
-      }
       await cron.run(job.id, "due");
-      expect(cron.getJob(job.id)).toBeUndefined();
-      expect(requestHeartbeatAndWait).toHaveBeenCalledTimes(3);
-      expect(deps.requestHeartbeat).not.toHaveBeenCalled();
-      expect(consumedTexts).toEqual(["hello"]);
-      expectEmptyQueue();
+      expect(cron.getJob(job.id)).toMatchObject({
+        enabled: false,
+        state: { lastStatus: "skipped", lastError: "disabled", consecutiveSkipped: 1 },
+      });
+      expect(cron.getJob(job.id)?.state.nextRunAtMs).toBeUndefined();
+      expect(runSessionEvent).toHaveBeenCalledOnce();
+      expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
     } finally {
       await cleanup();
     }
   });
+
+  it.each([
+    {
+      name: "owner route and account",
+      configured: { mode: "announce", target: "owner", accountId: "bound", directPolicy: "block" },
+      expected: {
+        mode: "announce",
+        target: "owner",
+        accountId: "bound",
+        directPolicy: "block",
+        to: undefined,
+        threadId: undefined,
+      },
+    },
+    {
+      name: "silent policy",
+      configured: { mode: "none" },
+      expected: {
+        mode: "none",
+        to: "another-recipient",
+        accountId: "other",
+        threadId: "other-thread",
+      },
+    },
+  ] satisfies Array<{ name: string; configured: CronDelivery; expected: Partial<CronDelivery> }>)(
+    "preserves stored $name during a per-occurrence delivery override",
+    async ({ configured, expected }) => {
+      const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>(async () => ({
+        status: "ok",
+      }));
+      const { cron, deps, cleanup } = await fixture({ runIsolatedAgentJob });
+      try {
+        const job = await cron.add(isolatedJob({ delivery: configured, deleteAfterRun: false }));
+        const delivery: CronDelivery = {
+          mode: "announce",
+          target: undefined,
+          to: "another-recipient",
+          accountId: "other",
+          threadId: "other-thread",
+          directPolicy: "allow",
+        };
+        await expect(cron.run(job.id, "force", { delivery })).resolves.toEqual({
+          ok: true,
+          ran: true,
+        });
+        expect(runIsolatedAgentJob).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            job: expect.objectContaining({ delivery: expect.objectContaining(expected) }),
+          }),
+        );
+        expect(cron.getJob(job.id)?.delivery).toEqual(configured);
+        const { entries } = readCronRunHistoryPageForTests({
+          storeKey: cronStoreKey(deps.storePath),
+          jobId: job.id,
+        });
+        expect(entries).toEqual([expect.objectContaining({ status: "ok" })]);
+      } finally {
+        await cleanup();
+      }
+    },
+  );
 
   it.each([false, true])(
     "retries lifecycle claim conflicts only before execution starts (started=%s)",
@@ -340,17 +409,18 @@ describe("CronService one-shot lifecycle", () => {
         expect(stored?.state.consecutiveErrors).toBe(1);
         if (executionStarted) {
           expect(stored?.state.nextRunAtMs).toBeUndefined();
-          expect(deps.enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+          expect(deps.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
             expect.stringContaining('Automation "one-shot" failed 1 times'),
             expect.objectContaining({ contextKey: `cron:${job.id}:failure-alert` }),
           );
-          expect(deps.requestHeartbeat).toHaveBeenCalledOnce();
         } else {
           expect(stored?.state.nextRunAtMs).toBeTypeOf("number");
           expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
-          expect(deps.requestHeartbeat).not.toHaveBeenCalled();
+          expect(deps.enqueueSessionEvent).not.toHaveBeenCalled();
         }
         expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+        expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(deps.runSessionEvent).not.toHaveBeenCalled();
       } finally {
         await cleanup();
       }
@@ -361,7 +431,7 @@ describe("CronService one-shot lifecycle", () => {
     const { cron, cleanup } = await fixture();
     try {
       await expect(
-        cron.add(mainJob({ payload: { kind: "agentTurn", message: "nope" } })),
+        cron.add(mainJob({ payload: { kind: "command", argv: ["invalid-main-command"] } })),
       ).rejects.toThrow(/sessionTarget "main" requires/);
       await expect(cron.add(mainJob({ sessionTarget: "isolated" }))).rejects.toThrow(
         /sessionTarget "isolated" requires/,

@@ -308,7 +308,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   agents:
     "Agent runtime configuration root. Root siblings own infrastructure and cross-agent defaults; agents.defaults owns agent-loop behavior; agent entries may override either where supported.",
   "agents.ownership":
-    'Durable multi-agent ownership generation marker. "explicit" means ambient channels, heartbeat, system-agent consults, Talk, cron, and bare CLI operations must resolve a surface-specific owner or fail closed. OpenClaw stamps this automatically when creating or migrating a fleet; omit it for a sole agent.',
+    'Durable multi-agent ownership generation marker. "explicit" means ambient channels, system-agent consults, Talk, cron, and bare CLI operations must resolve a surface-specific owner or fail closed. OpenClaw stamps this automatically when creating or migrating a fleet; omit it for a sole agent.',
   "agents.defaults":
     "Shared default settings inherited by agents unless overridden per entry in agents.entries. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
   "agents.defaults.skills":
@@ -373,12 +373,6 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Optional default working directory for this agent's ACP sessions.",
   "agents.entries.*.identity.avatar":
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
-  "agents.defaults.heartbeat.timeoutSeconds":
-    "Maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use agents.defaults.timeoutSeconds when set, otherwise the heartbeat cadence capped at 600 seconds.",
-  "agents.defaults.heartbeat.agentId":
-    "Agent that owns ambient heartbeat runs when no per-agent heartbeat configuration exists. Leave unset to preserve configured-default routing.",
-  "agents.entries.*.heartbeat.timeoutSeconds":
-    "Per-agent maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to inherit the merged heartbeat timeout, then agents.defaults.timeoutSeconds when set, otherwise the heartbeat cadence capped at 600 seconds.",
   "agents.defaults.systemAgent":
     "Target settings for ambient OpenClaw system-agent and Custodian inference plus selected unscoped operator reads.",
   "agents.defaults.systemAgent.agentId":

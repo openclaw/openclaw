@@ -439,8 +439,6 @@ export async function runExecProcess({
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
-  /** The command was started by a conversation turn, not heartbeat or automation work. */
-  notifyFromConversationTurn?: boolean;
   timeoutSec: number | null;
   /** Whether exec may return a supervised session for later continuation. */
   processContinuationAvailable?: boolean;
@@ -486,7 +484,6 @@ export async function runExecProcess({
       agentId: opts.agentId,
       eventRouting: opts.eventRouting,
       notifyDeliveryContext: normalizeDeliveryContext(opts.notifyDeliveryContext),
-      notifyFromConversationTurn: opts.notifyFromConversationTurn === true,
       notifyOnExit: opts.notifyOnExit,
       notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
       exitNotified: false,

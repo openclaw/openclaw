@@ -46,9 +46,10 @@ describe("Workboard terminal hook automation ownership", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", path.dirname(storePath));
     const gatewayContext = createContext();
     const finished = createFinishedBarrier();
-    const executeJob = vi.fn(() => {
+    const executeJob = vi.fn(async () => {
       expect(getGatewayToolCallerIdentity()).toBeUndefined();
       expect(getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext?.()).toBe(gatewayContext);
+      return { status: "ok" as const };
     });
     const scheduler = createTestGatewayScheduler();
     const cron = new CronService({
@@ -58,8 +59,8 @@ describe("Workboard terminal hook automation ownership", () => {
       cronEnabled: false,
       defaultAgentId: "main",
       log: createNoopLogger(),
-      enqueueSystemEvent: executeJob,
-      requestHeartbeat: vi.fn(),
+      enqueueSystemEvent: vi.fn(),
+      runSessionEvent: executeJob,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       onEvent: finished.onEvent,
     });

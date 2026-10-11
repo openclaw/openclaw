@@ -42,7 +42,6 @@ function createCronState() {
     reconcileExitWatchers: vi.fn(async () => {}),
     reconcileStreamWatchers: vi.fn(async () => {}),
     stopStreamWatchers: vi.fn(async () => {}),
-    reconcileSystemJobs: vi.fn(async () => "converged" as const),
   };
   return { state, cron };
 }
@@ -56,7 +55,6 @@ async function createFixture() {
   let state: ReturnType<GatewayReloadHandlerParams["getState"]> = {
     hooksConfig: null,
     hookClientIpConfig: { trustedProxies: [], allowRealIpFallback: false },
-    heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() },
     cronState: previous,
   };
   const setState = vi.fn<GatewayReloadHandlerParams["setState"]>((value) => {
@@ -113,7 +111,7 @@ describe("cron reload loading", { concurrent: false }, () => {
     const fixture = await createFixture();
     try {
       await fixture.handlers.applyHotReload(
-        { ...fixture.plan, restartCron: false, reconcileSystemJobs: false },
+        { ...fixture.plan, restartCron: false },
         fixture.nextConfig,
       );
       expect(load).not.toHaveBeenCalled();

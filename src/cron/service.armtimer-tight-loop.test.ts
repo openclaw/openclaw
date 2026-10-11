@@ -49,7 +49,7 @@ describe("cron scheduled wakes", () => {
       log: createNoopLogger(),
       scheduler: createTestGatewayScheduler(clock.clock),
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
+      runSessionEvent: vi.fn(async () => ({ status: "ok" as const })),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     states.push(state);

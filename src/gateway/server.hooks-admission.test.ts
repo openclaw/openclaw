@@ -15,6 +15,7 @@ import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 import * as sessionEventHandoff from "../auto-reply/reply/session-event-handoff.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
+import type { CronLaneWaitCallback } from "../cron/isolated-agent/run.types.js";
 import { DEFAULT_WEBHOOK_MAX_BODY_BYTES } from "../infra/http-body.js";
 import { drainSystemEvents, peekSystemEventEntries } from "../infra/system-events.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -517,9 +518,9 @@ describe("gateway hook admission", () => {
       cronIsolatedRun.mockImplementationOnce(async (params: unknown) => {
         const callbacks = params as {
           onExecutionStarted?: () => void;
-          onLaneWait?: (info: { waiting: boolean }) => void;
+          onLaneWait?: CronLaneWaitCallback;
         };
-        callbacks.onLaneWait?.({ waiting: false });
+        callbacks.onLaneWait?.({ waiting: false, stage: "execution" });
         placementAdmissionPublished.resolve();
         await runtimePreparation.promise;
         runnerEntered = true;
@@ -566,11 +567,13 @@ describe("gateway hook admission", () => {
       const persistent = mode === "persistent";
       await withGatewayServer(async ({ port }) => {
         const runnerAdmission = createDeferred();
+        const runnerEntered = createDeferred();
         cronIsolatedRun.mockClear();
         cronIsolatedRun.mockImplementationOnce(async (params: unknown) => {
           if (persistent) {
             expect(params).toHaveProperty("job.sessionTarget", "session:hook:admission:shared");
           }
+          runnerEntered.resolve();
           await runnerAdmission.promise;
           (params as { onExecutionStarted?: () => void }).onExecutionStarted?.();
           return { status: "ok", summary: "done" };
@@ -590,18 +593,28 @@ describe("gateway hook admission", () => {
           );
 
         const firstResponse = request();
-        await waitForCronIsolatedRuns(1);
-        const duplicateResponse = request();
-        await waitForDuplicateRequest();
-        expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
-        runnerAdmission.resolve();
+        let duplicateResponse: Promise<Response> | undefined;
+        try {
+          await awaitGateBeforeSettlement(
+            runnerEntered.promise,
+            firstResponse,
+            "Hook response settled before its runner entered admission",
+          );
+          duplicateResponse = request();
+          await waitForDuplicateRequest();
+          expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+          runnerAdmission.resolve();
 
-        const [first, duplicate] = await Promise.all([firstResponse, duplicateResponse]);
-        expect(first.status).toBe(200);
-        expect(duplicate.status).toBe(200);
-        const firstBody = (await first.json()) as { runId?: string };
-        const duplicateBody = (await duplicate.json()) as { runId?: string };
-        expect(duplicateBody.runId).toBe(firstBody.runId);
+          const [first, duplicate] = await Promise.all([firstResponse, duplicateResponse]);
+          expect(first.status).toBe(200);
+          expect(duplicate.status).toBe(200);
+          const firstBody = (await first.json()) as { runId?: string };
+          const duplicateBody = (await duplicate.json()) as { runId?: string };
+          expect(duplicateBody.runId).toBe(firstBody.runId);
+        } finally {
+          runnerAdmission.resolve();
+          await Promise.allSettled([firstResponse, duplicateResponse]);
+        }
       });
     },
   );

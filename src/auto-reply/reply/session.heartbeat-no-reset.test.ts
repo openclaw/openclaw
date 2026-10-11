@@ -16,8 +16,8 @@ afterEach(async () => {
   await cleanupSessionStateForTest({ stateDir });
 });
 
-it("keeps an expired session unchanged for heartbeat and resets on the next user turn", async () => {
-  stateDir = tempDirs.make("openclaw-heartbeat-reset-");
+it("keeps an expired session unchanged for automation and resets on the next user turn", async () => {
+  stateDir = tempDirs.make("openclaw-automation-reset-");
   const storePath = path.join(stateDir, "sessions.json");
   const sessionKey = "agent:main:main:user123";
   const staleTime = Date.now() - 25 * 60 * 60 * 1000;
@@ -49,12 +49,16 @@ it("keeps an expired session unchanged for heartbeat and resets on the next user
     ChatType: "direct",
     CommandAuthorized: true,
   };
-  const heartbeat = await initSessionState({
+  const automation = await initSessionState({
     cfg,
     commandAuthorized: true,
-    ctx: finalizeInboundContext({ ...ctx, InternalTurnSource: "heartbeat", Body: "HEARTBEAT_OK" }),
+    ctx: finalizeInboundContext({
+      ...ctx,
+      InternalTurnSource: "cron",
+      Body: "Run the scheduled check.",
+    }),
   });
-  expect(heartbeat).toMatchObject({
+  expect(automation).toMatchObject({
     isNewSession: false,
     resetTriggered: false,
     sessionId: "daily-session-id",

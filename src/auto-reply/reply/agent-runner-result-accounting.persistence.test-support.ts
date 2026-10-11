@@ -125,7 +125,6 @@ export async function createAgentAccountingPersistenceFixture({
     commandBody: followupRun.prompt,
     defaultModel: diagnostic.model,
     followupRun,
-    isHeartbeat: false,
     pendingToolTasks: new Set(),
     preflightCompactionApplied: false,
     queueKey: sessionKey,
@@ -166,7 +165,6 @@ export async function createAgentAccountingPersistenceFixture({
     typingSignals: createTypingSignaler({
       typing: createMockTypingController(),
       mode: "never",
-      isHeartbeat: false,
     }),
   };
   const handle = createReplySessionEntryHandle({

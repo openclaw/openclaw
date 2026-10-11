@@ -9,7 +9,8 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveHeartbeatSummaryForAgent } from "../../infra/heartbeat-summary.js";
+import type { CronJob } from "../../cron/types.js";
+import * as heartbeatSummarySnapshot from "../../infra/heartbeat-summary-snapshot.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { readStatusSessionStores } from "../../status/session-stores.js";
 import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
@@ -37,18 +38,16 @@ async function settleProjection(projection: SessionRowProjection) {
 describe("health agent summaries heartbeat roster", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it("resolves heartbeat enrollment for the whole fleet without re-walking the roster per agent", async () => {
+  it("projects canonical automation policy for the fleet without re-walking the roster per agent", async () => {
     const agentCount = 200;
-    const entries: Record<string, { heartbeat?: { every?: string } }> = {};
+    const entries: Record<string, object> = {};
     for (let index = 0; index < agentCount; index += 1) {
       entries[`agent-${index}`] = {};
     }
-    entries["agent-7"] = { heartbeat: { every: "45m" } };
     // An absent store isolates enrollment from session storage.
     const plain = {
       agents: {
         ownership: "explicit",
-        defaults: { heartbeat: { every: "30m", target: "owner" } },
         entries,
       },
       session: {
@@ -64,22 +63,44 @@ describe("health agent summaries heartbeat roster", () => {
         return Reflect.get(target, property, receiver);
       },
     });
+    const cfg = { ...plain, agents };
+    const primaryJob = {
+      id: "converted-heartbeat-agent-7",
+      agentId: "agent-7",
+      name: "Converted automation",
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      enabled: true,
+      schedule: { kind: "every", everyMs: 2_700_000 },
+      payload: { kind: "agentTurn", message: "Check the inbox" },
+      sessionTarget: "main",
+      wakeMode: "now",
+      delivery: { mode: "announce", target: "owner" },
+      state: {},
+    } satisfies CronJob;
+    const snapshot = vi
+      .spyOn(heartbeatSummarySnapshot, "readHeartbeatSummarySnapshot")
+      .mockResolvedValue([
+        primaryJob,
+        { ...primaryJob, id: "other-converted-job", enabled: false },
+      ]);
 
-    const summaries = await buildHealthAgentSummaries(
-      { ...plain, agents },
-      resolveHealthAgentOrder(plain),
-    );
+    const summaries = await buildHealthAgentSummaries(cfg, resolveHealthAgentOrder(plain));
 
     expect(summaries).toHaveLength(agentCount);
     // Per-agent resolution used to re-walk the whole roster for each summary.
     expect(rosterReads).toBeLessThan(agentCount);
-    expect(summaries.map((summary) => summary.heartbeat)).toEqual(
-      summaries.map((summary) => resolveHeartbeatSummaryForAgent(plain, summary.agentId)),
-    );
-    expect(summaries.find((summary) => summary.agentId === "agent-7")?.heartbeat).toMatchObject({
-      enabled: true,
-      every: "45m",
-    });
+    expect(snapshot).toHaveBeenCalledExactlyOnceWith(cfg);
+    expect(
+      summaries.filter((summary) => summary.heartbeat.enabled).map((summary) => summary.agentId),
+    ).toEqual(["agent-7"]);
+    for (const summary of summaries) {
+      expect(summary.heartbeat).toMatchObject(
+        summary.agentId === "agent-7"
+          ? { enabled: true, everyMs: 2_700_000, prompt: "Check the inbox", target: "owner" }
+          : { enabled: false, everyMs: null, prompt: "", target: "none" },
+      );
+    }
   });
 });
 

@@ -169,7 +169,7 @@ export const isPromptInjectionHookName = (hookName: PluginHookName): boolean =>
   hookName === "before_prompt_build" ||
   hookName === "heartbeat_prompt_contribution";
 
-const PLUGIN_HOOK_AGENT_TRIGGERS = ["cron", "heartbeat", "user"] as const;
+const PLUGIN_HOOK_AGENT_TRIGGERS = ["cron", "event", "heartbeat", "user"] as const;
 
 export type PluginHookAgentTrigger = (typeof PLUGIN_HOOK_AGENT_TRIGGERS)[number];
 

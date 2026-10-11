@@ -132,7 +132,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         sessionKey: params.attempt.sessionKey,
         agentDir: params.agentDir,
         // senderId is only set from the verified inbound sender (sessionCtx.SenderId
-        // or the triggering run's sender on follow-ups). Cron/subagent/heartbeat runs
+        // or the triggering run's sender on follow-ups). Automation/subagent/event runs
         // leave it unset, so requester-scoped MCP stays fail-closed for those paths.
         requesterSenderId: params.attempt.senderId,
         agentAccountId: params.attempt.agentAccountId,

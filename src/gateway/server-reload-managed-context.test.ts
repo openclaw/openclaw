@@ -110,7 +110,6 @@ function createTestCronState(): GatewayCronState {
     reconcileExitWatchers: vi.fn(async () => {}),
     reconcileStreamWatchers: vi.fn(async () => {}),
     stopStreamWatchers: vi.fn(async () => {}),
-    reconcileSystemJobs: vi.fn(async () => "converged" as const),
   };
 }
 
@@ -133,7 +132,6 @@ function startManagedGatewayConfigReloader(
   let state: ReturnType<ManagedReloaderParams["getState"]> = {
     hooksConfig: {} as never,
     hookClientIpConfig: {} as never,
-    heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
     cronState: createTestCronState(),
   };
   return startManagedGatewayConfigReloaderImpl({

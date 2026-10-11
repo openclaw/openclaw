@@ -6,8 +6,12 @@ import {
   isAgentDeletionBlocked,
   type AgentDeletionOperation,
 } from "../agents/agent-lifecycle-registry.js";
-import { listAgentEntries } from "../agents/agent-scope.js";
+import { listAgentEntries, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { applyClawAddPlan } from "../claws/add.js";
+import {
+  clawAutomationMutationResultSchema,
+  type ClawAutomationMutationGateway,
+} from "../claws/automation-mutation-contract.js";
 import type { ClawRemoveApplyOptions } from "../claws/lifecycle-remove-contract.js";
 import { applyClawRemovePlan, buildClawRemovePlan } from "../claws/lifecycle-state.js";
 import { buildClawAddPlan } from "../claws/lifecycle.js";
@@ -19,7 +23,6 @@ import {
 import { parseClawManifest } from "../claws/schema.js";
 import { registerConfigWriteListener, resetConfigRuntimeState } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { applyHeartbeatMonitorJobs } from "../cron/heartbeat-monitor.js";
 import { cronJobReadView } from "../cron/job-read-view.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
 import { CronService } from "../cron/service.js";
@@ -27,6 +30,7 @@ import type { CronServiceDeps } from "../cron/service/state.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as sleep from "../utils/sleep.js";
+import { clawsAutomationHandlers } from "./server-methods/claws-automations.js";
 import { clawsMonitorHandlers } from "./server-methods/claws-monitors.js";
 import type { RespondFn } from "./server-methods/types.js";
 
@@ -71,17 +75,25 @@ export function useClawMonitorFixture() {
 
   return async function fixture(
     enabled: boolean,
-    /** Runs forced isolated jobs and the heartbeat monitor. */
-    runner?: (params: { abortSignal?: AbortSignal }) => Promise<{ status: "ok" }>,
-    withCron = false,
+    runner?: CronServiceDeps["runIsolatedAgentJob"],
+    withCron = true,
+    withPortableHeartbeat = false,
   ) {
     const state = await createOpenClawTestState({ label: "claw-monitor-removal" });
     cleanups.push(state.cleanup);
     await fs.writeFile(state.path("SOUL.md"), "synthetic managed file\n");
+    if (withPortableHeartbeat) {
+      await fs.writeFile(state.path("HEARTBEAT.md"), "synthetic portable checklist\n");
+    }
     const parsed = parseClawManifest({
       schemaVersion: 1,
       agent: { id: "worker", name: "Worker" },
-      workspace: { bootstrapFiles: { "SOUL.md": { source: "SOUL.md" } } },
+      workspace: {
+        bootstrapFiles: {
+          "SOUL.md": { source: "SOUL.md" },
+          ...(withPortableHeartbeat ? { "HEARTBEAT.md": { source: "HEARTBEAT.md" } } : {}),
+        },
+      },
       cronJobs: withCron
         ? [
             {
@@ -110,11 +122,17 @@ export function useClawMonitorFixture() {
         byteLength: 100,
       },
       context: { workspace: workspaceDir },
+      ...(withPortableHeartbeat
+        ? {
+            openClawProfile: {
+              schemaVersion: 1 as const,
+              agent: { heartbeat: { every: enabled ? "30m" : "0m", isolatedSession: true } },
+            },
+          }
+        : {}),
     });
     expect(addPlan.blockers).toEqual([]);
-    let config: OpenClawConfig = {
-      agents: { defaults: { heartbeat: { every: enabled ? "30m" : "0m" } } },
-    };
+    let config: OpenClawConfig = {};
     const storePath = state.statePath("cron", "jobs.json");
     const cronDeps: CronServiceDeps = {
       scheduler: createTestGatewayScheduler(),
@@ -125,23 +143,41 @@ export function useClawMonitorFixture() {
       defaultAgentId: "worker",
       resolveSessionStorePath: (agentId = "worker") =>
         state.statePath("agents", agentId, "sessions", "sessions.json"),
-      resolveDefaultAgentId: () => listAgentEntries(config)[0]?.id ?? "main",
+      resolveDefaultAgentId: () => tryResolveAmbientOwnerAgentId(config),
       isAgentAvailable: (agentId) =>
         !isAgentDeletionBlocked(agentId) &&
         listAgentEntries(config).some((agent) => agent.id === agentId),
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      requestHeartbeatAndWait: async (_wake, lifecycle) => {
-        await runner?.({ abortSignal: lifecycle.abortSignal });
-        return { status: "ran", durationMs: 0 };
-      },
+      runSessionEvent: vi.fn(async () => ({ status: "ok" as const })),
       runIsolatedAgentJob: runner ?? vi.fn(async () => ({ status: "ok" as const })),
     };
     const cron = new CronService(cronDeps);
     cleanups.push(async () => {
       cron.stop();
     });
-    await applyClawAddPlan(addPlan, {
+    let reloadSettled = true;
+    const context = {
+      cron,
+      cronStorePath: storePath,
+      getRuntimeConfig: () => config,
+      isConfigReloadSettled: () => reloadSettled,
+    };
+    const mutateAutomation: ClawAutomationMutationGateway = async (request) => {
+      let response: { ok: boolean; payload: unknown; error: Parameters<RespondFn>[2] } | undefined;
+      await clawsAutomationHandlers["claws.automations.mutate"]({
+        params: { ...request, binding: resolveClawMonitorCleanupBinding(storePath) },
+        context,
+        hasCurrentClientAuthority: () => true,
+        respond: (ok, payload, error) => {
+          response = { ok, payload, error };
+        },
+      });
+      if (!response?.ok) {
+        throw new Error(response?.error?.message ?? "Automation mutation did not respond");
+      }
+      return clawAutomationMutationResultSchema.parse(response.payload);
+    };
+    const installed = await applyClawAddPlan(addPlan, {
       consentPlanIntegrity: addPlan.planIntegrity,
       commitConfig: async (transform) => {
         config = transform(config);
@@ -149,6 +185,14 @@ export function useClawMonitorFixture() {
         resetConfigRuntimeState();
       },
       cronGateway: {
+        mutateAutomation,
+        get: async (id) => {
+          const job = await cron.readJob(id);
+          return job ? cronJobReadView(job) : undefined;
+        },
+        list: async () => ({
+          jobs: (await cron.list({ includeDisabled: true })).map(cronJobReadView),
+        }),
         add: async (input) => {
           const normalized = normalizeCronJobCreate(input);
           if (!normalized) {
@@ -158,26 +202,13 @@ export function useClawMonitorFixture() {
         },
       },
     });
-    let reconcilePending = false;
-    const reconcile = async () => {
-      expect((await applyHeartbeatMonitorJobs({ cron, cfg: config })).ok).toBe(true);
-      reconcilePending = false;
-    };
-    await reconcile();
+    expect(installed.status, JSON.stringify(installed)).toBe("complete");
     const unsubscribe = registerConfigWriteListener((event) => {
       if (event.configPath === state.configPath) {
         config = event.runtimeConfig;
-        reconcilePending = true;
       }
     });
     cleanups.push(async () => unsubscribe());
-    let reloadSettled = true;
-    const context = {
-      cron,
-      cronStorePath: storePath,
-      getRuntimeConfig: () => config,
-      isConfigReloadSettled: () => reloadSettled,
-    };
     const invoke = async (params: Record<string, unknown>) => {
       let response: unknown;
       let failure: string | undefined;
@@ -205,9 +236,6 @@ export function useClawMonitorFixture() {
         await invoke({ phase: "quiesce", agentId, operationId, monitors });
       },
       drain: async (agentId, operationId) => {
-        if (reconcilePending) {
-          await reconcile();
-        }
         await invoke({ phase: "drain", agentId, operationId });
       },
     };
@@ -215,7 +243,6 @@ export function useClawMonitorFixture() {
       config = nextConfig;
       await state.writeConfig(config);
       resetConfigRuntimeState();
-      await reconcile();
     };
     const plan = () => buildClawRemovePlan("worker", { config, monitorGateway: gateway });
     const apply = async (
@@ -226,6 +253,10 @@ export function useClawMonitorFixture() {
         config,
         monitorGateway: gateway,
         cronGateway: {
+          mutateAutomation,
+          list: async () => ({
+            jobs: (await cron.list({ includeDisabled: true })).map(cronJobReadView),
+          }),
           get: async (id) => {
             const job = await cron.readJob(id);
             return job ? cronJobReadView(job) : null;
@@ -248,7 +279,6 @@ export function useClawMonitorFixture() {
       apply,
       invoke,
       writeConfig,
-      reconcile,
       replaceCron: () => {
         const replacement = new CronService(cronDeps);
         context.cron = replacement;

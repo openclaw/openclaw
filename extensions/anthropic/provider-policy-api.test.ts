@@ -6,6 +6,7 @@ import {
   applyConfigDefaults,
   deprecatedProfileIds,
   normalizeConfig,
+  resolveProactiveCadenceMs,
   resolveThinkingProfile,
 } from "./provider-policy-api.js";
 
@@ -34,6 +35,25 @@ const modelRefCases: Array<[string, string | null, string | null, boolean | null
 ];
 
 describe("anthropic provider policy public artifact", () => {
+  it.each([
+    ["oauth", 3_600_000],
+    ["token", 3_600_000],
+    ["api_key", 1_800_000],
+  ] as const)("resolves %s proactive cadence without adding heartbeat config", (mode, cadence) => {
+    const config = {
+      auth: { profiles: { default: { provider: "anthropic", mode } } },
+      agents: { defaults: {} },
+    };
+    expect(resolveProactiveCadenceMs({ config, env: {} })).toBe(cadence);
+    expect(applyConfigDefaults({ config, env: {} }).agents?.defaults).not.toHaveProperty(
+      "heartbeat",
+    );
+  });
+
+  it("leaves proactive cadence unset without Anthropic credentials", () => {
+    expect(resolveProactiveCadenceMs({ config: {}, env: {} })).toBeUndefined();
+  });
+
   it.each(modelRefCases)(
     "parses Anthropic model ref %s",
     (raw, provider, model, explicitProvider) => {

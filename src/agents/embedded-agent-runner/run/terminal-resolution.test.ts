@@ -598,39 +598,43 @@ describe("terminal resolution", () => {
     expect(activateInternalPrompt).not.toHaveBeenCalled();
   });
 
-  it("activates the prompt owner for an OpenAI Responses compaction checkpoint", async () => {
-    const assistant = buildEmbeddedRunnerAssistant({
-      stopReason: "length",
-      providerReplay: {
-        v: 1,
-        type: "openai-responses-compaction",
-        id: "cmp-terminal-retry",
-        data: "opaque-compaction",
-        provider: "openai",
-        api: "openai-responses",
-        model: "gpt-5.6-luna",
-        baseUrlHash: "base-url-hash",
-      },
-    });
-    const attempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: [],
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    });
-    const activateCompactionContinuation = vi.fn();
-    const input = makeTerminalInput({
-      attempt,
-      attemptAssistant: assistant,
-      sessionPromptState: { activateCompactionContinuation },
-    });
+  it.each(["length", "stop"] as const)(
+    "activates the prompt owner for a %s OpenAI Responses compaction checkpoint",
+    async (stopReason) => {
+      const assistant = buildEmbeddedRunnerAssistant({
+        stopReason,
+        providerReplay: {
+          v: 1,
+          type: "openai-responses-compaction",
+          id: "cmp-terminal-retry",
+          data: "opaque-compaction",
+          provider: "openai",
+          api: "openai-responses",
+          model: "gpt-5.6-luna",
+          baseUrlHash: "base-url-hash",
+        },
+      });
+      const attempt = makeEmbeddedRunnerAttempt({
+        assistantTexts: [],
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+      });
+      const activateCompactionContinuation = vi.fn();
+      const input = makeTerminalInput({
+        attempt,
+        attemptAssistant: assistant,
+        sessionPromptState: { activateCompactionContinuation },
+      });
 
-    await expect(resolveEmbeddedRunTerminal(input)).resolves.toEqual({ action: "retry" });
-    expect(activateCompactionContinuation).toHaveBeenCalledWith(
-      expect.stringContaining("Continue from the compacted transcript"),
-    );
-    expect(input.armPostCompactionGuard).toHaveBeenCalledOnce();
-  });
+      await expect(resolveEmbeddedRunTerminal(input)).resolves.toEqual({ action: "retry" });
+      expect(activateCompactionContinuation).toHaveBeenCalledWith(
+        expect.stringContaining("Continue from the compacted transcript"),
+      );
+      expect(input.armPostCompactionGuard).toHaveBeenCalledOnce();
+      expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
+    },
+  );
 
   it("reports completed-empty finalization for required replies", async () => {
     const assistant = emptyAssistant();

@@ -69,7 +69,6 @@ describe("server-runtime-services", () => {
     });
 
     expect(hoisted.startChannelHealthMonitor).toHaveBeenCalledTimes(1);
-    expect(hoisted.startHeartbeatRunner).not.toHaveBeenCalled();
     expect(hoisted.startSessionUpstreamMonitor).not.toHaveBeenCalled();
     expect(hoisted.recoverPendingDeliveries).not.toHaveBeenCalled();
   });
@@ -88,44 +87,9 @@ describe("server-runtime-services", () => {
     },
   );
 
-  function activateCronOff(
-    cfgAtStart: Parameters<typeof activateGatewayScheduledServices>[0]["cfgAtStart"],
-  ) {
-    vi.useFakeTimers();
-    const warn = vi.fn();
-    activateGatewayScheduledServices({
-      scheduler: createTestGatewayScheduler(),
-      minimalTestGateway: false,
-      cfgAtStart,
-      deps: {} as never,
-      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
-      cronEnabled: false,
-      log: {
-        child: vi.fn(() => ({ info: vi.fn(), warn, error: vi.fn() })),
-        error: vi.fn(),
-      },
-    });
-    return warn;
-  }
-
-  it("warns when cron is disabled but scheduled heartbeats remain enabled", () => {
-    const warn = activateCronOff({ skills: { workshop: { autonomous: { mode: "off" } } } });
-
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("cron scheduler is disabled"));
-  });
-
-  it("does not warn about disabled cron when heartbeat cadence is disabled", () => {
-    const warn = activateCronOff({
-      agents: { defaults: { heartbeat: { every: "0m" } } },
-      skills: { workshop: { autonomous: { mode: "auto" } } },
-    });
-
-    expect(warn).not.toHaveBeenCalled();
-  });
-
   registerGatewayCronStartupTests(startGatewayCronWithLogging);
 
-  it.each(["heartbeat", "session recovery", "session retry"] as const)(
+  it.each(["session recovery", "session retry"] as const)(
     "gives standalone scheduled %s its owning Gateway context and broker",
     async (kind) => {
       const broker = await createBroker();
@@ -147,12 +111,7 @@ describe("server-runtime-services", () => {
         observedBroker = getSpawnBroker();
         return undefined;
       };
-      if (kind === "heartbeat") {
-        hoisted.runHeartbeatOnce.mockImplementationOnce(async () => {
-          observe();
-          return { status: "ran", durationMs: 1 };
-        });
-      } else if (kind === "session recovery") {
+      if (kind === "session recovery") {
         hoisted.recoverPendingRestartContinuationDeliveries.mockImplementationOnce(async () =>
           observe(),
         );
@@ -165,30 +124,25 @@ describe("server-runtime-services", () => {
         ),
       );
       try {
-        if (kind === "heartbeat") {
-          const runnerParams = hoisted.startHeartbeatRunner.mock.calls[0]?.[0];
-          await runnerParams?.runOnce?.({} as never);
-        } else {
-          await vi.advanceTimersByTimeAsync(1_250);
-          await vi.dynamicImportSettled();
-          if (kind === "session retry") {
-            const runtime = hoisted.startSessionDeliveryRuntime.mock.calls[0]?.[0];
-            if (!runtime) {
-              throw new Error("Expected the session delivery runtime to start");
-            }
-            await runtime.deliver(
-              {
-                id: "scheduled-retry",
-                kind: "agentTurn",
-                sessionKey: "agent:main:scheduled-retry",
-                message: "Retry the synthetic turn",
-                messageId: "scheduled-retry-message",
-                enqueuedAt: 1,
-                retryCount: 1,
-              },
-              { queueContext: runtime.queueContext },
-            );
+        await vi.advanceTimersByTimeAsync(1_250);
+        await vi.dynamicImportSettled();
+        if (kind === "session retry") {
+          const runtime = hoisted.startSessionDeliveryRuntime.mock.calls[0]?.[0];
+          if (!runtime) {
+            throw new Error("Expected the session delivery runtime to start");
           }
+          await runtime.deliver(
+            {
+              id: "scheduled-retry",
+              kind: "agentTurn",
+              sessionKey: "agent:main:scheduled-retry",
+              message: "Retry the synthetic turn",
+              messageId: "scheduled-retry-message",
+              enqueuedAt: 1,
+              retryCount: 1,
+            },
+            { queueContext: runtime.queueContext },
+          );
         }
         expect(observed).toBe(gatewayContext);
         expect(observedClient).toBeUndefined();
@@ -196,7 +150,7 @@ describe("server-runtime-services", () => {
         expect(hasGatewayContextOwner(admittedOwner, resolveGatewayContext)).toBe(true);
         expect(hasGatewayContextOwner(admittedOwner, () => gatewayContext)).toBe(false);
       } finally {
-        services.heartbeatRunner.stop();
+        await services.stopScheduledServices();
         await services.stopDeliveryRecovery();
         vi.useRealTimers();
       }
@@ -245,7 +199,7 @@ describe("server-runtime-services", () => {
         legacy.resolve(0);
         recovery.resolve();
         await (stopPromise ?? services.stopDeliveryRecovery());
-        services.heartbeatRunner.stop();
+        await services.stopScheduledServices();
       }
     },
   );
@@ -298,7 +252,7 @@ describe("server-runtime-services", () => {
     expect(firstStopped).toBe(true);
     expect(secondStopped).toBe(true);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
-    services.heartbeatRunner.stop();
+    await services.stopScheduledServices();
   });
 
   it("stops unadmitted session recovery without reopening the restart fence", async () => {
@@ -323,7 +277,7 @@ describe("server-runtime-services", () => {
       expect(log.error).not.toHaveBeenCalled();
     } finally {
       fence.rollback();
-      services.heartbeatRunner.stop();
+      await services.stopScheduledServices();
       await services.stopDeliveryRecovery();
       await stopping;
       await vi.advanceTimersByTimeAsync(0);
@@ -348,7 +302,7 @@ describe("server-runtime-services", () => {
       expect(hoisted.schedulePendingSessionDeliveries).toHaveBeenCalledOnce();
     } finally {
       fence.rollback();
-      services.heartbeatRunner.stop();
+      await services.stopScheduledServices();
       await services.stopDeliveryRecovery();
       await vi.advanceTimersByTimeAsync(0);
     }
@@ -377,8 +331,7 @@ describe("server-runtime-services", () => {
         expect(getActiveGatewayRootWorkCount()).toBe(1);
 
         let stopped = false;
-        services.heartbeatRunner.stop();
-        stopPromise = services.stopDeliveryRecovery().then(() => {
+        stopPromise = services.stopScheduledServices().then(() => {
           stopped = true;
         });
         await vi.advanceTimersByTimeAsync(0);
@@ -403,7 +356,7 @@ describe("server-runtime-services", () => {
         }
       } finally {
         pending.resolve(undefined);
-        services.heartbeatRunner.stop();
+        await services.stopScheduledServices();
         await services.stopDeliveryRecovery();
         await stopPromise;
         await vi.advanceTimersByTimeAsync(0);
@@ -454,7 +407,7 @@ describe("server-runtime-services", () => {
       } finally {
         releaseImport.resolve();
         await vi.dynamicImportSettled();
-        services.heartbeatRunner.stop();
+        await services.stopScheduledServices();
         await services.stopDeliveryRecovery();
         await stopPromise;
         await waking;
@@ -498,7 +451,7 @@ describe("server-runtime-services", () => {
     expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();
     expect(hoisted.drainPendingDeliveries).toHaveBeenCalledTimes(3);
     await services.stopDeliveryRecovery();
-    services.heartbeatRunner.stop();
+    await services.stopScheduledServices();
   });
 
   it("reconstructs conversation route authorization for a recovered delivery attempt", async () => {
@@ -542,7 +495,7 @@ describe("server-runtime-services", () => {
       expect.objectContaining({ agentId: "main", storePath: "/tmp/agent.sqlite" }),
       expect.any(Function),
     );
-    services.heartbeatRunner.stop();
+    await services.stopScheduledServices();
   });
 
   it("uses the current runtime config when retrying queued outbound deliveries", async () => {
@@ -571,7 +524,7 @@ describe("server-runtime-services", () => {
       });
       expect(runtimeConfig).toHaveBeenCalledOnce();
     } finally {
-      services.heartbeatRunner.stop();
+      await services.stopScheduledServices();
       runtimeConfig.mockRestore();
     }
   });
@@ -607,7 +560,7 @@ describe("server-runtime-services", () => {
 
     await vi.advanceTimersByTimeAsync(5_000);
     expect(hoisted.drainPendingDeliveries).toHaveBeenCalledTimes(2);
-    services.heartbeatRunner.stop();
+    await services.stopScheduledServices();
   });
 
   it("coalesces late outbound recovery and stops retries with the gateway lifecycle", async () => {
@@ -624,12 +577,12 @@ describe("server-runtime-services", () => {
       expect(hoisted.drainPendingDeliveries).toHaveBeenCalledTimes(2);
       expect(scheduler.nextWakeAtMs).toBe(clock.clock.now() + 5_000);
 
-      services.heartbeatRunner.stop();
+      await services.stopScheduledServices();
       await services.stopDeliveryRecovery();
       await clock.advanceBy(15_000);
 
       expect(hoisted.drainPendingDeliveries).toHaveBeenCalledTimes(2);
-      expect(hoisted.heartbeatRunner.stop).toHaveBeenCalledOnce();
+      expect(hoisted.stopSessionUpstreamMonitor).toHaveBeenCalledOnce();
       expect(getActiveGatewayRootWorkCount()).toBe(0);
     } finally {
       await services.stopDeliveryRecovery();
@@ -655,7 +608,7 @@ describe("server-runtime-services", () => {
     await vi.advanceTimersByTimeAsync(5_000);
 
     expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
-    services.heartbeatRunner.stop();
+    await services.stopScheduledServices();
   });
 
   it("retries a scheduled idle task while request work is active", async () => {
@@ -732,23 +685,21 @@ describe("server-runtime-services", () => {
     },
   );
 
-  it("keeps scheduled services disabled for minimal test gateways", () => {
+  it("keeps scheduled services disabled for minimal test gateways", async () => {
     const services = activateGatewayScheduledServices({
       scheduler: createTestGatewayScheduler(),
       minimalTestGateway: true,
       cfgAtStart: {} as never,
       deps: {} as never,
       sessionDeliveryRecoveryMaxEnqueuedAt: 123,
-      cronEnabled: true,
       log: createLog(),
     });
 
-    expect(hoisted.startHeartbeatRunner).not.toHaveBeenCalled();
     expect(hoisted.recoverPendingDeliveries).not.toHaveBeenCalled();
     expect(hoisted.recoverPendingRestartContinuationDeliveries).not.toHaveBeenCalled();
 
-    services.heartbeatRunner.stop();
-    expect(hoisted.heartbeatRunner.stop).not.toHaveBeenCalled();
+    await services.stopScheduledServices();
+    expect(hoisted.stopSessionUpstreamMonitor).not.toHaveBeenCalled();
   });
 });
 
@@ -763,7 +714,6 @@ function activateScheduledServicesForTest(
     cfgAtStart,
     deps: {} as never,
     sessionDeliveryRecoveryMaxEnqueuedAt: 123,
-    cronEnabled: true,
     ...overrides,
     log,
   });

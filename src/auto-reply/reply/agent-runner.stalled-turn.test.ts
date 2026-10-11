@@ -94,7 +94,7 @@ const settings: QueueSettings = { mode: "followup", debounceMs: 0 };
 
 function createStalledRun(
   options: {
-    isHeartbeat?: boolean;
+    inputProvenance?: FollowupRun["run"]["inputProvenance"];
     operatorAuthority?: AdmittedRunOperatorAuthority;
     queuedFollowupReplyDisposition?: FollowupRun["queuedFollowupReplyDisposition"];
     originatingChannel?: string;
@@ -106,6 +106,7 @@ function createStalledRun(
     sessionKey: queueKey,
     messageProvider: "telegram",
     senderId: "traveler",
+    inputProvenance: options.inputProvenance,
   });
   followupRun.originatingChannel = options.originatingChannel ?? "telegram";
   followupRun.originatingTo = options.originatingChannel ? undefined : "12345";
@@ -142,7 +143,6 @@ function createStalledRun(
     replyOperation: operation,
     opts: {
       [REPLY_OPERATION_RUN_STATE]: runState,
-      ...(options.isHeartbeat ? { isHeartbeat: true } : {}),
     },
     typing: createMockTypingController(),
     sessionCtx: {
@@ -439,8 +439,8 @@ describe("runReplyAgent stalled turn continuation", () => {
     expect(drainedRuns).not.toHaveBeenCalled();
   });
 
-  it("does not arm a continuation for heartbeat turns", async () => {
-    const stalled = createStalledRun({ isHeartbeat: true });
+  it("does not arm a continuation for internal events with optional replies", async () => {
+    const stalled = createStalledRun({ inputProvenance: { kind: "internal_system" } });
     await stallBeforeOutput(stalled);
 
     expect(stalled.runState.continueStalledTurn).toBeUndefined();

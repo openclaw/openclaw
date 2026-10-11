@@ -41,7 +41,7 @@ export function resolveEmbeddedRunSessionLanePolicy(
   const triggerPriority =
     trigger === "user" || trigger === "manual"
       ? "foreground"
-      : ["cron", "heartbeat", "memory", "overflow"].includes(trigger ?? "")
+      : ["cron", "event", "memory", "overflow"].includes(trigger ?? "")
         ? "background"
         : "normal";
   const isRestartRecovery = isMainSessionRestartRecoveryInputProvenance(inputProvenance);

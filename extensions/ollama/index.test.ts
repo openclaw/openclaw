@@ -888,7 +888,6 @@ describe("ollama plugin", () => {
       config: {
         agents: {
           defaults: {
-            heartbeat: { model: "ollama/heartbeat:cloud" },
             model: { primary: "openai/gpt-5.5", fallbacks: ["ollama/global-fallback:cloud"] },
           },
           entries: { ops: { model: { primary: "ollama/per-agent:cloud@work" } } },
@@ -915,7 +914,6 @@ describe("ollama plugin", () => {
     });
     const expected = [
       ["global-fallback:cloud", "global-fallback:cloud", "ollama"],
-      ["heartbeat:cloud", "heartbeat:cloud", "ollama"],
       ["per-agent:cloud", "per-agent:cloud", "ollama"],
       ["minimax-m3:cloud", "Configured Minimax M3", "openai-completions"],
     ];

@@ -62,7 +62,7 @@ describe("CronService failure repair", () => {
         sendCronFailureAlert,
         runCronFailureRepair,
         enqueueSystemEvent,
-        requestHeartbeat,
+        enqueueSessionEvent,
         addJob,
         runIsolatedAgentJob,
       }) => {
@@ -84,9 +84,9 @@ describe("CronService failure repair", () => {
           sessionKey: ownerSessionKey,
           repairId: expect.any(String),
         });
-        // An ordinary owner turn, not a heartbeat wake.
+        // Repair uses its explicit owner turn rather than a fallback notice.
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(requestHeartbeat).not.toHaveBeenCalled();
+        expect(enqueueSessionEvent).not.toHaveBeenCalled();
         const brief = request?.message ?? "";
         expect(brief).toContain(`(id ${job.id}), created in this conversation, failed 2`);
         // The job's name, text, and errors reach the owner turn only as untrusted data.

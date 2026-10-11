@@ -5,7 +5,6 @@ import { inheritLegacyDefaultAgentId } from "../../../config/legacy.default-agen
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import { copyConfigResolutionFactsThroughRewrite } from "../../../config/resolution-facts.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { HeartbeatSchema } from "../../../config/zod-schema.agent-runtime.js";
 import { runPluginSetupConfigMigrations } from "../../../plugins/setup-registry.js";
 import { migrateLegacyCommandOwners } from "../../doctor-command-owner.js";
 import { applyChannelDoctorCompatibilityMigrations } from "./channel-legacy-config-migrate.js";
@@ -49,23 +48,6 @@ function repairAgentRoster(
       repair(agent, roster.kind === "entries" ? `agents.entries.${key}` : `agents.list[${key}]`);
     }
   }
-}
-
-function repairInvalidHeartbeatActiveHours(cfg: OpenClawConfig, changes: string[]): void {
-  const repairHeartbeat = (heartbeat: unknown, path: string) => {
-    if (
-      isRecord(heartbeat) &&
-      Object.hasOwn(heartbeat, "activeHours") &&
-      !HeartbeatSchema.safeParse({ activeHours: heartbeat.activeHours }).success
-    ) {
-      delete heartbeat.activeHours;
-      changes.push(
-        `Removed invalid ${path}.activeHours; heartbeats will use unrestricted hours until it is reconfigured.`,
-      );
-    }
-  };
-  repairHeartbeat(cfg.agents?.defaults?.heartbeat, "agents.defaults.heartbeat");
-  repairAgentRoster(cfg, (agent, path) => repairHeartbeat(agent.heartbeat, `${path}.heartbeat`));
 }
 
 function repairNullAgentWorkspaces(cfg: OpenClawConfig, changes: string[]): void {
@@ -142,7 +124,6 @@ export function normalizeCompatibilityConfigValues(
     changes.push(...secrets.changes);
   }
   normalizeLegacyOpenAICodexModelsAddMetadata(next, changes);
-  repairInvalidHeartbeatActiveHours(next, changes);
   repairNullAgentWorkspaces(next, changes);
   next = migrateLegacyCommandOwners(next, changes);
   next = pruneBindingsForMissingAgents(next, changes);

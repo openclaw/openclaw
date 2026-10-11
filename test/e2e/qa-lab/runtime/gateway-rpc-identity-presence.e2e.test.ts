@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { getRuntimeConfig } from "../../../../src/config/config.js";
+import { provisionDefaultProactiveJob } from "../../../../src/cron/default-proactive-job.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
@@ -173,15 +175,25 @@ describe("gateway RPC identity and presence", () => {
     const lastHeartbeat = await writer.request("last-heartbeat", {});
     expect(lastHeartbeat === null || typeof lastHeartbeat === "object").toBe(true);
 
+    const proactiveJob = await provisionDefaultProactiveJob(getRuntimeConfig(), "main");
+    expect(proactiveJob).toBeDefined();
     try {
       expect(await writer.request("set-heartbeats", { enabled: false })).toMatchObject({
         enabled: false,
         ok: true,
       });
+      expect(await writer.request("cron.get", { id: proactiveJob?.id })).toMatchObject({
+        id: proactiveJob?.id,
+        enabled: false,
+      });
     } finally {
       expect(await writer.request("set-heartbeats", { enabled: true })).toMatchObject({
         enabled: true,
         ok: true,
+      });
+      expect(await writer.request("cron.get", { id: proactiveJob?.id })).toMatchObject({
+        id: proactiveJob?.id,
+        enabled: true,
       });
     }
   });

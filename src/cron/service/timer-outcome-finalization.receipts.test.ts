@@ -11,11 +11,18 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import { advanceCronActiveJobGeneration, markCronJobActive } from "../active-jobs.js";
+import {
+  advanceCronActiveJobGeneration,
+  clearCronJobActive,
+  isCronActiveJobMarkerCurrent,
+  markCronJobActive,
+} from "../active-jobs.js";
+import { readCronRunRecordsForTests } from "../run-history.test-support.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
   finishCronRunReceiptAsync,
+  isCronRunReceiptOwnerStale,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
 import {
@@ -23,7 +30,13 @@ import {
   inspectActiveCronRunReceipt,
 } from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
-import { reserveQueuedCronRun } from "./run-admission.js";
+import {
+  activateQueuedCronRun,
+  cleanupQueuedCronRunReservations,
+  persistQueuedCronRunReservations,
+  reserveQueuedCronRun,
+  supersedeActivatedCronRun,
+} from "./run-admission.js";
 import { createCronRunHandle } from "./run-history.js";
 import { createCronServiceState } from "./state.js";
 import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
@@ -268,6 +281,178 @@ describe("cron outcome receipt finalization", () => {
     ]);
   });
 
+  it("settles mixed outcomes despite one deferred release failure without clearing a successor", async () => {
+    const { storePath } = fixtures.makeStorePath();
+    const startedAt = Date.parse("2026-02-06T10:04:59.375Z");
+    const makeJob = (id: string) => {
+      const job = createDueIsolatedJob({ id, nowMs: startedAt, nextRunAtMs: startedAt });
+      job.schedule = { kind: "every", everyMs: 60_000, anchorMs: startedAt };
+      return job;
+    };
+    const completedJob = makeJob("mixed-completed");
+    const failedJob = makeJob("mixed-deferred-release-fails");
+    const laterJob = makeJob("mixed-later-deferred");
+    const replacedJob = makeJob("mixed-replaced-deferred");
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [completedJob, failedJob, laterJob, replacedJob],
+    });
+    const state = createCronRegressionState({
+      storePath,
+      defaultAgentId: "main",
+      nowMs: () => startedAt,
+      runIsolatedAgentJob: vi.fn(),
+    });
+    const reserveRun = async (job: CronJob) => {
+      const [reserved] = await persistQueuedCronRunReservations({
+        state,
+        candidates: [job],
+        reservedAtMs: startedAt,
+      });
+      if (!reserved) {
+        throw new Error("Expected a durable reservation for the mixed finalization fixture");
+      }
+      const reservationIdentity = reserveQueuedCronRun(state, job.id, startedAt, {
+        runReceipt: reserved.runReceipt,
+        runReceiptContext: reserved.runReceiptContext,
+      });
+      const activation = await activateQueuedCronRun({
+        state,
+        job: reserved.job,
+        reservationIdentity,
+      });
+      if (activation.kind !== "activated") {
+        throw new Error("Expected the reserved receipt to activate");
+      }
+      return {
+        ...activation,
+        jobId: job.id,
+        activeJobMarker: markCronJobActive(job.id),
+        reservationIdentity,
+        taskRunId: createCronRunHandle({
+          state,
+          job: activation.job,
+          startedAt,
+          runReceipt: activation.runReceipt,
+        }).runId,
+        endedAt: startedAt + 1,
+      };
+    };
+    const completed = await reserveRun(completedJob);
+    const failed = await reserveRun(failedJob);
+    const later = await reserveRun(laterJob);
+    const predecessor = await reserveRun(replacedJob);
+    await supersedeActivatedCronRun({
+      state,
+      ...predecessor,
+      reason: "Replaced before idle admission",
+    });
+    const replacement = (await loadCronStore(storePath)).jobs.find(
+      (job) => job.id === replacedJob.id,
+    );
+    if (!replacement) {
+      throw new Error("Expected the replacement's existing job definition");
+    }
+    const successor = await reserveRun(replacement);
+    expect(successor.startedAt).toBe(predecessor.startedAt);
+    expect(successor.runReceipt.receiptId).not.toBe(predecessor.runReceipt.receiptId);
+    const database = openOpenClawStateDatabase().db;
+    const readReceipt = (run: typeof completed) =>
+      database
+        .prepare("SELECT status, finished_at_ms FROM cron_run_receipts WHERE receipt_id = ?")
+        .get(run.runReceipt.receiptId);
+    database.exec(`
+      CREATE TRIGGER reject_mixed_deferred_release
+      BEFORE UPDATE OF status ON cron_run_receipts
+      WHEN OLD.receipt_id = '${failed.runReceipt.receiptId}' AND NEW.status = 'skipped'
+      BEGIN
+        SELECT RAISE(ABORT, 'deferred release unavailable');
+      END;
+    `);
+    const deferredOutcome = (run: typeof completed) =>
+      authorOutcome({
+        ...run,
+        status: "skipped",
+        admissionDeferred: true,
+        executionStarted: false,
+      });
+
+    try {
+      const failure = await finalizeCompletedCronRunOutcomes(state, [
+        deferredOutcome(failed),
+        authorOutcome({ ...completed, status: "ok" }),
+        deferredOutcome(predecessor),
+        deferredOutcome(later),
+      ]).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+      expect(readReceipt(completed)).toEqual({ status: "ok", finished_at_ms: startedAt + 1 });
+      expect(readCronRunRecordsForTests(completed.jobId)).toEqual([
+        expect.objectContaining({ runId: completed.taskRunId, status: "succeeded" }),
+      ]);
+      expect(readReceipt(later)).toEqual({ status: "skipped", finished_at_ms: startedAt + 1 });
+      expect(readCronRunRecordsForTests(later.jobId)).toEqual([]);
+      const persisted = (await loadCronStore(storePath)).jobs;
+      const laterPersisted = persisted.find((job) => job.id === later.jobId);
+      expect(laterPersisted?.state.nextRunAtMs).toBe(startedAt);
+      expect(laterPersisted?.state.runningAtMs).toBeUndefined();
+      expect(laterPersisted?.state.lastRunStatus).toBeUndefined();
+      expect(readReceipt(failed)).toEqual({ status: "running", finished_at_ms: null });
+      expect(readCronRunRecordsForTests(failed.jobId)).toEqual([]);
+      expect(persisted.find((job) => job.id === failed.jobId)?.state).toMatchObject({
+        runningAtMs: startedAt,
+        runningReceiptId: failed.runReceipt.receiptId,
+        nextRunAtMs: startedAt,
+      });
+      expect(isCronRunReceiptOwnerStale(failed.runReceipt, startedAt)).toBe(true);
+      for (const run of [completed, failed, later]) {
+        expect(state.queuedRunReservationsByJobId.has(run.jobId)).toBe(false);
+        expect(isCronActiveJobMarkerCurrent(run.activeJobMarker)).toBe(false);
+      }
+      expect(readReceipt(predecessor)).toEqual({ status: "superseded", finished_at_ms: startedAt });
+      expect(readReceipt(successor)).toEqual({ status: "running", finished_at_ms: null });
+      expect(persisted.find((job) => job.id === successor.jobId)?.state).toMatchObject({
+        runningAtMs: startedAt,
+        runningReceiptId: successor.runReceipt.receiptId,
+      });
+      expect(state.queuedRunReservationsByJobId.get(successor.jobId)?.identity).toBe(
+        successor.reservationIdentity,
+      );
+      expect(isCronActiveJobMarkerCurrent(successor.activeJobMarker)).toBe(true);
+      expect(isCronRunReceiptOwnerStale(successor.runReceipt, startedAt)).toBe(false);
+      expect(failure).toMatchObject({
+        errors: [
+          expect.objectContaining({
+            message: expect.stringContaining("deferred release unavailable"),
+          }),
+          expect.objectContaining({
+            name: "CronRunReceiptRevisionError",
+            message: "cron run fence is no longer current",
+          }),
+        ],
+      });
+    } finally {
+      database.exec("DROP TRIGGER IF EXISTS reject_mixed_deferred_release");
+      await cleanupQueuedCronRunReservations({
+        state,
+        reservations: [...state.queuedRunReservationsByJobId].map(([jobId, reservation]) => ({
+          jobId,
+          reservationIdentity: reservation.identity,
+        })),
+      });
+      await finishCronRunReceiptAsync({
+        handle: failed.runReceipt,
+        status: "skipped",
+        finishedAtMs: startedAt + 1,
+      });
+      for (const run of [completed, failed, later, predecessor, successor]) {
+        clearCronJobActive(run.jobId, run.activeJobMarker);
+      }
+    }
+  });
+
   it("records a non-firing scheduled trigger as a skipped receipt", async () => {
     const store = fixtures.makeStorePath();
     const dueAt = Date.parse("2026-02-06T10:04:59.500Z");
@@ -369,7 +554,6 @@ describe("cron outcome receipt finalization", () => {
       log: { ...noopLogger, warn },
       nowMs: () => startedAt + 1,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
       onEvent: (event) => events.push(event),
     });

@@ -14,7 +14,6 @@ import {
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   commitReplySessionInitialization,
   loadReplySessionInitializationSnapshot,
@@ -23,9 +22,16 @@ import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as sessionReplacement from "../../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import * as sessionEntryRead from "../../config/sessions/session-entry-read-runtime.js";
+import { createCronServiceState } from "../../cron/service/state.js";
+import { wake } from "../../cron/service/wake.js";
+import type { CronJob } from "../../cron/types.js";
+import { createGatewayCronTargetResolver } from "../../gateway/server-cron-targets.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
+  enqueueAutomationSystemEvent,
+  enqueueSystemEvent,
+  prepareAutomationSystemEvents,
   enqueueRequiredSystemEventEntry,
   isSystemEventTurnOwned,
   peekSystemEventEntries,
@@ -34,18 +40,21 @@ import {
 import * as gatewayWork from "../../process/gateway-work-admission.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { registerSessionEventDeletionEnvironmentTests } from "./session-event-deletion-environment.cases.js";
 import {
   assertSessionEventTargetCurrent,
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
 } from "./session-event-handoff.js";
 import { prepareSessionEventTargetForHost } from "./session-event-target.js";
+import {
+  continuation,
+  sessionKey,
+  route,
+  withTargetFixture,
+} from "./session-event-target.test-support.js";
 // These cases stop before turn admission. Unexpected dispatch is a failure,
 // never a synthetic adoption/settlement supplied by the fixture.
 const dispatch = vi.hoisted(() =>
@@ -69,54 +78,6 @@ vi.mock("../dispatch.js", () => ({
   dispatchInboundMessageWithRoutedChannelDispatcher: dispatch,
 }));
 
-const continuation = vi.spyOn(gatewayWork, "runWithGatewayDetachedWorkContinuation");
-const sessionKey = "agent:main:event-origin";
-const route = {
-  channel: "telegram",
-  to: "-100001",
-  accountId: "event-account",
-  threadId: "42",
-};
-
-async function withTargetFixture(
-  run: (fixture: OpenClawTestState & { storePath: string }) => Promise<void>,
-  options: { empty?: boolean; native?: boolean } = {},
-) {
-  await withOpenClawTestState(
-    {
-      label: "session-event-target",
-      ...(options.native ? { env: { OPENCLAW_TEST_FAST: "0" } } : {}),
-    },
-    async (state) => {
-      setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
-      openOpenClawStateDatabase({ env: state.env });
-      if (!options.empty) {
-        const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-        writeSessionEntry(database, sessionKey, {
-          sessionId: "original-session",
-          lifecycleRevision: "original-revision",
-          updatedAt: 1,
-          delivery: normalizeSessionDeliveryState({ context: route }),
-          permissionMode: "full",
-        });
-      }
-      const storePath = resolveSessionStorePathCore(undefined, { agentId: "main", env: state.env });
-      try {
-        await run({ ...state, storePath });
-      } finally {
-        resetSystemEventsForTest();
-        gatewayWork.resetGatewayWorkAdmission();
-        await Promise.allSettled(
-          continuation.mock.results.flatMap((result) =>
-            result.type === "return" ? [result.value] : [],
-          ),
-        );
-        expect(gatewayWork.getActiveGatewayRootWorkCount()).toBe(0);
-      }
-    },
-  );
-}
-
 beforeEach(() => {
   eventLogError.mockClear();
   continuation.mockClear();
@@ -130,6 +91,170 @@ afterAll(() => {
 });
 
 describe("session event target custody", () => {
+  it("keeps a deferred wake for its selected later occurrence through native notice custody", async () => {
+    await withTargetFixture(async (state) => {
+      const job: CronJob = {
+        id: "running-receiver",
+        name: "Running receiver",
+        agentId: "main",
+        enabled: true,
+        createdAtMs: 0,
+        updatedAtMs: 0,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 0 },
+        sessionTarget: `session:${sessionKey}`,
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "Review notices" },
+        state: { nextRunAtMs: 1_000, runningAtMs: 1_000 },
+      };
+      const target = await captureSessionEventTargetForHost("main", sessionKey);
+      const adapter = createGatewayCronTargetResolver(state.env, { warn() {} });
+      const scheduler = createTestGatewayScheduler();
+      const cron = createCronServiceState({
+        scheduler,
+        cronEnabled: true,
+        storePath: "unused-notice-selection-store",
+        nowMs: () => 10_000,
+        log: { debug() {}, info() {}, warn() {}, error() {} },
+        enqueueSystemEvent() {},
+        resolveSessionEventTarget: adapter.resolveCronTarget,
+        deferSessionEvent: adapter.deferSessionEvent,
+        runIsolatedAgentJob: async () => {
+          throw new Error("Unexpected isolated execution");
+        },
+      });
+      cron.store = { version: 1, jobs: [job] };
+      cron.stopped = false;
+      try {
+        expect(
+          await wake(cron, {
+            mode: "next-heartbeat",
+            agentId: "main",
+            expectedTarget: target,
+            text: "Only the next scheduled turn may consume this",
+          }),
+        ).toEqual({ ok: true });
+        const pending = peekSystemEventEntries(sessionKey);
+        expect(pending).toHaveLength(1);
+        // Advancing wall time cannot redeem the already admitted earlier occurrence.
+        for (const runAtMs of [undefined, 1_000, 59_999]) {
+          const earlier = await prepareAutomationSystemEvents(sessionKey, job.id, runAtMs);
+          try {
+            expect(earlier.events).toEqual([]);
+            earlier.start();
+            expect(peekSystemEventEntries(sessionKey)).toEqual(pending);
+          } finally {
+            earlier.release();
+          }
+        }
+        const next = await prepareAutomationSystemEvents(sessionKey, job.id, 60_000);
+        try {
+          expect(next.events).toEqual(pending);
+          next.start();
+          expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+        } finally {
+          next.release();
+        }
+      } finally {
+        await scheduler.stop();
+      }
+    });
+  });
+
+  it.each(["consume", "source-replaced", "next-attempt"] as const)(
+    "retains deferred notice custody after ordinary creation closes: %s",
+    async (boundary) => {
+      await withTargetFixture(
+        async (state) => {
+          const originalDirectory = state.path("original-store");
+          const replacementDirectory = state.path("replacement-store");
+          const alias = state.path("event-store");
+          await fs.mkdir(originalDirectory);
+          await fs.mkdir(replacementDirectory);
+          await fs.symlink(originalDirectory, alias, "junction");
+          const storePath = path.join(alias, "openclaw-agent.sqlite");
+          setRuntimeConfigSnapshot({
+            agents: { entries: { main: {} } },
+            session: { store: storePath },
+          });
+          const target = await captureSessionEventTargetForHost("main", sessionKey, {
+            env: state.env,
+          });
+          const prepared = await prepareSessionEventTargetForHost(target, {
+            createIfMissing: true,
+          });
+          let notices: Awaited<ReturnType<typeof prepareAutomationSystemEvents>> | undefined;
+          try {
+            enqueueAutomationSystemEvent(
+              "Deferred first notice",
+              { sessionKey },
+              {
+                jobId: "first-scheduled-turn",
+                assertCurrent: () => assertSessionEventTargetCurrent(target),
+                prepare: () => prepareSessionEventTargetForHost(target),
+              },
+            );
+            const selected = await prepareAutomationSystemEvents(
+              sessionKey,
+              "first-scheduled-turn",
+            );
+            notices = selected;
+            const scope = { agentId: "main", storePath, sessionKey };
+            const snapshot = await loadReplySessionInitializationSnapshot(scope);
+            const committed = await commitReplySessionInitialization({
+              ...scope,
+              activeSessionKey: sessionKey,
+              expectedRevision: snapshot.revision,
+              sessionEntry: {
+                sessionId: "scheduled-first-session",
+                lifecycleRevision: "first",
+                updatedAt: 1,
+              },
+              bindCreation: (operation) => {
+                const assertEvent = prepared.bindCreation(operation);
+                const assertNotices = selected.bindCreation(operation);
+                return () => {
+                  assertEvent();
+                  assertNotices();
+                };
+              },
+            });
+            expect(committed.ok).toBe(true);
+            expect(target).toMatchObject({
+              sessionId: "scheduled-first-session",
+              lifecycleRevision: "first",
+            });
+            if (boundary === "source-replaced") {
+              await fs.unlink(alias);
+              await fs.symlink(replacementDirectory, alias, "junction");
+              expect(() => selected.start()).toThrow("storage changed after capture");
+              expect(peekSystemEventEntries(sessionKey).map((event) => event.text)).toEqual([
+                "Deferred first notice",
+              ]);
+            } else if (boundary === "next-attempt") {
+              // beforeStart deferral releases attempt facts without consuming the queued notice.
+              selected.release();
+              const retry = await prepareAutomationSystemEvents(sessionKey, "first-scheduled-turn");
+              try {
+                expect(retry.events.map((event) => event.text)).toEqual(["Deferred first notice"]);
+                retry.start();
+                expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+              } finally {
+                retry.release();
+              }
+            } else {
+              selected.start();
+              expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+            }
+          } finally {
+            notices?.release();
+            prepared.release();
+          }
+        },
+        { empty: true, native: true },
+      );
+    },
+  );
+
   it("retains fresh event custody from a captured Windows short-path spelling", async () => {
     await withTargetFixture(
       async (state) => {
@@ -713,4 +838,159 @@ describe("session event target custody", () => {
       expect(dispatch).not.toHaveBeenCalled();
     });
   });
+  it("retires a reset generation's deferred notice without poisoning its automation", async () => {
+    await withTargetFixture(async ({ env, storePath }) => {
+      const retiredTarget = await captureSessionEventTargetForHost("main", sessionKey, { env });
+      enqueueAutomationSystemEvent(
+        "Old session notice",
+        { sessionKey },
+        {
+          jobId: "scheduled-review",
+          assertCurrent: () => assertSessionEventTargetCurrent(retiredTarget),
+          prepare: () => prepareSessionEventTargetForHost(retiredTarget),
+        },
+      );
+      replaceSessionEntrySync(
+        { agentId: "main", storePath, sessionKey, env },
+        {
+          sessionId: "replacement-session",
+          lifecycleRevision: "replacement-revision",
+          updatedAt: 2,
+        },
+      );
+      const currentTarget = await captureSessionEventTargetForHost("main", sessionKey, { env });
+      const currentOwner = {
+        assertCurrent: () => assertSessionEventTargetCurrent(currentTarget),
+        prepare: () => prepareSessionEventTargetForHost(currentTarget),
+      };
+      enqueueAutomationSystemEvent(
+        "Current session notice",
+        { sessionKey },
+        {
+          ...currentOwner,
+          jobId: "scheduled-review",
+        },
+      );
+      enqueueAutomationSystemEvent(
+        "Other automation notice",
+        { sessionKey },
+        {
+          ...currentOwner,
+          jobId: "other-review",
+        },
+      );
+      enqueueSystemEvent("Ordinary session notice", { sessionKey });
+
+      const prepared = await prepareAutomationSystemEvents(sessionKey, "scheduled-review");
+      try {
+        expect(prepared.events.map((event) => event.text)).toEqual(["Current session notice"]);
+        prepared.start();
+        expect(peekSystemEventEntries(sessionKey).map((event) => event.text)).toEqual([
+          "Other automation notice",
+          "Ordinary session notice",
+        ]);
+      } finally {
+        prepared.release();
+      }
+      const nextRun = await prepareAutomationSystemEvents(sessionKey, "scheduled-review");
+      try {
+        expect(nextRun.events).toEqual([]);
+        nextRun.start();
+      } finally {
+        nextRun.release();
+      }
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+  });
+  it.each(["replaced", "temporarily-missing"] as const)(
+    "retires only positively replaced deferred storage: %s",
+    async (change) => {
+      await withTargetFixture(async (state) => {
+        const original = state.path("notice-original");
+        const replacement = state.path("notice-replacement");
+        const alias = state.path("notice-store");
+        await fs.mkdir(original);
+        await fs.mkdir(replacement);
+        await fs.symlink(original, alias, "junction");
+        const storePath = path.join(alias, "openclaw-agent.sqlite");
+        for (const directory of [original, replacement]) {
+          const database = openOpenClawAgentDatabase({
+            agentId: "main",
+            path: path.join(directory, "openclaw-agent.sqlite"),
+            env: state.env,
+          });
+          writeSessionEntry(database, sessionKey, {
+            sessionId: directory === original ? "original-notice" : "replacement-notice",
+            lifecycleRevision: directory === original ? "original" : "replacement",
+            updatedAt: 1,
+          });
+        }
+        setRuntimeConfigSnapshot({
+          agents: { entries: { main: {} } },
+          session: { store: storePath },
+        });
+        const retiredTarget = await captureSessionEventTargetForHost("main", sessionKey, {
+          env: state.env,
+        });
+        const enqueue = (target: typeof retiredTarget, jobId: string) =>
+          enqueueAutomationSystemEvent(
+            "Same notice",
+            { sessionKey },
+            {
+              jobId,
+              assertCurrent: () => assertSessionEventTargetCurrent(target),
+              prepare: () => prepareSessionEventTargetForHost(target),
+            },
+          );
+        enqueue(retiredTarget, "review");
+        enqueue(retiredTarget, "other-review");
+        enqueueSystemEvent("Ordinary notice", { sessionKey });
+        const before = peekSystemEventEntries(sessionKey);
+        await fs.unlink(alias);
+        if (change === "temporarily-missing") {
+          await expect(prepareAutomationSystemEvents(sessionKey, "review")).rejects.toThrow(
+            "storage changed after capture",
+          );
+          expect(peekSystemEventEntries(sessionKey)).toEqual(before);
+          await fs.symlink(original, alias, "junction");
+        } else {
+          await fs.symlink(replacement, alias, "junction");
+          const currentTarget = await captureSessionEventTargetForHost("main", sessionKey, {
+            env: state.env,
+          });
+          enqueue(currentTarget, "review");
+        }
+        const current = peekSystemEventEntries(sessionKey);
+        const expectedId = change === "replaced" ? current.at(-1)?.id : before[0]?.id;
+        const prepared = await prepareAutomationSystemEvents(sessionKey, "review");
+        try {
+          expect(prepared.events.map((event) => event.id)).toEqual([expectedId]);
+          prepared.start();
+        } finally {
+          prepared.release();
+        }
+        expect(peekSystemEventEntries(sessionKey)).toEqual([before[1], before[2]]);
+        const next = await prepareAutomationSystemEvents(sessionKey, "review");
+        try {
+          expect(next.events).toEqual([]);
+          next.start();
+        } finally {
+          next.release();
+        }
+        expect(dispatch).not.toHaveBeenCalled();
+      });
+    },
+  );
+});
+
+registerSessionEventDeletionEnvironmentTests(withTargetFixture, async (error, run) => {
+  await dispatch.withImplementation(
+    () => {
+      throw error;
+    },
+    async () => {
+      await run();
+      expect(dispatch).toHaveBeenCalledOnce();
+    },
+  );
 });

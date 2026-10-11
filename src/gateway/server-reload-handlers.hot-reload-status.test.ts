@@ -113,7 +113,6 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
       getState: () => ({
         hooksConfig: {} as never,
         hookClientIpConfig: {} as never,
-        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
         cronState: {
           cron: { start: vi.fn(async () => {}), stop: vi.fn() },
           storePath: "/tmp/cron.json",
@@ -121,7 +120,6 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
           reconcileExitWatchers: vi.fn(async () => {}),
           reconcileStreamWatchers: vi.fn(async () => {}),
           stopStreamWatchers: vi.fn(async () => {}),
-          reconcileSystemJobs: vi.fn(async () => "converged" as const),
         } as never,
       }),
       setState: vi.fn(),

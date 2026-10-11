@@ -56,6 +56,8 @@ function hasAgentTurnOnlyPayloadHint(payload: UnknownRecord): boolean {
     "thinking" in payload ||
     "timeoutSeconds" in payload ||
     typeof payload.lightContext === "boolean" ||
+    typeof payload.skipIfScratchEmpty === "boolean" ||
+    typeof payload.includeReasoning === "boolean" ||
     typeof payload.allowUnsafeExternalContent === "boolean"
   );
 }
@@ -70,10 +72,12 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
   } else if (kindRaw) {
     next.kind = kindRaw;
   }
-  for (const field of ["message", "text"] as const) {
-    if (typeof next[field] === "string") {
-      next[field] = normalizeOptionalString(next[field]) ?? "";
-    }
+  // Preserve authored prompt bytes; blank input still fails the shared schema validation.
+  if (typeof next.message === "string" && !next.message.trim()) {
+    next.message = "";
+  }
+  if (typeof next.text === "string") {
+    next.text = normalizeOptionalString(next.text) ?? "";
   }
   if (typeof next.script === "string") {
     next.script = next.script.trim();
@@ -174,6 +178,8 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
       delete next.fallbacks;
       delete next.thinking;
       delete next.lightContext;
+      delete next.skipIfScratchEmpty;
+      delete next.includeReasoning;
       delete next.allowUnsafeExternalContent;
     }
     if (kind !== "command") {

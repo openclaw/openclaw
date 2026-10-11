@@ -159,7 +159,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
     notifySessionKey,
     resolveSubagentSession,
     notifyDeliveryContext,
-    notifyFromConversationTurn,
   } = resolveExecNotificationDefaults(defaults);
   const backgroundFollowUp =
     notifyOnExit && notifyOnExitEmptySuccess
@@ -582,7 +581,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           agentId,
           eventRouting: defaults?.eventRouting,
           notifyDeliveryContext,
-          notifyFromConversationTurn,
           timeoutSec: effectiveTimeout,
           processContinuationAvailable: allowBackground,
           startupSignal: signal,

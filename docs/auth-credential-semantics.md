@@ -160,7 +160,7 @@ admission and closes its SQLite handles before returning.
 Reader launches normalize the effective state directory, so an implicit default
 and the same explicitly pinned directory reuse that child. A different state
 directory, environment, or source still replaces it.
-Detached connection, cron, heartbeat, and hook callbacks retain that Gateway's
+Detached connection, automation, session-event, and hook callbacks retain that Gateway's
 read-only worker scope without inheriting startup or request authority. Shutdown
 refuses late callbacks before they can create another reader.
 Usage bookkeeping invalidates later cache reuse while admitted reads can finish

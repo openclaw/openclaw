@@ -2,9 +2,9 @@ import {
   normalizeOptionalString,
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
-import { isSystemMonitorDeclaration } from "../../cron/system-owned-declaration.js";
 import type { CronJob } from "../../cron/types.js";
 import { CronCliError } from "./cron-cli-error.js";
+import { parseCronDeliveryPolicyOptions } from "./register.cron-options.js";
 import {
   assertCronTimeoutSupported,
   parseCronCommandArgv,
@@ -14,7 +14,7 @@ import {
   parseCronStringList,
   parseCronThinkingOption,
 } from "./shared.js";
-import { parseCronThreadIdOption } from "./thread-id-shared.js";
+import { normalizeCronSessionTargetOption, parseCronThreadIdOption } from "./thread-id-shared.js";
 import { readCronPayloadScript } from "./trigger-options.js";
 
 const assignIf = (
@@ -35,6 +35,8 @@ export async function resolveCronEditPayloadDeliveryPatch(
   commandCwd: string | undefined,
 ): Promise<Record<string, unknown>> {
   const patch: Record<string, unknown> = {};
+  const deliveryPolicy = parseCronDeliveryPolicyOptions(opts);
+  const hasDeliveryPolicy = Object.keys(deliveryPolicy).length > 0;
   const hasSystemEventPatch = typeof opts.systemEvent === "string";
   const scriptPath = readNonBlankString(opts.script);
   const commandShell = readNonBlankString(opts.command);
@@ -78,6 +80,8 @@ export async function resolveCronEditPayloadDeliveryPatch(
   const hasDeliveryModeFlag =
     opts.announce || typeof opts.deliver === "boolean" || hasWebhookDelivery;
   const threadId = parseCronThreadIdOption(opts.threadId);
+  const hasDeliveryThreadId = typeof threadId === "number";
+  const hasDeliveryRecipient = Boolean(normalizeOptionalString(opts.to));
   const deliveryFields = (
     [
       ["channel", "channel", opts.channel, opts.clearChannel],
@@ -123,7 +127,9 @@ export async function resolveCronEditPayloadDeliveryPatch(
     Boolean(opts.clearFallbacks) ||
     Boolean(thinking) ||
     Boolean(opts.clearThinking) ||
-    typeof opts.lightContext === "boolean";
+    typeof opts.lightContext === "boolean" ||
+    typeof opts.skipIfScratchEmpty === "boolean" ||
+    typeof opts.includeReasoning === "boolean";
   const hasScriptSpecificPayloadField =
     Boolean(scriptPath) || scriptTimeoutSeconds !== undefined || scriptToolBudget !== undefined;
   if (hasTimeoutSeconds && hasScriptSpecificPayloadField) {
@@ -150,15 +156,20 @@ export async function resolveCronEditPayloadDeliveryPatch(
     if (hasTimeoutSeconds) {
       assertCronTimeoutSupported(payloadKind);
     }
-    if (isSystemMonitorDeclaration(existingJob.declarationKey)) {
-      throw new CronCliError(
-        hasTimeoutSeconds
-          ? `--timeout-seconds is not supported for ${payloadKind} jobs.`
-          : "System-owned cron jobs cannot be edited by cron clients.",
-      );
-    }
   } else if (requestedPayloadKinds.length > 1) {
     throw new CronCliError("Choose at most one payload change");
+  }
+  for (const [key, flag] of [
+    ["skipIfScratchEmpty", "skip-if-scratch-empty"],
+    ["includeReasoning", "include-reasoning"],
+  ] as const) {
+    if (
+      typeof opts[key] === "boolean" &&
+      typeof opts.message !== "string" &&
+      (await loadExistingJob()).payload.kind !== "agentTurn"
+    ) {
+      throw new CronCliError(`--${flag}/--no-${flag} require an agentTurn job or --message`);
+    }
   }
   let payload: Record<string, unknown> | undefined;
   if (payloadKind === "systemEvent") {
@@ -177,6 +188,18 @@ export async function resolveCronEditPayloadDeliveryPatch(
     }
     assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
     assignIf(payload, "lightContext", opts.lightContext, typeof opts.lightContext === "boolean");
+    assignIf(
+      payload,
+      "skipIfScratchEmpty",
+      opts.skipIfScratchEmpty,
+      typeof opts.skipIfScratchEmpty === "boolean",
+    );
+    assignIf(
+      payload,
+      "includeReasoning",
+      opts.includeReasoning,
+      typeof opts.includeReasoning === "boolean",
+    );
   } else if (payloadKind === "command") {
     payload = { kind: "command" };
     assignIf(payload, "argv", commandArgv, Boolean(commandArgv));
@@ -206,8 +229,8 @@ export async function resolveCronEditPayloadDeliveryPatch(
     patch.payload = payload;
   }
 
-  if (hasDeliveryModeFlag || hasDeliveryTarget || hasBestEffort) {
-    const delivery: Record<string, unknown> = {};
+  if (hasDeliveryModeFlag || hasDeliveryTarget || hasBestEffort || hasDeliveryPolicy) {
+    const delivery: Record<string, unknown> = { ...deliveryPolicy };
     if (hasDeliveryModeFlag) {
       delivery.mode = hasWebhookDelivery
         ? "webhook"
@@ -227,6 +250,38 @@ export async function resolveCronEditPayloadDeliveryPatch(
     }
     if (typeof opts.bestEffortDeliver === "boolean") {
       delivery.bestEffort = opts.bestEffortDeliver;
+    }
+    if (hasDeliveryPolicy || hasDeliveryRecipient || hasDeliveryThreadId || hasWebhookDelivery) {
+      const existing = await loadExistingJob();
+      if (deliveryPolicy.target === "owner") {
+        // Owner lookup must never inherit a group/topic or primary webhook URL.
+        // Preserve channel/account constraints and an explicitly disabled mode.
+        delivery.to = null;
+        delivery.threadId = null;
+        if (delivery.mode === undefined && existing.delivery?.mode === "webhook") {
+          delivery.mode = "announce";
+        }
+      } else if (
+        existing.delivery?.target === "owner" &&
+        (hasDeliveryRecipient || hasDeliveryThreadId || hasWebhookDelivery)
+      ) {
+        delivery.target = null;
+      }
+      const mode = delivery.mode ?? existing.delivery?.mode;
+      if (deliveryPolicy.target === "owner" || deliveryPolicy.directPolicy != null) {
+        const sessionTarget =
+          normalizeCronSessionTargetOption(opts.session) ?? existing.sessionTarget;
+        if (sessionTarget === "main" || hasSystemEventPatch) {
+          throw new CronCliError(
+            "--delivery-target/--direct-policy require a non-main job; use --session isolated or session:<id>",
+          );
+        }
+        if (mode === "webhook") {
+          throw new CronCliError(
+            "--direct-policy requires chat delivery; use --announce or --no-deliver",
+          );
+        }
+      }
     }
     patch.delivery = delivery;
   }

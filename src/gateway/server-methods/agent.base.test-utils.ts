@@ -2,7 +2,6 @@
 import fs from "node:fs/promises";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
@@ -18,6 +17,7 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { registerAgentCreatorAuthorityTests } from "./agent.creator-authority.test-support.js";
 import {
   getAgentTestMocks,
   makeContext,
@@ -55,7 +55,6 @@ const mocks = getAgentTestMocks();
 describe("gateway agent handler", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-gateway-agent-base-");
   afterEach(describe0AfterEach0);
-
   it.each(["cleared", "no-op", "discarded result"])(
     "returns the replacement projection result with a %s store fixture",
     async (mode) => {
@@ -150,35 +149,7 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("carries exact cron creator authority through direct local agent RPC", async () => {
-    const runId = "direct-agent-cron-authority";
-    let capability: CronCreatorAuthorityCapability | undefined;
-    primeMainAgentRun();
-    mocks.agentCommand.mockImplementation(async (opts: AgentCommandCall) => {
-      capability = opts.cronCreatorAuthorityCapability as
-        | CronCreatorAuthorityCapability
-        | undefined;
-      expect(capability).toMatchObject({ active: true, runId });
-      return { payloads: [{ text: "ok" }], meta: { durationMs: 100 } };
-    });
-
-    await invokeAgent(
-      {
-        message: "create an automation",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        idempotencyKey: runId,
-      },
-      {
-        client: {
-          ...operatorWriteCliClient(["operator.admin"]),
-          internal: { isLocalClient: true },
-        } as AgentHandlerArgs["client"],
-      },
-    );
-
-    await waitForAssertion(() => expect(capability?.active).toBe(false));
-  });
+  registerAgentCreatorAuthorityTests();
 
   it("resolves explicit recipient sessions before Gateway admission", async () => {
     const sessionKey = "agent:ops:whatsapp:work:direct:+15551234567";
@@ -1897,8 +1868,12 @@ describe("gateway agent handler", () => {
         idempotencyKey: `test-idem-terminal-main-${runKind}-reuse`,
       } as AgentParams);
 
-      const call = await waitForAgentCommandCall<{ sessionId?: string }>();
+      const call = await waitForAgentCommandCall<{
+        sessionId?: string;
+        bootstrapContextRunKind?: string;
+      }>();
       expect(call.sessionId).toBe("terminal-main-session");
+      expect(call.bootstrapContextRunKind).toBe("cron");
       expect(capturedEntry?.sessionId).toBe("terminal-main-session");
       expectSqliteSessionFileMarkerForEntry(capturedEntry);
     },

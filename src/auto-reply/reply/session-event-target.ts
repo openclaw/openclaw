@@ -33,6 +33,7 @@ import { deliveryContextFromSession } from "../../utils/delivery-context.read.js
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { SessionEventTarget } from "./session-event-contract.js";
 import { narrowSessionEventSettings } from "./session-event-policy.js";
+import { SessionEventTargetRetiredError } from "./session-event-target-errors.js";
 
 type CapturedEventSource = {
   database: Parameters<SessionEntryReadSourcePreparation>[0];
@@ -45,12 +46,19 @@ function assertCapturedEventSource(source: CapturedEventSource | undefined) {
     return;
   }
   const identity = readDatabasePathIdentitySync(source.database.path);
-  if (
-    identity.key !== source.identity.key ||
-    identity.birthtime !== source.identity.birthtime ||
-    !isSessionStoreReadCandidateCurrent(source.selectedStore)
-  ) {
-    throw new Error("Session event destination storage changed after capture");
+  const identityChanged =
+    identity.key !== source.identity.key || identity.birthtime !== source.identity.birthtime;
+  const selectedStoreCurrent = isSessionStoreReadCandidateCurrent(source.selectedStore);
+  if (identityChanged || !selectedStoreCurrent) {
+    const replacement = selectedStoreCurrent
+      ? identity
+      : readDatabasePathIdentitySync(source.selectedStore.path);
+    const message = "Session event destination storage changed after capture";
+    // Missing or unreadable storage is not proof that another physical owner replaced it.
+    if (replacement.key.startsWith("file:")) {
+      throw new SessionEventTargetRetiredError(message);
+    }
+    throw new Error(message);
   }
 }
 
@@ -237,7 +245,7 @@ export function assertSessionEventTargetCurrent(target: SessionEventTarget): voi
   const cfg = getSessionEventRuntimeConfig();
   resolveConfiguredAgentId(cfg, target.agentId);
   assertAgentRunLifecycleGenerationCurrent(target.generation);
-  if (isAgentDeletionBlocked(target.agentId)) {
+  if (isAgentDeletionBlocked(target.agentId, { env: targetScopes.get(target)?.env })) {
     throw new Error("Session event owner is being deleted");
   }
   const storePath = resolveSessionStorePathCore(cfg.session?.store, {
@@ -245,7 +253,9 @@ export function assertSessionEventTargetCurrent(target: SessionEventTarget): voi
     env: targetScopes.get(target)?.env,
   });
   if (target.storePath && target.storePath !== storePath) {
-    throw new Error("Session event destination store changed while its producer was running");
+    throw new SessionEventTargetRetiredError(
+      "Session event destination store changed while its producer was running",
+    );
   }
 }
 

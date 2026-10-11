@@ -10,6 +10,8 @@ import { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
+import { createGatewayRequestContext } from "./server-request-context.js";
+import { makeContextParams } from "./server-request-context.test-support.js";
 import { createGatewayRuntimeStateForTest } from "./test-helpers.server-runtime-state.js";
 
 const mocks = vi.hoisted(() => ({
@@ -183,9 +185,12 @@ describe("createGatewayRuntimeState", () => {
       pluginId: "plugin",
       source: "test",
     });
-    const getGatewayRequestContext = vi.fn();
+    const requestContext = createGatewayRequestContext(makeContextParams());
+    const trackExecution = vi.spyOn(requestContext, "trackExecution");
+    const getGatewayRequestContext = vi.fn(() => requestContext);
     const runtimeState = await createGatewayRuntimeStateForTest(registry, {
       getGatewayRequestContext,
+      httpRequestLifetime: requestContext,
     });
     runtimeState.wss.once("connection", (socket) => socket.close());
     const server = runtimeState.httpServers[0];
@@ -206,6 +211,7 @@ describe("createGatewayRuntimeState", () => {
       });
       expect(mocks.pluginsHttpModuleLoaded).not.toHaveBeenCalled();
       expect(getGatewayRequestContext).not.toHaveBeenCalled();
+      expect(trackExecution).toHaveBeenCalledOnce();
 
       gatewaySocket = new WebSocket(`ws://127.0.0.1:${address.port}/`, {
         handshakeTimeout: 2_000,
@@ -216,6 +222,7 @@ describe("createGatewayRuntimeState", () => {
       });
       expect(mocks.pluginsHttpModuleLoaded).not.toHaveBeenCalled();
       expect(getGatewayRequestContext).not.toHaveBeenCalled();
+      expect(trackExecution).toHaveBeenCalledOnce();
       expect(pluginUpgrade).not.toHaveBeenCalled();
 
       await expect(requestPluginUpgrade(address.port, "/plugin")).resolves.toContain(

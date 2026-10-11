@@ -179,7 +179,10 @@ posixIt.each([
 ])(
   "$route cleans its namespace after $pool completion ($homePolicy, failed run: $failRun, paused after acknowledgement: $pauseAfterAck, first-file failure: $failFirstFile)",
   async ({ route, pool, failRun, pauseAfterAck, failFirstFile, homePolicy }) => {
-    const root = tempDirs.make("oc-vt-state-");
+    // Keep fixture and repository imports inside one Vite root.
+    const fixtureArtifactsDir = path.join(repoRoot, ".artifacts");
+    fs.mkdirSync(fixtureArtifactsDir, { recursive: true });
+    const root = tempDirs.make("oc-vt-state-", fixtureArtifactsDir);
     const profileOnly = homePolicy === "profile-only" || homePolicy === "profile-only-parent-shell";
     const { tmp, home } = prepareVitestFixture(root, profileOnly ? "home-$source" : "home");
     const realHome = homePolicy === "real-home";
@@ -352,11 +355,13 @@ class AlphabeticalSequencer extends BaseSequencer {
   async sort(files) { return [...files].sort((a, b) => a.moduleId.localeCompare(b.moduleId)); }
 }
 export default {
+  root: ${JSON.stringify(repoRoot)},
   resolve: sharedVitestConfig.resolve,
   plugins: sharedVitestConfig.plugins,
   cacheDir: ${JSON.stringify(path.join(root, ".vite"))},
   test: {
-    include: ["src/tui/*.e2e.test.ts"],
+    include: ["**/src/tui/*.e2e.test.ts"],
+    environment: sharedVitestConfig.test.environment,
     reporters: ["default", "json"],
     outputFile: ${JSON.stringify(path.join(root, "report.json"))},
     pool: ${JSON.stringify(pool)}, isolate: false, fileParallelism: false, maxWorkers: 1,
@@ -400,7 +405,7 @@ export default {
       env.OPENCLAW_LIVE_USE_REAL_HOME = staged ? "0" : "1";
       env.OPENCLAW_LIVE_TEST_QUIET = "1";
     }
-    const vitestArgs = ["--root", root, "--configLoader", "native"];
+    const vitestArgs = ["--dir", root, "--configLoader", "native"];
     const profileDir = path.join(root, "profiles");
     const pauseReceipt = path.join(root, "pause.json");
     if (pauseAfterAck) {

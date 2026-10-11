@@ -3,10 +3,11 @@ import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { INTERNAL_RUNTIME_CONTEXT_BEGIN } from "../src/agents/internal-runtime-context.js";
+import { stripInternalRuntimeContext } from "../src/agents/internal-runtime-context.js";
 import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { stripEnvelope } from "../src/shared/chat-envelope.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
 import {
   writeOpenAiResponsesSse,
@@ -164,7 +165,6 @@ function config(url: string): OpenClawConfig {
     messages: { groupChat: { visibleReplies: "message_tool" } },
     agents: {
       defaults: {
-        heartbeat: { every: "0m" },
         model: { primary: MODEL_REF },
         models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },
         skipBootstrap: true,
@@ -209,7 +209,7 @@ type ModelInput = {
   role?: string;
   name?: string;
   call_id?: string;
-  content?: unknown;
+  content?: string | Array<{ type?: string; text?: string }>;
   output?: unknown;
 };
 
@@ -237,15 +237,17 @@ async function startModel() {
     }
     const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { input?: ModelInput[] };
     const input = body.input ?? [];
-    const latestUser = input
-      .toReversed()
-      .find(
-        (item) =>
-          item.role === "user" &&
-          !JSON.stringify(item.content).includes(INTERNAL_RUNTIME_CONTEXT_BEGIN),
-      );
-    const text = JSON.stringify(latestUser?.content);
-    const last = input.at(-1);
+    const userText = (item: ModelInput) =>
+      stripInternalRuntimeContext(
+        stripEnvelope(
+          typeof item.content === "string"
+            ? item.content
+            : (item.content ?? []).map((part) => part.text ?? "").join("\n"),
+        ),
+      ).trim();
+    const latestUser = input.toReversed().find((item) => item.role === "user" && userText(item));
+    const text = latestUser ? userText(latestUser) : undefined;
+    const last = input.findLast((item) => item.role !== "user" || userText(item));
     const id = String(++sequence);
     const final = (value: string) =>
       writeOpenAiResponsesText(response, {
@@ -253,7 +255,7 @@ async function startModel() {
         messageId: "msg_" + id,
         responseId: "resp_" + id,
       });
-    if (text?.includes("[Subagent Task]") && text.includes(CHILD_TASK)) {
+    if (text?.includes("[Subagent Task]") && text.split("\n\n").includes(CHILD_TASK)) {
       childStarted = true;
       await child.promise;
       final("CHILD_REPLAY_RESULT");

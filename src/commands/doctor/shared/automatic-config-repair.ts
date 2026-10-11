@@ -38,7 +38,10 @@ type AutomaticConfigRepairPlan = {
   writeConfig: OpenClawConfig;
 };
 
-export function canPlanAutomaticConfigRepair(snapshot: ConfigFileSnapshot): boolean {
+export function canPlanAutomaticConfigRepair(
+  snapshot: ConfigFileSnapshot,
+  pendingStateMigration = false,
+): boolean {
   return (
     snapshot.exists &&
     snapshot.raw !== null &&
@@ -48,7 +51,8 @@ export function canPlanAutomaticConfigRepair(snapshot: ConfigFileSnapshot): bool
     (snapshot.includedPaths?.length ?? 0) === 0 &&
     !containsConfigIncludeDirective(snapshot.parsed) &&
     // Voice Call remains valid telephony config after its runtime Talk inheritance retires.
-    (!snapshot.valid ||
+    (pendingStateMigration ||
+      !snapshot.valid ||
       findLegacyConfigRuleIssues(
         snapshot.sourceConfig,
         LEGACY_TALK_VOICE_CALL_INHERITANCE.legacyRules ?? [],
@@ -79,8 +83,9 @@ async function prepareAutomaticConfigRepairWrite(
 async function planConfigRepair(
   snapshot: ConfigFileSnapshot,
   pluginContracts: boolean,
+  additionalMigration?: { config: OpenClawConfig; changes: string[]; pendingStateMigration?: true },
 ): Promise<AutomaticConfigRepairPlan | null> {
-  if (!canPlanAutomaticConfigRepair(snapshot)) {
+  if (!canPlanAutomaticConfigRepair(snapshot, additionalMigration?.pendingStateMigration)) {
     return null;
   }
   const deferredPluginMigrations = getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig);
@@ -91,22 +96,26 @@ async function planConfigRepair(
           run,
         )
       : run();
+  const migrationSource = additionalMigration?.config ?? snapshot.sourceConfig;
   const migration = withPluginContracts(() =>
-    applyLegacyDoctorMigrations(snapshot.sourceConfig, {
+    applyLegacyDoctorMigrations(migrationSource, {
       sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
       context: { authoredRaw: snapshot.parsed, resolvedRaw: snapshot.sourceConfig },
       pluginContracts,
     }),
   );
   const config = inheritLegacyDefaultAgentId(
-    migration.next ?? snapshot.sourceConfig,
+    migration.next ?? migrationSource,
     preserveDeferredPluginMigrationConfig({
       sourceConfig: snapshot.sourceConfig,
-      nextConfig: migration.next ?? snapshot.sourceConfig,
+      nextConfig: migration.next ?? migrationSource,
       pending: deferredPluginMigrations ?? [],
     }),
   );
-  if (isDeepStrictEqual(config, snapshot.sourceConfig)) {
+  if (
+    !additionalMigration?.pendingStateMigration &&
+    isDeepStrictEqual(config, snapshot.sourceConfig)
+  ) {
     return null;
   }
   // Migration rebuilds the source object; retain only facts whose values survived.
@@ -142,7 +151,11 @@ async function planConfigRepair(
   return {
     config,
     writeConfig,
-    changes: [...migration.changes, ...(migration.warnings ?? [])],
+    changes: [
+      ...(additionalMigration?.changes ?? []),
+      ...migration.changes,
+      ...(migration.warnings ?? []),
+    ],
     snapshot: {
       ...snapshot,
       sourceConfig: config,
@@ -160,8 +173,18 @@ async function planConfigRepair(
 /** Admits only complete, deterministic single-file legacy migrations. */
 export async function planAutomaticConfigRepair(
   snapshot: ConfigFileSnapshot,
+  additionalMigration?: { config: OpenClawConfig; changes: string[]; pendingStateMigration?: true },
 ): Promise<AutomaticConfigRepairPlan | null> {
-  return planConfigRepair(snapshot, true);
+  return planConfigRepair(snapshot, true, additionalMigration);
+}
+
+/** Core-only admission can inspect a candidate without obtaining a writable repair plan. */
+export async function projectAutomaticConfigRepair(
+  snapshot: ConfigFileSnapshot,
+  additionalMigration: { config: OpenClawConfig; changes: string[]; pendingStateMigration?: true },
+  options: { pluginContracts: boolean },
+): Promise<OpenClawConfig | undefined> {
+  return (await planConfigRepair(snapshot, options.pluginContracts, additionalMigration))?.config;
 }
 
 /**
@@ -176,12 +199,14 @@ export async function resolveLegacyConfigSnapshotForBackup(snapshot: ConfigFileS
 export async function commitAutomaticConfigRepair(
   plan: AutomaticConfigRepairPlan,
   snapshot: ConfigFileSnapshot,
+  beforeWrite?: (snapshot: ConfigFileSnapshot) => Promise<void>,
 ): Promise<void> {
   await transformConfigFile({
     baseHash: resolveConfigSnapshotHash(snapshot) ?? undefined,
     // Preflight can commit before the later Doctor health write. Preserve moved
     // references here, under the same snapshot/hash and read-time environment.
     transform: async (_current, { snapshot: currentSnapshot }) => {
+      await beforeWrite?.(currentSnapshot);
       const { repairLegacyCronOwnersBeforeConfigWrite } = await import("../cron/legacy-owner.js");
       const changes = await repairLegacyCronOwnersBeforeConfigWrite({
         snapshot: currentSnapshot,

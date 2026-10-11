@@ -181,7 +181,6 @@ describe("Completed child results on a real parent-agent turn", () => {
             defaults: {
               workspace,
               skipBootstrap: true,
-              heartbeat: { every: "0m" },
               model: { primary: provider.modelRef },
               models: {
                 [provider.modelRef]: { params: { transport: "sse", openaiWsWarmup: false } },
@@ -256,7 +255,7 @@ describe("Completed child results on a real parent-agent turn", () => {
               result,
               resultAgeMs: 7_200_000,
               spawnDenied: true,
-              heartbeatDisabled: true,
+              automationSchedulerDisabled: true,
               requesterSawResult: true,
               unrelatedRequesterSawResult: false,
               deliveryStateUnchanged: true,

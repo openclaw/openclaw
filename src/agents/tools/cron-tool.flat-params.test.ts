@@ -52,6 +52,27 @@ describe("cron shorthand recovery", () => {
       },
     },
     {
+      name: "ordinary monitoring policies",
+      input: {
+        everyMs: 60_000,
+        message: "Check the queue",
+        activeHours: { start: "09:00", end: "17:00", timezone: "UTC" },
+        idleOnly: true,
+        includeReasoning: true,
+        skipIfScratchEmpty: true,
+      },
+      expected: {
+        activeHours: { start: "09:00", end: "17:00", timezone: "UTC" },
+        idleOnly: true,
+        payload: {
+          kind: "agentTurn",
+          message: "Check the queue",
+          includeReasoning: true,
+          skipIfScratchEmpty: true,
+        },
+      },
+    },
+    {
       name: "script before agent-turn hints",
       input: {
         everyMs: 60_000,

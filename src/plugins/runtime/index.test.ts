@@ -11,7 +11,6 @@ import {
   type OpenClawConfig,
 } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { requestHeartbeat, setHeartbeatWakeHandler } from "../../infra/heartbeat-wake.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { VERSION } from "../../version.js";
 
@@ -20,11 +19,6 @@ const runtimeModelAuthMocks = vi.hoisted(() => ({
   getRuntimeAuthForModelCore: vi.fn(),
   resolveProviderRuntimeApiKey: vi.fn(),
 }));
-const heartbeatRunnerMocks = vi.hoisted(() => ({ loads: 0, runHeartbeatOnce: vi.fn() }));
-vi.mock("../../infra/heartbeat-runner.js", () => {
-  heartbeatRunnerMocks.loads++;
-  return { runHeartbeatOnce: heartbeatRunnerMocks.runHeartbeatOnce };
-});
 
 const sandboxContextMocks = vi.hoisted(() => ({
   resolveSandboxContext: vi.fn(),
@@ -65,40 +59,6 @@ describe("plugin runtime command execution", () => {
     resetConfigRuntimeState();
   });
 
-  it("defers heartbeat execution and forwards only plugin-safe options", async () => {
-    const system = createPluginRuntime().system;
-    expect(heartbeatRunnerMocks.loads).toBe(0);
-    const result = { status: "skipped", reason: "disabled" };
-    heartbeatRunnerMocks.runHeartbeatOnce.mockResolvedValueOnce(result);
-    await expect(
-      system.runHeartbeatOnce({
-        reason: "plugin-event",
-        agentId: "main",
-        sessionKey: "session",
-        heartbeat: { target: "none", every: "1ms" },
-        cfg: {},
-        deps: {},
-      } as Parameters<typeof system.runHeartbeatOnce>[0]),
-    ).resolves.toBe(result);
-    expect(heartbeatRunnerMocks.loads).toBe(1);
-    expect(heartbeatRunnerMocks.runHeartbeatOnce).toHaveBeenCalledWith({
-      reason: "plugin-event",
-      agentId: "main",
-      sessionKey: "session",
-      heartbeat: { target: "none" },
-    });
-    const failure = new Error("heartbeat failed");
-    heartbeatRunnerMocks.runHeartbeatOnce.mockRejectedValueOnce(failure);
-    await expect(system.runHeartbeatOnce()).rejects.toBe(failure);
-    expect(heartbeatRunnerMocks.runHeartbeatOnce).toHaveBeenLastCalledWith({
-      reason: undefined,
-      agentId: undefined,
-      sessionKey: undefined,
-      heartbeat: undefined,
-    });
-    heartbeatRunnerMocks.runHeartbeatOnce.mockReset();
-  });
-
   it("exposes the host version and immutable supported behavior capabilities", () => {
     const runtime = createPluginRuntime();
     expect(runtime.version).toBe(VERSION);
@@ -109,31 +69,6 @@ describe("plugin runtime command execution", () => {
   it("exposes reset freshness resolver on the host channel runtime", () => {
     const sessionRuntime = createPluginRuntime().channel.session as Record<string, unknown>;
     expect(typeof sessionRuntime.resolveEntryResetFreshness).toBe("function");
-  });
-
-  it("maps deprecated runtime.system.requestHeartbeatNow to an immediate compatibility wake", async () => {
-    vi.useFakeTimers();
-    const handler = vi.fn(async (_request: Parameters<typeof requestHeartbeat>[0]) => ({
-      status: "skipped" as const,
-      reason: "disabled",
-    }));
-    const dispose = setHeartbeatWakeHandler(handler);
-    try {
-      createPluginRuntime().system.requestHeartbeatNow({
-        reason: "legacy-plugin",
-        coalesceMs: 0,
-      });
-      await vi.advanceTimersByTimeAsync(1);
-      const request = handler.mock.calls[0]?.[0] as
-        | { source?: string; intent?: string; reason?: string }
-        | undefined;
-      expect(request?.source).toBe("other");
-      expect(request?.intent).toBe("immediate");
-      expect(request?.reason).toBe("legacy-plugin");
-    } finally {
-      dispose();
-      vi.useRealTimers();
-    }
   });
 
   it("resolves thinking policy with configured model compat from runtime config", () => {

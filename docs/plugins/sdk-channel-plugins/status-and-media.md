@@ -21,11 +21,14 @@ removal date; removal waits for external channel-plugin adoption.
 
 ## Typing indicators
 
-If your channel supports typing indicators outside inbound replies, expose
-`heartbeat.sendTyping(...)` on the channel plugin. Core calls it with the
-resolved heartbeat delivery target before the heartbeat model run starts and
-uses the shared typing keepalive/cleanup lifecycle. Add
-`heartbeat.clearTyping(...)` when the platform needs an explicit stop signal.
+`ChannelPlugin.heartbeat` retains its historical name for channel transport,
+readiness, and typing support. It does not schedule or execute periodic agent
+turns. Restart recovery uses `heartbeat.sendTypingGuarded(...)` with the captured
+delivery target, cancellation signal, and platform-send authority callback.
+Check that authority after awaited preparation and immediately before sending.
+Add `heartbeat.clearTyping(...)` when the platform needs an explicit stop signal.
+Recovery does not fall back to unguarded `heartbeat.sendTyping(...)`.
+See [Restart recovery](/gateway/restart-recovery).
 
 ## Media source params
 

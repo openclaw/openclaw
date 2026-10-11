@@ -9,7 +9,7 @@ import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runne
 /** Cron scheduling, delivery, diagnostics, and store data contracts. */
 import type { FailoverReason } from "../agents/failover/signal.js";
 import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-reply-skip-reason.js";
-import type { ChannelId } from "../channels/plugins/types.public.js";
+import type { ChannelId } from "../channels/plugins/channel-id.types.js";
 import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { CronAuthenticatedChannelRequester } from "../gateway/cron-creator-authority-grant.types.js";
@@ -21,7 +21,7 @@ import type {
   CronToolsAllowExecTarget,
   CronToolsAllowExecTargetRequirement,
 } from "./scheduled-tool-policy.js";
-import type { CronJobBase, CronPacing } from "./types-shared.js";
+import type { CronActiveHours, CronJobBase, CronPacing } from "./types-shared.js";
 
 export type { CronPacing } from "./types-shared.js";
 export type {
@@ -41,7 +41,7 @@ export type CronSchedule = CronJobWire["schedule"];
 /** Runtime target that decides whether a job joins main, isolated, or a named session. */
 type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
 
-/** Wake policy for main-session jobs waiting on heartbeat/user activity. */
+/** Legacy wake input; scheduled runs execute their ordinary payload. */
 type CronWakeMode = CronJobWire["wakeMode"];
 
 /** Messaging channel id accepted by cron delivery settings. */
@@ -53,6 +53,9 @@ type CronDeliveryMode = "none" | "announce" | "webhook";
 /** Completion delivery configuration for cron job output. */
 export type CronDelivery = {
   mode: CronDeliveryMode;
+  /** Resolve the owner's current direct-message route at execution time. */
+  target?: "owner";
+  directPolicy?: "allow" | "block";
   channel?: CronMessageChannel;
   to?: string;
   /** Explicit thread/topic id for channels that support threaded delivery. */
@@ -87,6 +90,8 @@ type CronFailureDestinationPatch = {
 
 /** Partial delivery update shape; null clears optional delivery destinations or fields. */
 export type CronDeliveryPatch = Partial<Pick<CronDelivery, "mode" | "bestEffort">> & {
+  target?: "owner" | null;
+  directPolicy?: "allow" | "block" | null;
   channel?: CronMessageChannel | null;
   to?: string | null;
   threadId?: string | number | null;
@@ -169,6 +174,9 @@ export type CronRunOutcome = {
   error?: string;
   /** True once agent execution begins; retries after this point can replay side effects. */
   executionStarted?: boolean;
+  /** Internal admission outcome; preserves the unstarted occurrence's scheduled slot. */
+  admissionDeferred?: boolean;
+  admissionDeferredReason?: "busy" | "active-hours";
   /** Optional classifier for execution errors to guide fallback behavior. */
   errorKind?: "delivery-target";
   errorClassification?: CronRunErrorClassification;
@@ -221,7 +229,7 @@ export type CronAgentExecutionStarted = {
   agentId?: string;
   sessionId?: string;
   sessionKey?: string;
-  /** Invocation run id; every attempt registers its embedded handle under it. */
+  /** Invocation bound to the active embedded handle or ordinary reply backend. */
   runId?: string;
   /** True when this runner belongs to a later candidate in the same fallback chain. */
   isFallback?: boolean;
@@ -250,35 +258,13 @@ export type CronFailureAlertPatch = {
 
 /** Payload variants cron can execute in main-session or detached modes. */
 export type CronPayload =
-  | Exclude<CronJobWire["payload"], { kind: "agentTurn" | "heartbeat" }>
-  | (Extract<CronJobWire["payload"], { kind: "agentTurn" }> & CronExternalContent)
-  // System-owned heartbeat monitor: execution requests an interval heartbeat
-  // wake. Gateway-converged only; not accepted from client create/patch APIs.
-  | ({ kind: "heartbeat" } & CronPayloadToolAllow);
+  | Exclude<CronJobWire["payload"], { kind: "agentTurn" }>
+  | (Extract<CronJobWire["payload"], { kind: "agentTurn" }> & CronExternalContent);
 
 /** Partial payload update shape used by cron patch/edit flows. */
 export type CronPayloadPatch =
   | Exclude<CronPayloadPatchWire, { kind: "agentTurn" }>
-  | (Extract<CronPayloadPatchWire, { kind: "agentTurn" }> & CronExternalContent)
-  // Representable so the service can reject it with a typed boundary error;
-  // transports and tools never accept it.
-  | ({ kind: "heartbeat" } & CronPayloadToolAllowPatch);
-
-export function isSystemOwnedCronPayloadKind(kind: unknown): kind is "heartbeat" {
-  return kind === "heartbeat";
-}
-
-type CronPayloadToolAllow = {
-  /** Restricts agentTurn execution, or the trigger runtime for other payload kinds. */
-  toolsAllow?: string[];
-  /** Server-managed marker for auto-stamped defaults; explicit restrictions omit it. */
-  toolsAllowIsDefault?: boolean;
-};
-
-type CronPayloadToolAllowPatch = {
-  toolsAllow?: string[] | null;
-  toolsAllowIsDefault?: boolean;
-};
+  | (Extract<CronPayloadPatchWire, { kind: "agentTurn" }> & CronExternalContent);
 
 type CronPayloadPatchWire = NonNullable<CronUpdateParamsWire["patch"]["payload"]>;
 
@@ -465,11 +451,15 @@ export type CronJobPatch = Partial<
     | "owner"
     | "scheduledToolPolicy"
     | "pacing"
+    | "activeHours"
+    | "idleOnly"
     | "trigger"
   >
 > & {
   displayName?: string | null;
   pacing?: CronPacing | null;
+  activeHours?: CronActiveHours | null;
+  idleOnly?: boolean | null;
   trigger?: CronTrigger | null;
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;

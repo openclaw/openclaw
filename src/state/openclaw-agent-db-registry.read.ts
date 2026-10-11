@@ -9,6 +9,7 @@ import {
   type SqliteSchemaFacts,
 } from "../infra/sqlite-schema-facts.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
 import type { OpenClawRegisteredAgentDatabase } from "./openclaw-agent-db-contract.js";
 import {
   assertCanonicalAgentDatabasesPrimaryKey,
@@ -70,7 +71,7 @@ export function readRegisteredAgentDatabaseRows(
   pathname: string,
   artifactPreserving: boolean,
 ): OpenClawRegisteredAgentDatabase[] {
-  if (artifactPreserving) {
+  if (artifactPreserving || isArtifactPreservingStateRead("shared", pathname)) {
     assertCanonicalAgentDatabasesPrimaryKey(database, pathname);
   } else {
     const schema = getAdmittedSqliteSchemaFacts(database);

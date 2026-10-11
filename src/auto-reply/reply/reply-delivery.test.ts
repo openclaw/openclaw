@@ -53,7 +53,6 @@ function buildFinalPayloads(
     Partial<Parameters<typeof buildReplyPayloads>[0]>,
 ) {
   return buildReplyPayloads({
-    isHeartbeat: false,
     didLogHeartbeatStrip: false,
     blockStreamingEnabled: true,
     blockReplyPipeline: null,

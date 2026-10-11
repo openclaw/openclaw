@@ -9,10 +9,6 @@ import {
 import { tryFastAbortFromMessage } from "../../../auto-reply/reply/abort.js";
 import { handleStopCommand } from "../../../auto-reply/reply/commands-session-abort.js";
 import { buildCommandTestParams } from "../../../auto-reply/reply/commands.test-harness.js";
-import {
-  recordReplyOperationAgentTurn,
-  type ReplyOperationRunState,
-} from "../../../auto-reply/reply/reply-operation-run-state.js";
 import { buildTestCtx } from "../../../auto-reply/reply/test-ctx.js";
 import {
   loadSessionEntry,
@@ -35,13 +31,8 @@ import {
   withExecRequestOwners,
   withExecRequestTurn,
 } from "../../../infra/exec-request-context.js";
-import { createHeartbeatDispatch } from "../../../infra/heartbeat-dispatch.js";
 import {
-  prepareHeartbeatRunStage,
-  resolveHeartbeatWakeStage,
-  type HeartbeatRunOptions,
-} from "../../../infra/heartbeat-runner-execution.js";
-import {
+  claimSystemEventTurn,
   consumeSelectedSystemEventEntries,
   enqueueSystemEventEntry,
   peekSystemEventEntries,
@@ -315,37 +306,13 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
             client: { connId, connect: { scopes: ["operator.write"] } },
           });
         if (mode !== "retained-exact") {
-          // The bound native-parent fixture replaces model admission. Use the real
-          // heartbeat preparation and acknowledgement owner to retire its event.
-          const heartbeatOptions: HeartbeatRunOptions = {
-            cfg: bound.cfg,
-            agentId: original.agentId,
-            sessionKey: original.sessionKey,
-            source: "exec-event",
-            intent: "event",
-            reason: "exec-event",
-            heartbeat: { every: "1h", target: "none", isolatedSession: false },
-          };
-          const wake = await resolveHeartbeatWakeStage(heartbeatOptions);
-          if (wake.kind !== "ready") {
-            throw new Error(`Heartbeat acknowledgement preparation skipped: ${wake.reason}`);
-          }
-          const prepared = await prepareHeartbeatRunStage(wake);
-          if (prepared.kind !== "ready") {
-            throw new Error(`Heartbeat acknowledgement routing skipped: ${prepared.reason}`);
-          }
-          expect(prepared.inspectedSystemEventsToConsume.map((selected) => selected.id)).toContain(
-            event.id,
+          // The bound native-parent fixture replaces model admission. Transfer its
+          // original occurrence through the same owner used by ordinary event turns.
+          const acknowledgement = expectDefined(
+            claimSystemEventTurn(original.sessionKey, [event], () => {}, original.agentId),
+            "original event turn ownership",
           );
-          const replyState: ReplyOperationRunState = {};
-          recordReplyOperationAgentTurn([replyState], undefined, {
-            kind: "settled",
-            status: "ok",
-            result: { acceptedSessionSpawns: [accepted] },
-          });
-          const acknowledgement = createHeartbeatDispatch(heartbeatOptions, wake, prepared);
-          await acknowledgement.prepareReply({ text: "HEARTBEAT_OK" }, replyState);
-          expect(acknowledgement.result).toMatchObject({ status: "ran" });
+          acknowledgement.start();
           expect(
             peekSystemEventEntries(original.sessionKey).map((selected) => selected.id),
           ).not.toContain(event.id);

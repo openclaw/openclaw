@@ -609,7 +609,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     }
   });
 
-  it("passes the heartbeat queue and clears stateless CLI bindings when its hook claims", async () => {
+  it("clears stateless CLI bindings when its hook claims", async () => {
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupCliBackend: () => undefined,
       resolveRuntimeCliBackends: () => [
@@ -631,16 +631,10 @@ describe("runCliAgent before_agent_reply seam", () => {
 
     const result = await runCliAgent({
       ...runParams,
-      trigger: "heartbeat",
-      sessionKey: "agent:main:heartbeat:heartbeat",
-      heartbeatEventQueueSessionKey: "agent:main:heartbeat",
+      trigger: "cron",
       config: {},
     });
 
-    expect(replyMock.mock.calls[0]?.[1]).toMatchObject({
-      sessionKey: "agent:main:heartbeat:heartbeat",
-      heartbeatEventQueueSessionKey: "agent:main:heartbeat",
-    });
     expect(result.meta.agentMeta?.sessionId).toBe("");
     expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
     expect(result.payloads?.[0]?.text).toBe(SILENT_REPLY_TOKEN);

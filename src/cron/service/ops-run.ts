@@ -13,6 +13,7 @@ import {
   releaseLocalCronRunReceiptOwnership,
   type CronRunReceiptSettlementDisposition,
 } from "../store/run-receipt-store.js";
+import { hasUnstartedCronAdmission } from "./admission-deferred.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { locked } from "./locked.js";
 import { waitForRunSettlement } from "./ops-lifecycle.js";
@@ -30,7 +31,7 @@ import {
 import { clearManualCronJobActive } from "./ops-shared.js";
 import { releaseQueuedCronRun, runWithCronAdmission } from "./run-admission.js";
 import { createCronOwnerExecutionIdentityAdmission } from "./run-history.js";
-import type { CronRunMode, CronServiceState, CronWakeMode } from "./state.js";
+import type { CronRunMode, CronServiceState } from "./state.js";
 import { isImmediateCronRunMode } from "./state.js";
 import { emitCronRunFinished, type ManualRunTerminalTracker } from "./timer-outcome-events.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
@@ -50,6 +51,11 @@ async function finishPreparedManualRun(
   const taskRunId = prepared.taskRunId;
   let finalizationStarted = false;
   let receiptSettlementDisposition: CronRunReceiptSettlementDisposition | undefined;
+  const executionIdentity = createCronOwnerExecutionIdentityAdmission({
+    state,
+    runReceipt: prepared.runReceipt,
+  });
+  const onExit = prepared.onExit;
 
   try {
     let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
@@ -63,10 +69,23 @@ async function finishPreparedManualRun(
         streamSourceIdentity: prepared.streamSourceIdentity,
         runReceipt: prepared.runReceipt,
         runReceiptContext: prepared.runReceiptContext,
-        executionIdentity: createCronOwnerExecutionIdentityAdmission({
-          state,
-          runReceipt: prepared.runReceipt,
-        }),
+        executionIdentity,
+        ...(onExit
+          ? {
+              idleAdmission: {
+                signal: onExit.signal,
+                assertCurrent: () => {
+                  onExit.commitGuard();
+                  if (prepared.activeJobMarker?.messageSourceAuthorityRevoked) {
+                    throw new CronRunReceiptRevisionError(
+                      prepared.runReceipt.receiptId,
+                      "cron on-exit source changed while awaiting idle execution",
+                    );
+                  }
+                },
+              },
+            }
+          : {}),
       });
     } catch (err) {
       if (err instanceof CronRunReceiptRevisionError && err.reason === "owner-unavailable") {
@@ -79,17 +98,19 @@ async function finishPreparedManualRun(
       });
     }
     if (prepared.onTriggerDisposition) {
-      const disposition = coreResult.triggerEval?.busy
-        ? "busy"
-        : coreResult.status === "error"
-          ? "error"
-          : coreResult.status !== "ok"
-            ? "dropped"
-            : !executionJob.trigger
-              ? "fired"
-              : coreResult.triggerEval?.fired
+      const disposition =
+        coreResult.triggerEval?.busy ||
+        (hasUnstartedCronAdmission(coreResult) && coreResult.admissionDeferredReason === "busy")
+          ? "busy"
+          : coreResult.status === "error"
+            ? "error"
+            : coreResult.status !== "ok"
+              ? "dropped"
+              : !executionJob.trigger
                 ? "fired"
-                : "dropped";
+                : coreResult.triggerEval?.fired
+                  ? "fired"
+                  : "dropped";
       prepared.onTriggerDisposition(disposition);
     }
     finalizationStarted = true;
@@ -445,9 +466,6 @@ export async function waitForManualRun(
 }
 
 /** Enqueues manual wake text through the cron wake API. */
-export function wakeNow(
-  state: CronServiceState,
-  opts: { mode: CronWakeMode; text: string; sessionKey?: string; agentId?: string },
-) {
+export function wakeNow(state: CronServiceState, opts: Parameters<typeof wake>[1]) {
   return wake(state, opts);
 }

@@ -796,7 +796,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       debugStatus: unknown;
       debugHealth: unknown;
       debugModels: unknown[];
-      debugHeartbeat: unknown;
+      debugAutomations: unknown;
       debugLanes: unknown[];
       debugDiagnosticsError: string | null;
       diagnosticsTask: { readonly status: TaskStatus };
@@ -816,7 +816,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     expect(page.debugStatus).toBeNull();
     expect(page.debugHealth).toBeNull();
     expect(page.debugModels).toEqual([]);
-    expect(page.debugHeartbeat).toBeNull();
+    expect(page.debugAutomations).toBeNull();
     expect(page.debugLanes).toEqual([]);
     expect(page.debugDiagnosticsError).toBeNull();
   });

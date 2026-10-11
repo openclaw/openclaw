@@ -76,7 +76,7 @@ async function prepareAttempt(input: {
   admittedRunContext?: ReturnType<typeof createTestAdmittedRunContext>;
   currentAttemptCompletedAssistant?: AssistantMessage;
   sourceReplyDeliveryMode?: "message_tool_only";
-  heartbeat?: { continuesConversation: boolean };
+  trigger?: "cron" | "event";
   terminalState: EmbeddedRunTerminalState;
 }) {
   const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
@@ -87,8 +87,7 @@ async function prepareAttempt(input: {
       runId: "run-focused",
       workspaceDir: "/tmp/openclaw-test",
       prompt: "hi",
-      trigger: input.heartbeat ? "heartbeat" : "user",
-      ...(input.heartbeat?.continuesConversation ? { continuesConversation: true } : {}),
+      trigger: input.trigger ?? "user",
       timeoutMs: 60_000,
       ...(input.sourceReplyDeliveryMode
         ? { sourceReplyDeliveryMode: input.sourceReplyDeliveryMode }
@@ -650,11 +649,11 @@ describe("prepareEmbeddedRunTerminal", () => {
   });
 
   it.each([
-    { continuesConversation: false, warns: true },
-    { continuesConversation: true, warns: false },
-  ])(
-    "keeps a failed command's NO_REPLY silent only when the heartbeat continues a conversation ($continuesConversation)",
-    async ({ continuesConversation, warns }) => {
+    { trigger: "cron", warns: true },
+    { trigger: "event", warns: false },
+  ] as const)(
+    "preserves failure reporting and authored silence for $trigger turns",
+    async ({ trigger, warns }) => {
       const actual = await vi.importActual<{
         buildEmbeddedRunPayloads: typeof buildEmbeddedRunPayloads;
       }>("./payloads.js");
@@ -672,7 +671,7 @@ describe("prepareEmbeddedRunTerminal", () => {
           currentAttemptCompletedAssistant: silent,
           lastToolError: { toolName: "exec", error: "Command exited with code 1" },
         }),
-        heartbeat: { continuesConversation },
+        trigger,
         terminalState: {
           outcome: { reason: "completed", status: "ok", stopReason: "stop" },
           signalOwnedInterruption: false,

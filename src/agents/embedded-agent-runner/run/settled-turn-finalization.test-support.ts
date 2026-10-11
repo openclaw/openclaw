@@ -174,7 +174,6 @@ export function projectSettledProviderFailureAttempt(
     getAssistantTurnCount: () => 1,
     hasSuccessfulModelResponse: () => false,
     getCompactionCount: () => 0,
-    getHeartbeatToolResponse: () => undefined,
     getItemLifecycle: () => base.itemLifecycle,
     getLastAssistantTextMessageIndex: () => undefined,
     getKeptAnswer: () => undefined,

@@ -196,9 +196,7 @@ describe("anthropic provider replay hooks", () => {
       mode: "cache-ttl",
       ttl: "1h",
     });
-    expectFields(next?.agents?.defaults?.heartbeat, {
-      every: "30m",
-    });
+    expect(next?.agents?.defaults).not.toHaveProperty("heartbeat");
     expect(
       next?.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.params?.cacheRetention,
     ).toBe("short");

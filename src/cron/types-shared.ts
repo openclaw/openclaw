@@ -23,6 +23,13 @@ export type CronQuarantinedJob = QuarantinedCronConfigJob & { quarantinedAtMs: n
 /** Optional dynamic-cadence bounds for one cron job. */
 export type CronPacing = SchemaContract<NonNullable<CronJob["pacing"]>>;
 
+/** Optional local-time execution window; the end is exclusive. */
+export type CronActiveHours = {
+  start: string;
+  end: string;
+  timezone?: string;
+};
+
 /** Shared persisted cron job envelope used by runtime and external config shapes. */
 export type CronJobBase<TSchedule, TSessionTarget, TWakeMode, TPayload, TDelivery, TFailureAlert> =
   {
@@ -37,6 +44,8 @@ export type CronJobBase<TSchedule, TSessionTarget, TWakeMode, TPayload, TDeliver
     updatedAtMs: number;
     schedule: TSchedule;
     pacing?: CronPacing;
+    activeHours?: CronActiveHours;
+    idleOnly?: boolean;
     sessionTarget: TSessionTarget;
     wakeMode: TWakeMode;
     payload: TPayload;

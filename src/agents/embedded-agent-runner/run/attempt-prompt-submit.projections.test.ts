@@ -45,6 +45,7 @@ import {
 } from "./attempt-prompt-submit.test-support.js";
 import { createUserTranscriptContextRegistry } from "./attempt-user-transcript-context-registry.js";
 import { hydratePromptMediaMessages } from "./images.js";
+import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
 registerAgentSessionLoopTestLifecycle();
@@ -316,9 +317,13 @@ describe("durable model prompt projection at provider dispatch", () => {
     },
   );
 
-  it.each([false, true])(
-    "keeps a dispatched user's projection across model fallback (enriched=%s)",
-    async (enriched) => {
+  it.each([
+    { enriched: false, contextOnly: false },
+    { enriched: true, contextOnly: false },
+    { enriched: false, contextOnly: true },
+  ])(
+    "keeps a dispatched user's projection across model fallback (enriched=$enriched, contextOnly=$contextOnly)",
+    async ({ enriched, contextOnly }) => {
       await withOpenClawTestState({ label: "fallback-model-projection" }, async (state) => {
         const target = {
           agentId: "main",
@@ -329,14 +334,22 @@ describe("durable model prompt projection at provider dispatch", () => {
         await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
         const original = "Keep the original user request.";
         const firstProjection = enriched ? "Original request with captured context." : original;
-        const retry = "[Retry after the previous model attempt failed or timed out]\n\n" + original;
+        const retryInstruction = "[Retry after the previous model attempt failed or timed out]";
+        const retry = retryInstruction + "\n\n" + original;
         const recorder = createUserTurnTranscriptRecorder({
-          input: { text: original, timestamp: 1, idempotencyKey: "fallback:user" },
+          input: {
+            text: original,
+            timestamp: 1,
+            idempotencyKey: "fallback:user",
+            ...(contextOnly ? { sender: { id: "gateway-owner" } } : {}),
+          },
           target: { ...target, sessionEntry: undefined },
         });
         const requests: Context["messages"][] = [];
+        const serializedRequests: ReturnType<typeof buildOpenAIResponsesParams>[] = [];
         streamMocks.streamSimple.mockImplementation((model, context) => {
           requests.push(structuredClone(context.messages));
+          serializedRequests.push(buildOpenAIResponsesParams(model, context, undefined));
           return createAssistantResultStream({
             ...createAssistant(
               model,
@@ -353,7 +366,7 @@ describe("durable model prompt projection at provider dispatch", () => {
               ...target,
               sessionFile: target.sessionKey,
               workspaceDir: state.workspaceDir,
-              prompt: fallback ? retry : original,
+              prompt: fallback && !contextOnly ? retry : original,
               runId: "fallback-projection-run",
               timeoutMs: 30_000,
               userTurnTranscriptRecorder: recorder,
@@ -367,6 +380,7 @@ describe("durable model prompt projection at provider dispatch", () => {
                   }
                 : { requestedProvider: "test-provider", requestedModel: "primary", stage },
             },
+            reusePersistedUserTurn: fallback && contextOnly,
             sessionAgentId: target.agentId,
             resolvedSessionKey: target.sessionKey,
             lifecycleGeneration: "test-generation",
@@ -407,8 +421,15 @@ describe("durable model prompt projection at provider dispatch", () => {
               skipPreparedUserTurnMessage: internal,
             },
             activeSession: session,
-            transcriptPrompt: internal ? retry : original,
-            modelPrompt: fallback ? retry : firstProjection,
+            transcriptPrompt: internal && !contextOnly ? retry : original,
+            modelPrompt: fallback && !contextOnly ? retry : firstProjection,
+            ...(fallback && contextOnly
+              ? {
+                  runtimeContextMessage: buildRuntimeContextCustomMessage(retryInstruction, [
+                    { kind: "runtime-instruction", text: retryInstruction },
+                  ]),
+                }
+              : {}),
             prependContext: undefined,
             appendContext: undefined,
             getUserTranscriptContexts: () => contexts.list(),
@@ -425,8 +446,18 @@ describe("durable model prompt projection at provider dispatch", () => {
         expect(requests).toHaveLength(2);
         const userText = (messages: Context["messages"]) =>
           messages.filter((message) => message.role === "user").map((message) => message.content);
-        expect(userText(requests[0]!)).toEqual([firstProjection]);
-        expect(userText(requests[1]!)).toEqual([firstProjection, retry]);
+        if (contextOnly) {
+          const taskInputs = (request: ReturnType<typeof buildOpenAIResponsesParams>) =>
+            request.input.filter((input) => JSON.stringify(input).includes(original));
+          const initialTask = taskInputs(serializedRequests[0]!);
+          expect(initialTask).toHaveLength(1);
+          expect(JSON.stringify(initialTask)).toContain("gateway-owner");
+          expect(taskInputs(serializedRequests[1]!)).toEqual(initialTask);
+          expect(JSON.stringify(serializedRequests[1]!)).toContain(retryInstruction);
+        } else {
+          expect(userText(requests[0]!)).toEqual([firstProjection]);
+          expect(userText(requests[1]!)).toEqual([firstProjection, retry]);
+        }
         const users = (await readTranscriptMessages(target)).filter(
           (message) => message.role === "user",
         );
@@ -630,9 +661,10 @@ describe("durable model prompt projection at provider dispatch", () => {
     { body: "plain", nested: false, hook: false },
     { body: "forwarded inter-session", nested: true, hook: false },
     { body: "redacted hook", nested: false, hook: true },
+    { body: "quoted same-source envelope", nested: false, hook: false, quoted: true },
   ])(
     "replays an inter-session turn with its stored provenance envelope: $body body",
-    async ({ nested, hook }) => {
+    async ({ nested, hook, quoted }) => {
       await withOpenClawTestState({ label: "inter-session-model-prompt" }, async (state) => {
         const target = {
           agentId: "main",
@@ -649,13 +681,15 @@ describe("durable model prompt projection at provider dispatch", () => {
           sourceTool: "sessions_send",
         };
         const task = "Continue the delegated task.";
-        const body = nested
-          ? annotateInterSessionPromptText(task, {
-              kind: "inter_session",
-              sourceSessionKey: "agent:main:origin",
-              sourceTool: "sessions_send",
-            })
-          : task;
+        const body = quoted
+          ? `Quoted context:\n\n${annotateInterSessionPromptText(task, provenance)}`
+          : nested
+            ? annotateInterSessionPromptText(task, {
+                kind: "inter_session",
+                sourceSessionKey: "agent:main:origin",
+                sourceTool: "sessions_send",
+              })
+            : task;
         const annotated = annotateInterSessionPromptText(body, provenance);
         const recorder = createUserTurnTranscriptRecorder({
           input: {
@@ -711,12 +745,19 @@ describe("durable model prompt projection at provider dispatch", () => {
         // and the envelope stays visible once the transient carrier is gone.
         expect(firstUser(requests[0]!)).toContain("sourceSession=agent:main:parent");
         expect(firstUser(requests[0]!)).toContain(task);
+        if (hook) {
+          expect(firstUser(requests[0]!)).toContain("hook before ***");
+        }
+        if (nested) {
+          expect(firstUser(requests[0]!)).toContain("sourceSession=agent:main:origin");
+        }
+        expect(firstUser(requests[0]!)).toContain(
+          '"text":"[Inter-session message] sourceSession=agent:main:parent ',
+        );
         expect(firstUser(requests[1]!)).toBe(firstUser(requests[0]!));
         // Unredacted hook text never reaches the provider.
         expect(JSON.stringify(requests)).not.toContain("hidden");
-        expect(JSON.stringify(loadTranscriptEventsSync(target))).not.toContain(
-          "modelPromptProjection",
-        );
+        expect(JSON.stringify(loadTranscriptEventsSync(target))).not.toContain("hidden");
       });
     },
   );

@@ -1,5 +1,11 @@
 import "./isolated-agent.mocks.js";
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import { resolveDefaultSessionStorePath } from "../config/sessions.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   peekSystemEventEntries,
@@ -7,14 +13,10 @@ import {
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { resolveAdmittedCronCompletionStatus } from "./completion-status.js";
 import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test-helpers.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
-import {
-  makeCfg,
-  makeJob,
-  withTempCronHome,
-  writeSessionStoreEntries,
-} from "./isolated-agent.test-harness.js";
+import { makeCfg, makeJob, withTempCronHome } from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
 
 type AnnounceOptions = {
@@ -31,15 +33,20 @@ async function withAnnounce(
   ) => void = () => {},
 ) {
   await withTempCronHome(async (home) => {
-    const storePath = await writeSessionStoreEntries(home, options.entries ?? {});
+    const storePath = resolveDefaultSessionStorePath("main");
     const deps = createCliDeps();
     mockAgentPayloads(options.texts.map((text) => ({ text })));
+    const cfg = makeCfg(home, storePath, {
+      ...options.cfg,
+      ...(options.cfg?.session ? { session: { store: storePath, ...options.cfg.session } } : {}),
+    });
+    setRuntimeConfigSnapshot(cfg);
+    for (const [sessionKey, entry] of Object.entries(options.entries ?? {})) {
+      await replaceSessionEntry({ agentId: "main", storePath, sessionKey }, entry);
+    }
     const result = await runCronIsolatedAgentTurn({
       deliveryAttemptFence: null,
-      cfg: makeCfg(home, storePath, {
-        ...options.cfg,
-        ...(options.cfg?.session ? { session: { store: storePath, ...options.cfg.session } } : {}),
-      }),
+      cfg,
       deps,
       job: {
         ...makeJob({ kind: "agentTurn", message: "do it" }),
@@ -54,10 +61,12 @@ async function withAnnounce(
 }
 
 describe("isolated cron delivery notifications", () => {
+  afterEach(clearRuntimeConfigSnapshot);
   beforeAll(async () => {
     setupIsolatedAgentTurnMocks();
     resetSystemEventsForTest();
     await withAnnounce({ texts: ["warm runtime"] });
+    clearRuntimeConfigSnapshot();
   });
   beforeEach(() => {
     setupIsolatedAgentTurnMocks();
@@ -126,9 +135,17 @@ describe("isolated cron delivery notifications", () => {
       (result, deps) => {
         expect(result.status).toBe("ok");
         expect(result.error).toBeUndefined();
-        expect(result.deliveryError).toContain("shared agent-main session bucket");
-        expect(result.deliveryState?.status).toBe("not-delivered");
         expect(result.delivered).toBe(false);
+        expect(result.deliveryState).toMatchObject({ status: "not-delivered", delivered: false });
+        expect(result.deliveryError).toContain("shared agent-main session bucket");
+        expect(
+          resolveAdmittedCronCompletionStatus(
+            { delivery: { mode: "announce" } },
+            result.status,
+            result.deliveryState?.status ?? "unknown",
+            result.deliverySuppressionReason,
+          ),
+        ).toBe("failed");
         expect(deps.telegram).not.toHaveBeenCalled();
         expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
       },

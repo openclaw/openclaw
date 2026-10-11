@@ -78,7 +78,7 @@ openclaw config schema --json
 openclaw config get browser.executablePath
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
 openclaw config set browser.profiles.work '{"cdpPort":18801,"executablePath":"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"}' --strict-json --merge
-openclaw config set agents.defaults.heartbeat.every "2h"
+openclaw config set agents.defaults.userTimezone "America/New_York"
 openclaw config set logging.audit.executionIdentity true
 openclaw config set 'agents.entries.main.tools.exec.node' "node-id-or-name"
 openclaw config set agents.defaults.models '{"openai/gpt-5.4":{}}' --strict-json --merge
@@ -232,12 +232,18 @@ the provider docs and verify behavior on the selected runtime and provider.
 Values parse as JSON5 when possible; otherwise they are treated as raw strings. Use `--strict-json` to require standard JSON with no string fallback (JSON5-only syntax such as comments, trailing commas, or unquoted keys is then rejected). `--json` is a legacy alias for `--strict-json` on `config set`.
 
 ```bash
-openclaw config set agents.defaults.heartbeat.every "0m"
+openclaw config set agents.defaults.contextPruning.ttl "1h"
 openclaw config set gateway.port 19001 --strict-json
 openclaw config set channels.whatsapp.groups '{"*":{"requireMention":true}}' --strict-json
 ```
 
 For structured values that are awkward to quote in your shell, put a config-shaped JSON5 object in a file and use [`config patch --file <path> --dry-run`](/cli/config#config-patch). The file contains config keys and their values, not a bare array.
+
+Periodic monitoring belongs to stored automation jobs. Use
+`openclaw automations edit <job-id> --every 2h` to change a cadence and
+`openclaw automations disable <job-id>` to stop it. Retired heartbeat config keys
+are migrated by `openclaw doctor --fix`; do not add them with `config set`.
+See [Heartbeat migration](/gateway/heartbeat).
 
 `config get <path> --json` prints the redacted value as JSON instead of terminal-formatted text.
 
@@ -449,9 +455,9 @@ Example patch:
   },
   agents: {
     defaults: {
-      model: { primary: "openai/gpt-6-astra" },
+      model: { primary: "openai/gpt-5.6-sol" },
       models: {
-        "openai/gpt-6-astra": {
+        "openai/gpt-5.6-sol": {
           agentRuntime: { id: "openclaw" },
           params: { fastMode: true },
         },

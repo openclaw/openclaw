@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { resolveHeartbeatPromptForResponseTool } from "../../../src/auto-reply/heartbeat.js";
 import {
   buildSourceConversationContext,
   buildGroupChatContext,
@@ -33,6 +32,10 @@ import { withStateDirEnv } from "../../../src/test-helpers/state-dir-env.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../../../src/test-utils/channel-plugins.js";
 import {
+  AUTOMATION_SNAPSHOT_PROMPT,
+  withPromptSnapshotRun,
+} from "./happy-path-automation-fixture.js";
+import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
   CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO,
   CODEX_PROMPT_SNAPSHOT_FILES,
@@ -62,7 +65,6 @@ const HAPPY_PATH_TOOL_NAMES = new Set([
   "nodes",
   "automations",
   "message",
-  "heartbeat_respond",
   "tts",
   "gateway",
   "agents_list",
@@ -142,7 +144,8 @@ type PromptScenario = {
   id: string;
   title: string;
   notes: string[];
-  trigger: "user" | "heartbeat";
+  trigger: "user" | "cron";
+  sourceReplyDeliveryMode: "automatic" | "message_tool_only";
   ctx: TemplateContext;
   prompt: string;
   extraSystemPrompt: string;
@@ -298,9 +301,6 @@ const baseConfig: OpenClawConfig = {
   agents: {
     defaults: {
       userTimezone: "UTC",
-      heartbeat: {
-        every: "30m",
-      },
     },
     entries: { main: {} },
   },
@@ -455,7 +455,7 @@ function createAttempt(params: {
     senderE164: params.scenario.ctx.SenderE164,
     senderIsOwner: true,
     currentMessageId: params.scenario.ctx.MessageSid,
-    sourceReplyDeliveryMode: "message_tool_only",
+    sourceReplyDeliveryMode: params.scenario.sourceReplyDeliveryMode,
     forceMessageTool: true,
     authProfileStore: { version: 1, profiles: {} },
     authStorage: {} as EmbeddedRunAttemptParams["authStorage"],
@@ -466,47 +466,47 @@ function createAttempt(params: {
 function createDynamicTools(params: {
   codexApi: CodexPromptSnapshotApi;
   ctx: TemplateContext;
-  trigger: "user" | "heartbeat";
+  trigger: "user" | "cron";
 }): CodexDynamicToolSpec[] {
-  const tools = createOpenClawCodingTools({
-    agentId: "main",
-    workspaceDir: WORKSPACE_DIR,
-    agentDir: AGENT_DIR,
-    sessionKey: params.ctx.SessionKey,
-    sessionId: `session-tools-${params.trigger}`,
-    runId: `run-tools-${params.trigger}`,
-    messageProvider: params.ctx.Provider,
-    agentAccountId: params.ctx.AccountId,
-    messageTo: params.ctx.OriginatingTo,
-    messageThreadId: params.ctx.MessageThreadId,
-    groupId: params.ctx.From,
-    groupChannel: params.ctx.GroupChannel,
-    groupSpace: params.ctx.GroupSpace,
-    senderId: params.ctx.SenderId,
-    senderName: params.ctx.SenderName,
-    senderUsername: params.ctx.SenderUsername,
-    senderE164: params.ctx.SenderE164,
-    senderIsOwner: true,
-    currentMessageId: params.ctx.MessageSid,
-    modelProvider: "openai",
-    modelId: MODEL_ID,
-    modelApi: "responses",
-    // Codex owns hosted-search selection, matching its dynamic-tool builder.
-    suppressManagedWebSearch: false,
-    modelContextWindowTokens: 272_000,
-    forceMessageTool: true,
-    enableHeartbeatTool: params.trigger === "heartbeat",
-    forceHeartbeatTool: params.trigger === "heartbeat",
-    trigger: params.trigger,
-    config: dynamicToolsConfig,
-    toolConstructionPlan: {
-      includeBaseCodingTools: false,
-      includeShellTools: false,
-      includeChannelTools: false,
-      includeOpenClawTools: true,
-      includePluginTools: false,
-    },
-  });
+  const tools = withPromptSnapshotRun(params.trigger, (identity) =>
+    createOpenClawCodingTools({
+      agentId: "main",
+      workspaceDir: WORKSPACE_DIR,
+      agentDir: AGENT_DIR,
+      sessionKey: params.ctx.SessionKey,
+      sessionId: `session-tools-${params.trigger}`,
+      ...identity,
+      messageProvider: params.ctx.Provider,
+      agentAccountId: params.ctx.AccountId,
+      messageTo: params.ctx.OriginatingTo,
+      messageThreadId: params.ctx.MessageThreadId,
+      groupId: params.ctx.From,
+      groupChannel: params.ctx.GroupChannel,
+      groupSpace: params.ctx.GroupSpace,
+      senderId: params.ctx.SenderId,
+      senderName: params.ctx.SenderName,
+      senderUsername: params.ctx.SenderUsername,
+      senderE164: params.ctx.SenderE164,
+      senderIsOwner: true,
+      currentMessageId: params.ctx.MessageSid,
+      modelProvider: "openai",
+      modelId: MODEL_ID,
+      modelApi: "responses",
+      // Codex owns hosted-search selection, matching its dynamic-tool builder.
+      suppressManagedWebSearch: false,
+      modelContextWindowTokens: 272_000,
+      forceMessageTool: true,
+      trigger: params.trigger,
+      config: dynamicToolsConfig,
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    }),
+  );
   const normalized = normalizeAgentRuntimeTools({
     tools,
     runtimePlan: undefined,
@@ -530,7 +530,7 @@ function createDynamicTools(params: {
 async function createScenarioDynamicTools(params: {
   codexApi: CodexPromptSnapshotApi;
   ctx: TemplateContext;
-  trigger: "user" | "heartbeat";
+  trigger: "user" | "cron";
 }): Promise<CodexDynamicToolSpec[]> {
   const provider = params.ctx.Provider;
   if (!provider) {
@@ -587,11 +587,11 @@ async function createScenarios(codexApi: CodexPromptSnapshotApi): Promise<Prompt
     Body: "@OpenClaw can you audit whether this prompt path has conflicting silence instructions?",
     BodyStripped: "can you audit whether this prompt path has conflicting silence instructions?",
   };
-  const heartbeatCtx: TemplateContext = {
+  const automationCtx: TemplateContext = {
     ...telegramDirectCtx,
-    MessageSid: "heartbeat-0001",
-    Body: resolveHeartbeatPromptForResponseTool(),
-    BodyStripped: resolveHeartbeatPromptForResponseTool(),
+    MessageSid: "automation-0001",
+    Body: AUTOMATION_SNAPSHOT_PROMPT,
+    BodyStripped: AUTOMATION_SNAPSHOT_PROMPT,
   };
   const telegramDirectTools = await createScenarioDynamicTools({
     codexApi,
@@ -603,10 +603,10 @@ async function createScenarios(codexApi: CodexPromptSnapshotApi): Promise<Prompt
     ctx: discordGroupCtx,
     trigger: "user",
   });
-  const heartbeatTools = await createScenarioDynamicTools({
+  const automationTools = await createScenarioDynamicTools({
     codexApi,
-    ctx: heartbeatCtx,
-    trigger: "heartbeat",
+    ctx: automationCtx,
+    trigger: "cron",
   });
 
   return [
@@ -618,6 +618,7 @@ async function createScenarios(codexApi: CodexPromptSnapshotApi): Promise<Prompt
         "A quiet turn is represented by not calling `message(action=send)`; the normal final assistant text is private to OpenClaw/Codex.",
       ],
       trigger: "user",
+      sourceReplyDeliveryMode: "message_tool_only",
       ctx: telegramDirectCtx,
       prompt: createPrompt(
         telegramDirectCtx,
@@ -641,6 +642,7 @@ async function createScenarios(codexApi: CodexPromptSnapshotApi): Promise<Prompt
         "Group-visible output must be explicit through the message tool; the model is also told to mostly lurk unless directly addressed or clearly useful.",
       ],
       trigger: "user",
+      sourceReplyDeliveryMode: "message_tool_only",
       ctx: discordGroupCtx,
       prompt: createPrompt(
         discordGroupCtx,
@@ -662,24 +664,25 @@ async function createScenarios(codexApi: CodexPromptSnapshotApi): Promise<Prompt
       toolSnapshotFile: "codex-dynamic-tools.discord-group.json",
     },
     {
-      id: "telegram-heartbeat-codex-tool",
-      title: "Telegram Direct Codex Heartbeat Tool Turn",
+      id: "telegram-automation-codex-tool",
+      title: "Telegram Direct Codex Automation Turn",
       notes: [
-        "Heartbeat happy path: Codex receives the structured `heartbeat_respond` dynamic tool in the searchable catalog instead of the initial tool context.",
-        "The heartbeat tool still carries the notify/no-notify decision, outcome, summary, and optional notification text instead of relying only on final-text parsing.",
+        "Ordinary scheduled automation: Codex receives the current job's scratch and structured-result actions through the Automations tool.",
+        "The current invocation owns scratch CAS and result recording; ordinary source-reply delivery owns visible messages, and NO_REPLY keeps a quiet result silent.",
       ],
-      trigger: "heartbeat",
-      ctx: heartbeatCtx,
-      prompt: createPrompt(heartbeatCtx, heartbeatCtx.BodyStripped ?? heartbeatCtx.Body ?? ""),
+      trigger: "cron",
+      sourceReplyDeliveryMode: "automatic",
+      ctx: automationCtx,
+      prompt: createPrompt(automationCtx, automationCtx.BodyStripped ?? automationCtx.Body ?? ""),
       extraSystemPrompt: createExtraSystemPrompt({
-        ctx: heartbeatCtx,
+        ctx: automationCtx,
         chatContext: buildSourceConversationContext({
-          sessionCtx: heartbeatCtx,
-          sourceReplyDeliveryMode: "message_tool_only",
+          sessionCtx: automationCtx,
+          sourceReplyDeliveryMode: "automatic",
         }),
       }),
-      dynamicTools: heartbeatTools,
-      toolSnapshotFile: "codex-dynamic-tools.heartbeat-turn.json",
+      dynamicTools: automationTools,
+      toolSnapshotFile: "codex-dynamic-tools.automation-turn.json",
     },
   ];
 }
@@ -934,8 +937,9 @@ function renderScenarioSnapshot(
     }),
   );
   const dynamicToolFunctions = flattenCodexDynamicToolSpecs(scenario.dynamicTools);
-  const criticalToolSpecs = dynamicToolFunctions.filter((tool) =>
-    ["message", "heartbeat_respond"].includes(tool.name),
+  const criticalToolSpecs = dynamicToolFunctions.filter(
+    (tool) =>
+      tool.name === "message" || (scenario.trigger === "cron" && tool.name === "automations"),
   );
   const dynamicToolsJson = stableJson(scenario.dynamicTools);
   return [
@@ -958,7 +962,7 @@ function renderScenarioSnapshot(
         runtime: "codex_app_server",
         modelProvider: "openai",
         model: MODEL_ID,
-        sourceReplyDeliveryMode: "message_tool_only",
+        sourceReplyDeliveryMode: scenario.sourceReplyDeliveryMode,
         trigger: scenario.trigger,
         channel: scenario.ctx.Provider,
         chatType: scenario.ctx.ChatType,
@@ -1023,7 +1027,7 @@ function renderReadme(scenarios: PromptScenario[]): string {
     "",
     "- OpenAI model through the Codex harness and Codex app-server runtime.",
     "- Codex harness default coverage for tool-only visible source replies.",
-    "- Telegram direct chat, Discord group chat, and a heartbeat turn with `heartbeat_respond` available through searchable dynamic tools.",
+    "- Telegram direct chat, Discord group chat, and an ordinary scheduled automation with self-scoped scratch and result actions.",
     "",
     "The materialized Markdown snapshots show selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack: Codex `gpt-5.5` model instructions from a pinned Codex model catalog fixture, Codex permission developer instructions for the happy-path yolo profile, OpenClaw developer instructions, turn input with simulated OpenClaw workspace bootstrap runtime context, and references to the complete dynamic tool catalog.",
     "",
@@ -1031,9 +1035,9 @@ function renderReadme(scenarios: PromptScenario[]): string {
     "",
     "The tool catalog is pinned to the canonical happy-path OpenClaw tools so optional locally installed plugin tools do not create fixture churn.",
     "",
-    "The Telegram Markdown file is the complete canonical prompt snapshot. Discord and heartbeat are readable, SHA-bound zero-context `.md.diff` files with complete lossless differences from that base. Materialize one with `node --import tsx scripts/generate-prompt-snapshots.ts --materialize-prompt discord-group`; replace the scenario with `heartbeat-turn` or `telegram-direct` as needed.",
+    "The Telegram Markdown file is the complete canonical prompt snapshot. Discord and automation are readable, SHA-bound zero-context `.md.diff` files with complete lossless differences from that base. Materialize one with `node --import tsx scripts/generate-prompt-snapshots.ts --materialize-prompt discord-group`; replace the scenario with `automation-turn` or `telegram-direct` as needed.",
     "",
-    "The Telegram JSON is the complete shared tool catalog. Discord and heartbeat JSON fixtures contain readable, complete replacements for their changed top-level tools or namespaces; their `base` field points to the Telegram catalog.",
+    "The Telegram JSON is the complete shared tool catalog. Discord and automation JSON fixtures contain readable, complete replacements for their changed top-level tools or namespaces; their `base` field points to the Telegram catalog.",
     "",
     "Materialize the complete, formatted tool catalog for a scenario with:",
     "",
@@ -1042,7 +1046,7 @@ function renderReadme(scenarios: PromptScenario[]): string {
       "node --import tsx scripts/generate-prompt-snapshots.ts --materialize discord-group",
     ),
     "",
-    "Replace `discord-group` with `heartbeat-turn` to inspect the complete heartbeat catalog.",
+    "Replace `discord-group` with `automation-turn` to inspect the complete automation catalog.",
     "",
     "The Codex model prompt fixture is generated from the same Codex model catalog/cache shape that the Codex runtime uses for remote model metadata. Regenerate it from Codex's runtime cache or, when present, a local Codex checkout with:",
     "",

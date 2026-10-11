@@ -13,7 +13,6 @@ import {
   parseAgentSessionKey,
   parseThreadSessionSuffix,
   resolveEventSessionKey,
-  scopedHeartbeatWakeOptions,
 } from "../routing/session-key.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
@@ -137,7 +136,7 @@ function shouldPreserveDirectSessionKeyFromRoute(params: {
   }
 }
 
-/** Build the routing policy used by event wakeups and scoped heartbeat options. */
+/** Build the routing policy used by session events. */
 export function resolveEventSessionRoutingPolicy(params: {
   cfg?: OpenClawConfig;
   sessionKey?: string | null;
@@ -236,24 +235,4 @@ export function resolveEventSessionKeyForPolicy(
     return cronScoped;
   }
   return resolveMainScopedEventSessionKey({ sessionKey, policy }) ?? sessionKey;
-}
-
-/** Apply event routing policy while preserving wake option typing. */
-export function scopedHeartbeatWakeOptionsForPolicy<T extends object>(
-  sessionKey: string,
-  wakeOptions: T,
-  policy?: EventSessionRoutingPolicy,
-): T | (T & { sessionKey: string }) | (T & { agentId: string }) {
-  const cronScoped = resolveEventSessionKey(sessionKey, policy?.mainKey, policy?.sessionScope);
-  if (cronScoped === sessionKey) {
-    const mainScoped = resolveMainScopedEventSessionKey({ sessionKey, policy });
-    if (mainScoped) {
-      if (mainScoped === "global") {
-        const agentId = parseAgentSessionKey(sessionKey)?.agentId;
-        return agentId ? { ...wakeOptions, agentId } : wakeOptions;
-      }
-      return { ...wakeOptions, sessionKey: mainScoped };
-    }
-  }
-  return scopedHeartbeatWakeOptions(sessionKey, wakeOptions, policy?.mainKey, policy?.sessionScope);
 }

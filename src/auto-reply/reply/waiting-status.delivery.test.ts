@@ -46,7 +46,6 @@ function createContext(): FinalizeReplyAgentRunInput {
     commandBody: followupRun.prompt,
     defaultModel: followupRun.run.model,
     followupRun,
-    isHeartbeat: false,
     pendingToolTasks: new Set(),
     preflightCompactionApplied: false,
     queueKey: sessionKey,
@@ -87,7 +86,6 @@ function createContext(): FinalizeReplyAgentRunInput {
     typingSignals: createTypingSignaler({
       typing: createMockTypingController(),
       mode: "never",
-      isHeartbeat: false,
     }),
   };
 }
@@ -121,7 +119,7 @@ async function prepare(lane: "ordinary" | "queued", context: FinalizeReplyAgentR
     turn,
     execution: { runId, outcome: context.execution },
     accounting,
-    opts: { ...context.opts, isHeartbeat: context.isHeartbeat },
+    opts: context.opts,
   });
   return decision.kind === "deliver" ? decision.payloads : [];
 }

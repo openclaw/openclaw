@@ -1,5 +1,5 @@
 ---
-summary: "Visible reply delivery, heartbeat turns, and bounded final-answer recovery"
+summary: "Visible reply delivery, automation turns, and bounded final-answer recovery"
 read_when:
   - You are choosing between automatic and message-tool replies
   - A Codex turn finished tool work without a visible answer
@@ -9,7 +9,9 @@ sidebarTitle: "Replies and final answers"
 
 How final assistant text reaches the source conversation, and what happens when a Codex turn settles without one. Part of the [Codex harness runtime](/plugins/codex-harness-runtime) guide; [Where each section moved](/plugins/codex-harness-runtime#where-each-section-moved) lists every section.
 
-## Visible replies and heartbeats
+<a id="visible-replies-and-heartbeats" />
+
+## Visible replies and scheduled checks
 
 Direct/source chat turns through the Codex harness default to automatic final
 assistant delivery for internal WebChat surfaces, matching the Pi harness
@@ -27,11 +29,11 @@ Native Codex messages explicitly marked for asynchronous delivery use an
 independent delivery intent. They are delivered separately from optional progress
 and from the eventual final answer, including when block streaming is disabled.
 
-Codex heartbeat turns get `heartbeat_respond` in the searchable OpenClaw tool
-catalog by default so the agent can record whether the wake should stay quiet
-or notify. Heartbeat turns use the same Codex Default collaboration mode as
-ordinary chat turns. The heartbeat monitor's cron scratch is appended to the
-scheduled heartbeat user message when present.
+Scheduled checks are ordinary automation turns. Return a normal final reply for
+a visible result or `NO_REPLY` for silence. During a job's run, the `automations`
+tool provides self-scoped scratch and `record_result` actions; the retired
+`heartbeat_respond` tool is unavailable. Present job scratch is included in the
+bounded run context. See [Job scratch and quiet results](/automation/cron-jobs/payloads#job-scratch-and-quiet-results).
 
 ## Attachments in a remote workspace
 

@@ -27,10 +27,12 @@ function sortedSessionIdentifiers(identifiers: Iterable<string>): string[] {
 }
 
 /** Lists active embedded-run session keys from both embedded and auto-reply registries. */
-export function listActiveEmbeddedRunSessionKeys(): string[] {
+export function listActiveEmbeddedRunSessionKeys(options?: {
+  includeReplyRuns?: boolean;
+}): string[] {
   return sortedSessionIdentifiers([
     ...ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.keys(),
-    ...listActiveReplyRunSessionKeys(),
+    ...(options?.includeReplyRuns === false ? [] : listActiveReplyRunSessionKeys()),
   ]);
 }
 

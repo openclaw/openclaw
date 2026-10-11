@@ -8,6 +8,7 @@ import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import { createPluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
+import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import {
   buildCaptionedFinalTextFallback,
   cleanDeferredFinalText,
@@ -366,7 +367,9 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     const preparation = prepareReplyPayloadForDispatcher(dispatcher, "final", inputPayload);
     if (preparation.kind === "suppress") {
       await suppressPendingFinalDelivery(inputPayload, {
-        preserveActivity: state.replyOperationRunState.heartbeat !== undefined,
+        preserveActivity: shouldPreserveUserFacingSessionStateForInputProvenance(
+          state.ctx.InputProvenance,
+        ),
       });
       return {
         queuedFinal: false,
@@ -482,7 +485,9 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       });
       if (pendingBlock) {
         await suppressPendingFinalDelivery(payload, {
-          preserveActivity: state.replyOperationRunState.heartbeat !== undefined,
+          preserveActivity: shouldPreserveUserFacingSessionStateForInputProvenance(
+            state.ctx.InputProvenance,
+          ),
         });
       }
       if (pendingBlock || sourceRecovery) {

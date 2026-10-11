@@ -28,8 +28,6 @@ import type {
 import {
   readAgentDeletionJournal,
   readAgentDeletionJournalInDatabase,
-  type AgentDeletionJournalCleanupPath,
-  type AgentDeletionJournalEntry,
 } from "../state/agent-deletion-journal.js";
 import type { AgentDeletionWorkerPredicate } from "../state/agent-deletion-worker-contract.js";
 import type { AgentDeletionWorkerAuthority } from "../state/agent-deletion-worker.types.js";
@@ -54,6 +52,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import type { OpenClawStateWorkerLeaseContext } from "../state/openclaw-state-lease-context.js";
 import { verifyOpenClawStateLeaseOwnership } from "../state/openclaw-state-lease-storage.js";
 import {
+  withOpenClawStateLeaseRemoteAdmission,
   withOpenClawStateLeaseWorkerAdmission,
   withOpenClawStateLeasesWorkerAdmission,
 } from "../state/openclaw-state-lease-worker-owner.js";
@@ -70,7 +69,9 @@ import {
   beginRemoteAgentDeletionJournal,
   rollbackRemoteAgentDeletionJournal,
 } from "./agent-deletion-journal-remote.js";
+import type { AgentDeletionOperation } from "./agent-deletion-operation.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
+export type { AgentDeletionOperation } from "./agent-deletion-operation.js";
 export {
   AgentDeletionAuthorityRollbackError,
   AgentDeletionCommitUncertainError,
@@ -88,23 +89,6 @@ export type AgentLifecycleBinding = Readonly<{
 type AgentDeletionBeginOptions = {
   expectedClawInstall?: PersistedClawInstall | null;
   preserveDeleteFiles?: boolean;
-};
-
-export type AgentDeletionOperation = AgentDeletionWorkerAuthority & {
-  entry: AgentDeletionJournalEntry;
-  previousEntry?: AgentDeletionJournalEntry;
-  assertCurrentAsync(this: void): Promise<void>;
-  assertCurrentFinal(this: void): void;
-  runDatabaseCleanup: ReturnType<typeof createAgentDeletionDatabaseCleanup>;
-  fenceDatabasePaths(paths: readonly string[]): Promise<void>;
-  fenceCleanupPaths(paths: readonly AgentDeletionJournalCleanupPath[]): Promise<void>;
-  finish(options?: { unregisterDatabases?: boolean }): Promise<void>;
-  releaseClawRows(input: {
-    files: Array<{ path: string; action: string }>;
-    complete: boolean;
-  }): Promise<boolean>;
-  handoffClawRetry(): Promise<void>;
-  rollback(): Promise<void>;
 };
 
 /** Acquire before the config lock and retain ownership through cleanup and recovery. */
@@ -158,19 +142,19 @@ export function withAgentDeletion<T>(
           }
           lifetime.assertCurrent();
         };
-        const execute = <Result>(
+        const execute = <TResult>(
           apply: (
             scope: DomainScope,
             identity: typeof lifetime.identity,
             additionalIdentities: readonly OpenClawStateLeaseIdentity[],
-          ) => Promise<Result>,
+          ) => Promise<TResult>,
           publication?: {
             assertCurrent?: () => void;
             onCommitted?: (facts: unknown) => void;
             onAdmission?: (request: SqliteWorkerAdmissionRequest, stateIdentityKey: string) => void;
             additionalLeases?: readonly OpenClawStateWorkerLeaseContext[];
           },
-        ): Promise<Result> => {
+        ): Promise<TResult> => {
           assertCurrentHost();
           const invoke = (
             admission: Pick<typeof lifetime, "assertCurrent" | "createAdmission">,
@@ -399,6 +383,22 @@ export function withAgentDeletion<T>(
               ...authority,
               entry: journal,
               previousEntry,
+              runWithRemoteAdmission: (runRemote) => {
+                assertCurrentHost();
+                return withOpenClawStateLeaseRemoteAdmission(lease, statePath, async (remote) => {
+                  const assertCurrent = () => {
+                    assertCurrentHost();
+                    remote.assertCurrent();
+                  };
+                  assertCurrent();
+                  const result = await runRemote(
+                    { ...remote, databasePath: statePath, assertCurrent },
+                    { lease: remote.identity, predicate },
+                  );
+                  assertCurrent();
+                  return result;
+                });
+              },
               assertCurrentAsync,
               assertCurrentFinal,
               runDatabaseCleanup: createAgentDeletionDatabaseCleanup({

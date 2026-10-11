@@ -236,8 +236,7 @@ it("routes a command started by a conversation's completion turn back to that co
     "mcp-continuation",
     {
       sessionKey,
-      trigger: "heartbeat",
-      continuesConversation: true,
+      trigger: "event",
       toolsAllow: ["exec", "process"],
       messageProvider: "telegram",
       currentChannelId: "telegram:-100155462274:topic:42",

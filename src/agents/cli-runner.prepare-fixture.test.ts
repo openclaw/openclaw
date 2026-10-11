@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { persistHeartbeatOutcome } from "../infra/heartbeat-outcome-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
@@ -20,13 +19,6 @@ it("drains owned agent resources before removing preparation directories and pre
     dir,
     database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: dir } }),
   }));
-  await persistHeartbeatOutcome({
-    ...first.sessionTarget,
-    env: { OPENCLAW_STATE_DIR: first.dir },
-    runSessionKey: "agent:main:main:heartbeat",
-    occurredAt: 100,
-    response: { outcome: "progress", notify: false, summary: "Fixture-owned worker" },
-  });
   const entered = createDeferredCore();
   const release = createDeferredCore();
   let resourceClosed = false;

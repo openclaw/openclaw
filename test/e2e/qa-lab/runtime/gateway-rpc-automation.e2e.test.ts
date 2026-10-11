@@ -20,6 +20,7 @@ import { resetAgentEventsForTest } from "../../../../src/infra/agent-events.js";
 import { resetSystemEventsForTest } from "../../../../src/infra/system-events.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../../../src/test-utils/env.js";
 import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../../../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const ISOLATED_GATEWAY_ENV_KEYS = [
@@ -85,13 +86,18 @@ function writeAssistantResponse(response: ServerResponse, text: string): void {
 }
 
 describe("Gateway run cancellation and automation RPCs", () => {
+  let fixtureSettlement: Promise<void> | undefined;
   beforeEach(resetGatewayState);
-  afterEach(resetGatewayState);
+  afterEach(async () => {
+    await fixtureSettlement;
+    fixtureSettlement = undefined;
+    resetGatewayState();
+  });
 
   it(
-    "persists cron CRUD, wakes the heartbeat, and cancels an agent run through chat.abort",
+    "persists cron CRUD, runs an ordinary session wake, and cancels an agent run through chat.abort",
     { timeout: 90_000 },
-    async () => {
+    async ({ signal }) => {
       const envSnapshot = captureEnv([...ISOLATED_GATEWAY_ENV_KEYS]);
       const tempHome = tempDirs.make("openclaw-gateway-automation-");
       const stateDir = path.join(tempHome, ".openclaw");
@@ -103,10 +109,6 @@ describe("Gateway run cancellation and automation RPCs", () => {
         fs.mkdir(bundledPluginsDir, { recursive: true }),
         fs.mkdir(path.dirname(configPath), { recursive: true }),
       ]);
-      await fs.writeFile(
-        path.join(workspaceDir, "HEARTBEAT.md"),
-        "Handle pending system events, then reply with a concise acknowledgement.\n",
-      );
 
       const token = nextId("gateway-automation-token");
       for (const [key, value] of Object.entries({
@@ -131,6 +133,7 @@ describe("Gateway run cancellation and automation RPCs", () => {
       const taskPrompt = nextId("create-tracked-task");
       const wakeText = nextId("wake-heartbeat");
       const providerRequests: Array<Record<string, unknown>> = [];
+      const taskRequestReceived = createDeferred();
       let releaseTaskResponse: (() => void) | undefined;
       const taskResponseGate = new Promise<void>((resolve) => {
         releaseTaskResponse = resolve;
@@ -152,17 +155,20 @@ describe("Gateway run cancellation and automation RPCs", () => {
           providerRequests.push(body);
           const serialized = JSON.stringify(body);
           if (providerRequests.length === 1 && serialized.includes(taskPrompt)) {
+            taskRequestReceived.resolve();
             await taskResponseGate;
             writeAssistantResponse(response, "Tracked task completed.");
             return;
           }
-          writeAssistantResponse(response, `Heartbeat handled: ${wakeText}`);
+          writeAssistantResponse(response, `Event handled: ${wakeText}`);
         })().catch((error: unknown) => {
           response.writeHead(500).end(error instanceof Error ? error.message : String(error));
         });
       });
 
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+      const fixtureSettled = createDeferred();
+      fixtureSettlement = fixtureSettled.promise;
       try {
         await new Promise<void>((resolve, reject) => {
           providerServer.once("error", reject);
@@ -181,7 +187,6 @@ describe("Gateway run cancellation and automation RPCs", () => {
             defaults: {
               workspace: workspaceDir,
               skipBootstrap: true,
-              heartbeat: { every: "5m", target: "none" },
               model: { primary: provider.modelRef },
               models: {
                 [provider.modelRef]: {
@@ -288,12 +293,23 @@ describe("Gateway run cancellation and automation RPCs", () => {
         );
         expect(started).toMatchObject({ runId, status: "accepted" });
 
-        await expect
-          .poll(() => providerRequests.some((body) => JSON.stringify(body).includes(taskPrompt)), {
-            timeout: 10_000,
-            interval: 50,
-          })
-          .toBe(true);
+        const agentWait = client.request<{ status: string; error?: string }>(
+          "agent.wait",
+          { runId: started.runId, timeoutMs: 30_000 },
+          { timeoutMs: 35_000 },
+        );
+        await withinTest(
+          awaitGateBeforeSettlement(
+            taskRequestReceived.promise,
+            agentWait.then((result) => {
+              throw new Error(
+                `Task settled before reaching the provider: ${JSON.stringify(result)}`,
+              );
+            }),
+            "Task settled before reaching the provider",
+          ),
+          signal,
+        );
         await expect(client.request("chat.abort", { sessionKey, runId })).resolves.toMatchObject({
           aborted: true,
           runIds: [runId],
@@ -304,14 +320,8 @@ describe("Gateway run cancellation and automation RPCs", () => {
         }
         releaseResponse();
         releaseTaskResponse = undefined;
-        const agentWait = await client.request<{ status: string; error?: string }>(
-          "agent.wait",
-          { runId: started.runId, timeoutMs: 30_000 },
-          { timeoutMs: 35_000 },
-        );
-        expect(agentWait).toMatchObject({ status: "error", stopReason: "rpc" });
+        expect(await agentWait).toMatchObject({ status: "error", stopReason: "rpc" });
         const requestsBeforeWake = providerRequests.length;
-        const wakeRequestedAt = Date.now();
         await expect(
           client.request<{ ok: boolean }>("wake", {
             mode: "now",
@@ -323,52 +333,32 @@ describe("Gateway run cancellation and automation RPCs", () => {
         await expect
           .poll(() => providerRequests.length, { timeout: 15_000, interval: 50 })
           .toBeGreaterThan(requestsBeforeWake);
-        let observedHeartbeat: {
-          ts: number;
-          status: string;
-          reason?: string;
-          message?: string;
-          preview?: string;
-        } | null = null;
-        try {
-          await expect
-            .poll(
-              async () => {
-                observedHeartbeat = await client.request<{
-                  ts: number;
-                  status: string;
-                  reason?: string;
-                  message?: string;
-                  preview?: string;
-                }>("last-heartbeat", {});
-                return (
-                  observedHeartbeat.ts >= wakeRequestedAt &&
-                  observedHeartbeat.status === "skipped" &&
-                  observedHeartbeat.reason === "target-none" &&
-                  observedHeartbeat.message ===
-                    "Heartbeat delivery is disabled by configuration (target: none)." &&
-                  observedHeartbeat.preview === `Heartbeat handled: ${wakeText}`
-                );
-              },
-              { timeout: 15_000, interval: 50 },
-            )
-            .toBe(true);
-        } catch (error) {
-          throw new Error(`Unexpected last-heartbeat state: ${JSON.stringify(observedHeartbeat)}`, {
-            cause: error,
-          });
-        }
+        await expect
+          .poll(
+            async () => {
+              const history = await client.request<{ messages: unknown[] }>("chat.history", {
+                sessionKey,
+              });
+              return JSON.stringify(history.messages);
+            },
+            { timeout: 15_000, interval: 50 },
+          )
+          .toContain(`Event handled: ${wakeText}`);
       } finally {
-        if (gateway) {
-          await disconnectGatewayClient(gateway.client);
-          await gateway.server.close({ reason: "Gateway RPC automation test complete" });
-        }
         releaseTaskResponse?.();
-        providerServer.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          providerServer.close(() => resolve());
-        });
-        envSnapshot.restore();
+        try {
+          if (gateway) {
+            await disconnectGatewayClient(gateway.client);
+            await gateway.server.close({ reason: "Gateway RPC automation test complete" });
+          }
+          providerServer.closeAllConnections();
+          await new Promise<void>((resolve) => {
+            providerServer.close(() => resolve());
+          });
+          envSnapshot.restore();
+        } finally {
+          fixtureSettled.resolve();
+        }
       }
     },
   );

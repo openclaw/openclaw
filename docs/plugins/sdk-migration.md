@@ -21,7 +21,7 @@ from a single entry point:
   dozens of helpers while the focused SDK was being built. Both roots are now
   removed. Import a documented subpath instead.
 - **`openclaw/plugin-sdk/infra-runtime`** - a broad barrel mixing system
-  events, heartbeat state, delivery queues, fetch/proxy helpers, file helpers,
+  events, automation state, delivery queues, fetch/proxy helpers, file helpers,
   approval types, and unrelated utilities.
 - **`openclaw/plugin-sdk/config-runtime`** - a removed broad config barrel,
   including its deprecated direct `loadConfig` and `writeConfigFile` exports.

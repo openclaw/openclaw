@@ -538,6 +538,61 @@ describe("followup queue drain restart after idle window", () => {
     },
   );
 
+  it.for(["before-enqueue", "on-deferred", "reversible"] as const)(
+    "settles late queued admission without retiring its admitted producer (%s)",
+    async (boundary) => {
+      const parent = tryBeginGatewayRootWorkAdmission("late-cron-notice");
+      if (!parent) {
+        throw new Error("Expected the producing run to own Gateway admission");
+      }
+      const abandoned = vi.fn();
+      const settled = vi.fn();
+      const runFollowup = vi.fn(async () => {});
+      const queued = createRun({ prompt: "completed event preparation" });
+      queued.turnAdoptionLifecycle = {
+        admission: "exclusive",
+        onAdopted: vi.fn(async () => {}),
+        onDeferred: () => {
+          if (boundary === "on-deferred") {
+            markGatewayRestartDraining("stop (SIGTERM)");
+          }
+        },
+        onAbandoned: abandoned,
+        onSettled: settled,
+      };
+      let signalFence: ReturnType<typeof beginGatewayRestartSignalAdmission> | undefined;
+      try {
+        await parent.run(async () => {
+          if (boundary === "before-enqueue") {
+            markGatewayRestartDraining("stop (SIGTERM)");
+          } else if (boundary === "reversible") {
+            signalFence = beginGatewayRestartSignalAdmission();
+            expect(signalFence).not.toBeNull();
+          }
+          const accepted = enqueueFollowupRun(key, queued, defaults, "none", runFollowup, false);
+          expect(accepted).toBe(boundary === "reversible");
+          if (boundary === "reversible") {
+            expect(getExistingFollowupQueue(key)?.items).toEqual([queued]);
+            expect(abandoned).not.toHaveBeenCalled();
+            expect(settled).not.toHaveBeenCalled();
+          } else {
+            expect(getExistingFollowupQueue(key)).toBeUndefined();
+            expect(abandoned).toHaveBeenCalledOnce();
+            expect(settled).toHaveBeenCalledOnce();
+          }
+          expect(runFollowup).not.toHaveBeenCalled();
+          expect(getActiveGatewayRootWorkCount()).toBe(1);
+        });
+      } finally {
+        clearFollowupQueue(key);
+        clearFollowupDrainCallback(key);
+        signalFence?.rollback();
+        parent.release();
+      }
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    },
+  );
+
   it("retires queued followups and callbacks when one-way restart drain begins", async () => {
     const abandoned = vi.fn();
     const settled = vi.fn();

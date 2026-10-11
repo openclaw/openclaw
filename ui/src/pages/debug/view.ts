@@ -3,6 +3,7 @@ import { guard } from "lit/directives/guard.js";
 import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { EventLogEntry } from "../../api/event-log.ts";
+import type { CronStatus } from "../../api/types.ts";
 import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
 import { renderKeyboardShortcut, renderShortcutText } from "../../components/kbd.ts";
 import { highlightJsonHtml } from "../../components/markdown-code-blocks.ts";
@@ -30,7 +31,7 @@ type DebugProps = {
   status: Record<string, unknown> | null;
   health: Record<string, unknown> | null;
   models: unknown[];
-  heartbeat: unknown;
+  automations: CronStatus | null;
   lanes: CommandLaneSnapshot[];
   dynamic: CommandLaneDynamicSummary | null;
   diagnosticsError: string | null;
@@ -134,16 +135,36 @@ export function renderDebug(props: DebugProps) {
           : nothing
       }
       ${renderDiagnosticsError(props.diagnosticsError)} ${renderSecurityRow(props)}
-      ${(["status", "health", "heartbeat"] as const).map((key) => {
-        const title = t(key === "heartbeat" ? "debug.lastHeartbeat" : `debug.${key}`);
-        const value = props[key];
-        return renderSettingsRow({
-          title,
-          stacked: true,
-          control: renderCodeBlock(title, value, () => JSON.stringify(value ?? {}, null, 2)),
-        });
+      ${renderSettingsRow({
+        title: t("debug.automations"),
+        description: t("debug.automationsSubtitle"),
+        control: html`${
+          props.automations
+            ? t("debug.automationsSummary", {
+                state: t(props.automations.enabled ? "common.enabled" : "common.disabled"),
+                count: String(props.automations.jobs),
+                next:
+                  props.automations.nextWakeAtMs == null
+                    ? t("debug.noWakeScheduled")
+                    : formatTimeMs(props.automations.nextWakeAtMs),
+              })
+            : t("debug.overlay.unavailable")
+        }`,
       })}
     `,
+  );
+
+  const rawSection = renderSettingsSection(
+    { title: t("debug.rawProtocolTitle"), description: t("debug.rawProtocolSubtitle") },
+    (["status", "health"] as const).map((key) => {
+      const title = t(`debug.${key}`);
+      const value = props[key];
+      return renderSettingsRow({
+        title,
+        stacked: true,
+        control: renderCodeBlock(title, value, () => JSON.stringify(value ?? {}, null, 2)),
+      });
+    }),
   );
 
   const lanesSection = renderSettingsSection(
@@ -274,7 +295,7 @@ ${props.callError}</pre>
   );
 
   return renderSettingsPage(
-    html`${snapshotsSection} ${lanesSection} ${rpcSection} ${modelsSection} ${eventLogSection}`,
+    [snapshotsSection, rawSection, lanesSection, rpcSection, modelsSection, eventLogSection],
     { wide: true },
   );
 }

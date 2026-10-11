@@ -644,7 +644,6 @@ function createTestConfig(baseUrl: string): OpenClawConfig {
       ownership: "explicit",
       entries: { [OTHER_AGENT_ID]: {}, [REQUESTER_AGENT_ID]: {} },
       defaults: {
-        heartbeat: { every: "0m" },
         maxConcurrent: 8,
         model: { primary: MODEL_REF },
         models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },

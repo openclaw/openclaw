@@ -14,7 +14,6 @@ type Routing = Pick<
   | "mainSessionRestartRecovery"
   | "lifecycleStartedAt"
   | "lifecycleGeneration"
-  | "isHeartbeat"
   | "verboseLevel"
   | "registeredAt"
   | "eventState"
@@ -56,7 +55,6 @@ export function recordAgentEventRouting(
     mainSessionRestartRecovery: context.mainSessionRestartRecovery,
     lifecycleStartedAt: context.lifecycleStartedAt,
     lifecycleGeneration: context.lifecycleGeneration,
-    isHeartbeat: context.isHeartbeat,
     verboseLevel: context.verboseLevel,
     registeredAt: context.registeredAt,
     eventState: context.eventState,

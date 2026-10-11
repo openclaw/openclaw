@@ -608,7 +608,7 @@ describe("doctor config persistence", () => {
                 }
               : {
                   gatway: { port: 12345 },
-                  agents: { defaults: { heartbeat: { every: 5 } } },
+                  agents: { defaults: { timeoutSeconds: "invalid" } },
                   plugins: { enabled: false },
                 },
           );
@@ -655,7 +655,7 @@ describe("doctor config persistence", () => {
             expect(warning?.[0]).toContain("the included file ./browser.json");
             await expect(fs.readFile(includePath, "utf8")).resolves.toBe(includeRaw);
           } else {
-            expect(warning?.[0]).toContain("agents.defaults.heartbeat.every");
+            expect(warning?.[0]).toContain("agents.defaults.timeoutSeconds");
           }
           await expect(fs.readFile(configPath, "utf8")).resolves.toBe(rootRaw);
         });

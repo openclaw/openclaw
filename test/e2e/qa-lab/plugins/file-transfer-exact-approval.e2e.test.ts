@@ -89,7 +89,7 @@ describe("file-transfer exact approval transport", () => {
         nodes: { commands: { allow: [FILE_FETCH_COMMAND] } },
       },
       agents: {
-        defaults: { heartbeat: { every: "0m" }, skipBootstrap: true },
+        defaults: { skipBootstrap: true },
       },
       plugins: {
         allow: ["file-transfer"],

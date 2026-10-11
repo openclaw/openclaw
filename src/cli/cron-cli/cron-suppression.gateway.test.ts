@@ -214,7 +214,7 @@ describe("cron CLI delivery suppression readback", () => {
           cronEnabled: true,
           log: createNoopLogger(),
           enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
+          enqueueSessionEvent: vi.fn(),
           runIsolatedAgentJob,
           onEvent: (event) => {
             if (event.action === "finished") {

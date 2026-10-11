@@ -1,8 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  parseAgentSessionKey,
-  resolveMemoryDreamingPluginConfig,
-} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { resolveMemoryDreamingPluginConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   MEMORY_DREAMING_SYSTEM_EVENT_TEXT as DREAMING_SYSTEM_EVENT_TEXT,
   resolveMemoryDeepDreamingConfig,
@@ -14,7 +11,6 @@ import {
   normalizeOptionalString,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
 import {
   type CronServiceLike,
   reconcileShortTermDreamingCronJob,
@@ -54,25 +50,9 @@ function formatRepairSummary(repair: {
   return actions.join(", ");
 }
 
-function hasPendingManagedDreamingCronEvent(sessionKey?: string, agentId?: string): boolean {
-  if (
-    !sessionKey ||
-    (!parseAgentSessionKey(sessionKey) &&
-      sessionKey !== "global" &&
-      sessionKey !== "global:heartbeat")
-  ) {
-    return false;
-  }
-  return peekSystemEventEntries(sessionKey, agentId).some(
-    (event) =>
-      event.contextKey?.startsWith("cron:") === true &&
-      normalizeOptionalString(event.text) === DREAMING_SYSTEM_EVENT_TEXT,
-  );
-}
-
 async function runShortTermDreamingPromotion(params: {
   runInBackground?: DreamNarrativeRequest["runInBackground"];
-  /** Agent whose heartbeat/cron turn triggered the sweep. */
+  /** Agent whose scheduled turn triggered the sweep. */
   agentId?: string;
   workspaceDir?: string;
   cfg?: OpenClawConfig;
@@ -594,7 +574,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     "before_agent_reply",
     async (event, ctx) => {
       try {
-        if (ctx.trigger !== "heartbeat" && ctx.trigger !== "cron") {
+        if (ctx.trigger !== "cron") {
           return undefined;
         }
         if (!includesSystemEventToken(event.cleanedBody, DREAMING_SYSTEM_EVENT_TEXT)) {
@@ -606,21 +586,10 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
           cfg: currentConfig,
         });
         if (!config.enabled) {
-          return ctx.trigger === "cron"
-            ? { handled: true, reason: "memory-core: short-term dreaming disabled" }
-            : undefined;
-        }
-        if (
-          ctx.trigger === "heartbeat" &&
-          !hasPendingManagedDreamingCronEvent(
-            ctx.heartbeatEventQueueSessionKey ?? ctx.sessionKey,
-            ctx.agentId,
-          )
-        ) {
-          return undefined;
+          return { handled: true, reason: "memory-core: short-term dreaming disabled" };
         }
         return await runShortTermDreamingPromotion({
-          runInBackground: ctx.trigger === "cron" ? trackDreamingTask : undefined,
+          runInBackground: trackDreamingTask,
           agentId: ctx.agentId,
           workspaceDir: ctx.workspaceDir,
           cfg: currentConfig,
@@ -634,6 +603,6 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         return undefined;
       }
     },
-    { eligibleTriggers: ["heartbeat", "cron"] },
+    { eligibleTriggers: ["cron"] },
   );
 }

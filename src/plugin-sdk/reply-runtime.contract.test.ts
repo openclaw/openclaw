@@ -100,7 +100,7 @@ describe("reply runtime public progress contracts", () => {
 });
 
 describe("reply runtime public dispatcher compatibility", () => {
-  it("keeps internal event authority out of the public reply option types", () => {
+  it("keeps internal event and scheduled authority out of the public reply option types", () => {
     type Options = NonNullable<Parameters<typeof dispatchInboundMessage>[0]["replyOptions"]>;
     type RuntimeOptions = NonNullable<
       Parameters<PluginRuntimeChannel["reply"]["dispatchReplyFromConfig"]>[0]["replyOptions"]
@@ -113,14 +113,21 @@ describe("reply runtime public dispatcher compatibility", () => {
     type ResolverOptions = NonNullable<Parameters<Resolver>[1]>;
     expectTypeOf<"internalEventExecution">().not.toExtend<keyof ResolverOptions>();
     expectTypeOf<"onReplyOperationOwned">().not.toExtend<keyof ResolverOptions>();
+    expectTypeOf<"modelOverride">().not.toExtend<keyof Options>();
+    expectTypeOf<"modelOverride">().not.toExtend<keyof RuntimeOptions>();
+    expectTypeOf<"modelOverride">().not.toExtend<keyof ResolverOptions>();
+    expectTypeOf<"scheduledAutomation">().not.toExtend<keyof Options>();
+    expectTypeOf<"scheduledAutomation">().not.toExtend<keyof RuntimeOptions>();
+    expectTypeOf<"scheduledAutomation">().not.toExtend<keyof ResolverOptions>();
     expectTypeOf<"onSessionPrepared">().toExtend<keyof Options>();
     expectTypeOf<"onSessionPrepared">().toExtend<keyof ResolverOptions>();
   });
 
-  it("rejects plugin-supplied event custody while retaining public reply options", async () => {
+  it("rejects plugin-supplied event and scheduled custody while retaining public reply options", async () => {
     const callback = vi.fn();
     const options = {
-      isHeartbeat: true,
+      scheduledAutomation: { assertCurrent: callback },
+      modelOverride: "untrusted/model",
       onReplyStart: callback,
       internalEventExecution: { assertCurrent: callback, onStarted: callback },
       onReplyOperationOwned: callback,
@@ -142,8 +149,9 @@ describe("reply runtime public dispatcher compatibility", () => {
         dispatched = true;
         expect(replyOptions).not.toHaveProperty("internalEventExecution");
         expect(replyOptions).not.toHaveProperty("onReplyOperationOwned");
+        expect(replyOptions).not.toHaveProperty("scheduledAutomation");
+        expect(replyOptions).not.toHaveProperty("modelOverride");
         expect(replyOptions).toMatchObject({
-          isHeartbeat: true,
           onReplyStart: callback,
           [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" },
         });
@@ -155,6 +163,7 @@ describe("reply runtime public dispatcher compatibility", () => {
     expect(delivered).toEqual(["public reply"]);
     expect(options.internalEventExecution.onStarted).toBe(callback);
     expect(options.onReplyOperationOwned).toBe(callback);
+    expect(options.scheduledAutomation.assertCurrent).toBe(callback);
   });
 
   it("preserves deprecated admission counters beside settled receipt outcomes", async () => {

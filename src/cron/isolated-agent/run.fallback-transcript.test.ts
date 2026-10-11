@@ -3,6 +3,11 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { createEmbeddedAgentRunnerOpenAiConfig } from "../../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { readTranscriptMessages } from "../../sessions/user-turn-transcript.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -122,55 +127,66 @@ it("continues one cron user turn when the primary times out after provider dispa
     });
     vi.spyOn(globalThis, "fetch").mockImplementation(fetchProvider);
 
-    const running = runCronIsolatedAgentTurn({
-      cfg: config,
-      onExecutionPhase: ({ phase, model }) => {
-        if (phase === "model_call_started" && model === "primary") {
-          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-        }
-      },
-      deps: {},
-      deliveryAttemptFence: null,
-      agentId: "main",
-      sessionKey: "cron:fallback-transcript",
-      message: "Reply exactly Fallback report",
-      job: {
-        id: "fallback-transcript",
-        name: "Fallback transcript proof",
-        enabled: false,
-        createdAtMs: 1,
-        updatedAtMs: 1,
-        schedule: { kind: "every", everyMs: 3_600_000 },
-        sessionTarget: "isolated",
-        wakeMode: "now",
-        payload: {
-          kind: "agentTurn",
-          message: "Reply exactly Fallback report",
-          timeoutSeconds: 120,
-          toolsAllow: [],
+    const previousConfig = getRuntimeConfigSnapshot();
+    setRuntimeConfigSnapshot(config);
+    try {
+      const running = runCronIsolatedAgentTurn({
+        cfg: config,
+        onExecutionPhase: ({ phase, model }) => {
+          if (phase === "model_call_started" && model === "primary") {
+            vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+          }
         },
-        delivery: { mode: "none" },
-        state: {},
-      },
-    });
+        deps: {},
+        deliveryAttemptFence: null,
+        agentId: "main",
+        sessionKey: "cron:fallback-transcript",
+        message: "Reply exactly Fallback report",
+        job: {
+          id: "fallback-transcript",
+          name: "Fallback transcript proof",
+          enabled: false,
+          createdAtMs: 1,
+          updatedAtMs: 1,
+          schedule: { kind: "every", everyMs: 3_600_000 },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: {
+            kind: "agentTurn",
+            message: "Reply exactly Fallback report",
+            timeoutSeconds: 120,
+            toolsAllow: [],
+          },
+          delivery: { mode: "none" },
+          state: {},
+        },
+      });
 
-    const result = await running;
-    await Promise.all(timeoutAdvances);
-    vi.useRealTimers();
+      const result = await running;
+      await Promise.all(timeoutAdvances);
+      vi.useRealTimers();
 
-    expect(result, JSON.stringify({ result, requests })).toMatchObject({
-      status: "ok",
-      outputText: "Fallback report",
-    });
-    expect(requests).toEqual(["primary", "backup"]);
-    const messages = await readTranscriptMessages({
-      sessionId: result.sessionId!,
-      sessionKey: result.sessionKey!,
-      storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
-    });
-    expect(messages.filter((message) => message.role === "user")).toHaveLength(1);
-    expect(
-      messages.filter((message) => message.role === "assistant" && message.stopReason === "stop"),
-    ).toHaveLength(1);
+      expect(result, JSON.stringify({ result, requests })).toMatchObject({
+        status: "ok",
+        outputText: "Fallback report",
+      });
+      expect(requests).toEqual(["primary", "backup"]);
+      const messages = await readTranscriptMessages({
+        sessionId: result.sessionId!,
+        sessionKey: result.sessionKey!,
+        storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+      });
+      expect(messages.filter((message) => message.role === "user")).toHaveLength(1);
+      expect(
+        messages.filter((message) => message.role === "assistant" && message.stopReason === "stop"),
+      ).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+      if (previousConfig) {
+        setRuntimeConfigSnapshot(previousConfig);
+      } else {
+        clearRuntimeConfigSnapshot();
+      }
+    }
   });
 });

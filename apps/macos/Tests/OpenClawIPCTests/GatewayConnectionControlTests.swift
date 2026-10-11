@@ -255,7 +255,7 @@ private func assertConfigLookupCannotRecreateRoute(
             sessionBox: WebSocketSessionBox(session: session))
         var mismatch: GatewayCompatibilityIssue?
         do {
-            _ = try await connection.request(method: "set-heartbeats", params: nil, retryTransportFailures: false)
+            _ = try await connection.request(method: "health", params: nil, retryTransportFailures: false)
             Issue.record("expected protocol rejection")
         } catch {
             mismatch = GatewayCompatibilityIssue(error: error)
@@ -271,7 +271,7 @@ private func assertConfigLookupCannotRecreateRoute(
         let stream = await connection.subscribe()
         var buffered = stream.makeAsyncIterator()
         rejectConnect.withValue { $0 = false }
-        _ = try await connection.request(method: "set-heartbeats", params: nil, retryTransportFailures: false)
+        _ = try await connection.request(method: "health", params: nil, retryTransportFailures: false)
         let firstRevision = connection.connectedEndpointRevision
         let firstRecovery = alerts.observeConnection(revision: firstRevision)
         #expect(firstRevision == 1)
@@ -304,7 +304,7 @@ private func assertConfigLookupCannotRecreateRoute(
         #expect(staleRecovery == nil)
         #expect(alerts.presentation == replacementIssue)
 
-        _ = try await connection.request(method: "set-heartbeats", params: nil, retryTransportFailures: false)
+        _ = try await connection.request(method: "health", params: nil, retryTransportFailures: false)
         let secondRevision = connection.connectedEndpointRevision
         let secondRecovery = alerts.observeConnection(revision: secondRevision)
         #expect(secondRevision == 2)

@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
@@ -465,6 +466,19 @@ describe("plugin cron registry ownership e2e", () => {
         expect(models.at(-1)).toBe("available");
         expect(requestText(server.requests[0]!)).toContain(`PROVIDER_HOOK_${provider}`);
         expect(requestText(server.requests.at(-1)!)).toContain(`PROVIDER_HOOK_${fallbackProvider}`);
+        if (route === "subagent") {
+          const taskText = "Prove the selected provider runtime.";
+          const taskInputs = (request: MockModelRequest) =>
+            (Array.isArray(request.body.input) ? request.body.input : [])
+              .filter(isRecord)
+              .filter((input) => input.role === "user" && JSON.stringify(input).includes(taskText));
+          const initialTask = taskInputs(server.requests[0]!);
+          expect(initialTask).toHaveLength(1);
+          expect(taskInputs(server.requests.at(-1)!)).toEqual(initialTask);
+          expect(requestText(server.requests.at(-1)!)).toContain(
+            "[Retry after the previous model attempt failed or timed out]",
+          );
+        }
       } finally {
         if (jobId) {
           await client.request("cron.remove", { id: jobId });

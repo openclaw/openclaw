@@ -1,4 +1,3 @@
-import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
 import type { CronJob } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsToggle } from "../../components/solid/settings-ui.tsx";
@@ -33,7 +32,6 @@ export function AdminRequired(props: CronProps) {
 // Run now and pause/resume are visible controls (rows and detail header);
 // the menu only carries the low-traffic actions.
 export function JobMenu(props: CronProps & { job: CronJob }) {
-  const systemOwned = () => isSystemMonitorDeclaration(props.job.declarationKey);
   const displayName = () => props.job.displayName ?? props.job.name;
   return (
     <wa-dropdown
@@ -54,14 +52,10 @@ export function JobMenu(props: CronProps & { job: CronJob }) {
             props.onRun(props.job, "due");
             break;
           case "clone":
-            if (!systemOwned()) {
-              props.onClone(props.job);
-            }
+            props.onClone(props.job);
             break;
           case "remove":
-            if (!systemOwned()) {
-              props.onRemove(props.job);
-            }
+            props.onRemove(props.job);
             break;
           case undefined:
             break;
@@ -78,12 +72,8 @@ export function JobMenu(props: CronProps & { job: CronJob }) {
         <Icon name="moreHorizontal" />
       </button>
       <MenuItem {...props} value="run-if-due" label={t("cron.actions.runIfDue")} />
-      {systemOwned() ? undefined : (
-        <MenuItem {...props} value="clone" label={t("cron.actions.clone")} />
-      )}
-      {systemOwned() ? undefined : (
-        <MenuItem {...props} value="remove" label={t("cron.actions.remove")} danger />
-      )}
+      <MenuItem {...props} value="clone" label={t("cron.actions.clone")} />
+      <MenuItem {...props} value="remove" label={t("cron.actions.remove")} danger />
     </wa-dropdown>
   );
 }

@@ -32,28 +32,17 @@ import { pruneAgentConfig } from "../commands/agents.config.js";
 import { moveToTrash } from "../commands/cleanup-utils.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
-import { loadedCronStoreFromRows } from "../cron/store/row-codec.js";
-import type { CronJobRow } from "../cron/store/schema.js";
-import { isSystemMonitorDeclaration } from "../cron/system-owned-declaration.js";
-import { compileSqliteQueryBindings, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
-import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { digestClawBytes } from "./digest.js";
-import type { ClawMonitorCleanupGateway, ClawMonitorSnapshot } from "./monitor-cleanup-contract.js";
+import { readAttachedCronJobsInDatabase } from "./monitor-cleanup-read.kernel.js";
+import type { AttachedCronJob } from "./monitor-cleanup.read.types.js";
 import { deleteCachedClawInstallSchemaVersion } from "./provenance-runtime-read.js";
 import type { PersistedClawInstall } from "./provenance.js";
 import type { PersistedClawWorkspaceFile } from "./workspace.js";
-
-type ClawRemovalDatabase = Pick<
-  DB,
-  "claw_workspace_files" | "claw_package_refs" | "claw_installs" | "cron_jobs"
->;
 
 export class ClawRemoveError extends Error {
   constructor(
@@ -120,77 +109,19 @@ export function deletionEffects(
   };
 }
 
-export type AttachedCronJob = {
-  id: string;
-  name: string;
-  enabled: boolean;
-  agentId: string | null;
-  ownerAgentId: string | null;
-  storeKey: string;
-  declarationKey: string | null;
-  revision?: string;
-};
+export type { AttachedCronJob } from "./monitor-cleanup.read.types.js";
 
 /** Inventories cron jobs that would retain a reference to a removed agent. */
 export function readAttachedCronJobs(
   agentId: string,
   options: OpenClawStateDatabaseOptions,
+  defaultAgentId?: string,
 ): AttachedCronJob[] {
-  const { db } = openOpenClawStateDatabase(options);
-  if (!tableExists(db, "cron_jobs")) {
-    return [];
-  }
-  const { compiled, bind } = compileSqliteQueryBindings<string>((parameter) => {
-    const boundAgentId = parameter((value) => value);
-    return getNodeSqliteKysely<ClawRemovalDatabase>(db)
-      .selectFrom("cron_jobs")
-      .selectAll()
-      .where((eb) =>
-        eb.or([eb("agent_id", "=", boundAgentId), eb("owner_agent_id", "=", boundAgentId)]),
-      )
-      .orderBy("job_id")
-      .orderBy("store_key");
-  });
-  const rows =
-    db /* sqlite-allow-raw: preserve native inventory errors outside the write-transaction owner. */
-      .prepare(compiled.sql)
-      .all(...bind(agentId)) as CronJobRow[];
-  return rows.map((row) => {
-    const job = loadedCronStoreFromRows([row]).store.jobs[0];
-    return {
-      id: row.job_id,
-      name: row.name,
-      enabled: row.enabled === 1,
-      agentId: row.agent_id,
-      ownerAgentId: row.owner_agent_id,
-      storeKey: row.store_key,
-      declarationKey: row.declaration_key,
-      revision: job ? resolveCronJobConfigRevision(job) : undefined,
-    };
-  });
-}
-
-/** Offline preview keeps local blockers; only a serving owner can make a monitor removable. */
-export async function readClawRemoveCronInventory(
-  agentId: string,
-  options: OpenClawStateDatabaseOptions & { monitorGateway?: ClawMonitorCleanupGateway },
-) {
-  let attachedJobs = readAttachedCronJobs(agentId, options);
-  let monitors: ClawMonitorSnapshot[] = [];
-  let inspectionUnavailable = false;
-  if (attachedJobs.some((job) => isSystemMonitorDeclaration(job.declarationKey ?? undefined))) {
-    inspectionUnavailable = true;
-    if (options.monitorGateway) {
-      try {
-        monitors = await options.monitorGateway.inspect(agentId);
-        inspectionUnavailable = false;
-      } catch {
-        // An unavailable/uncorroborated owner grants no removal scope.
-      }
-      attachedJobs = readAttachedCronJobs(agentId, options);
-    }
-  }
-  return { attachedJobs, monitors, inspectionUnavailable };
+  return readAttachedCronJobsInDatabase(
+    openOpenClawStateDatabase(options).db,
+    agentId,
+    defaultAgentId,
+  );
 }
 
 export type ClawCleanupTargets = {

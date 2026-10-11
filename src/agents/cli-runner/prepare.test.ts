@@ -32,10 +32,6 @@ import {
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { resolveMcpLoopbackScopedTools as resolveLoopbackTools } from "../../gateway/mcp-http.runtime.js";
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
-import {
-  claimHeartbeatOutcomeForRun,
-  persistHeartbeatOutcome,
-} from "../../infra/heartbeat-outcome-store.js";
 import { labelRuntimeContextText } from "../../llm/types.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type {
@@ -660,140 +656,13 @@ describe("prepareCliRunContext", () => {
     await fixture.cleanup();
   });
 
-  it.each(["process", "plugin"] as const)(
-    "carries silent heartbeat outcome in late %s user input without rebinding",
-    async (targetKind) => {
-      const { sessionTarget } = fixture.session;
-      if (targetKind === "plugin") {
-        setRawCliBackendForPrepareTest({
-          ...defaultTestCliBackend,
-          prepareExecution: () => ({
-            async *execute() {
-              yield { type: "result" };
-            },
-          }),
-        });
-      }
-      const admission = prepareSystemAgentRunAdmission(
-        {},
-        "run-test",
-        "main",
-        "heartbeat-context-test",
-      );
-      const input = {
-        preparedRunAdmission: admission,
-        sessionKey: sessionTarget.sessionKey,
-        trigger: "user" as const,
-        prompt: "What happened?",
-        transcriptPrompt: "What happened?",
-        currentInboundContext: { text: "Quoted reply", resumableText: "Room delta" },
-      };
-      try {
-        const before = await fixture.prepare(input);
-        await persistHeartbeatOutcome({
-          ...sessionTarget,
-          runSessionKey: "agent:main:main:heartbeat",
-          occurredAt: 1,
-          response: { outcome: "done", notify: false, summary: "ISOLATED_CLI_OUTCOME_947" },
-        });
-        for (let retry = 0; retry < 2; retry++) {
-          const context = await fixture.prepare(input);
-          expect(context.executionTarget.kind).toBe(targetKind);
-          const visibleInput = [
-            context.params.prompt,
-            context.promptContext?.prependContext,
-            context.promptContext?.appendContext,
-          ]
-            .filter(Boolean)
-            .join("\n");
-          expect(visibleInput.match(/ISOLATED_CLI_OUTCOME_947/g)).toHaveLength(1);
-          expect(context.params.transcriptPrompt).toBe("What happened?");
-          expect(context.systemPrompt).toBe(before.systemPrompt);
-          expect(context.extraSystemPromptHash).toBe(before.extraSystemPromptHash);
-          expect(context.messageToolPolicyHash).toBe(before.messageToolPolicyHash);
-          expect(input.currentInboundContext).toEqual({
-            text: "Quoted reply",
-            resumableText: "Room delta",
-          });
-        }
-        const laterAdmission = prepareSystemAgentRunAdmission(
-          {},
-          "later-user-run",
-          "main",
-          "heartbeat-context-test",
-        );
-        try {
-          const later = await fixture.prepare({
-            ...input,
-            runId: "later-user-run",
-            preparedRunAdmission: laterAdmission,
-          });
-          expect(JSON.stringify([later.params.prompt, later.promptContext])).not.toContain(
-            "ISOLATED_CLI_OUTCOME_947",
-          );
-        } finally {
-          laterAdmission.close();
-        }
-      } finally {
-        admission.close();
-      }
-    },
-  );
-
-  it.each(["heartbeat", "in-memory", "aborted"] as const)(
-    "does not consume silent heartbeat context for %s CLI preparation",
-    async (kind) => {
-      const { sessionTarget, dir } = fixture.session;
-      await persistHeartbeatOutcome({
-        ...sessionTarget,
-        runSessionKey: "agent:main:main:heartbeat",
-        occurredAt: 1,
-        response: { outcome: "done", notify: false, summary: "Retained CLI outcome" },
-      });
-      const admission = prepareSystemAgentRunAdmission(
-        {},
-        "run-test",
-        "main",
-        "heartbeat-context-test",
-      );
-      const input = {
-        preparedRunAdmission: admission,
-        sessionKey: sessionTarget.sessionKey,
-        trigger: kind === "heartbeat" ? kind : ("user" as const),
-        ...(kind === "in-memory" ? { sessionManager: SessionManager.inMemory(dir) } : {}),
-        ...(kind === "aborted" ? { abortSignal: AbortSignal.abort() } : {}),
-      };
-      try {
-        if (kind === "aborted") {
-          await expect(fixture.prepare(input)).rejects.toThrow();
-        } else {
-          const context = await fixture.prepare(input);
-          expect(JSON.stringify([context.params.prompt, context.promptContext])).not.toContain(
-            "Retained CLI outcome",
-          );
-        }
-        expect(
-          (await claimHeartbeatOutcomeForRun({ ...sessionTarget, runId: "next-user" }))?.summary,
-        ).toBe("Retained CLI outcome");
-      } finally {
-        admission.close();
-      }
-    },
-  );
-
-  it("does not renew an explicitly revoked CLI owner to claim silent heartbeat context", async () => {
+  it("does not renew an explicitly revoked CLI owner during preparation", async () => {
     const { sessionTarget } = fixture.session;
-    await persistHeartbeatOutcome({
-      ...sessionTarget,
-      runSessionKey: "agent:main:main:heartbeat",
-      occurredAt: 1,
-      response: { outcome: "done", notify: false, summary: "Keep revoked-owner outcome" },
-    });
     const admission = prepareSystemAgentRunAdmission(
       {},
       "revoked-user",
       "main",
-      "heartbeat-context-test",
+      "revoked-context-test",
     );
     const admittedRunContext = await admission.admit("embedded");
     admission.close();
@@ -805,9 +674,6 @@ describe("prepareCliRunContext", () => {
         sessionKey: sessionTarget.sessionKey,
       }),
     ).rejects.toThrow("authority");
-    expect(
-      (await claimHeartbeatOutcomeForRun({ ...sessionTarget, runId: "next-user" }))?.summary,
-    ).toBe("Keep revoked-owner outcome");
   });
 
   it("honors an explicit auth agent directory independently of session identity", async () => {
@@ -2186,8 +2052,8 @@ describe("prepareCliRunContext", () => {
     });
   });
 
-  it("reuses normal/heartbeat/normal CLI bindings for a subagent", async () => {
-    const trigger = "heartbeat";
+  it("reuses normal/event/normal CLI bindings for a subagent", async () => {
+    const trigger = "event";
     const sessionKey = "agent:main:subagent:child";
     const cliSessionBindingFacts = { extraSystemPromptStatic: "" };
     const first = await fixture.prepare({ sessionKey, cliSessionBindingFacts });

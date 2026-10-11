@@ -1,7 +1,4 @@
 import crypto from "node:crypto";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { CHANNEL_IDS } from "../channels/ids.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { PluginConfigUiHint } from "../plugins/manifest-types.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
@@ -253,27 +250,7 @@ function applyMetadataHints(
     mergeRelativeHints(basePath, channel.configUiHints);
   }
 
-  const channelList = listHeartbeatTargetChannels(channels);
-  const channelHelp = channelList.length ? ` Known channels: ${channelList.join(", ")}.` : "";
-  const help = `Delivery target ("owner", "last", "none", or a channel id).${channelHelp}`;
-  const paths = ["agents.defaults.heartbeat.target", "agents.entries.*.heartbeat.target"];
-  for (const path of paths) {
-    const current = next[path] ?? {};
-    next[path] = {
-      ...current,
-      help: current.help ?? help,
-      placeholder: current.placeholder ?? "owner",
-    };
-  }
   return next;
-}
-
-function listHeartbeatTargetChannels(channels: ChannelUiMetadata[]): string[] {
-  return uniqueStrings(
-    [...CHANNEL_IDS, ...channels.map((channel) => channel.id)]
-      .map(normalizeLowercaseStringOrEmpty)
-      .filter(Boolean),
-  );
 }
 
 /** Mutate a caller-owned schema; cached inputs must be cloned before merging. */

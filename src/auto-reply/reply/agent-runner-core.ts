@@ -48,12 +48,7 @@ import { hasBlockReplyDeliveryCustody } from "./block-reply-delivery.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery-state.js";
-import {
-  type FollowupRun,
-  kickFollowupDrainIfIdle,
-  type QueueSettings,
-  scheduleFollowupDrain,
-} from "./queue.js";
+import { type FollowupRun, type QueueSettings, scheduleFollowupDrain } from "./queue.js";
 import { normalizeReplyPayloadDirectives, type DirectBlockDelivery } from "./reply-delivery.js";
 import {
   buildRestartLifecycleReplyText,
@@ -336,7 +331,6 @@ export async function handleReplyAgentRunError(
   error: unknown,
   context: {
     resolveVisibleReplyDelivery: () => Promise<boolean>;
-    isHeartbeat: boolean;
     replyExpectation: ReplyExpectation;
     isRestartRecoveryArmed: () => Promise<boolean>;
     replyOperation: ReplyOperation;
@@ -347,7 +341,6 @@ export async function handleReplyAgentRunError(
 ): Promise<ReplyPayload | undefined> {
   const {
     resolveVisibleReplyDelivery,
-    isHeartbeat,
     replyExpectation,
     isRestartRecoveryArmed,
     replyOperation,
@@ -411,7 +404,7 @@ export async function handleReplyAgentRunError(
     return returnWithQueuedFollowupDrain(knownFailurePayload);
   }
   const visibleReplyDelivered = await resolveVisibleReplyDelivery();
-  if (!isHeartbeat && visibleReplyDelivered && !replyOperation.abortSignal.aborted) {
+  if (visibleReplyDelivered && !replyOperation.abortSignal.aborted) {
     replyOperation.fail("run_failed", error);
     return returnWithQueuedFollowupDrain(
       buildTerminalAgentRunFailureReplyPayload({ replyExpectation, visibleReplyDelivered }),
@@ -427,7 +420,6 @@ export async function handleReplyAgentRunError(
 export async function cleanupReplyAgentRun(context: {
   blockReplyPipeline: BlockReplyPipeline | null;
   clearRestartRecoveryDeliveryClaim: () => Promise<void>;
-  isHeartbeat: boolean;
   providedReplyOperation: ReplyOperation | undefined;
   queueKey: string;
   replyOperation: ReplyOperation;
@@ -439,7 +431,6 @@ export async function cleanupReplyAgentRun(context: {
   const {
     blockReplyPipeline,
     clearRestartRecoveryDeliveryClaim,
-    isHeartbeat,
     providedReplyOperation,
     queueKey,
     replyOperation,
@@ -459,16 +450,11 @@ export async function cleanupReplyAgentRun(context: {
     );
   }
   if (shouldDrainQueuedFollowupsAfterClear) {
-    if (isHeartbeat) {
-      // Heartbeat-scoped options and dispatch must never run queued user turns after a restart.
-      runAfterReplyOperationClear(replyOperation, () => kickFollowupDrainIfIdle(queueKey));
-    } else {
-      scheduleFollowupDrainAfterReplyOperationClear({
-        operation: replyOperation,
-        queueKey,
-        runFollowup: runFollowupTurn,
-      });
-    }
+    scheduleFollowupDrainAfterReplyOperationClear({
+      operation: replyOperation,
+      queueKey,
+      runFollowup: runFollowupTurn,
+    });
   }
   if (!providedReplyOperation) {
     replyOperation.complete();

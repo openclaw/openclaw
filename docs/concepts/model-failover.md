@@ -461,7 +461,7 @@ Session model changes are shared state. The active runner, `/model` command, com
 Live model switching follows these rules:
 
 - Only explicit user-driven model changes mark a pending live switch. That includes `/model`, `session_status(model=...)`, and `sessions.patch`.
-- System-driven model changes such as fallback rotation, heartbeat overrides, or compaction never mark a pending live switch on their own.
+- System-driven model changes such as fallback rotation, automation overrides, or compaction never mark a pending live switch on their own.
 - User-driven model overrides are treated as exact selections for fallback policy. An unreachable selected provider therefore surfaces as a failure, instead of being masked by `agents.defaults.model.fallbacks`.
 - Runtime fallback candidates remain turn-local. The next turn starts from the current selected model, including a manual selection that arrived during the previous run.
 - Previously stored auto fallback overrides remain supported: OpenClaw periodically checks their configured origin and clears the override when it recovers. `/new`, `/reset`, and `sessions.reset` clear auto-sourced overrides immediately.

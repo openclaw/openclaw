@@ -2,10 +2,16 @@
 import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as modelThinkingDefault from "../agents/model-thinking-default.js";
 import { SessionManager } from "../agents/sessions/index.js";
 import * as thinking from "../auto-reply/thinking.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
@@ -117,12 +123,23 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         path.join(home, ".openclaw", "agents", "{agentId}", "sessions", "sessions.json"),
         {
           agents: {
+            ownership: "explicit",
             defaults: { workspace: path.join(home, "default-workspace") },
             entries: { main: {}, [agentId]: { workspace: workspaceDir } },
           },
         },
       );
 
+      const previousConfig = getRuntimeConfigSnapshot();
+      const previousSource = getRuntimeConfigSourceSnapshot();
+      onTestFinished(() => {
+        if (previousConfig) {
+          setRuntimeConfigSnapshot(previousConfig, previousSource ?? undefined);
+        } else {
+          clearRuntimeConfigSnapshot();
+        }
+      });
+      setRuntimeConfigSnapshot(cfg);
       const res = await runCronIsolatedAgentTurn({
         deliveryAttemptFence: null,
         cfg,

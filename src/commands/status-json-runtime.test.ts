@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
     },
   })),
   resolveStatusRuntimeSnapshot: vi.fn(),
+  resolveStatusLastHeartbeat: vi.fn(),
 }));
 
 vi.mock("../state/backup-run-records.js", () => ({
@@ -26,8 +27,10 @@ vi.mock("./status-json-payload.ts", () => ({
   buildStatusJsonPayload: mocks.buildStatusJsonPayload,
 }));
 
+// mock-isolation: Compose the supplied status snapshot without Gateway RPCs, service discovery, or provider credential probes.
 vi.mock("./status-runtime-shared.ts", () => ({
   resolveStatusRuntimeSnapshot: mocks.resolveStatusRuntimeSnapshot,
+  resolveStatusLastHeartbeat: mocks.resolveStatusLastHeartbeat,
 }));
 
 function createScan() {
@@ -76,12 +79,12 @@ function requireStatusPayloadInput() {
 describe("status-json-runtime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.resolveStatusLastHeartbeat.mockResolvedValue({ status: "ok" });
     vi.spyOn(performance, "now").mockReturnValue(0);
     mocks.resolveStatusRuntimeSnapshot.mockResolvedValue({
       securityAudit: { summary: { critical: 1 } },
       usage: { providers: [] },
       health: { ok: true },
-      lastHeartbeat: { status: "ok" },
       gatewayService: { label: "LaunchAgent" },
       nodeService: { label: "node" },
     });
@@ -176,7 +179,6 @@ describe("status-json-runtime", () => {
       securityAudit: undefined,
       usage: undefined,
       health: undefined,
-      lastHeartbeat: null,
       gatewayService: { label: "LaunchAgent" },
       nodeService: { label: "node" },
     });
@@ -208,6 +210,7 @@ describe("status-json-runtime", () => {
     expect(payloadInput.usage).toBeUndefined();
     expect(payloadInput.health).toBeUndefined();
     expect(payloadInput.lastHeartbeat).toBeNull();
+    expect(mocks.resolveStatusLastHeartbeat).not.toHaveBeenCalled();
     expect(payloadInput.pluginCompatibility).toBeUndefined();
   });
 
@@ -216,7 +219,6 @@ describe("status-json-runtime", () => {
       securityAudit: undefined,
       usage: undefined,
       health: { error: "gateway health probe timed out" },
-      lastHeartbeat: { status: "ok" },
       gatewayService: { label: "LaunchAgent" },
       nodeService: { label: "node" },
     });

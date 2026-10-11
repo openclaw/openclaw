@@ -294,6 +294,23 @@ export function createLazyGatewayCronState(
 
   return {
     cron,
+    deferHookWake: async (opts) => {
+      const generation = lifecycleGeneration;
+      const commitGuard = () => {
+        opts.commitGuard();
+        if (stopped || lifecycleGeneration !== generation) {
+          throw new Error("Scheduled Hook wake owner changed; retry the request");
+        }
+      };
+      commitGuard();
+      const current = await load();
+      commitGuard();
+      const defer = current.state.deferHookWake;
+      if (!defer) {
+        throw new Error("Scheduled Hook wake admission is unavailable; restart the Gateway");
+      }
+      return await defer({ ...opts, commitGuard });
+    },
     storePath,
     cronEnabled,
     prepareExitWatcherHandoff: async (): Promise<GatewayCronExitWatcherHandoff | undefined> => {
@@ -310,15 +327,12 @@ export function createLazyGatewayCronState(
         },
       };
     },
-    // Reload rules invoke these hooks on whatever cronState is live; the lazy
-    // proxy must forward every GatewayCronState member or hot reloads silently
-    // no-op until a gateway restart (system-owned cron cadence changes never applied).
+    // Reload hooks follow the serving lazy owner.
     reconcileExitWatchers: bindCron(({ state }) => state.reconcileExitWatchers.bind(state)),
     reconcileStreamWatchers: bindCron(({ state }) => state.reconcileStreamWatchers.bind(state)),
     async stopStreamWatchers() {
       // Nothing to stop before the heavy cron service is built.
       await loaded?.state.stopStreamWatchers();
     },
-    reconcileSystemJobs: bindCron(({ state }) => state.reconcileSystemJobs.bind(state)),
   };
 }

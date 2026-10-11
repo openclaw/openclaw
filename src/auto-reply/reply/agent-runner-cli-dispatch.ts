@@ -202,6 +202,8 @@ type RunCliAgentWithLifecycleParams = {
   runParams: RunCliAgentInternalParams;
   startedAt?: number;
   onAgentRunStart?: () => void;
+  /** Scheduled admission must precede lifecycle publication and native preparation. */
+  deferLifecycleStartUntilExecution?: true;
   suppressAssistantBridge?: boolean;
   /**
    * Stamped before every delivered CLI progress event (assistant, reasoning,
@@ -290,16 +292,26 @@ async function runCliAgentWithLifecycleInternal(
     fastModeAutoProgressState.offAnnounced = true;
     await emitFastModeAutoProgress(next);
   };
-  params.onAgentRunStart?.();
-  emitAgentEvent({
-    runId: params.runId,
-    ...(params.runParams.agentId ? { agentId: params.runParams.agentId } : {}),
-    ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
-    ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
-    ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
-    stream: "lifecycle",
-    data: { phase: "start", startedAt },
-  });
+  let lifecycleStarted = false;
+  const startLifecycle = () => {
+    if (lifecycleStarted) {
+      return;
+    }
+    params.onAgentRunStart?.();
+    lifecycleStarted = true;
+    emitAgentEvent({
+      runId: params.runId,
+      ...(params.runParams.agentId ? { agentId: params.runParams.agentId } : {}),
+      ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
+      ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
+      ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
+      stream: "lifecycle",
+      data: { phase: "start", startedAt },
+    });
+  };
+  if (!params.deferLifecycleStartUntilExecution) {
+    startLifecycle();
+  }
   const progressStartOrder = createAgentEventDeliveryStartOrder({
     preserveCallbackStartOrder: params.preserveProgressCallbackStartOrder === true,
   });
@@ -456,6 +468,16 @@ async function runCliAgentWithLifecycleInternal(
   try {
     const rawResult = await runCliAgent({
       ...params.runParams,
+      ...(params.deferLifecycleStartUntilExecution
+        ? {
+            onExecutionStarted: async () => {
+              await params.runParams.onExecutionStarted?.();
+              params.runParams.abortSignal?.throwIfAborted();
+              params.runParams.assertCurrent?.();
+              startLifecycle();
+            },
+          }
+        : {}),
       emitCommentaryText: params.runParams.emitCommentaryText ?? Boolean(params.onCommentaryText),
     });
     const restartAbortReason = params.runParams.abortSignal?.reason;

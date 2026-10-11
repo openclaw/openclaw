@@ -97,7 +97,6 @@ export function maybeNotifyOnExit(
       sessionKey: eventSessionKey,
       contextKey: `exec:${session.id}`,
       deliveryContext: session.notifyDeliveryContext,
-      fromConversationTurn: session.notifyFromConversationTurn,
     },
     readExecRequestOwners(session),
   );

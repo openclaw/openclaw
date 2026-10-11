@@ -28,12 +28,12 @@ shared `message` tool. Your plugin owns:
   chats, thread ids, and parent fallbacks
 - **Outbound** - sending text, media, and polls to the platform
 - **Threading** - how replies are threaded
-- **Heartbeat typing** - optional typing/busy signals for heartbeat delivery
-  targets
+- **Recovery typing** - guarded typing/busy signals for resumed conversations;
+  the channel adapter retains its historical `heartbeat` property name
 - **Formatting contract** - optional `agentPrompt.inboundFormattingHints`,
   resolved per delivering account. Despite its name, core gives it to every
   OpenClaw agent turn whose visible text reaches the channel: replies,
-  heartbeats, cron announces, subagent announces, and cron runs without a
+  cron announces, subagent announces, and cron runs without a
   reply route that can send with the `message` tool (for example
   `delivery.mode: "none"`). Such a run uses the message tool's default
   channel: its current channel, or the only configured channel. A `message`

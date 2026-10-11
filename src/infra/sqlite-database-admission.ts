@@ -656,6 +656,18 @@ export function hasSqliteDatabaseSchemaAdmissionForIdentity(
   return state.registry.hasSchemaAdmissionForIdentity(physicalIdentity);
 }
 
+/** Consume native write settlement without opening a handle or observing the pathname. */
+export function readSqliteDatabaseWriteRevisionForIdentity(
+  physicalIdentity: DatabaseFileIdentity,
+): number | undefined {
+  if (!physicalIdentity.key.startsWith("file:") || physicalIdentity.birthtime === undefined) {
+    return undefined;
+  }
+  const key = `${physicalIdentity.key.slice("file:".length)}:${physicalIdentity.birthtime}`;
+  const record = state.registry.records.get(key);
+  return record && !isRetired(record) ? readWriteRevision(record) : undefined;
+}
+
 export function captureSqliteDatabaseAdmissions(
   cursor?: SqliteDatabaseAdmissionCursor,
   scope?: { location?: string; admissions?: SqliteDatabaseAdmissions },
