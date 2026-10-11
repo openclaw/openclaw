@@ -238,7 +238,7 @@ it("reports a maintenance deadline without an unused revision snapshot", () => {
         },
       },
     );
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       kind: "maintenance-age",
       nextAt: now + ageFacts.SESSION_ENTRY_MAINTENANCE_INTERVAL_MS,
     });

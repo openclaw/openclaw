@@ -13,14 +13,14 @@ type Methods = Pick<AssistantDockOwner, "openSession" | "closeSession"> & {
   toggle(): void;
   handleToggleRequest(event: Event): void;
 };
-export type OpenClawAssistantPanel = SolidBridgeElement<AssistantPanelProps, Methods> & {
+type OpenClawAssistantPanel = SolidBridgeElement<AssistantPanelProps, Methods> & {
   readonly openSessionKey: string | null;
   readonly assistantPanelOpen: boolean;
 };
 
 // The host outlives context-only Solid remounts; preserve its dock intent.
 const controls = new WeakMap<HTMLElement, AssistantPanelController>();
-export const AssistantPanel = defineSolidBridge<AssistantPanelProps, Methods>(
+defineSolidBridge<AssistantPanelProps, Methods>(
   "openclaw-assistant-panel",
   (props, element) => {
     // A standalone bridge can connect before the application provider exists.
