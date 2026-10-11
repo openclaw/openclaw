@@ -257,7 +257,7 @@ describe("dispatch Stop before provider allocation", () => {
         const stopped = await stopping;
         if (outcome === "cancel" || outcome === "incarnation") {
           expect.soft(moved).toMatchObject({ state: "local", generation: local?.generation });
-          expect.soft(placements.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
+          expect.soft(await placements.getPlacementMoveAsync(REQUEST.sessionId)).toBeUndefined();
           if (outcome === "incarnation") {
             // Move reports the old source's committed cleanup; Stop cannot use that
             // completion as authority over the replacement session incarnation.
@@ -271,7 +271,7 @@ describe("dispatch Stop before provider allocation", () => {
           expect(moved).toBeInstanceOf(Error);
           if (outcome === "preflight-error" || outcome === "canceled-preflight-error") {
             expect(moved).toMatchObject({ message: "destination preflight rejected" });
-            expect(placements.getPlacementMove(REQUEST.sessionId)?.lastError).toBe(
+            expect((await placements.getPlacementMoveAsync(REQUEST.sessionId))?.lastError).toBe(
               "destination preflight rejected",
             );
             if (outcome === "canceled-preflight-error") {

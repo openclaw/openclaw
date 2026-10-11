@@ -152,6 +152,16 @@ current policy, pending canonical validation, and current-row reads remain
 with the reader. When physical admission is already known, the first canonical
 read enters its snapshot before policy reads, avoiding discarded probes.
 
+Gateway placement moves read their intents through the existing worker operation.
+Move preparation carries the coordinator's captured source; the final worker
+transition still compares the exact move and placement before committing. Approval
+decisions, allow-once consumption, expiry, and placement transitions return their
+committed rows from the write instead of selecting them again. Group catalog
+snapshots read ordering and defaults together, and group mutation checks membership
+once while retaining the final caller authorization check. These changes preserve
+schemas, stored bytes, permissions, and update behavior. Released synchronous SDK
+approval and placement contracts retain their native effect guards.
+
 ## Config CLI ownership
 
 ### Non-session bookkeeping
