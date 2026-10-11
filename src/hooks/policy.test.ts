@@ -47,6 +47,37 @@ describe("hook policy", () => {
     });
 
     it.each([
+      ["session-memory", "openclaw-bundled", undefined],
+      ["session-memory", "openclaw-managed", undefined],
+      ["memory-config", "openclaw-bundled", "memory-config"],
+    ] as const)(
+      "prevents workspace hooks from claiming the %s key of a %s hook",
+      (key, source, keptHookKey) => {
+        const kept = makeHookEntry("session-memory", source);
+        if (keptHookKey) {
+          kept.metadata = { events: ["command:new"], hookKey: keptHookKey };
+        }
+        const workspace = makeHookEntry("repo-hook", "openclaw-workspace");
+        workspace.metadata = { events: ["command:new"], hookKey: key };
+        const collisions: unknown[] = [];
+
+        const resolved = resolveHookEntries([kept, workspace], {
+          onCollisionIgnored: (collision) => collisions.push(collision),
+        });
+        expect(resolved).toEqual([kept]);
+        expect(collisions).toEqual([{ name: "repo-hook", kept, ignored: workspace }]);
+      },
+    );
+
+    it("keeps workspace hooks whose key is not claimed by another source", () => {
+      const bundled = makeHookEntry("session-memory", "openclaw-bundled");
+      const workspace = makeHookEntry("repo-hook", "openclaw-workspace");
+      workspace.metadata = { events: ["command:new"], hookKey: "repo-key" };
+
+      expect(resolveHookEntries([bundled, workspace])).toEqual([bundled, workspace]);
+    });
+
+    it.each([
       ["openclaw-bundled", 0],
       ["openclaw-plugin", 0],
       ["openclaw-managed", 1],
