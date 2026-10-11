@@ -119,16 +119,43 @@ describe("doctor-contract-registry module loader", () => {
       pins: false,
     },
     {
+      name: "deferred trusted official owner",
+      ownerId: "feishu",
+      trusted: true,
+      warning: undefined,
+      explicit: false,
+      pins: true,
+    },
+    {
+      name: "deferred trusted owner with authored endpoints",
+      ownerId: "feishu",
+      trusted: true,
+      warning: undefined,
+      explicit: true,
+      pins: true,
+    },
+    {
+      name: "deferred trusted owner excluded by the allowlist",
+      ownerId: "feishu",
+      trusted: true,
+      restricted: true,
+      warning: undefined,
+      explicit: false,
+      pins: false,
+    },
+    {
       name: "deferred replacement owner",
       ownerId: "custom-feishu",
       warning: undefined,
       explicit: false,
       pins: false,
     },
-  ])("preserves historical webhook ownership for $name", ({ ownerId, warning, explicit, pins }) => {
+  ])("preserves historical webhook ownership for $name", (scenario) => {
+    const { ownerId, trusted, restricted, warning, explicit, pins } = scenario;
     const config: OpenClawConfig = {
       meta: { migrations: { webhookListeners: { telegram: [] } } },
       gateway: { port: 18789 },
+      ...(restricted ? { plugins: { allow: ["other-plugin"] } } : {}),
       channels: {
         feishu: {
           enabled: true,
@@ -176,6 +203,7 @@ describe("doctor-contract-registry module loader", () => {
         channels: ["feishu"],
         providers: [],
         origin: "global",
+        trustedOfficialInstall: trusted,
         doctorContract: { configRepair: true },
       });
     }
@@ -229,7 +257,12 @@ describe("doctor-contract-registry module loader", () => {
               },
             },
           }
-        : original,
+        : restricted
+          ? {
+              ...original,
+              meta: { migrations: { webhookListeners: { telegram: [], feishu: [] } } },
+            }
+          : original,
     );
     expect(result.warnings).toEqual(warning ? [warning] : undefined);
     expect(inspected).not.toHaveBeenCalled();

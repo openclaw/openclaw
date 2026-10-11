@@ -189,7 +189,7 @@ check the per-agent setting if the model default still does not take effect.
 - Directive-only message toggles whether thinking blocks are shown in replies.
 - When enabled, reasoning is sent as a **separate message** prefixed with `Thinking`.
 - `stream`: streams reasoning while the reply is generating when the active channel supports reasoning previews, then sends the final answer without reasoning. Channel previews remove recognized internal runtime context before delivery; the original reasoning remains unchanged for model replay.
-- Control UI shows native-provider reasoning during generation for `on` and `stream`, with **View → Reasoning** enabled. In `on`, the preview hands off to the saved reasoning; in `stream`, it disappears when the run ends.
+- Control UI shows native-provider reasoning during generation for `on` and `stream`, with **View → Reasoning** enabled. Each tool step keeps the reasoning that preceded it while later steps run. In `on`, each preview hands off to its saved reasoning without duplication; in `stream`, all previews disappear when the run ends.
 - Control UI history shows saved reasoning only for `on`, with **View → Reasoning** enabled. `off` and `stream` keep it hidden, including after reload.
 - Visible Control UI reasoning preserves Markdown paragraphs and fenced code blocks, including blank lines inside code.
 - Alias: `/reason`.

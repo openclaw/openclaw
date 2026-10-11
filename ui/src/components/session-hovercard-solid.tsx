@@ -1,5 +1,4 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
-import { spread } from "@solidjs/web";
 import { createMemo, For, Show, untrack } from "solid-js";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
@@ -21,10 +20,11 @@ import { participantLabel, formatSessionAge, sessionAttribution } from "./sessio
 import { sessionOwnerInitials } from "./session-owner-chip.ts";
 import { ProgressCardMarkdown } from "./session-progress-card-view.tsx";
 import { progressCardHeadsUp } from "./session-progress-card.ts";
+import { ChannelAvatar } from "./solid/channel-avatar.tsx";
 import { Icon } from "./solid/icon.tsx";
+import { ViewerAvatar } from "./solid/viewer-facepile.tsx";
 import "./session-hovercard.css";
 import "./tooltip.ts";
-import "./viewer-facepile.ts";
 
 registerGitHubEnglish();
 
@@ -37,7 +37,6 @@ export type SessionHovercardInput = SessionHovercardContextInput & {
   pullRequests?: ControlUiSessionPullRequestSnapshot;
   progressCard?: ProgressCard | null;
 };
-let channelAvatarElementLoad: Promise<unknown> | undefined;
 const PULL_REQUEST_STATE_ICONS = {
   open: "gitPullRequest",
   draft: "gitPullRequestDraft",
@@ -111,36 +110,6 @@ function ParticipantMenu(props: {
 }
 
 type Attribution = NonNullable<ReturnType<typeof sessionAttribution>>;
-function ChannelAvatar(props: {
-  attribution: Attribution;
-  row?: SidebarSessionHovercardRow;
-  auth?: SessionHovercardAvatarAuth;
-}) {
-  channelAvatarElementLoad ??= import("./channel-avatar.ts");
-  const initials = createMemo(() => {
-    const creator = props.attribution.creator;
-    return creator ? sessionOwnerInitials(creator) : "";
-  });
-  const fallback = document.createElement("span");
-  spread(fallback, {
-    class: "session-hovercard__creator-avatar-fallback",
-    "aria-hidden": "true",
-    get children() {
-      return initials();
-    },
-  });
-
-  return (
-    <openclaw-channel-avatar
-      class="session-hovercard__creator-avatar"
-      prop:routeUrl={props.row?.channelAvatarUrl}
-      prop:authTokens={props.auth?.authTokens ?? []}
-      prop:authReady={props.auth?.authReady ?? false}
-      prop:fallback={initials() ? fallback : undefined}
-      aria-hidden="true"
-    />
-  );
-}
 
 function AttributionContent(props: {
   attribution: Attribution;
@@ -148,6 +117,10 @@ function AttributionContent(props: {
   auth?: SessionHovercardAvatarAuth;
   routing?: PersonActivityRouting;
 }) {
+  const creatorInitials = createMemo(() => {
+    const creator = props.attribution.creator;
+    return creator ? sessionOwnerInitials(creator) : "";
+  });
   const primaryActivity = () =>
     props.attribution.primaryIdentity?.type === "profile"
       ? personActivityLink(
@@ -239,16 +212,16 @@ function AttributionContent(props: {
                   const initial = untrack(person);
                   const current = () => avatarPerson() ?? initial;
                   return (
-                    <openclaw-viewer-avatar
+                    <ViewerAvatar
                       class="session-hovercard__creator-avatar"
-                      prop:user={{
+                      user={{
                         id: current().id ?? current().identity?.id ?? "",
                         name: current().label,
                         avatarUrl: current().avatarUrl,
                         watchedSessions: [],
                       }}
-                      prop:markAsViewer={false}
-                      prop:identity={current().identity}
+                      markAsViewer={false}
+                      identity={current().identity}
                       variant="session"
                       aria-hidden="true"
                     />
@@ -257,7 +230,19 @@ function AttributionContent(props: {
               </Show>
             }
           >
-            <ChannelAvatar attribution={props.attribution} row={props.row} auth={props.auth} />
+            <ChannelAvatar
+              class="session-hovercard__creator-avatar"
+              routeUrl={props.row?.channelAvatarUrl}
+              authTokens={props.auth?.authTokens ?? []}
+              authReady={props.auth?.authReady ?? false}
+              aria-hidden="true"
+            >
+              <Show when={creatorInitials()}>
+                <span class="session-hovercard__creator-avatar-fallback" aria-hidden="true">
+                  {creatorInitials()}
+                </span>
+              </Show>
+            </ChannelAvatar>
           </Show>
         </PersonAvatarLink>
         <Show when={remaining().length > 0}>

@@ -12,22 +12,12 @@ import type {
 import { SessionMenuItem } from "./session-menu-item.tsx";
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import { Icon } from "./solid/icon.tsx";
+import { SessionOwnerAvatar } from "./solid/session-owner-chip.tsx";
 
 function OwnerAvatar(props: { owner: SessionOwnerOption }) {
   return (
     <span slot="icon" class="session-menu__avatar" aria-hidden="true">
-      <openclaw-viewer-avatar
-        prop:identity={props.owner.identity}
-        prop:user={{
-          id: props.owner.id,
-          name: props.owner.label,
-          avatarUrl: props.owner.avatarUrl,
-          watchedSessions: [],
-        }}
-        prop:markAsViewer={false}
-        variant="session"
-        aria-hidden="true"
-      />
+      <SessionOwnerAvatar owner={props.owner} />
     </span>
   );
 }

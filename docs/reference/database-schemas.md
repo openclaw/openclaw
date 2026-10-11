@@ -121,7 +121,10 @@ commits do not repeat schema validation. Schemas, stored bytes, and update behav
 are unchanged.
 
 Admitted schema facts survive data-only transaction settlement. Committed write
-receipts invalidate cached row facts. Transaction-local views of
+receipts invalidate cached row facts. A settled write releases its receipt fence
+even when an independent read cursor remains open on the same connection. Active
+write cursors and explicit transactions retain their fence until settlement.
+This changes no schema, stored data, or update behavior. Transaction-local views of
 schema facts end with their SQLite snapshot; the next transaction consumes the
 process's published facts without repeating validation.
 

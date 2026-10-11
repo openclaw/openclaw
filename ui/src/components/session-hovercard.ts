@@ -277,9 +277,9 @@ function renderSessionAttribution({
           .routeUrl=${row.channelAvatarUrl}
           .authTokens=${avatarAuth?.authTokens ?? []}
           .authReady=${avatarAuth?.authReady ?? false}
-          .fallback=${avatarFallback}
           aria-hidden="true"
-        ></openclaw-channel-avatar>`
+          >${avatarFallback}</openclaw-channel-avatar
+        >`
       : avatarPerson
         ? html`<openclaw-viewer-avatar
             class="session-hovercard__creator-avatar"

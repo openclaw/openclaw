@@ -19,6 +19,11 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import {
+  executeSharedStateCommand,
+  prepareSharedStateCommand,
+} from "../state/openclaw-state-worker-runtime.js";
 import {
   type DeferredPluginMigration,
   assertDeferredPluginMigrationsCurrent,
@@ -35,6 +40,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
+import { runWithSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import { recordLegacyMigrationRun } from "./state-migrations.receipts.js";
 
 const log = vi.hoisted(() => ({ warn: vi.fn(), info: vi.fn() }));
@@ -413,6 +419,31 @@ describe("deferred configured-plugin migrations", () => {
       resolvedPluginIds: ["fixture-plugin"],
     });
     expect(readFixtureMetadata()).toEqual(unrelated);
+  });
+
+  it("serves the published 2026.10.1 updater's shared-state pending read after replacement", async () => {
+    const { env } = fixture();
+    await recordDeferredPluginMigrations({ env, pending: [pending] });
+    await closeOpenClawStateDatabaseAsync();
+    const context = captureOpenClawStateWorkerContext({ env });
+    await prepareSharedStateCommand("plugins.deferredMigrations.read");
+    const refuseWriter = vi.fn(() => {
+      throw new Error("Writer admission refused");
+    });
+    // 2026.10.1 sends this exact command to whichever shared-state worker its
+    // stable worker entry loads, which is this package after replacement.
+    const reply = runWithSqliteWorkerStateContext(context, () =>
+      executeSharedStateCommand(
+        { type: "plugins.deferredMigrations.read", input: { artifactPreservingReadOnly: true } },
+        { databasePath: context.admission.databasePath },
+        refuseWriter,
+        refuseWriter,
+        refuseWriter,
+        refuseWriter,
+      ),
+    );
+    expect(reply).toEqual([pending]);
+    expect(refuseWriter).not.toHaveBeenCalled();
   });
 
   it("retains pending migrations across restart and resolves only the completed plugin", async () => {

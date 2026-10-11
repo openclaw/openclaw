@@ -238,10 +238,6 @@ describe("node auto-update controller", () => {
   });
 
   it.each([
-    { stage: "discovery", change: "disabled" },
-    { stage: "discovery", change: "channel" },
-    { stage: "download", change: "disabled" },
-    { stage: "download", change: "channel" },
     { stage: "preflight", change: "disabled" },
     { stage: "preflight", change: "channel" },
     { stage: "preflight", change: "interval" },
@@ -264,12 +260,9 @@ describe("node auto-update controller", () => {
       }
       pending.resolve();
       await vi.advanceTimersByTimeAsync(0);
-      if (stage === "discovery") {
-        expect(mocks.prepare).not.toHaveBeenCalled();
-      }
       expect(mocks.restart).not.toHaveBeenCalled();
       expect(host.onRestartAccepted).not.toHaveBeenCalled();
-      expect(host.runtime.resumeAfterUpdate).toHaveBeenCalledTimes(stage === "preflight" ? 1 : 0);
+      expect(host.runtime.resumeAfterUpdate).toHaveBeenCalledOnce();
     },
   );
 

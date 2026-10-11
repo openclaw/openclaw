@@ -624,29 +624,21 @@ export function encodePluginModelCatalogRelativePath(pluginId: string): string {
   return `plugins/${encodeURIComponent(pluginId)}/${PLUGIN_MODEL_CATALOG_FILE}`;
 }
 
-/** Returns true only for canonical profile-relative generated catalog paths. */
-function isPluginModelCatalogRelativePath(relativePath: string): boolean {
-  const parts = relativePath.split(/[\\/]/);
-  return (
-    !path.isAbsolute(relativePath) &&
-    parts.length === 3 &&
-    parts[0] === "plugins" &&
-    parts[1] !== "" &&
-    parts[1] !== "." &&
-    parts[1] !== ".." &&
-    parts[2] === PLUGIN_MODEL_CATALOG_FILE
-  );
-}
-
 /** Decodes the plugin id from a canonical generated catalog path. */
 export function decodePluginModelCatalogRelativePathPluginId(
   relativePath: string,
 ): string | undefined {
-  if (!isPluginModelCatalogRelativePath(relativePath)) {
-    return undefined;
-  }
-  const encodedPluginId = relativePath.split(/[\\/]/)[1];
-  if (!encodedPluginId) {
+  const parts = relativePath.split(/[\\/]/);
+  const encodedPluginId = parts[1];
+  if (
+    path.isAbsolute(relativePath) ||
+    parts.length !== 3 ||
+    parts[0] !== "plugins" ||
+    !encodedPluginId ||
+    encodedPluginId === "." ||
+    encodedPluginId === ".." ||
+    parts[2] !== PLUGIN_MODEL_CATALOG_FILE
+  ) {
     return undefined;
   }
   try {

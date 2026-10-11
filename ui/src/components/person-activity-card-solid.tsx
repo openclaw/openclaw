@@ -22,8 +22,8 @@ import {
 } from "./person-activity-card.ts";
 import { personActivityLink } from "./person-activity-link.ts";
 import { Icon } from "./solid/icon.tsx";
+import { ViewerAvatar } from "./solid/viewer-facepile.tsx";
 import "./elapsed-time.ts";
-import "./viewer-facepile.ts";
 
 function Elapsed(props: {
   timestamp: number;
@@ -199,12 +199,7 @@ export function PersonActivityCard(props: PersonCardInput) {
   return (
     <div class="person-activity-card">
       <header class="person-activity-card__header">
-        <openclaw-viewer-avatar
-          prop:user={props.user}
-          prop:markAsViewer={false}
-          variant="footer"
-          aria-hidden="true"
-        />
+        <ViewerAvatar user={props.user} markAsViewer={false} variant="footer" aria-hidden="true" />
         <div>
           <h2>{facts().label.name}</h2>
           <Show when={facts().observed}>

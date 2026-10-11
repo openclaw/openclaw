@@ -90,22 +90,21 @@ it.skipIf(process.platform === "win32").each(["preparation", "publication"] as c
         fs.renameSync(f.packageRoot, retained);
         fs.mkdirSync(f.packageRoot);
         fs.writeFileSync(manifest, originalManifest);
-        await expect(owner.preflight("retire")).rejects.toThrow("recorded generation");
+        await expect(owner.retire()).rejects.toThrow("Package publication object changed");
         fs.unlinkSync(manifest);
         fs.rmdirSync(f.packageRoot);
         fs.renameSync(retained, f.packageRoot);
         fs.writeFileSync(manifest, '{"name":"openclaw","version":"3.0.0"}');
-        await expect(owner.preflight("retire")).rejects.toThrow(
-          "Package publication object changed",
-        );
+        await expect(owner.retire()).rejects.toThrow("Package publication object changed");
         fs.writeFileSync(manifest, originalManifest);
         // Full fingerprints include manifest metadata, so only identity-only preparation
         // can reuse the repaired version after this deliberate write.
         if (phase === "preparation") {
           fs.writeFileSync(f.launcher, "changed launcher\n");
-          await expect(owner.preflight("retire")).rejects.toThrow("Package launcher changed");
+          await expect(owner.retire()).rejects.toThrow(
+            "Selected package launcher fingerprint changed",
+          );
           fs.writeFileSync(f.launcher, "candidate launcher\n");
-          await expect(owner.preflight("retire")).resolves.toBeUndefined();
           await transaction!.complete({ activationVerified: true }, fence.assertCurrent);
           expect(fs.existsSync(anchor)).toBe(false);
         }

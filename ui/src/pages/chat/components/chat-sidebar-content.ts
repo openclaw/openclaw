@@ -45,7 +45,7 @@ import {
 } from "./chat-attachment-href.ts";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import "./chat-audio-player.ts";
-import "../../../components/mcp-app-panel.ts";
+import "../../../components/solid/mcp-app-panel.tsx";
 import "./chat-video-player.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import { isPdfAttachment } from "./chat-pdf-preview.ts";

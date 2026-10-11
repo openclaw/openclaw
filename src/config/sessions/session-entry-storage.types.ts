@@ -26,5 +26,6 @@ export type ResolvedSessionEntryRow = {
     Partial<Pick<SessionEntryRow, "legacy_acp_migration_json">> & {
       board_present?: SqlBool;
       member_ids_json?: string;
+      window_json?: string | null;
     };
 };
