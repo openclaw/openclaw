@@ -89,13 +89,10 @@ function resolveTargetBoundAccountId(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
   channelPlugin?: ChannelPlugin;
-  args: Record<string, unknown>;
-  agentId?: string;
+  target: string | undefined;
+  agentId: string;
 }): string | undefined {
-  if (!params.agentId) {
-    return undefined;
-  }
-  const target = readTrimmedStringAlias(params.args, ["to", "channelId"]);
+  const target = params.target;
   if (!target) {
     return resolveFirstBoundAccountId({
       cfg: params.cfg,
@@ -115,6 +112,44 @@ function resolveTargetBoundAccountId(params: {
     exactPeerIdAliases,
     peerKind: inferPeerKindForAccountBinding(params.channel, target, params.channelPlugin),
   });
+}
+
+type MessageAccountSelection = {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  channelPlugin?: ChannelPlugin;
+  /** Explicit or caller-default account; wins over every derived account. */
+  accountId?: string | null;
+  agentId?: string;
+  target: string | undefined;
+};
+
+// Selection precedence shared by routing and by callers that must key on the delivery
+// account before routing runs: explicit/caller default, then the agent's target binding.
+function resolveSelectedMessageAccountId(params: MessageAccountSelection): string | undefined {
+  if (params.accountId) {
+    return params.accountId;
+  }
+  return params.agentId
+    ? resolveTargetBoundAccountId({ ...params, agentId: params.agentId })
+    : undefined;
+}
+
+/**
+ * The account a send leaves through when the caller omits one. prepareMessageRoute applies
+ * the channel default only to locally owned sends and leaves omitted input for the Gateway,
+ * which resolves the same channel default (send-account-route.ts), so this applies it
+ * unconditionally. Identity only: never forward the result as an explicit selection.
+ */
+export function resolveEffectiveMessageAccountId(
+  params: MessageAccountSelection,
+): string | undefined {
+  return (
+    resolveSelectedMessageAccountId(params) ??
+    (params.channelPlugin
+      ? resolveChannelDefaultAccountId({ plugin: params.channelPlugin, cfg: params.cfg })
+      : undefined)
+  );
 }
 
 function hasExplicitSingularTargetParam(params: Record<string, unknown>): boolean {
@@ -267,16 +302,14 @@ export async function prepareMessageRoute(params: {
     // aliases still normalize above and remain subject to the shared cross-context policy.
     allowResourceOnly: input.conversationReadOrigin === "direct-operator",
   });
-  let accountId = explicitAccountId ?? input.defaultAccountId;
-  if (!accountId && agentId) {
-    accountId = resolveTargetBoundAccountId({
-      cfg,
-      channel,
-      channelPlugin,
-      args: actionParams,
-      agentId,
-    });
-  }
+  let accountId = resolveSelectedMessageAccountId({
+    cfg,
+    channel,
+    channelPlugin,
+    accountId: explicitAccountId ?? input.defaultAccountId,
+    agentId,
+    target: readTrimmedStringAlias(actionParams, ["to", "channelId"]),
+  });
   const delegatesActionToGateway =
     Boolean(input.gateway) &&
     channelPlugin?.actions?.resolveExecutionMode?.({ action }) === "gateway";

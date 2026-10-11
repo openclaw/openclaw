@@ -62,7 +62,12 @@ type RouteParams = Parameters<typeof resolveOutboundActionRoute>[0];
 function route(
   overrides: Partial<RouteParams> & { args: Record<string, unknown> },
 ): string | undefined {
-  return resolveOutboundActionRoute({ action: "send", channel: "telegram", ...overrides });
+  return resolveOutboundActionRoute({
+    action: "send",
+    channel: "telegram",
+    resolveAccountId: () => undefined,
+    ...overrides,
+  });
 }
 
 describe("resolveOutboundActionRoute canonicalization", () => {
@@ -110,10 +115,14 @@ describe("resolveOutboundActionRoute canonicalization", () => {
     expect(aliased).toBe(current);
   });
 
-  it("keeps the account component in the canonical route", () => {
-    expect(route({ args: { target: "TG:12345", to: "12345" }, accountId: "primary" })).toBe(
+  it("keys on the resolved delivery account, resolved from the target as spelled", () => {
+    // Binding lookups match exact peer ids, so the account resolver sees the caller's
+    // spelling while the key still carries the canonical target.
+    const resolveAccountId = vi.fn(() => "primary");
+    expect(route({ args: { target: "TG:12345", to: "12345" }, resolveAccountId })).toBe(
       "telegram\u0000primary\u000012345",
     );
+    expect(resolveAccountId).toHaveBeenCalledWith({ channel: "telegram", target: "TG:12345" });
   });
 
   it("returns undefined when neither a target nor a current source resolves", () => {
