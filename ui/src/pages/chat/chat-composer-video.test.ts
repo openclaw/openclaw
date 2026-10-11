@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import {
+  createComposerContainer,
   createComposerProps as props,
   findComposerButton as button,
   renderComposerFixture as renderComposer,
@@ -116,7 +117,7 @@ describe("renderChatComposer video", () => {
   it("keeps the same camera stream attached across unrelated rerenders", () => {
     const stream = { getVideoTracks: () => [] } as unknown as MediaStream;
     const replacementStream = { getVideoTracks: () => [] } as unknown as MediaStream;
-    const container = document.createElement("div");
+    const container = createComposerContainer();
     const composerProps = props({
       realtimeTalkStatus: "listening",
       realtimeTalkVideoStream: stream,

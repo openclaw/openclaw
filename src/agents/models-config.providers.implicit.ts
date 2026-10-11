@@ -541,20 +541,17 @@ export async function resolveImplicitProviders(
     resolveProviderApiKey: createProviderApiKeyResolver(...authInputs),
     resolveProviderAuth: createProviderAuthResolver(...authInputs),
   };
+  const inDiscoveryScope = (provider: { pluginId?: string }) =>
+    discoveryPluginIds === undefined ||
+    (provider.pluginId !== undefined && discoveryPluginIds.includes(provider.pluginId));
   const preparedStaticEntries = params.preparedStaticProviderCatalog
-    ? params.preparedStaticProviderCatalog.entries.filter(
-        ({ provider }) =>
-          discoveryPluginIds === undefined ||
-          (provider.pluginId !== undefined && discoveryPluginIds.includes(provider.pluginId)),
+    ? params.preparedStaticProviderCatalog.entries.filter(({ provider }) =>
+        inDiscoveryScope(provider),
       )
     : undefined;
   const preparedProviders =
     params.providerDiscoveryEntriesOnly === true && params.preparedStaticProviderCatalog?.providers
-      ? params.preparedStaticProviderCatalog.providers.filter(
-          (provider) =>
-            discoveryPluginIds === undefined ||
-            (provider.pluginId !== undefined && discoveryPluginIds.includes(provider.pluginId)),
-        )
+      ? params.preparedStaticProviderCatalog.providers.filter(inDiscoveryScope)
       : [];
   const preparedPluginIds = new Set(
     preparedProviders.flatMap((provider) => (provider.pluginId ? [provider.pluginId] : [])),

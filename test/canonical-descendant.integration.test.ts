@@ -170,7 +170,7 @@ async function withFixture(
       key: string,
       entryId: string,
     ) => Promise<{ ok: boolean; key?: string; message?: string }>,
-    revoke: (target: "source" | "child" | "registry", sourceKey: string) => void,
+    revoke: (target: "source" | "child", sourceKey: string) => void,
     admissions: Array<{ recorder: UserTurnTranscriptRecorder; before: unknown[] }>,
     runtime: ReturnType<typeof createPluginRuntimeMock>,
   ) => Promise<void>,
@@ -513,10 +513,6 @@ async function withFixture(
             fixture,
             fork,
             (target, sourceKey) => {
-              if (target === "registry") {
-                markPluginRegistryRetired(registry);
-                return;
-              }
               const key =
                 target === "source"
                   ? sourceKey
@@ -684,9 +680,9 @@ describe("canonical descendant lifecycle through real owners", () => {
   );
 
   it.each(
-    ["source", "child", "registry"].flatMap((target) =>
+    ["source", "child"].flatMap((target) =>
       ["prewrite", "overload", "acknowledged"].map((phase) => ({
-        target: target as "source" | "child" | "registry",
+        target: target as "source" | "child",
         phase,
       })),
     ),
@@ -1000,7 +996,7 @@ describe("canonical descendant lifecycle through real owners", () => {
       }
     });
   }, 180_000);
-  it.each(["source", "child", "registry"] as const)(
+  it.each(["source", "child"] as const)(
     "fences physical fork writes after %s revocation during configuration wait",
     async (target) => {
       await withFixture(async (fixture, fork, revoke) => {
@@ -1044,7 +1040,7 @@ describe("canonical descendant lifecycle through real owners", () => {
     180_000,
   );
 
-  it.each(["source", "child", "registry"] as const)(
+  it.each(["source", "child"] as const)(
     "fences physical fork retries after %s revocation on overload",
     async (target) => {
       await withFixture(async (fixture, fork, revoke) => {
@@ -1068,10 +1064,7 @@ describe("canonical descendant lifecycle through real owners", () => {
     180_000,
   );
 
-  it.each([
-    ["source", 2, 0],
-    ["registry", 1, 1],
-  ] as const)(
+  it.each([["source", 2, 0]] as const)(
     "keeps native archive overload retry within captured rollback after %s revocation",
     async (target, attempts, retained) => {
       await withFixture(async (fixture, fork, revoke) => {
@@ -1101,7 +1094,6 @@ describe("canonical descendant lifecycle through real owners", () => {
   it.each([
     ["source", true],
     ["child", false],
-    ["registry", false],
   ] as const)(
     "uses captured rollback ownership after %s revocation following native fork",
     async (target, rollbackAllowed) => {

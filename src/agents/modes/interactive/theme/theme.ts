@@ -85,13 +85,15 @@ const validateThemeJson = Compile(ThemeJsonSchema);
 
 type ThemeColor = Exclude<keyof ThemeJson["colors"], ThemeBg>;
 
-type ThemeBg =
-  | "selectedBg"
-  | "userMessageBg"
-  | "customMessageBg"
-  | "toolPendingBg"
-  | "toolSuccessBg"
-  | "toolErrorBg";
+const BACKGROUND_COLOR_KEYS = [
+  "selectedBg",
+  "userMessageBg",
+  "customMessageBg",
+  "toolPendingBg",
+  "toolSuccessBg",
+  "toolErrorBg",
+] as const;
+type ThemeBg = (typeof BACKGROUND_COLOR_KEYS)[number];
 
 type ColorMode = "truecolor" | "256color";
 
@@ -380,14 +382,7 @@ function createTheme(themeJson: ThemeJson, mode?: ColorMode, sourcePath?: string
   const resolvedColors = resolveThemeColors(themeJson.colors, themeJson.vars);
   const fgColors: Record<ThemeColor, string | number> = {} as Record<ThemeColor, string | number>;
   const bgColors: Record<ThemeBg, string | number> = {} as Record<ThemeBg, string | number>;
-  const bgColorKeys: Set<string> = new Set([
-    "selectedBg",
-    "userMessageBg",
-    "customMessageBg",
-    "toolPendingBg",
-    "toolSuccessBg",
-    "toolErrorBg",
-  ]);
+  const bgColorKeys: Set<string> = new Set(BACKGROUND_COLOR_KEYS);
   for (const [key, value] of Object.entries(resolvedColors)) {
     if (bgColorKeys.has(key)) {
       bgColors[key as ThemeBg] = value;
@@ -455,72 +450,57 @@ export function highlightCode(code: string, lang?: string): string[] {
   }
 }
 
+const EXTENSION_LANGUAGES: Record<string, string> = Object.fromEntries(
+  Object.entries({
+    typescript: ["ts", "tsx"],
+    javascript: ["js", "jsx", "mjs", "cjs"],
+    python: ["py"],
+    ruby: ["rb"],
+    rust: ["rs"],
+    go: ["go"],
+    java: ["java"],
+    kotlin: ["kt"],
+    swift: ["swift"],
+    c: ["c", "h"],
+    cpp: ["cpp", "cc", "cxx", "hpp"],
+    csharp: ["cs"],
+    php: ["php"],
+    bash: ["sh", "bash", "zsh"],
+    fish: ["fish"],
+    powershell: ["ps1"],
+    sql: ["sql"],
+    html: ["html", "htm"],
+    css: ["css"],
+    scss: ["scss"],
+    sass: ["sass"],
+    less: ["less"],
+    json: ["json"],
+    yaml: ["yaml", "yml"],
+    toml: ["toml"],
+    xml: ["xml"],
+    markdown: ["md", "markdown"],
+    dockerfile: ["dockerfile"],
+    makefile: ["makefile"],
+    cmake: ["cmake"],
+    lua: ["lua"],
+    perl: ["perl"],
+    r: ["r"],
+    scala: ["scala"],
+    clojure: ["clj"],
+    elixir: ["ex", "exs"],
+    erlang: ["erl"],
+    haskell: ["hs"],
+    ocaml: ["ml"],
+    vim: ["vim"],
+    graphql: ["graphql"],
+    protobuf: ["proto"],
+    hcl: ["tf", "hcl"],
+  }).flatMap(([language, extensions]) =>
+    extensions.map((extension) => [extension, language] as const),
+  ),
+);
+
 export function getLanguageFromPath(filePath: string): string | undefined {
   const ext = filePath.split(".").pop()?.toLowerCase();
-  if (!ext) {
-    return undefined;
-  }
-
-  const extToLang: Record<string, string> = {
-    ts: "typescript",
-    tsx: "typescript",
-    js: "javascript",
-    jsx: "javascript",
-    mjs: "javascript",
-    cjs: "javascript",
-    py: "python",
-    rb: "ruby",
-    rs: "rust",
-    go: "go",
-    java: "java",
-    kt: "kotlin",
-    swift: "swift",
-    c: "c",
-    h: "c",
-    cpp: "cpp",
-    cc: "cpp",
-    cxx: "cpp",
-    hpp: "cpp",
-    cs: "csharp",
-    php: "php",
-    sh: "bash",
-    bash: "bash",
-    zsh: "bash",
-    fish: "fish",
-    ps1: "powershell",
-    sql: "sql",
-    html: "html",
-    htm: "html",
-    css: "css",
-    scss: "scss",
-    sass: "sass",
-    less: "less",
-    json: "json",
-    yaml: "yaml",
-    yml: "yaml",
-    toml: "toml",
-    xml: "xml",
-    md: "markdown",
-    markdown: "markdown",
-    dockerfile: "dockerfile",
-    makefile: "makefile",
-    cmake: "cmake",
-    lua: "lua",
-    perl: "perl",
-    r: "r",
-    scala: "scala",
-    clj: "clojure",
-    ex: "elixir",
-    exs: "elixir",
-    erl: "erlang",
-    hs: "haskell",
-    ml: "ocaml",
-    vim: "vim",
-    graphql: "graphql",
-    proto: "protobuf",
-    tf: "hcl",
-    hcl: "hcl",
-  };
-
-  return extToLang[ext];
+  return ext ? EXTENSION_LANGUAGES[ext] : undefined;
 }

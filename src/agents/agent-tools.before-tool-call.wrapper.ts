@@ -219,13 +219,7 @@ export function recordStructuredReplayTrustForToolCall(
     return;
   }
   recordStructuredReplaySafeToolCall(toolCallId, runId);
-  while (structuredReplaySafeToolCallIds.size > MAX_TRACKED_ADJUSTED_PARAMS) {
-    const oldest = structuredReplaySafeToolCallIds.values().next().value;
-    if (!oldest) {
-      break;
-    }
-    structuredReplaySafeToolCallIds.delete(oldest);
-  }
+  pruneTrackedToolCallIds(structuredReplaySafeToolCallIds);
 }
 
 const preExecutionBlockedToolResults = new WeakSet<object>();
@@ -695,11 +689,15 @@ function recordPreExecutionBlockedToolCall(toolCallId?: string, runId?: string):
     return;
   }
   preExecutionBlockedToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));
-  while (preExecutionBlockedToolCallIds.size > MAX_TRACKED_ADJUSTED_PARAMS) {
-    const oldest = preExecutionBlockedToolCallIds.values().next().value;
+  pruneTrackedToolCallIds(preExecutionBlockedToolCallIds);
+}
+
+function pruneTrackedToolCallIds(ids: Set<string>): void {
+  while (ids.size > MAX_TRACKED_ADJUSTED_PARAMS) {
+    const oldest = ids.values().next().value;
     if (!oldest) {
       break;
     }
-    preExecutionBlockedToolCallIds.delete(oldest);
+    ids.delete(oldest);
   }
 }
