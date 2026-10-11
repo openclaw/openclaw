@@ -211,6 +211,7 @@ export function resolveCronCreatorAuthorityGrantProvenance(
       capturesRuntimeAuthority: boolean;
       callerOrigin?: CronScheduledToolCallerOrigin;
       channelRequester?: CronAuthenticatedChannelRequester;
+      callerScopedCreation?: true;
     }
   | undefined {
   const entry = grantsByToken.get(grant.token);
@@ -236,6 +237,9 @@ export function resolveCronCreatorAuthorityGrantProvenance(
     capturesRuntimeAuthority: entry.capturesRuntimeAuthority,
     ...(scope.callerOrigin.kind === "local" ? { callerOrigin: { kind: "local" as const } } : {}),
     ...(channelRequester ? { channelRequester: { ...channelRequester } } : {}),
+    ...(!entry.capturesRuntimeAuthority && scope.callerScopedCreation
+      ? { callerScopedCreation: true as const }
+      : {}),
   };
 }
 
@@ -257,7 +261,9 @@ export function hasCronCreatorGrantProvenance(
     input.cronCreatorAuthorityGrant,
     runId,
   );
-  return Boolean(provenance?.callerOrigin || provenance?.channelRequester);
+  return Boolean(
+    provenance?.callerOrigin || provenance?.channelRequester || provenance?.callerScopedCreation,
+  );
 }
 
 function revokeCronCreatorAuthorityGrant(token: string): void {
