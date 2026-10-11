@@ -5,7 +5,6 @@ export const DEFAULT_RELAY_URL = "https://mcp.openclaw.ai";
 
 export type McpRelayConfig = {
   relayUrl: string;
-  controlUiUrl?: string;
   agentId?: string;
 };
 
@@ -14,12 +13,8 @@ export function parseMcpRelayConfig(raw: unknown): McpRelayConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("MCP relay config must be an object.");
   }
-  if (
-    Object.keys(value).some(
-      (key) => key !== "relayUrl" && key !== "controlUiUrl" && key !== "agentId",
-    )
-  ) {
-    throw new Error("MCP relay config supports only relayUrl, controlUiUrl, and agentId.");
+  if (Object.keys(value).some((key) => key !== "relayUrl" && key !== "agentId")) {
+    throw new Error("MCP relay config supports only relayUrl and agentId.");
   }
   const relayUrl = "relayUrl" in value ? value.relayUrl : DEFAULT_RELAY_URL;
   if (
@@ -39,26 +34,11 @@ export function parseMcpRelayConfig(raw: unknown): McpRelayConfig {
   if (url.pathname !== "/" || url.username || url.password || url.search || url.hash) {
     throw new Error("relayUrl must contain only the relay origin. Remove credentials and paths.");
   }
-  const controlUiUrl = "controlUiUrl" in value ? value.controlUiUrl : undefined;
-  if (
-    controlUiUrl !== undefined &&
-    (typeof controlUiUrl !== "string" ||
-      !new RegExp(manifest.configSchema.properties.controlUiUrl.pattern).test(controlUiUrl) ||
-      !URL.canParse(controlUiUrl))
-  ) {
-    throw new Error(
-      "controlUiUrl must be an absolute HTTPS URL without credentials, a query, or fragment. A Control UI path is allowed.",
-    );
-  }
   const agentId = "agentId" in value ? value.agentId : undefined;
   if (agentId !== undefined && (typeof agentId !== "string" || !agentId.trim())) {
     throw new Error("agentId must be a nonempty agent ID. Omit it to use the Gateway default.");
   }
-  return {
-    relayUrl: url.origin,
-    ...(controlUiUrl === undefined ? {} : { controlUiUrl }),
-    ...(agentId === undefined ? {} : { agentId }),
-  };
+  return { relayUrl: url.origin, ...(agentId === undefined ? {} : { agentId }) };
 }
 
 export const mcpRelayConfigSchema: OpenClawPluginConfigSchema = {

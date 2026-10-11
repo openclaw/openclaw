@@ -38,9 +38,7 @@ once. The 15-second preview deadline includes queue wait, fetching, and image wo
 Disabling automatic favicons or retiring the request's authority suppresses cached
 previews too.
 
-The browser-side resource restrictions remain enforced. Framing the Control UI
-is separately opt-in through
-[`gateway.controlUi.frameAncestors`](/web/control-ui#embed-the-control-ui).
+The browser-side CSP restriction itself is always on and not configurable.
 
 ## Public transcript boundary
 

@@ -58,7 +58,6 @@ import {
   type ControlUiPluginFrameGrantAck,
 } from "./control-ui-contract.js";
 import { applyControlUiSecurityHeaders } from "./control-ui-csp.js";
-import { isSafeControlUiRelativePath } from "./control-ui-file.js";
 import {
   isReadHttpMethod,
   respondNotFound as respondControlUiNotFound,
@@ -628,6 +627,20 @@ function isExpectedSafePathError(error: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP";
 }
 
+function isSafeRelativePath(relPath: string) {
+  if (!relPath) {
+    return false;
+  }
+  const normalized = path.posix.normalize(relPath);
+  return !(
+    path.posix.isAbsolute(normalized) ||
+    path.win32.isAbsolute(normalized) ||
+    normalized.startsWith("../") ||
+    normalized === ".." ||
+    normalized.includes("\0")
+  );
+}
+
 // The default SPA entry infers /__openclaw__ as its base path before bootstrap.
 const CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH = `${CONTROL_UI_NAMESPACE_PREFIX.replace(
   /\/$/,
@@ -842,7 +855,7 @@ export async function handleControlUiHttpRequest(
     respondControlUiNotFound(res);
     return true;
   }
-  if (!isSafeControlUiRelativePath(fileRel)) {
+  if (!isSafeRelativePath(fileRel)) {
     respondControlUiNotFound(res);
     return true;
   }
@@ -893,13 +906,10 @@ export async function handleControlUiHttpRequest(
 
   while (asset) {
     // Both requested and physical index aliases retain document preparation.
-    const isIndex =
-      path.basename(fileRel) === "index.html" || path.basename(asset.file.path) === "index.html";
-    // Only app documents opt into framing; media and public readers keep their own policies.
-    if (isIndex || path.extname(fileRel).toLowerCase() === ".html") {
-      applyControlUiSecurityHeaders(res, opts?.config?.gateway?.controlUi?.frameAncestors);
-    }
-    if (isIndex) {
+    if (
+      path.basename(fileRel) === "index.html" ||
+      path.basename(asset.file.path) === "index.html"
+    ) {
       if (req.method === "HEAD") {
         const encoding = resolveControlUiHtmlEncoding(req);
         if (encoding === "not-acceptable") {
@@ -933,7 +943,6 @@ export async function handleControlUiHttpRequest(
           opts?.isSessionEntryCurrent?.() !== false,
         opts?.auth?.mode === "trusted-proxy",
         bootstrap?.config,
-        opts?.config?.gateway?.controlUi?.frameAncestors,
       );
       return true;
     }

@@ -1,24 +1,9 @@
 import fs from "node:fs";
-import path from "node:path";
 import {
   matchRootFileOpenFailure,
   openRootFileSync,
   readFileWindowFullySync,
 } from "@openclaw/fs-safe/advanced";
-
-export function isSafeControlUiRelativePath(relPath: string): boolean {
-  if (!relPath) {
-    return false;
-  }
-  const normalized = path.posix.normalize(relPath);
-  return !(
-    path.posix.isAbsolute(normalized) ||
-    path.win32.isAbsolute(normalized) ||
-    normalized.startsWith("../") ||
-    normalized === ".." ||
-    normalized.includes("\0")
-  );
-}
 
 export type ControlUiFileRead = {
   rootPath: string;

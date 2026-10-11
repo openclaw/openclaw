@@ -27,7 +27,6 @@ export const GATEWAY_FIELD_LABELS: Record<string, string> = {
   "gateway.controlUi.allowExternalEmbedUrls": "Allow External Control UI Embed URLs",
   "gateway.controlUi.automaticallyFetchFavicons": "Automatically Fetch Link Favicons",
   "gateway.controlUi.allowedOrigins": "Control UI Allowed Origins",
-  "gateway.controlUi.frameAncestors": "Control UI Frame Ancestors",
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback":
     "Dangerously Allow Host-Header Origin Fallback",
   "gateway.uploads": "File and Image Uploads",

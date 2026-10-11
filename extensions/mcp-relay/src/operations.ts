@@ -158,14 +158,12 @@ export function createOperations({
   logger,
   gateway,
   agentId: configuredAgentId,
-  controlUiUrl,
   now = Date.now,
 }: {
   runtime: OperationsRuntime;
   logger: Pick<PluginLogger, "error">;
   gateway: { name: string; version: string };
   agentId?: string;
-  controlUiUrl?: string;
   now?: () => number;
 }) {
   async function findSession(conversationId: string): Promise<SessionFact> {
@@ -303,7 +301,6 @@ export function createOperations({
         const defaultAgentId = tryResolveDefaultAgentId(config);
         return capResult({
           gateway: { name: truncateText(gateway.name), version: truncateText(gateway.version) },
-          ...(controlUiUrl === undefined ? {} : { controlUi: { url: controlUiUrl } }),
           agents: listAgentIds(config).map((id) => ({
             id,
             name: truncateText(readStringValue(config.agents?.entries?.[id]?.name) ?? id),

@@ -118,7 +118,6 @@ export default definePluginEntry({
             logger: api.logger,
             gateway,
             agentId: config.agentId,
-            controlUiUrl: config.controlUiUrl,
             now: scheduler.now,
           }),
         });

@@ -28,7 +28,7 @@ const older = {
   lastActivityAt: 500,
 };
 
-function fixture(agentId?: string, now = () => 0, controlUiUrl?: string) {
+function fixture(agentId?: string, now = () => 0) {
   const request = vi.fn<Parameters<typeof createOperations>[0]["runtime"]["gateway"]["request"]>();
   const readSessionFacts = vi
     .fn<PluginRuntime["gateway"]["readSessionFacts"]>()
@@ -51,7 +51,6 @@ function fixture(agentId?: string, now = () => 0, controlUiUrl?: string) {
   const dispatch = createOperations({
     logger,
     agentId,
-    controlUiUrl,
     now,
     gateway: { name: "Synthetic Gateway", version: "1.0.0" },
     runtime: {
@@ -113,18 +112,6 @@ describe("MCP relay data operations", () => {
       await operations("conversations.list", { limit: 50, search: "OLDER", agentId: "main" }),
     ).toMatchObject({ conversations: [{ conversationId: older.key }] });
     expect(withSessionFacts).toHaveBeenLastCalledWith(expect.objectContaining({ agentId: "main" }));
-  });
-
-  it("advertises the configured direct Control UI URL in status", async () => {
-    const { operations } = fixture(undefined, undefined, "https://gateway.example:8443/openclaw/");
-    expect(await operations("status", {})).toEqual({
-      gateway: { name: "Synthetic Gateway", version: "1.0.0" },
-      agents: [
-        { id: "main", name: "Main agent", default: true },
-        { id: "research", name: "Research", default: false },
-      ],
-      controlUi: { url: "https://gateway.example:8443/openclaw/" },
-    });
   });
 
   it("anchors the first history page and preserves opaque older cursors with plain user/assistant text", async () => {

@@ -1,4 +1,3 @@
-import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
 import { parseMcpRelayConfig } from "./config.js";
@@ -18,54 +17,6 @@ describe("MCP relay configuration", () => {
     "allows the development origin %s",
     (relayUrl) => {
       expect(parseMcpRelayConfig({ relayUrl })).toEqual({ relayUrl });
-    },
-  );
-
-  it.each([
-    "https://gateway.example",
-    "https://gateway.example:8443/",
-    "https://gateway.example/openclaw/",
-    "https://gateway.example/openclaw/chat",
-    "https://[2001:db8::1]:8443/openclaw/",
-  ])("accepts the Control UI URL in cold metadata and runtime config: %s", (controlUiUrl) => {
-    const config = { controlUiUrl };
-    expect(validateJsonSchemaValue({ schema: manifest.configSchema, value: config }).ok).toBe(true);
-    expect(parseMcpRelayConfig(config)).toEqual({
-      relayUrl: "https://mcp.openclaw.ai",
-      controlUiUrl,
-    });
-  });
-
-  it.each([
-    "http://gateway.example",
-    "http://localhost:18789/",
-    "//gateway.example/",
-    "/openclaw/",
-    "https:gateway.example",
-    "https:///gateway.example",
-    "https://user:password@gateway.example/",
-    "https://@gateway.example/",
-    "https://gateway.example/?token=secret",
-    "https://gateway.example/#token=secret",
-    "https://gateway.example/?",
-    "https://gateway.example/#",
-    "https://gateway.example:99999/",
-    "https://gateway.example\\openclaw",
-    "https://gateway.example/open claw/",
-    "https://gateway.example/\n",
-    "https://gateway.example/\u0000",
-    "not a URL",
-    "",
-    null,
-    1,
-  ])(
-    "rejects an invalid Control UI URL in cold metadata and runtime config: %j",
-    (controlUiUrl) => {
-      const config = { controlUiUrl };
-      expect(validateJsonSchemaValue({ schema: manifest.configSchema, value: config }).ok).toBe(
-        false,
-      );
-      expect(() => parseMcpRelayConfig(config)).toThrow("controlUiUrl");
     },
   );
 
