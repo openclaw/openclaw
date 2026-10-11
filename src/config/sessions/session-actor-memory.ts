@@ -369,7 +369,7 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
         {
           conversations,
           entries: () =>
-            Array.from(sessions, ([key, record]): [string, typeof record.state] => [
+            Array.from(sessions, ([key, record]): [string, SessionActorMemoryRecord["state"]] => [
               key,
               record.state,
             ]).values(),

@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   extractAssistantPhaseText,
   extractFirstTextBlock,
@@ -33,21 +34,8 @@ export function extractRecentConversationText(
   event: TranscriptEvent,
   options: ReadRecentSessionConversationTextOptions = {},
 ): SessionRecentConversationText | undefined {
-  const parsed = event as {
-    id?: unknown;
-    message?: unknown;
-  };
-  const message = parsed.message as
-    | {
-        role?: unknown;
-        timestamp?: unknown;
-        provenance?: unknown;
-        provider?: unknown;
-        model?: unknown;
-        openclawDeliveryMirror?: unknown;
-        __openclaw?: unknown;
-      }
-    | undefined;
+  const parsed = asOptionalObjectRecord(event);
+  const message = asOptionalObjectRecord(parsed?.message);
   if (
     !message ||
     (message.role !== "user" && message.role !== "assistant") ||
@@ -84,13 +72,10 @@ export function extractRecentConversationText(
   if (!text) {
     return undefined;
   }
-  const provenance =
-    message.provenance && typeof message.provenance === "object"
-      ? (message.provenance as { sourceChannel?: unknown })
-      : undefined;
+  const provenance = asOptionalObjectRecord(message.provenance);
   const timestamp = normalizeTranscriptTimestamp(message.timestamp);
   return {
-    ...(typeof parsed.id === "string" && parsed.id ? { id: parsed.id } : {}),
+    ...(typeof parsed?.id === "string" && parsed.id ? { id: parsed.id } : {}),
     role: message.role,
     text,
     ...(timestamp !== undefined ? { timestamp } : {}),
