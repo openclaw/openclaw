@@ -16,6 +16,7 @@ import {
   digestWorkerCredentialAuthority,
   encodeWorkerEnvironmentTransferAuthority,
 } from "./store-commit-authority.js";
+import { WorkerEnvironmentInventoryClosedError } from "./store-errors.js";
 import { assertShape } from "./store-validation.js";
 import type { WorkerEnvironmentCommitAdmission, WorkerEnvironmentFacts } from "./store.types.js";
 
@@ -96,7 +97,7 @@ function createWorkerEnvironmentProjection() {
   let reconcilable: WorkerEnvironmentRecord[] | undefined;
   const assertActive = () => {
     if (!active) {
-      throw new Error("Worker environment inventory has closed");
+      throw new WorkerEnvironmentInventoryClosedError();
     }
   };
   const assertReadable = (
