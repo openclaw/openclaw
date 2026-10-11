@@ -208,35 +208,39 @@ export function captureWorkerTurnTranscriptSource(
   },
 ): SessionSourceAssertion {
   const binding = captureIncognitoSessionBinding(target);
+  const expected: WorkerTranscriptSourceIdentity = predicate
+    ? { ...predicate.expected }
+    : {
+        sessionId: target.sessionId,
+        ...(target.expectedLifecycleRevision !== undefined
+          ? { lifecycleRevision: target.expectedLifecycleRevision }
+          : {}),
+        ...(target.expectedWriterRunId !== undefined
+          ? { activeWriterRunId: target.expectedWriterRunId }
+          : {}),
+      };
+  const fields: (keyof WorkerTranscriptSourceIdentity)[] = predicate
+    ? [...predicate.fields]
+    : (["sessionId", "lifecycleRevision", "activeWriterRunId"] as const).filter((field) =>
+        Object.hasOwn(expected, field),
+      );
+  const refuse =
+    predicate?.refuse ??
+    ((): never => {
+      throw new Error("Cloud worker transcript identity is no longer current");
+    });
+  const assertEntry = (entry: WorkerTranscriptSourceIdentity | undefined) => {
+    if (!entry || fields.some((field) => entry[field] !== expected[field])) {
+      refuse();
+    }
+  };
   if (binding) {
     const claim = binding.actor.sessions.captureCurrent(target.sessionKey);
-    const expected = predicate
-      ? { ...predicate.expected }
-      : {
-          sessionId: target.sessionId,
-          ...(target.expectedLifecycleRevision !== undefined && {
-            lifecycleRevision: target.expectedLifecycleRevision,
-          }),
-          ...(target.expectedWriterRunId !== undefined && {
-            activeWriterRunId: target.expectedWriterRunId,
-          }),
-        };
-    const fields = predicate
-      ? [...predicate.fields]
-      : (["sessionId", "lifecycleRevision", "activeWriterRunId"] as const).filter((field) =>
-          Object.hasOwn(expected, field),
-        );
     return () => {
       binding.admissionSignal?.throwIfAborted();
       binding.actor.assertReadable();
       claim.assertCurrent();
-      const entry = binding.actor.sessions.readSharing(target.sessionKey)?.entry;
-      if (!entry || fields.some((field) => entry[field] !== expected[field])) {
-        if (predicate) {
-          predicate.refuse();
-        }
-        throw new Error("Cloud worker transcript identity is no longer current");
-      }
+      assertEntry(binding.actor.sessions.readSharing(target.sessionKey)?.entry);
     };
   }
   const env = captureSessionTranscriptStorageEnvironment(process.env);
@@ -245,11 +249,6 @@ export function captureWorkerTurnTranscriptSource(
   const path = resolveOpenClawAgentSqlitePath(options);
   const incognito = isIncognitoOpenClawAgentSqlitePath(path, options);
   const identity = readDatabasePathIdentitySync(path);
-  const refuse =
-    predicate?.refuse ??
-    ((): never => {
-      throw new Error("Cloud worker transcript identity is no longer current");
-    });
   const captured = { ...target, sessionKey: resolved.sessionKey, storePath: path };
   const assertCurrent = () => {
     if (incognito) {
@@ -259,27 +258,6 @@ export function captureWorkerTurnTranscriptSource(
       refuse();
     }
     assertExistingDatabaseIdentity(path, identity.key, identity.birthtime);
-  };
-  const expected: WorkerTranscriptSourceIdentity = predicate
-    ? { ...predicate.expected }
-    : {
-        sessionId: captured.sessionId,
-        ...(captured.expectedLifecycleRevision !== undefined
-          ? { lifecycleRevision: captured.expectedLifecycleRevision }
-          : {}),
-        ...(captured.expectedWriterRunId !== undefined
-          ? { activeWriterRunId: captured.expectedWriterRunId }
-          : {}),
-      };
-  const fields: (keyof WorkerTranscriptSourceIdentity)[] = predicate
-    ? [...predicate.fields]
-    : (["sessionId", "lifecycleRevision", "activeWriterRunId"] as const).filter((field) =>
-        Object.hasOwn(expected, field),
-      );
-  const assertEntry = (entry: WorkerTranscriptSourceIdentity | undefined) => {
-    if (!entry || fields.some((field) => entry[field] !== expected[field])) {
-      refuse();
-    }
   };
   const assertNative = () => {
     assertCurrent();

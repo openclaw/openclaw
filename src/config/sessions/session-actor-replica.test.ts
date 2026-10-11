@@ -42,7 +42,10 @@ import type {
   SessionActorReceipt,
 } from "./session-actor-contract.js";
 import { hydrateSessionActorState } from "./session-actor-hydration.worker.js";
-import { createSessionActorReplica } from "./session-actor-replica.js";
+import {
+  createSessionActorReplica,
+  retainSessionActorEntryFacts,
+} from "./session-actor-replica.js";
 import { mutatePendingInput, readPendingInput } from "./session-pending-input-operations.kernel.js";
 import type { PendingInputMutation } from "./session-pending-input-operations.types.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
@@ -212,6 +215,15 @@ it("retains unrelated session postimages but invalidates a shared physical sessi
     const other = { ...fixture.scope, sessionKey: "agent:main:other-replica" };
     replaceSessionEntrySync(other, { sessionId: "other-session", updatedAt: 1, label: "other" });
     const snapshot = hydrate(fixture);
+    if (snapshot.target.database.kind !== "file") {
+      throw new Error("Replica fixture requires a durable target");
+    }
+    retainSessionActorEntryFacts(
+      { ...snapshot.target, database: snapshot.target.database },
+      { entry: snapshot.entry, snapshots: [] },
+      "partial-entry-reader",
+    );
+    expect(fixture.replica.read()).toEqual(snapshot);
     replaceSessionEntrySync(other, { sessionId: "other-session", updatedAt: 2, label: "changed" });
     expect(fixture.replica.read()).toEqual(snapshot);
     using sibling = openNodeSqliteDatabase(fixture.database.path);

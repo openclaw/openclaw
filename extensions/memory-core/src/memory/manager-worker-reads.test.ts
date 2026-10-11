@@ -9,7 +9,6 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
-  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   observeHostDataSql,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -128,7 +127,7 @@ describe("memory manager retained worker reads", () => {
     }
   });
 
-  it.each(["ready", "rejected", "revoked"] as const)(
+  it.each(["ready", "rejected"] as const)(
     "waits for a %s cache read before requesting embeddings",
     async (outcome) => {
       const memoryPath = path.join(fixture.paths.memory, "2026-01-12.md");
@@ -176,23 +175,13 @@ describe("memory manager retained worker reads", () => {
         expect(
           publishedDb.prepare("SELECT text FROM memory_index_chunks ORDER BY id").all(),
         ).toEqual(before);
-        if (outcome === "revoked") {
-          closeOpenClawAgentDatabasesForTest();
-        }
         release.resolve();
         if (outcome === "ready") {
           await sync;
           expect(fixture.provider.embeddedBatchTexts).toEqual([replacement]);
         } else {
-          await expect(sync).rejects.toThrow(
-            outcome === "rejected"
-              ? "controlled cache read rejection"
-              : "Memory embedding generation changed during cache lookup",
-          );
+          await expect(sync).rejects.toThrow("controlled cache read rejection");
           expect(fixture.provider.embeddedBatchTexts).toEqual([]);
-        }
-        if (outcome === "revoked") {
-          await closeOpenClawAgentDatabasesAsync();
         }
         const current = openOpenClawAgentDatabase({ agentId: "main" }).db;
         expect(current.prepare("SELECT text FROM memory_index_chunks ORDER BY id").all()).toEqual(

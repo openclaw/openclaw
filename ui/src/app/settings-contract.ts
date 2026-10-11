@@ -124,6 +124,7 @@ export type UiSettings = {
   navigationScope: "mine" | "all";
   sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
   chatMessageMaxWidth?: string; // Browser-local centered chat transcript max width
+  chatBubbleSessionKeys?: string[]; // Browser-local speech bubbles per canonical session, scoped to this Gateway
   showAdvancedSettings?: boolean; // Expand advanced schema settings (default false)
   pinnedAgentIds?: string[]; // Agents surfaced first in the agent-chip quick switcher
   textScale?: TextScaleStop; // Browser-local text scale percentage

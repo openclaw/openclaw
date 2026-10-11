@@ -22,7 +22,7 @@ import {
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
-import { memoryDatabaseTableExists, readMemoryDatabaseRevision } from "./manager-db-kernel.js";
+import { memoryDatabaseTableExists } from "./manager-db-kernel.js";
 import { cleanupAgedMemoryReindexTempFiles, removeMemoryDatabaseFiles } from "./manager-db.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import { withMemoryIndexGeneration } from "./manager-index-generation-lease.js";
@@ -97,7 +97,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   }
 
   protected abstract readonly createProvider: MemoryManagerProviderFactory;
-  protected abstract releaseProvider(provider: EmbeddingProvider): void;
   protected fallbackProviderInitPromise: Promise<boolean> | null = null;
   protected syncProviderGeneration: MemorySyncProviderGeneration | null = null;
 
@@ -559,7 +558,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     let shadowCleanup: MemoryIndexDatabase | undefined;
     try {
       await cleanupAgedMemoryReindexTempFiles(dbPath);
-      const originalRevision = readMemoryDatabaseRevision(originalDb);
+      const originalRevision = this.database.facts.revision;
       const shadow = MemoryIndexDatabase.openShadow(tempDbPath, this.settings.store.vector.enabled);
       shadowCleanup = shadow;
       shadow.vector.enabled = this.vector.enabled;
@@ -613,7 +612,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             nextMeta.vectorDims = this.vector.dims;
           }
 
-          await this.withDatabaseWrite(() => this.writeMeta(nextMeta));
+          await this.writeMeta(nextMeta);
           return {
             nextMeta,
             vectorIndexComplete,
@@ -653,8 +652,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         });
       });
 
-      this.database.lastMetaSerialized = null;
-      this.resetVectorState();
+      this.resetVectorState(rebuilt.vectorIndexComplete);
       this.fts.available = shadow.fts.available;
       this.fts.loadError = shadow.fts.loadError;
       this.vector.dims = rebuilt.nextMeta.vectorDims;

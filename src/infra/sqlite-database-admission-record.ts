@@ -3,7 +3,10 @@ import type { BigIntStats } from "node:fs";
 import { setEnvironmentData, threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
-import { readDatabaseIdentityBirthtime } from "./sqlite-worker-identity.js";
+import {
+  readDatabaseIdentityBirthtime,
+  type DatabaseFileIdentity,
+} from "./sqlite-worker-identity.js";
 import { readWorkerAncestors, workerAncestors } from "./worker-ancestry.js";
 
 export function readSqliteDatabaseAdmissionIdentity(file: BigIntStats): string {
@@ -21,7 +24,7 @@ export const SqliteDatabaseGenerationSlot = {
   unscopedWriteRevision: 7,
   writeScopeCount: 8,
 } as const;
-export const SQLITE_DATABASE_GENERATION_LENGTH = Object.keys(SqliteDatabaseGenerationSlot).length;
+const SQLITE_DATABASE_GENERATION_LENGTH = Object.keys(SqliteDatabaseGenerationSlot).length;
 
 export type AdmissionFact = {
   value: unknown;
@@ -197,6 +200,11 @@ export function isSqliteDatabaseAdmissionFactCurrent(
   );
 }
 
+export function hasSqliteDatabaseSchemaAdmission(record: Admission | undefined): boolean {
+  const fact = record?.facts.get("sqlite-schema");
+  return Boolean(record && fact && isSqliteDatabaseAdmissionFactCurrent(record, fact));
+}
+
 export function readSqliteDatabaseFactRevision(
   record: Admission,
   schemaDependent: boolean | undefined,
@@ -212,7 +220,7 @@ export function readSqliteDatabaseFactRevision(
 export function activeSqliteDatabaseWriters(
   record: Admission,
   index: 0 | 2,
-  refresh: (record: Admission) => void,
+  refresh?: (record: Admission) => void,
 ): number | undefined {
   const generation = new Int32Array(record.generation);
   let registrations = Atomics.load(generation, SqliteDatabaseGenerationSlot.writerCount);
@@ -220,6 +228,9 @@ export function activeSqliteDatabaseWriters(
     [...record.writers.values()].filter(({ cell }) => Atomics.load(new Int32Array(cell), 1) === 1)
       .length;
   if (known() < registrations) {
+    if (!refresh) {
+      return undefined;
+    }
     refresh(record);
     registrations = Atomics.load(generation, SqliteDatabaseGenerationSlot.writerCount);
     if (known() < registrations) {
@@ -238,7 +249,7 @@ export function activeSqliteDatabaseWriters(
 export function readSqliteDatabaseRecordWriteRevision(
   record: Admission,
   ownWriters: number,
-  refresh: (record: Admission) => void,
+  refresh?: (record: Admission) => void,
 ): number | undefined {
   const cell = new Int32Array(record.generation);
   const revision = Atomics.load(cell, SqliteDatabaseGenerationSlot.writeRevision);
@@ -348,6 +359,14 @@ export class SqliteDatabaseAdmissionRegistry {
   readonly records = new Map<string, Admission>();
   private readonly published = new Map<string, Admission>();
   private revision = 0;
+
+  hasSchemaAdmissionForIdentity(physicalIdentity: DatabaseFileIdentity): boolean {
+    if (!physicalIdentity.key.startsWith("file:") || physicalIdentity.birthtime === undefined) {
+      return false;
+    }
+    const key = `${physicalIdentity.key.slice("file:".length)}:${physicalIdentity.birthtime}`;
+    return hasSqliteDatabaseSchemaAdmission(this.records.get(key));
+  }
 
   retainDescriptor(location: string, descriptor: number, opened: BigIntStats): Admission {
     const record: Admission = {

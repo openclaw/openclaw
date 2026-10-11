@@ -218,6 +218,8 @@ const repositoryScriptEntries = [
   "scripts/openclaw-release-ready.mjs!",
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
   "scripts/oxlint-boundary-guards.mjs!",
+  // Boundary lint loads this migration plugin by path; remove with that config entry.
+  "scripts/oxlint-solid-migration.mjs!",
   "scripts/plugin-prerelease-liveish-matrix.mts!",
   "scripts/pre-commit/guard-staged-content.mjs!",
   // Frozen-target contract admission is invoked as a standalone Node CLI.
@@ -761,7 +763,7 @@ const config = {
     "src/agents/harness/registry.ts": ["exports"],
     // Focused outbox tests seed and recover rows through these kernels; production
     // reaches them only through the agent database worker's command dispatcher.
-    "src/agents/harness/context-engine-turn-outbox.ts": ["exports"],
+    "src/agents/harness/context-engine-turn-outbox.kernel.worker.ts": ["exports"],
     // Runtime reason values are exported now so protocol schemas can derive from one tuple later.
     "src/agents/failover/signal.ts": ["exports"],
     "src/context-engine/registry.ts": ["exports", "types"],

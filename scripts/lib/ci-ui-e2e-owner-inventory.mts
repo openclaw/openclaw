@@ -255,6 +255,8 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
       "ui/src/components/select-picker.ts",
       "ui/src/components/settings-save-indicator.ts",
       "ui/src/pages/agents/agents-page.ts",
+      "ui/src/pages/agents/agents-page.tsx",
+      "ui/src/pages/agents/agents-page-state.ts",
     ],
   ),
   pageWatch(
@@ -1020,7 +1022,8 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
       "ui/src/components/agent-select-registration.ts",
       "ui/src/components/select-picker.ts",
       "ui/src/lib/cron/types.ts",
-      "ui/src/pages/cron/cron-page.ts",
+      "ui/src/pages/cron/cron-page.tsx",
+      "ui/src/pages/cron/cron-page-controller.ts",
     ],
     ["ui/src/styles/select-picker.css"],
   ),
@@ -1039,7 +1042,11 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/cron-history-recovery.e2e.test.ts",
     ["cron"],
-    ["ui/src/lib/cron/types.ts", "ui/src/pages/cron/cron-page.ts"],
+    [
+      "ui/src/lib/cron/types.ts",
+      "ui/src/pages/cron/cron-page.tsx",
+      "ui/src/pages/cron/cron-page-controller.ts",
+    ],
   ),
   pageWatch("ui/src/e2e/cron-job-link.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
   pageWatch("ui/src/e2e/cron-pacing.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
@@ -1257,7 +1264,12 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/model-alias-display.e2e.test.ts",
     ["agents-home", "agents", "chat", "config"],
-    ["ui/src/components/select-picker.ts", "ui/src/pages/agents/agents-page.ts"],
+    [
+      "ui/src/components/select-picker.ts",
+      "ui/src/pages/agents/agents-page.ts",
+      "ui/src/pages/agents/agents-page.tsx",
+      "ui/src/pages/agents/agents-page-state.ts",
+    ],
   ),
   pageWatch(
     "ui/src/e2e/model-defaults-recovery.e2e.test.ts",
@@ -1486,7 +1498,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     "ui/src/e2e/new-session-page.provisional-navigation.e2e.test.ts",
     ["about", "chat", "new-session"],
     [
-      "ui/src/pages/about/about-page.ts",
+      "ui/src/pages/about/about-page.tsx",
       "ui/src/pages/chat/chat-page.ts",
       "ui/src/pages/chat/chat-pane.ts",
     ],
@@ -1539,6 +1551,8 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
       "ui/src/components/agent-select-registration.ts",
       "ui/src/components/modal-dialog.ts",
       "ui/src/pages/agents/agents-page.ts",
+      "ui/src/pages/agents/agents-page.tsx",
+      "ui/src/pages/agents/agents-page-state.ts",
     ],
   ),
   pageWatch("ui/src/e2e/placement-error-unicode.e2e.test.ts", ["chat", "new-session"]),

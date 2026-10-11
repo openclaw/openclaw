@@ -10,6 +10,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   capturePluginStateReadDependencies,
@@ -54,6 +55,39 @@ function observe() {
 }
 
 describe("plugin state committed facts", () => {
+  it("serves warm keyed reads from committed receipts across worker and native writes", async () => {
+    await withOpenClawTestState({ label: "plugin-state-keyed-read-receipts" }, async ({ env }) => {
+      const options = { namespace: "receipts", maxEntries: 10, env };
+      const store = createPluginStateKeyedStore<{ count: number }>("receipt-test", options);
+      const native = createPluginStateSyncKeyedStore<{ count: number }>("receipt-test", options);
+      await store.register("key", { count: 1 });
+      const dispatch = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+      const read = async (expected: { count: number } | undefined) => {
+        dispatch.mockClear();
+        expect(await store.lookup("key")).toEqual(expected);
+        expect(await store.lookupMany(["key", "key"])).toEqual([
+          { ok: true, value: expected },
+          { ok: true, value: expected },
+        ]);
+        expect(dispatch).not.toHaveBeenCalled();
+      };
+      await read({ count: 1 });
+      const first = await store.lookup("key");
+      first!.count = 99;
+      await read({ count: 1 });
+      native.register("key", { count: 2 });
+      await read({ count: 2 });
+      await store.register("key", { count: 3 });
+      await read({ count: 3 });
+      await store.delete("key");
+      await read(undefined);
+      native.register("key", { count: 4 });
+      await read({ count: 4 });
+      await store.clear();
+      await read(undefined);
+    });
+  });
+
   it("publishes fixture cleanup to warm observations and ownership reads", async () => {
     await withOpenClawTestState({ label: "plugin-state-clear-publication" }, async ({ env }) => {
       const store = createPluginStateKeyedStore("receipt-test", {

@@ -582,7 +582,7 @@ describe("session startup catch-up", () => {
     expect(harness.corpusListCalls).toBe(0);
   });
 
-  it("checks only targeted tombstones in a custom session store", async () => {
+  it("resolves queued identities once and observes committed appends and tombstones", async () => {
     const storePath = path.join(stateDir, "custom-sessions", "sessions.json");
     const session = await writeSqliteSession({
       storePath,
@@ -592,27 +592,44 @@ describe("session startup catch-up", () => {
     });
     const forgotten = await writeSqliteSession({ storePath, sessionId: "forgotten-thread" });
     await writeSqliteSession({ storePath, sessionId: "unrelated-thread" });
-    const { db } = openOpenClawAgentDatabase({ agentId: "main" });
-    ensureMemorySessionTombstones(db);
-    recordMemorySessionTombstonesInDatabase(db, {
-      agentId: "main",
-      sessionIds: [forgotten.sessionId, "unrelated-thread"],
-    });
-    const harness = new SessionStartupCatchupHarness([]);
+    const harness = new SessionStartupCatchupHarness([], true);
     harness.addPendingSessionTarget({
       agentId: "main",
       sessionId: "custom-thread",
       sessionKey: "agent:main:chat:custom",
     });
     harness.addPendingSessionTarget({ agentId: "main", sessionId: forgotten.sessionId });
+    await appendSessionTranscriptMessageByIdentity({
+      agentId: "main",
+      sessionId: session.sessionId,
+      sessionKey: session.sessionKey,
+      storePath,
+      cwd: stateDir,
+      message: { role: "user", content: "appended after queuing" },
+    });
+    const { db } = openOpenClawAgentDatabase({ agentId: "main" });
+    ensureMemorySessionTombstones(db);
+    recordMemorySessionTombstonesInDatabase(db, {
+      agentId: "main",
+      sessionIds: [forgotten.sessionId, "unrelated-thread"],
+    });
     const reads = vi.spyOn(cpuRuntime, "runMemoryOriginRead");
     try {
       await harness.processPendingSessionUpdates();
-      await Promise.resolve();
+      await harness.waitForSessionSync();
 
-      expect(harness.getDirtyArchiveFiles()).toEqual([session.sessionKey]);
-      expect(harness.syncCalls[0]?.archiveFiles).toEqual([session.sessionKey]);
-      expect(harness.syncCalls[0]?.sessions).toHaveLength(2);
+      expect(harness.syncCalls[0]).toMatchObject({
+        sessions: [
+          { agentId: "main", sessionId: session.sessionId, sessionKey: session.sessionKey },
+          { agentId: "main", sessionId: forgotten.sessionId },
+        ],
+        archiveFiles: [],
+      });
+      expect(harness.corpusListCalls).toBe(1);
+      expect(harness.indexedPaths).toEqual([session.corpusPath]);
+      expect(harness.indexedContents).toEqual([
+        "User: custom store target\nUser: appended after queuing",
+      ]);
       const queriedSessionIds = reads.mock.calls.flatMap(([request]) =>
         request.kind === "session-tombstones" ? (request.sessionIds ?? []) : [],
       );
@@ -825,7 +842,7 @@ describe("session startup catch-up", () => {
         await vi.advanceTimersByTimeAsync(6000);
         await harness.waitForSessionSync();
 
-        expect(harness.getDirtyArchiveFiles()).toEqual([session.filePath]);
+        expect(harness.getDirtyArchiveFiles()).toEqual([]);
         expect(harness.syncCalls[0]?.archiveFiles).toEqual([session.filePath]);
         expect(harness.indexedPaths).toEqual([
           `sessions/main/thread.jsonl.${reason}.2026-06-23T10-00-00.000Z`,

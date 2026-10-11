@@ -1,4 +1,4 @@
-import { isDeepStrictEqual } from "node:util";
+import { isDeepStrictEqual, types } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok } from "@openclaw/normalization-core/result";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
@@ -89,6 +89,7 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    readTrajectoryEvents: reader("trajectory-events", "trajectory events", (value) => value.events),
     readTrajectoryRetention: (input, options) => {
       const captured = {
         ...input,
@@ -331,7 +332,7 @@ export function createSessionHistoryWorkerReaders(
         for (const frame of value.frames) {
           if (
             !isRecord(frame) ||
-            !(frame.data instanceof Uint8Array) ||
+            !types.isUint8Array(frame.data) ||
             typeof frame.endOfEvent !== "boolean"
           ) {
             throw new Error("Session history worker returned an invalid transcript frame");

@@ -3153,6 +3153,9 @@ export const en: TranslationMap & {
     usageRemaining: "Usage Remaining",
     view: {
       menu: "View",
+      speechBubbles: "Speech bubbles",
+      activityDetails: "View activity details",
+      workingDetails: "Agent is working. View details",
       reasoning: "Reasoning",
       toolCalls: "Tool calls",
       commentary: "Keep commentary",

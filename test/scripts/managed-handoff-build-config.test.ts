@@ -310,21 +310,31 @@ it.each(
           phase,
         });
       }
+      const completedJournal = readFileSync(
+        resolvePackageActivationJournalPath(preparedPackage.anchor),
+      );
       const second = await prepareNext();
       const recordB = second.journal.read();
       const journalPath = resolvePackageActivationJournalPath(second.anchor);
-      expect(lstatSync(journalPath).ino).toBe(originalJournal.ino);
+      const archivedJournal = path.join(
+        `${second.anchor}.superseded-${first.descriptor.operationId}`,
+        "control",
+        "operation.sqlite",
+      );
+      expect(lstatSync(archivedJournal).ino).toBe(originalJournal.ino);
+      expect(readFileSync(archivedJournal)).toEqual(completedJournal);
+      expect(lstatSync(journalPath).ino).not.toBe(originalJournal.ino);
       expect(lstatSync(journalPath).dev).toBe(originalJournal.dev);
-      expect(recordB.revision).toBeGreaterThan(first.revision);
       expect(recordB.descriptor.operationId).not.toBe(first.descriptor.operationId);
       const snapshot = () =>
         [
+          archivedJournal,
           journalPath,
           resolvePackageActivationHelper(second.anchor),
           path.join(recordB.descriptor.authority.installKey, "package.json"),
         ].map((file) => ({ bytes: readFileSync(file), ino: lstatSync(file).ino }));
       const before = snapshot();
-      expect(commands).toHaveLength(3);
+      expect(commands).toHaveLength(2);
       for (const action of ["status", "repair", "retire"]) {
         const stale = runCommand(commandA, action);
         expect(stale.error).toBeUndefined();
@@ -332,15 +342,12 @@ it.each(
         expect(stale.stderr).toContain("different operation");
         expect(snapshot()).toEqual(before);
       }
-      // The replacement's temporary command is deliberately one-phase, never
-      // another locator for the next operation after its helper has moved.
-      expect(runCommand(commands[1]!, "status").status).not.toBe(0);
       for (const [action, phase] of [
         ["status", "prepared"],
         ["repair", "aborted"],
         ["retire", "complete"],
       ]) {
-        const current = runCommand(commands[2]!, action!);
+        const current = runCommand(commands[1]!, action!);
         expect(current.error).toBeUndefined();
         expect(current.status, current.stderr).toBe(0);
         expect(JSON.parse(current.stdout)).toMatchObject({

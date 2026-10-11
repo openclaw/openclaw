@@ -15,7 +15,6 @@ extensions/browser/src/browser/routes/agent.snapshot.ts
 extensions/codex/src/app-server/approval-bridge.ts
 extensions/codex/src/app-server/auth-bridge.test.ts
 extensions/codex/src/app-server/auth-bridge.ts
-extensions/codex/src/app-server/client.ts
 extensions/codex/src/app-server/compact.test.ts
 extensions/codex/src/app-server/computer-use.ts
 extensions/codex/src/app-server/config.test.ts
@@ -54,8 +53,6 @@ extensions/discord/src/monitor/message-handler.preflight.ts
 extensions/discord/src/monitor/model-picker.test.ts
 extensions/discord/src/monitor/native-command.model-picker.test.ts
 extensions/discord/src/monitor/native-command.plugin-dispatch.test.ts
-extensions/discord/src/outbound-adapter.test.ts
-extensions/discord/src/send.sends-basic-channel-messages.test.ts
 extensions/fal/image-generation-provider.ts
 extensions/feishu/src/bot.test.ts
 extensions/feishu/src/bot.ts
@@ -165,8 +162,6 @@ extensions/telegram/src/bot.create-telegram-bot.test.ts
 extensions/telegram/src/bot.test.ts
 extensions/telegram/src/bot/delivery.replies.ts
 extensions/telegram/src/channel.ts
-extensions/telegram/src/draft-stream.test.ts
-extensions/telegram/src/draft-stream.ts
 extensions/telegram/src/message-cache.ts
 extensions/telegram/src/polling-session.test.ts
 extensions/telegram/src/webhook.test.ts
@@ -254,7 +249,6 @@ src/agents/model-selection-shared.ts
 src/agents/models.profiles.live.test.ts
 src/agents/openclaw-tools.session-status.test.ts
 src/agents/openclaw-tools.sessions.test.ts
-src/agents/session-transcript-repair.test.ts
 src/agents/sessions/extensions/runner.ts
 src/agents/sessions/extensions/types.ts
 src/agents/sessions/model-registry.ts
@@ -360,7 +354,6 @@ src/config/io.write-prepare.ts
 src/config/mutate.test.ts
 src/config/mutate.ts
 src/config/schema.labels.ts
-src/config/schema.test.ts
 src/config/sessions/session-accessor.conformance.test.ts
 src/config/sessions/session-accessor.test.ts
 src/config/sessions/transcript.test.ts
@@ -543,7 +536,6 @@ src/tui/tui-event-handlers.test.ts
 src/tui/tui-pty-local.e2e.test.ts
 src/tui/tui-session-actions.test.ts
 src/tui/tui.ts
-src/web-search/runtime.test.ts
 src/wizard/setup.finalize.test.ts
 src/wizard/setup.finalize.ts
 src/wizard/setup.test.ts
@@ -552,8 +544,7 @@ ui/src/api/gateway.node.test.ts
 ui/src/lib/cron/index.test.ts
 ui/src/lib/cron/index.ts
 ui/src/lib/skills/index.test.ts
-ui/src/pages/agents/agents-page.ts
-ui/src/pages/agents/memory/view.ts
+ui/src/pages/agents/agents-page-state.ts
 ui/src/pages/chat/chat-gateway.test.ts
 ui/src/pages/chat/chat-responsive.browser.test.ts
 ui/src/pages/chat/chat-send.test.ts
@@ -565,8 +556,6 @@ ui/src/pages/chat/composer-persistence.ts
 ui/src/pages/chat/talk/gateway-relay.test.ts
 ui/src/pages/config/config-page.ts
 ui/src/pages/config/view.browser.test.ts
-ui/src/pages/cron/view.ts
 ui/src/pages/sessions/sessions-page.ts
-ui/src/pages/sessions/view.ts
 ui/src/pages/usage/view.ts
 ui/src/test-helpers/control-ui-e2e.ts

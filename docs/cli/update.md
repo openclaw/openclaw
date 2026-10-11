@@ -17,6 +17,13 @@ If you installed via **npm/pnpm/bun** (global install, no git metadata),
 updates go through the package-manager flow described in
 [Updating](/install/updating).
 
+Update checks, candidate rehearsal, activation Doctor, and verification inherit
+the managed Gateway's Node heap controls from its effective service command and
+`NODE_OPTIONS`. Command-line heap controls take precedence. An empty service
+`NODE_OPTIONS` preserves heap controls supplied by the invoking shell while still
+clearing inherited preload and debugger flags. This requires the fix in the
+installed updater; an older updater cannot inherit it from the candidate it stages.
+
 On Windows, update checks the Gateway Scheduled Task's principal and run level
 before staging or changing state. A per-user `LeastPrivilege` task for the current
 account can be updated from a non-elevated terminal, including a UAC-filtered
@@ -171,6 +178,11 @@ update successfully and then exit with `ERR_MODULE_NOT_FOUND` during CLI cleanup
 Check `openclaw update status` with the newly installed CLI to distinguish that
 exit failure from the recorded update outcome; the installed driver needs the fix
 before it performs its next update.
+
+Newer packages retain the published 2026.10.1 updater's cleanup entrypoints,
+including its original pending-disposer queue, so that first upgrade can finish
+normally. This compatibility covers the published package, not arbitrary
+development-build filenames.
 
 Updating from inside the installation keeps captured paths anchored to the
 invoking directory while the package is replaced. The updater keeps a valid
@@ -589,7 +601,7 @@ account and a non-interactive SSH command:
 ssh -T user@gateway-host 'openclaw update --yes' </dev/null
 ```
 
-Ensure `openclaw` resolves to the intended installation in that account's SSH
+Check that `openclaw` resolves to the intended installation in that account's SSH
 environment. Add the existing global `--profile <name>` before `update` when
 targeting a named profile.
 

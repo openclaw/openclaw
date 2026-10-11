@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { expressionBuilder } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -64,7 +65,11 @@ export function splitSessionEntrySnapshots(
   const values = { sessionDiffBaseline, skillsSnapshot, systemPromptReport };
   const snapshotsChanged =
     mode === "complete" ||
-    snapshotColumns.some(([field]) => values[field] !== mode.previousEntry?.[field]);
+    snapshotColumns.some(
+      ([field]) =>
+        values[field] !== mode.previousEntry?.[field] &&
+        !isDeepStrictEqual(values[field], mode.previousEntry?.[field]),
+    );
   const snapshots: SessionEntrySnapshot[] = [];
   for (const [field] of snapshotsChanged ? snapshotColumns : []) {
     const valueJson = JSON.stringify(values[field]);
