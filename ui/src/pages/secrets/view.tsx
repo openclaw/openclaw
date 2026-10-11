@@ -1,4 +1,3 @@
-import type { JSX as SolidJSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -14,22 +13,8 @@ import "../../components/web-awesome.ts";
 import { formatRelativeTimestamp } from "../../lib/reactive/format.ts";
 import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import type { SecretsStoreDraft } from "../../lib/secrets-store/index.ts";
+import type { JSX as SolidJSX } from "../../types/solid-elements.d.ts";
 import "../../styles/secrets-store.css";
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "wa-dropdown": HTMLAttributes<HTMLElement> & {
-        placement: "bottom-end";
-        "onWa-select"?: (event: CustomEvent<{ item: { value?: string } }>) => void;
-      };
-      "wa-dropdown-item": HTMLAttributes<HTMLElement> & {
-        value: string;
-        variant?: "danger";
-      };
-    }
-  }
-}
 
 export type SecretsDialogMode = "add" | "edit" | null;
 
@@ -148,7 +133,7 @@ function EntryMenu(props: { view: SecretsStoreViewProps; entry: SecretStoreEntry
           <wa-dropdown-item value="edit">{t("secretsStore.edit")}</wa-dropdown-item>
         </Show>
         <Show when={props.view.canDelete}>
-          <wa-dropdown-item value="delete" variant="danger">
+          <wa-dropdown-item value="delete" prop:variant="danger">
             {t("common.delete")}
           </wa-dropdown-item>
         </Show>
