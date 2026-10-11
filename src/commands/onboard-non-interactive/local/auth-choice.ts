@@ -11,7 +11,7 @@ import type {
   ProviderResolveNonInteractiveApiKeyParams,
 } from "../../../plugins/provider-authentication.types.js";
 import { resolveDeprecatedProviderInstallCatalogEntry } from "../../../plugins/provider-install-catalog.js";
-import type { RuntimeEnv } from "../../../runtime.js";
+import { ExitError, type RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
 import { resolveLegacyOnboardAuthChoice } from "../../auth-choice-legacy.js";
 import { formatAuthChoiceChoicesForCli } from "../../auth-choice-options.js";
@@ -251,6 +251,9 @@ export async function applyNonInteractiveAuthChoice(params: {
       }
       return result.config;
     } catch (err) {
+      if (err instanceof ExitError) {
+        throw err;
+      }
       const message =
         err instanceof CustomApiError &&
         (err.code === "missing_required" || err.code === "invalid_compatibility")

@@ -102,7 +102,7 @@ describe("context engine transcript cursor contract", () => {
         sessionFile: target.storePath,
         messagesSnapshot: [],
         prePromptMessageCount: 0,
-        promptError: true,
+        promptError: false,
         aborted: false,
         yieldAborted: false,
         turnCandidate: {

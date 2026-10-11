@@ -62,7 +62,6 @@ export {
 export type {
   ChannelApprovalCapabilityHandlerContext,
   ChannelApprovalNativeAvailabilityAdapter,
-  ChannelApprovalNativeAvailabilityAdapterAsync,
   ChannelApprovalNativeFinalAction,
   ChannelApprovalNativeInteractionAdapter,
   ChannelApprovalNativeObserveAdapter,
@@ -304,7 +303,7 @@ export type ChannelApprovalHandlerAdapter<
   >;
 };
 
-export type ChannelApprovalHandlerAdapterAsync<
+type ChannelApprovalHandlerAdapterAsync<
   TPendingEntry,
   TPreparedTarget,
   TPendingContent,

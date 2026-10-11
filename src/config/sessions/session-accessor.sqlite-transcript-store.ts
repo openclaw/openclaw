@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { getCodeModeSourceAppend } from "../../agents/transcript-code-mode-source.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
@@ -21,6 +22,7 @@ import type {
   TranscriptEvent,
   TranscriptMessageAppendOptions,
 } from "./session-accessor.sqlite-contract.js";
+import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   createTranscriptIdentityReader,
   findAssistantTranscriptEventInDatabase,
@@ -246,6 +248,22 @@ export function appendTranscriptEventInTransaction(
     cursor.insertIdentity({ ...identity, seq, createdAt });
   }
   advanceCliHistoryBoundaryInTransaction(database, scope, seq);
+  if (
+    isRecord(persistedEvent) &&
+    persistedEvent.type === "compaction" &&
+    parseCompactionDetails(persistedEvent.details)?.qualityDegraded
+  ) {
+    const entry = readSessionEntryRow(database, scope.sessionKey)?.entry;
+    if (entry?.sessionId === scope.sessionId && !entry.compactionQualityDegraded) {
+      // A later successful summary cannot recover facts already lost from this history.
+      writeSessionEntry(
+        database,
+        scope.sessionKey,
+        { ...entry, compactionQualityDegraded: true },
+        { previousEntry: entry },
+      );
+    }
+  }
   if (options.touchMutation !== false) {
     touchTranscriptMutationInTransaction(database, scope.sessionId);
   }
