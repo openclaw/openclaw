@@ -259,7 +259,13 @@ export class CronService implements CronServiceContract {
       : this.state.deps.defaultAgentId;
   }
 
-  wake(opts: { mode: CronWakeMode; text: string; sessionKey?: string; agentId?: string }) {
+  wake(opts: {
+    mode: CronWakeMode;
+    text: string;
+    sessionKey?: string;
+    agentId?: string;
+    commitGuard?: () => void;
+  }) {
     return runOps.wakeNow(this.state, opts);
   }
 }

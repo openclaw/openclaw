@@ -106,7 +106,7 @@ Lowering the setting applies the eviction policy to existing checkouts. Disk-spa
 
 ## Filesystem acceleration
 
-OpenClaw automatically uses filesystem acceleration for new managed worktrees when supported. Linux uses native Btrfs snapshots without requiring the `btrfs` command. macOS uses a native APFS directory clone, preserving independent file contents, executable modes, and symbolic links. Windows uses ReFS block clones, including on Dev Drive volumes. OpenClaw keeps the template on the same writable filesystem as the new checkout; the source repository can be on another filesystem. Git configurations with checkout filters, sparse checkout, per-worktree configuration, or external attributes use normal Git checkout.
+OpenClaw automatically uses filesystem acceleration for new managed worktrees when supported. Linux uses native Btrfs snapshots without requiring the `btrfs` command. macOS uses a native APFS directory clone, preserving independent file contents, executable modes, and symbolic links. Windows uses ReFS block clones, including on Dev Drive volumes. OpenClaw keeps the template on the same writable filesystem as the new checkout; the source repository can be on another filesystem. Effective checkout filters, sparse checkout, or external attributes in the target or template use normal Git checkout. Enabling Git's `extensions.worktreeConfig` or configuring sparse checkout in another worktree does not disable acceleration for full checkouts. Template reuse includes the effective per-worktree configuration, so changing a template's checkout settings invalidates it.
 
 To opt out, set:
 

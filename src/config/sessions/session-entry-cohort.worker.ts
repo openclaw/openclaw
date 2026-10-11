@@ -7,10 +7,9 @@ import {
 } from "../../infra/kysely-sync.js";
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
-import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
+import { normalizeDatabasePath } from "../../infra/sqlite-worker-identity.js";
 import {
   assertOpenClawAgentDatabaseIdentity,
-  isOpenClawAgentDatabasePathCurrent,
   readOpenClawAgentDatabaseIdentity,
 } from "../../state/openclaw-agent-db-identity.js";
 import {
@@ -113,7 +112,7 @@ export function readSessionEntryCohort(
     throw new Error("Session runtime target must belong to its entry cohort");
   }
   const source = readOpenClawAgentDatabaseIdentity(database);
-  if (typeof source.identity !== "string" || !isOpenClawAgentDatabasePathCurrent(database)) {
+  if (typeof source.identity !== "string") {
     throw new Error("Session entry cohort requires its admitted durable owner");
   }
   const identity = source.identity;
@@ -126,11 +125,11 @@ export function readSessionEntryCohort(
     input.replyInitializationSessionKey,
   );
   const assertSource = () => {
-    assertExistingDatabaseIdentity(database.path, `file:${identity}`, source.birthtime);
     const current = readOpenClawAgentDatabaseIdentity(database);
     if (
       current.incarnation !== source.incarnation ||
-      !isOpenClawAgentDatabasePathCurrent(database) ||
+      !database.db.isOpen ||
+      normalizeDatabasePath(database.db.location() ?? "") !== source.filename ||
       (expected && current.incarnation !== expected.incarnation)
     ) {
       throw new SessionEntryChangedDuringReadError();
@@ -251,10 +250,10 @@ export function readSessionEntryDataInDatabase(
     throw new Error("Session entry read requires its admitted durable owner");
   }
   const assertSource = () => {
-    assertExistingDatabaseIdentity(database.path, `file:${identity}`, source.birthtime);
     if (
       readOpenClawAgentDatabaseIdentity(database).incarnation !== source.incarnation ||
-      !isOpenClawAgentDatabasePathCurrent(database)
+      !database.db.isOpen ||
+      normalizeDatabasePath(database.db.location() ?? "") !== source.filename
     ) {
       throw new Error("Session entry read changed its admitted physical owner");
     }

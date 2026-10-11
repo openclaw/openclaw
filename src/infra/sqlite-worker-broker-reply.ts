@@ -12,6 +12,7 @@ import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import {
   acquireStateDatabaseSchemaLease,
   assertStateDatabaseAccessAllowed,
+  assertStateDatabaseReadAllowed,
   type StateDatabaseSchemaLease,
 } from "./gateway-state-owner.js";
 import { installSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
@@ -152,11 +153,18 @@ function prepareSqliteWorkerOperationAdmission(
       const assertAccess = () => {
         assertCurrentJob();
         job.maintenanceScope?.assertAdmission();
-        assertStateDatabaseAccessAllowed(databasePath, {
+        assertStateDatabaseReadAllowed(databasePath, {
           maintenanceScope: job.maintenanceScope,
           schemaLease,
         });
       };
+      // Retirement must drain even after ordinary database access is revoked.
+      if (job.request.type !== "close") {
+        assertStateDatabaseAccessAllowed(databasePath, {
+          maintenanceScope: job.maintenanceScope,
+          schemaLease,
+        });
+      }
       retained.admission.bindDatabaseAuthority({
         databasePath,
         assertRequest: assertDispatchable,

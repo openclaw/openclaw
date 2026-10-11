@@ -21,6 +21,7 @@ import type {
   SessionActorTarget,
 } from "./session-actor-contract.js";
 import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
+import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
@@ -31,6 +32,7 @@ export type SessionActorEntryFacts = Pick<
   Partial<Pick<SessionActorHotState, "participants" | "members">> & {
     snapshots: "full" | readonly SessionEntrySnapshotField[];
     projection?: Pick<SessionRowDatabaseFacts, "hasBoard" | "activitySummaryWatermark">;
+    predicateColumns?: ReturnType<typeof deriveSessionPredicateColumns>;
   };
 
 type FileTarget = SessionActorTarget & { database: AgentDatabaseExecutionFileIdentity };
@@ -38,6 +40,7 @@ type ReplicaCell = {
   target: SessionActorTarget;
   snapshot?: SessionActorHotState;
   entry?: SessionActorEntryFacts;
+  predicateColumns?: SessionActorEntryFacts["predicateColumns"];
   generation?: string;
   reservation: number;
   handles: number;
@@ -107,6 +110,7 @@ function ensureReplicaSubscription(): void {
       // Board writes use unchanged-entry markers, so they revoke row projection coverage.
       const unchangedEntry =
         unchangedMarker && cell.entry ? { ...cell.entry, projection: undefined } : undefined;
+      const previousPredicateColumns = cell.predicateColumns;
       const previous = cell.snapshot ?? cell.entry;
       const previousProjection = cell.snapshot
         ? { hasBoard: cell.snapshot.hasBoard }
@@ -116,6 +120,7 @@ function ensureReplicaSubscription(): void {
         // Transcript/metadata markers do not revoke an installed entry receipt.
         // Its original scoped token still rejects any unaccounted storage write.
         cell.entry = unchangedEntry;
+        cell.predicateColumns = previousPredicateColumns;
         cell.bytes = JSON.stringify(unchangedEntry).length * 2;
         pool.snapshots += 1;
         pool.bytes += cell.bytes;
@@ -146,6 +151,7 @@ function ensureReplicaSubscription(): void {
             snapshots: "full",
             projection,
           });
+          cell.predicateColumns = deriveSessionPredicateColumns(JSON.stringify(prepared.fullEntry));
           cell.bytes = JSON.stringify(cell.entry).length * 2;
           pool.snapshots += 1;
           pool.bytes += cell.bytes;
@@ -177,6 +183,7 @@ function discard(cell: ReplicaCell): void {
   pool.bytes -= cell.bytes;
   cell.snapshot = undefined;
   cell.entry = undefined;
+  cell.predicateColumns = undefined;
   cell.bytes = 0;
 }
 
@@ -266,6 +273,7 @@ export function readSessionActorEntryFacts(
     snapshots,
     dependencySessionIds: state.dependencySessionIds,
     writeToken: state.writeToken,
+    predicateColumns: cell.predicateColumns,
     incarnation,
   });
 }
@@ -319,7 +327,10 @@ export function readSessionActorRowFacts(params: {
 /** A single cold entry batch and actor commands publish into the same bounded MAIN owner. */
 export function retainSessionActorEntryFacts(
   target: FileTarget,
-  facts: Omit<SessionActorEntryFacts, "target" | "writeToken" | "dependencySessionIds">,
+  facts: Omit<
+    SessionActorEntryFacts,
+    "target" | "writeToken" | "dependencySessionIds" | "predicateColumns"
+  >,
   incarnation: string,
 ): void {
   ensureReplicaSubscription();
@@ -356,6 +367,9 @@ export function retainSessionActorEntryFacts(
       writeToken,
     }),
   );
+  cell.predicateColumns = facts.entry
+    ? deriveSessionPredicateColumns(JSON.stringify(facts.entry))
+    : undefined;
   cell.generation = incarnation;
   cell.bytes = JSON.stringify(cell.entry).length * 2;
   pool.snapshots += 1;
@@ -431,6 +445,9 @@ export function createSessionActorReplica(params: {
     }
     discard(owned);
     owned.snapshot = detached;
+    owned.predicateColumns = detached.entry
+      ? deriveSessionPredicateColumns(JSON.stringify(detached.entry))
+      : undefined;
     owned.generation = expectedGeneration;
     owned.bytes = JSON.stringify(detached).length * 2;
     pool.snapshots += 1;

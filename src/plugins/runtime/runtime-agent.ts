@@ -1,6 +1,9 @@
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import { resolveEmbeddedCliBackendDispatchEligibility } from "../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js";
+import {
+  resolveEmbeddedCliBackendDispatchEligibility,
+  resolveEmbeddedCliBackendDispatchEligibilityAsync,
+} from "../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import {
   buildConfiguredModelCatalog,
@@ -22,12 +25,14 @@ import {
   type SessionAccessScope,
 } from "../../config/sessions/session-accessor.js";
 import { captureMemoryExactSessionReader } from "../../config/sessions/session-accessor.memory-exact-read.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   getSessionEntryAsync,
   getSessionEntryByIdAsync,
 } from "../../plugin-sdk/session-store-runtime-internal.js";
 import {
+  listSessionEntriesAsync,
   patchSessionEntry,
   prepareSessionEntryPatch,
   updateSessionStoreEntry,
@@ -35,6 +40,7 @@ import {
 } from "../../plugin-sdk/session-store-runtime.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { warnPluginSdkDeprecation } from "../sdk-deprecation.js";
 import { resolveAgentCatalogCreateTarget } from "./runtime-agent-session-catalog.js";
 import { createRuntimeSessionEntry } from "./runtime-agent-session-create.js";
 import { ensurePluginAgentWorkspace } from "./runtime-agent-workspace.js";
@@ -75,6 +81,11 @@ function getSessionEntry(params: RuntimeSessionStoreReadParams): SessionEntry | 
 }
 
 const listSessionEntries: RuntimeSession["listSessionEntries"] = (params = {}) => {
+  warnPluginSdkDeprecation({
+    family: "session-store",
+    method: "runtime.agent.session.listSessionEntries",
+    replacement: "runtime.agent.session.listSessionEntriesAsync",
+  });
   const listEntries = params.readOnly
     ? listAccessorSessionEntriesReadOnly
     : listAccessorSessionEntries;
@@ -101,7 +112,7 @@ async function runWithSessionWorkAdmission<T>(
   const memory = captureMemoryExactSessionReader(params, () => params.signal?.throwIfAborted());
   const initialEntry = memory
     ? memory.read(params.sessionKey, "list")
-    : getSessionEntry({
+    : await readSessionEntryReadOnlyInWorker({
         storePath: params.storePath,
         sessionKey: params.sessionKey,
         readConsistency: "latest",
@@ -182,6 +193,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     },
     resolveAgentTimeoutMs,
     resolveCliBackendDispatchEligibility: resolveEmbeddedCliBackendDispatchEligibility,
+    resolveCliBackendDispatchEligibilityAsync: resolveEmbeddedCliBackendDispatchEligibilityAsync,
     ensureAgentWorkspace: ensurePluginAgentWorkspace,
   } satisfies Omit<
     PluginRuntime["agent"],
@@ -218,6 +230,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     getSessionEntryAsync,
     getSessionEntryByIdAsync,
     listSessionEntries,
+    listSessionEntriesAsync,
     createSessionEntryListReader: async (
       params: Parameters<RuntimeSession["createSessionEntryListReader"]>[0],
     ) =>

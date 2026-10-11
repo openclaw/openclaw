@@ -94,6 +94,7 @@ export {
 } from "./session-accessor.sqlite-entry.js";
 
 export { resolveSessionEntryFromStore, resolveSessionEntrySelection };
+export { resolveSessionEntryCandidateTargetForRuntime } from "./session-entry-candidate-runtime.js";
 
 function resolveLogicalSessionStoreCandidates(params: {
   agentId: string;
@@ -383,13 +384,6 @@ export function resolveSessionEntryCandidateTarget(
     persisted: false,
     sessionKey: fallbackKey,
   };
-}
-
-/** Candidate reads consume the selected backend's current entries in order. */
-export function resolveSessionEntryCandidateTargetForRuntime(
-  scope: SessionEntryCandidateAccessScope,
-): ResolvedSessionEntryCandidateTarget | null {
-  return resolveSessionEntryCandidateTarget(scope);
 }
 
 function resolveSessionEntryStoreTarget(

@@ -18,6 +18,7 @@ Each entry cost at least one failed CI run, a reverted approach, or a blocked PR
 - **A tag can have only one class.** Our first plan kept Lit versions of shared primitives for unported callers while Solid rendered the same tags. The browser upgrades any element with a registered tag, so Lit rendered over Solid's children. The fix is one implementation per tag plus the bridge.
 - **Don't block the old path before the new one works.** The Lit ratchet landed before anyone could mount a Solid component, and it blocked feature PRs that legitimately added Lit UI. Migration guards start advisory. Enforce in the PR that makes the replacement usable, and only for new files.
 - **Bridges need the boring cases tested.** Properties set before upgrade, moves within one task, Lit part markers in child content, and context replacement each broke a first draft.
+- **Refs can precede document adoption.** A Solid template element can still belong to an inert document when its ref runs, so `ownerDocument.defaultView` is null. Bind global listeners through an already mounted owner and retain that exact window for cleanup; otherwise hover-only Escape silently stops working while focused key handlers still pass.
 
 ## Testing and tooling
 

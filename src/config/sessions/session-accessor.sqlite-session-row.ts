@@ -6,6 +6,7 @@ import {
 import { normalizeSessionRowChatType, normalizeText } from "./session-accessor.sqlite-normalize.js";
 import { bindSessionEntryProvenance } from "./session-accessor.sqlite-provenance.js";
 import { normalizeStatus } from "./session-accessor.sqlite-status.js";
+import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
 import { resolveSessionWindowCreatedAt } from "./session-window-created-at.js";
 import type { SessionEntry } from "./types.js";
 
@@ -63,6 +64,7 @@ export function bindSessionNode(params: {
     session_key: params.sessionKey,
     current_session_id: params.entry.sessionId,
     entry_json: params.entryJson,
+    ...deriveSessionPredicateColumns(params.entryJson),
     entry_valid: 1,
     updated_at: params.updatedAt,
     status: normalizeStatus(params.entry.status),

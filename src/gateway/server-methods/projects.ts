@@ -26,6 +26,7 @@ import {
 } from "../../agents/worktrees/run-end-lifecycle.js";
 import { managedWorktrees, type ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
+import { loadCombinedSessionStoreForGatewayCoreAsync } from "../../config/sessions/combined-store-gateway-read.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
@@ -62,7 +63,6 @@ import {
   requireSessionRowProjection,
 } from "../session-row-projection-access.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
-import { loadCombinedSessionStoreForGatewayCore } from "../session-utils.js";
 import { startProjectsListDiagnostics } from "./projects-list-diagnostics.js";
 import { listProjectRecents } from "./projects-recents.js";
 import {
@@ -236,7 +236,7 @@ async function listObservedProjects(
   service: ProjectWorktreeService,
   context: Parameters<GatewayRequestHandlers["projects.list"]>[0]["context"],
   client: Parameters<GatewayRequestHandlers["projects.list"]>[0]["client"],
-  store: ReturnType<typeof loadCombinedSessionStoreForGatewayCore>["store"],
+  store: Awaited<ReturnType<typeof loadCombinedSessionStoreForGatewayCoreAsync>>["store"],
   diagnostics?: ReturnType<typeof startProjectsListDiagnostics>,
 ): Promise<ProjectSummary[]> {
   diagnostics?.mark("worktreeRegistry");
@@ -341,11 +341,11 @@ function findSessionCheckoutReference(
   return undefined;
 }
 
-function findProjectCheckoutReference(
+async function findProjectCheckoutReference(
   cfg: Parameters<typeof listProjectRegistry>[0],
   repoRoot: string,
   worktrees: readonly ManagedWorktreeRecord[],
-): string | undefined {
+): Promise<string | undefined> {
   const normalizedRoot = path.resolve(repoRoot);
   const workspaceReference = listWorkspaceProjects(cfg).find(
     (candidate) => path.resolve(candidate.repoRoot) === normalizedRoot,
@@ -353,14 +353,17 @@ function findProjectCheckoutReference(
   const worktreeReference = worktrees.find(
     (worktree) => !worktree.removedAt && path.resolve(worktree.repoRoot) === normalizedRoot,
   );
-  const sessionReference = findSessionCheckoutReference(normalizedRoot, [
-    ...Object.entries(
-      loadCombinedSessionStoreForGatewayCore(cfg, {
-        projection: "list",
-        includeIncognito: false,
-      }).store,
+  const sessionReference = findSessionCheckoutReference(
+    normalizedRoot,
+    Object.entries(
+      (
+        await loadCombinedSessionStoreForGatewayCoreAsync(cfg, {
+          projection: "list",
+          includeIncognito: false,
+        })
+      ).store,
     ),
-  ]);
+  );
   return workspaceReference
     ? `agent workspace ${workspaceReference.displayName}`
     : worktreeReference
@@ -407,7 +410,9 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
             "sessions.create",
             Array.isArray(client?.connect.scopes) ? client.connect.scopes : [],
           ).allowed;
-        let store: ReturnType<typeof loadCombinedSessionStoreForGatewayCore>["store"] = {};
+        let store: Awaited<
+          ReturnType<typeof loadCombinedSessionStoreForGatewayCoreAsync>
+        >["store"] = {};
         let observedProjects: ProjectSummary[] | undefined;
         if (client?.authenticatedUserProfile?.profileId || (params.includeObserved && canWrite())) {
           const projection = requireSessionRowProjection(context);
@@ -633,13 +638,14 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
             };
             return removeClonedProjectCheckout(
               project,
-              () => {
+              async () => {
                 assertCurrent();
-                const reference = findProjectCheckoutReference(
+                const reference = await findProjectCheckoutReference(
                   context.getRuntimeConfig(),
                   project.repoRoot,
                   worktrees,
                 );
+                assertCurrent();
                 if (reference) {
                   throw new ProjectCheckoutError(
                     `Project checkout is still referenced by ${reference}. Remove that reference before deleting the checkout.`,

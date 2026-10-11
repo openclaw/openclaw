@@ -10,7 +10,9 @@ import {
 import { getChannelPlugin, getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { SkillCommandSpec } from "../skills/types.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
 import { listChatCommands, listChatCommandsForConfig } from "./commands-registry-list.js";
@@ -369,13 +371,71 @@ export function canResolveCommandArgMenu<
     : args?.values?.[command.argsMenu.arg] == null;
 }
 
-/** Resolves the next argument menu to show for commands with selectable choices. */
-export function resolveCommandArgMenu(
-  params: Omit<CommandArgChoiceContext, "arg"> & {
-    args?: CommandArgs;
-    session?: { agentId: string; sessionKey: string };
-  },
-): { arg: CommandArgDefinition; choices: ResolvedCommandArgChoice[]; title?: string } | null {
+type CommandArgMenuParams = Omit<CommandArgChoiceContext, "arg"> & {
+  args?: CommandArgs;
+  session?: { agentId: string; sessionKey: string };
+};
+
+type ResolvedCommandArgMenu = {
+  arg: CommandArgDefinition;
+  choices: ResolvedCommandArgChoice[];
+  title?: string;
+};
+
+/** @deprecated Use resolveCommandArgMenuAsync. Removed at the next Plugin SDK major. */
+export function resolveCommandArgMenu(params: CommandArgMenuParams): ResolvedCommandArgMenu | null {
+  warnPluginSdkDeprecation({
+    family: "native-command-menu",
+    method: "resolveCommandArgMenu",
+    replacement: "resolveCommandArgMenuAsync",
+  });
+  const menu = resolveCommandArgMenuChoices(params);
+  if (menu && params.command.key === "verbose" && params.cfg && params.session) {
+    const { agentId, sessionKey } = params.session;
+    const entry = loadSessionEntryReadOnly({
+      agentId,
+      storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+      sessionKey,
+    });
+    setVerboseMenuTitle(
+      menu,
+      params.command,
+      entry?.verboseLevel ?? resolveAgentConfig(params.cfg, agentId)?.verboseDefault ?? "off",
+    );
+  }
+  return menu;
+}
+
+/** Resolves menu choices and session-owned status through the asynchronous read owner. */
+export async function resolveCommandArgMenuAsync(
+  params: CommandArgMenuParams,
+): Promise<ResolvedCommandArgMenu | null> {
+  const menu = resolveCommandArgMenuChoices(params);
+  if (menu && params.command.key === "verbose" && params.cfg && params.session) {
+    const { agentId, sessionKey } = params.session;
+    const entry = await readSessionEntryReadOnlyInWorker({
+      agentId,
+      storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+      sessionKey,
+    });
+    setVerboseMenuTitle(
+      menu,
+      params.command,
+      entry?.verboseLevel ?? resolveAgentConfig(params.cfg, agentId)?.verboseDefault ?? "off",
+    );
+  }
+  return menu;
+}
+
+function setVerboseMenuTitle(
+  menu: ResolvedCommandArgMenu,
+  command: ChatCommandDefinition,
+  level: string,
+): void {
+  menu.title = `Current verbose level: ${level}.\n${formatCommandArgMenuTitle({ command, menu })}`;
+}
+
+function resolveCommandArgMenuChoices(params: CommandArgMenuParams): ResolvedCommandArgMenu | null {
   if (!canResolveCommandArgMenu(params)) {
     return null;
   }
@@ -404,25 +464,13 @@ export function resolveCommandArgMenu(
   if (choices.length === 0) {
     return null;
   }
-  const menu = { arg, choices, title: argSpec !== "auto" ? argSpec.title : undefined };
-  if (command.key === "verbose" && cfg && params.session) {
-    // Native menus bypass directive dispatch; keep its status tied to the same target session.
-    const { agentId, sessionKey } = params.session;
-    const entry = loadSessionEntryReadOnly({
-      agentId,
-      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
-      sessionKey,
-    });
-    const level = entry?.verboseLevel ?? resolveAgentConfig(cfg, agentId)?.verboseDefault ?? "off";
-    menu.title = `Current verbose level: ${level}.\n${formatCommandArgMenuTitle({ command, menu })}`;
-  }
-  return menu;
+  return { arg, choices, title: argSpec !== "auto" ? argSpec.title : undefined };
 }
 
 /** Formats the prompt title shown before an argument-choice menu. */
 export function formatCommandArgMenuTitle(params: {
   command: ChatCommandDefinition;
-  menu: NonNullable<ReturnType<typeof resolveCommandArgMenu>>;
+  menu: ResolvedCommandArgMenu;
 }): string {
   const { command, menu } = params;
   if (menu.title) {

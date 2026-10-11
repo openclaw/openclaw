@@ -43,7 +43,6 @@ import {
   retainAgentDatabase,
   type PendingAgentDatabaseOpen,
 } from "./openclaw-agent-db-lifecycle.js";
-import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
 import { assertAgentDatabaseResourceAdmission } from "./openclaw-agent-db-resources.js";
 import {
   assertExistingAgentSchemaOwner,
@@ -202,20 +201,13 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
           }
         }
       : deletionCommit;
-    const enteredNestedTransaction = database.db.isTransaction;
     return withSqlitePostCommitPublications(database.db, () =>
       runSqliteImmediateTransactionSync(
         database.db,
         () => {
           assertAgentDeletionDatabaseCleanupAccess(database, options);
           assertAgentCreationClaimAccess(database, options);
-          const operationResult = operation(database);
-          if (!enteredNestedTransaction) {
-            // Permission failure must roll back with the write. Repairing after
-            // COMMIT could make callers retry a transaction already durable in SQLite.
-            ensureOpenClawAgentDatabasePermissions(database.path, options);
-          }
-          return operationResult;
+          return operation(database);
         },
         {
           busyTimeoutMs: writeOptions.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,

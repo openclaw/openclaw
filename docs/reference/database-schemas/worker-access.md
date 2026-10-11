@@ -240,6 +240,25 @@ inline maintenance and archive persistence still share the released opaque SDK
 deletion transaction; moving those calls requires that transaction owner's cutover.
 This changes no schemas, retention, stored bytes, or update behavior.
 
+## Session target discovery
+
+Gateway combined listings, search preparation, cron owner discovery, delivery
+context recovery, and ordered runtime candidate selection await the existing
+session history/discovery worker. Target selection returns logical and physical
+store facts together; durable reads do not run SQLite on the Gateway thread.
+Combined topology and row reads share the federation policy used by the native
+maintenance entrypoint. Bound incognito rows remain with their process-held actor;
+unbound incognito stores retain their existing process-local native owner.
+
+Ordinary discovery keeps one captured roster and listing through completion.
+Later registry, path, or row changes are observed on the next owner preparation;
+there is no post-read registry retry or repeated listing-identity capture.
+Write receipts invalidate reusable target facts. Current authorization at
+search disclosure, project removal, and other real effects remains required.
+The released synchronous transcript-hit SDK and native mutation callbacks retain
+their existing kernels until those owning contracts are migrated; this is not a
+claim that all shared discovery kernels are worker-only.
+
 ## Config CLI ownership
 
 ### Non-session bookkeeping
@@ -652,9 +671,11 @@ a receipt for one key does not certify those sibling guards.
 
 Reads inside an active session writer borrow that writer's execution instead of
 reentering FIFO admission or consuming a potentially unsettled cached postimage.
-Transcript callbacks retain their existing append and preparation queues, and
-the writer settles accepted reads before releasing its reservation. The plain
-reader keeps its projection and error contracts on the supplied database handle.
+Transcript callbacks retain their existing append and preparation queues. Source
+authority and message preparation borrow an append's nested read queue so their
+reads cannot wait behind the append itself. The writer settles accepted reads
+before releasing its reservation. The plain reader keeps its projection and
+error contracts on the supplied database handle.
 Each database retains at most 128 keys and 8 MiB of serialized fact data, including
 saved prompt snapshots; the process retains at most 32 such databases. Least
 recently used entries are evicted when either bound is reached. Eviction, worker

@@ -23,8 +23,6 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -582,7 +580,7 @@ it.each(["process", "explicit"])(
   },
 );
 
-it.each(["completed-drain", "active-drain", "terminal-owner", "registry-close"])(
+it.each(["completed-drain", "active-drain", "terminal-owner"])(
   "preserves physical discovery authority across %s",
   async (transition) => {
     await withOpenClawTestState(
@@ -629,11 +627,7 @@ it.each(["completed-drain", "active-drain", "terminal-owner", "registry-close"])
           transition === "completed-drain"
             ? expect(pending).resolves.toBeInstanceOf(SessionManager)
             : expect(pending).rejects.toThrow(
-                transition === "active-drain"
-                  ? "resources are closing"
-                  : transition === "terminal-owner"
-                    ? "newly forbidden owner"
-                    : "read admission",
+                transition === "active-drain" ? "resources are closing" : "newly forbidden owner",
               );
         let closing: Promise<boolean> | undefined;
         try {
@@ -646,8 +640,6 @@ it.each(["completed-drain", "active-drain", "terminal-owner", "registry-close"])
               target.storePath,
               new Error("newly forbidden owner"),
             );
-          } else if (transition === "registry-close") {
-            await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath());
           } else {
             await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
           }

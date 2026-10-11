@@ -14,7 +14,10 @@ import {
   shouldProjectActiveEvent,
   transcriptEventContextEligibility,
 } from "../config/sessions/session-transcript-projection-append.js";
-import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
+import {
+  createTranscriptEventInserter,
+  transcriptEventJsonSql,
+} from "../config/sessions/transcript-payload.js";
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
@@ -110,13 +113,18 @@ export function createLegacyDatabaseFixture(params: {
           "INSERT INTO transcript_rewrite_watermarks(session_id,generation,updated_at) VALUES(?,?,?)",
         )
         .run(sessionId, `generation-${sessionId}`, firstTimestamp);
+      const insertEvent = legacy ? undefined : createTranscriptEventInserter(database, sessionId);
       events.forEach((event, seq) => {
         const createdAt = Number(event.timestamp ?? firstTimestamp) + 100;
-        database
-          .prepare(
-            "INSERT INTO transcript_events(session_id,seq,event_json,created_at) VALUES(?,?,?,?)",
-          )
-          .run(sessionId, seq, JSON.stringify(event), createdAt);
+        if (insertEvent) {
+          insertEvent({ seq, eventJson: JSON.stringify(event), createdAt });
+        } else {
+          database
+            .prepare(
+              "INSERT INTO transcript_events(session_id,seq,event_json,created_at) VALUES(?,?,?,?)",
+            )
+            .run(sessionId, seq, JSON.stringify(event), createdAt);
+        }
         database
           .prepare(
             "INSERT INTO transcript_event_identities(session_id,event_id,seq,event_type,parent_id,message_idempotency_key,created_at) VALUES(?,?,?,?,?,?,?)",

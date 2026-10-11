@@ -53,7 +53,6 @@ src/gateway/gateway.sessions-send-hot-reload.e2e.test.ts	4
 src/gateway/mcp-app-standalone-cancellation.test.ts	7
 src/gateway/mcp-http.test.ts	4
 src/gateway/server-lifetime-sidecars.test.ts	3
-src/gateway/server-methods/chat.oauth-refresh-cancel.integration.test.ts	1
 src/gateway/server-methods/cron-creator-transports.integration.test.ts	1
 src/gateway/server-methods/environments.pairing-snapshot.test.ts	1
 src/gateway/server-methods/models-auth-login.catalog.integration.test.ts	1

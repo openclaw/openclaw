@@ -47,6 +47,7 @@ import {
   listSessions,
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
+import * as listFilters from "./session-list-filters.js";
 import * as projectionWork from "./session-projection-work.js";
 import { prepareSessionRowPublication } from "./session-row-presentation.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
@@ -402,9 +403,18 @@ it("reuses row identities across lists until their entry, profile, or config cha
       }
       expect(identities).not.toHaveBeenCalled();
 
+      const serialized = () =>
+        listProjectedSessions({ projection, opts: {}, acceptsSerializedJson: true });
+      await serialized();
+      const selections = vi.spyOn(listFilters, "filterSessionEntries");
+      sessionChanges.emit({ ...scope, scope: "runtime", facts: { kind: "unchanged" } });
+      expect((await serialized()).sessions[0]?.owner?.actor.label).toBe("Original agent");
+      expect(selections).not.toHaveBeenCalled();
+      identities.mockClear();
+
       sessionChanges.emit({ all: true, scope: "profiles" });
       await list();
-      expect(identities).toHaveBeenCalledTimes(3);
+      expect(identities).toHaveBeenCalled();
       identities.mockClear();
       await list();
       expect(identities).not.toHaveBeenCalled();

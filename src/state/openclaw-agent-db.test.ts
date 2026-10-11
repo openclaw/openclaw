@@ -2438,26 +2438,6 @@ describe("openclaw agent database", () => {
     expect(fs.statSync(parentDir).mode & 0o777).toBe(0o755);
   });
 
-  it.runIf(process.platform !== "win32")(
-    "defers nested permission repair to the outer transaction boundary",
-    () => {
-      const stateDir = createTempStateDir();
-      const options = {
-        agentId: "worker-1",
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      };
-      const database = openOpenClawAgentDatabase(options);
-      fs.chmodSync(database.path, 0o644);
-
-      runOpenClawAgentWriteTransaction(() => {
-        runOpenClawAgentWriteTransaction(() => undefined, options);
-        expect(fs.statSync(database.path).mode & 0o777).toBe(0o644);
-      }, options);
-
-      expect(fs.statSync(database.path).mode & 0o777).toBe(0o600);
-    },
-  );
-
   it("repairs every missing or drifted canonical agent-state named index", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };

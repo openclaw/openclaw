@@ -571,44 +571,8 @@ function resolveGatewaySessionStoreTargetsReadOnly(params: {
   targets: readonly { key: string; agentId?: string }[];
   projection?: SessionEntryReadScope["projection"];
 }): GatewaySessionStoreTargetWithStore[] {
-  return readGatewaySessionStoreTargets(params, "eager").map((result) => {
-    if (!result.ok) {
-      throw result.error;
-    }
-    return result.value;
-  });
-}
-
-/** Read exact groups now, retaining logical errors for the caller's ordered visitor. */
-export function prepareGatewaySessionStoreTargetsReadOnly(params: {
-  env?: NodeJS.ProcessEnv;
-  cfg: OpenClawConfig;
-  targets: readonly { key: string; agentId?: string }[];
-  projection: SessionEntryReadScope["projection"];
-}): Array<Result<GatewaySessionStoreTargetWithStore, unknown>> {
-  return readGatewaySessionStoreTargets(params, "prepared");
-}
-
-function readGatewaySessionStoreTargets(
-  params: Parameters<typeof resolveGatewaySessionStoreTargetsReadOnly>[0],
-  mode: "eager" | "prepared",
-): Array<Result<GatewaySessionStoreTargetWithStore, unknown>> {
-  const resolve = <T, U>(items: Result<T, unknown>[], read: (value: T) => U) =>
-    items.map((item): Result<U, unknown> => {
-      if (!item.ok) {
-        return item;
-      }
-      try {
-        return ok(read(item.value));
-      } catch (error) {
-        if (mode === "eager") {
-          throw error;
-        }
-        return err(error);
-      }
-    });
   const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-  const requests = resolve(params.targets.map(ok), (target) => {
+  const requests = params.targets.map((target) => {
     const lookup: GatewaySessionStoreLookupParams = {
       ...target,
       key: normalizeOptionalString(target.key) ?? "",
@@ -617,23 +581,19 @@ function readGatewaySessionStoreTargets(
       clone: false,
       readOnly: true,
       exactRead: true,
-      projection: mode === "eager" ? (params.projection ?? "list") : params.projection,
+      projection: params.projection ?? "list",
       targetDiscoveryCache,
     };
     return { lookup, legacy: prepareExplicitDeletedLegacyMainStoreTarget(lookup) };
   });
-  loadGatewaySessionStoreReads(
-    requests.flatMap((request) => (request.ok ? (request.value.legacy?.reads ?? []) : [])),
-  );
-  const selected = resolve(requests, ({ lookup, legacy }) => {
+  loadGatewaySessionStoreReads(requests.flatMap((request) => request.legacy?.reads ?? []));
+  const selected = requests.map(({ lookup, legacy }) => {
     // Only a legacy miss permits fallback; a logical error must stay with its target.
     const target = legacy?.resolve();
     return target ? { reads: [], resolve: () => target } : prepareGatewaySessionStoreTarget(lookup);
   });
-  loadGatewaySessionStoreReads(
-    selected.flatMap((selection) => (selection.ok ? selection.value.reads : [])),
-  );
-  return resolve(selected, (selection) => selection.resolve());
+  loadGatewaySessionStoreReads(selected.flatMap((selection) => selection.reads));
+  return selected.map((selection) => selection.resolve());
 }
 
 function includeDirectChildEntries(

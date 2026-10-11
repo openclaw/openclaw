@@ -5,10 +5,8 @@ import {
   isRestartRecoveryTombstone,
   isSessionWorkStartInvalidatedError,
 } from "../../config/sessions/lifecycle.js";
-import {
-  loadSessionEntryReadOnly,
-  patchSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import {
   composeSessionSourceAssertion,
@@ -133,7 +131,9 @@ async function restoreArchivedDispatchSession(params: {
     scope: storePath,
     identities: [sessionKey, snapshotSessionId],
     run: async () => {
-      const currentEntry = metadata ? metadata.readCurrent() : loadSessionEntryReadOnly(scope);
+      const currentEntry = metadata
+        ? metadata.readCurrent()
+        : await readSessionEntryReadOnlyInWorker(scope);
       metadata?.assertCurrent();
       if (
         !currentEntry ||

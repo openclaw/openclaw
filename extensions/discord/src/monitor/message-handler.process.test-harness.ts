@@ -417,7 +417,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
 
 vi.mock("openclaw/plugin-sdk/session-store-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/session-store-runtime")>()),
-  getSessionEntry: (params?: unknown) => configSessionsMocks.getSessionEntry(params),
+  getSessionEntryAsync: async (params?: unknown) => configSessionsMocks.getSessionEntry(params),
   readSessionUpdatedAtAsync: async (params?: unknown) =>
     configSessionsMocks.readSessionUpdatedAt(params),
   resolveStorePath: (path?: unknown, opts?: unknown) =>

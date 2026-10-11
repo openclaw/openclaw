@@ -183,6 +183,9 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
     modelId: params.modelId,
     modelContextTokens: asFiniteNumber(params.runtimeModel.contextTokens),
     modelContextWindow: contextWindowProfile.contextTokens,
+    modelContextWindowSource: contextWindowProfile.contextWindow
+      ? undefined
+      : params.runtimeModel.contextWindowSource,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   });
   // resolveContextWindowInfo ranks the passed selection below both the

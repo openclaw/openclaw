@@ -1,4 +1,3 @@
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   ErrorCodes,
   errorShape,
@@ -36,7 +35,6 @@ import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import {
   withGatewaySessionStoreTarget,
-  prepareGatewaySessionStoreTargetsReadOnly,
   resolveGatewaySessionStoreTargetWithStore,
   type GatewaySessionStoreCache,
 } from "./session-utils-store-lookup.js";
@@ -252,41 +250,6 @@ function toSessionSharingTarget(
         readSource: target.capturedReadSource,
       }
     : null;
-}
-
-/** Prepare one synchronous batch while retaining each target's failure for ordered consumption. */
-export function prepareSessionSharingTargets(params: {
-  cfg: OpenClawConfig;
-  targets: readonly { sessionKey: string; agentId?: string }[];
-}): Array<Result<SessionSharingTarget | null, unknown>> {
-  const durableTargets = params.targets.filter(
-    (target) => !isIncognitoSessionKey(target.sessionKey),
-  );
-  const durableResults = prepareGatewaySessionStoreTargetsReadOnly({
-    cfg: params.cfg,
-    targets: durableTargets.map(({ sessionKey, agentId }) => ({ key: sessionKey, agentId })),
-    projection: "list",
-  }).map((result): Result<SessionSharingTarget | null, unknown> => {
-    if (!result.ok) {
-      return result;
-    }
-    try {
-      return ok(toSessionSharingTarget(result.value));
-    } catch (error) {
-      return err(error);
-    }
-  });
-  let durableIndex = 0;
-  return params.targets.map((target) => {
-    if (!isIncognitoSessionKey(target.sessionKey)) {
-      return durableResults[durableIndex++]!;
-    }
-    try {
-      return ok(resolveSessionSharingTarget({ cfg: params.cfg, ...target }));
-    } catch (error) {
-      return err(error);
-    }
-  });
 }
 
 export type SessionSharingRoleParams = {

@@ -21,7 +21,7 @@ function projectStatusEntry(
   return { entry, key, persisted };
 }
 
-export function resolveSessionStatusEntry(params: {
+export async function resolveSessionStatusEntry(params: {
   agentId: string;
   alias: string;
   cfg: OpenClawConfig;
@@ -29,7 +29,7 @@ export function resolveSessionStatusEntry(params: {
   keyRaw: string;
   mainKey: string;
   requesterInternalKey?: string;
-}): ResolvedStatusSessionEntry | null {
+}): Promise<ResolvedStatusSessionEntry | null> {
   const keyRaw = params.keyRaw.trim();
   if (!keyRaw) {
     return null;
@@ -61,7 +61,7 @@ export function resolveSessionStatusEntry(params: {
     }
   }
 
-  const resolved = resolveSessionEntryCandidateTargetForRuntime({
+  const resolved = await resolveSessionEntryCandidateTargetForRuntime({
     agentId: params.agentId,
     candidateKeys: candidates,
     cfg: params.cfg,

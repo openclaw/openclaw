@@ -374,7 +374,7 @@ export function createSessionStatusTool(opts?: {
       // Resolve against the requester-scoped store first to avoid leaking default agent data.
       let resolved = deferTargetOwnerResolution
         ? undefined
-        : readStatusEntry(requestedKeyInput, requestedKeyInput !== "current");
+        : await readStatusEntry(requestedKeyInput, requestedKeyInput !== "current");
 
       if (
         !resolved &&
@@ -436,18 +436,18 @@ export function createSessionStatusTool(opts?: {
             agentId,
             mainKey,
           });
-          resolved = readStatusEntry(requestedKeyInput);
+          resolved = await readStatusEntry(requestedKeyInput);
         } else if (!resolvedSession.notFound || resolvedSession.status === "forbidden") {
           throw new Error(resolvedSession.error);
         }
       }
 
       if (!resolved && requestedKeyInput === "current" && effectiveRequesterLookupKey) {
-        resolved = readStatusEntry(effectiveRequesterLookupKey, false);
+        resolved = await readStatusEntry(effectiveRequesterLookupKey, false);
       }
 
       if (!resolved && requestedKeyInput === "current") {
-        resolved = readStatusEntry(requestedKeyInput, true);
+        resolved = await readStatusEntry(requestedKeyInput, true);
       }
 
       if (!resolved && requestedKeyParam === undefined) {
@@ -455,7 +455,7 @@ export function createSessionStatusTool(opts?: {
           keyRaw: requestedKeyInput,
           mainKey,
         })) {
-          resolved = readStatusEntry(fallbackKey, true);
+          resolved = await readStatusEntry(fallbackKey, true);
           if (resolved) {
             resolvedViaImplicitCurrentFallback = true;
             break;

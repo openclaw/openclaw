@@ -14,7 +14,6 @@ import type {
   OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
 import { retainAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
-import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
 import { getOpenClawAgentDatabaseIfOpen, openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 
 /** Yield only for BEGIN admission; admitted writes and publications are never replayed. */
@@ -38,9 +37,7 @@ export async function runOpenClawAgentWriteWithYieldingAdmission<T>(
       database.db,
       async () => () => {
         assertAgentDeletionDatabaseCleanupAccess(database, captured);
-        const result = operation(database);
-        ensureOpenClawAgentDatabasePermissions(database.path, captured);
-        return result;
+        return operation(database);
       },
       {
         ...transactionOptions,
