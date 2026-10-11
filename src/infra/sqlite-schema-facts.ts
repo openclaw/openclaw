@@ -418,7 +418,8 @@ function trackSchemaChanges(
         schemaChange: unexpected,
         mainSchemaChange: unexpected,
         temporaryTableSchemaChange: false,
-        dataChange: true,
+        // Known generation triggers change no rows and must not revoke in-flight reads.
+        dataChange: unexpected || schema.kind !== "generation",
         temporaryWriteTables: [],
         control: undefined,
       });

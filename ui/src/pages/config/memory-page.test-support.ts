@@ -326,7 +326,7 @@ export function addonSwitch(element: HTMLElement, label: string) {
   const row = [...element.querySelectorAll(".settings-row--toggle")].find((entry) =>
     entry.textContent?.includes(label),
   );
-  return row?.querySelector<HTMLElement & { checked: boolean }>("wa-switch") ?? null;
+  return row?.querySelector<HTMLInputElement>(".settings-toggle__input") ?? null;
 }
 
 export function toggleAddon(element: HTMLElement, label: string, checked: boolean) {
@@ -340,12 +340,16 @@ export function toggleAddon(element: HTMLElement, label: string, checked: boolea
 
 export function activeEngine(element: HTMLElement): string | null {
   return (
-    element.querySelector("wa-radio.settings-segmented__btn--active")?.getAttribute("value") ?? null
+    element.querySelector<HTMLInputElement>(".settings-segmented__input:checked")?.value ?? null
   );
 }
 
 export function selectEngine(element: HTMLElement, value: string) {
-  const group = element.querySelector("wa-radio-group") as HTMLElement & { value?: string };
-  group.value = value;
-  group.dispatchEvent(new Event("change"));
+  const input = [...element.querySelectorAll<HTMLInputElement>(".settings-segmented__input")].find(
+    (candidate) => candidate.value === value,
+  );
+  if (!input) {
+    throw new Error(`Missing memory engine: ${value}`);
+  }
+  input.click();
 }

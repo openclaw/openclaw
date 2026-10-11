@@ -189,24 +189,29 @@ export function isSqliteDatabaseAdmissionFactCurrent(
   record: Admission,
   fact: AdmissionFact,
 ): boolean {
-  const cell = new Int32Array(record.generation);
   return (
     !isSqliteDatabaseAdmissionRetired(record) &&
     Atomics.load(new Int32Array(fact.current), 0) === 1 &&
-    fact.revision ===
-      Atomics.load(
-        cell,
-        fact.schemaDependent
-          ? SqliteDatabaseGenerationSlot.schemaRevision
-          : SqliteDatabaseGenerationSlot.factRevision,
-      )
+    fact.revision === readSqliteDatabaseFactRevision(record, fact.schemaDependent)
+  );
+}
+
+export function readSqliteDatabaseFactRevision(
+  record: Admission,
+  schemaDependent: boolean | undefined,
+): number {
+  return Atomics.load(
+    new Int32Array(record.generation),
+    schemaDependent
+      ? SqliteDatabaseGenerationSlot.schemaRevision
+      : SqliteDatabaseGenerationSlot.factRevision,
   );
 }
 
 export function activeSqliteDatabaseWriters(
   record: Admission,
   index: 0 | 2,
-  refresh: (location: string) => void,
+  refresh: (record: Admission) => void,
 ): number | undefined {
   const generation = new Int32Array(record.generation);
   let registrations = Atomics.load(generation, SqliteDatabaseGenerationSlot.writerCount);
@@ -214,7 +219,7 @@ export function activeSqliteDatabaseWriters(
     [...record.writers.values()].filter(({ cell }) => Atomics.load(new Int32Array(cell), 1) === 1)
       .length;
   if (known() < registrations) {
-    refresh(record.location);
+    refresh(record);
     registrations = Atomics.load(generation, SqliteDatabaseGenerationSlot.writerCount);
     if (known() < registrations) {
       return undefined;
@@ -232,7 +237,7 @@ export function activeSqliteDatabaseWriters(
 export function readSqliteDatabaseRecordWriteRevision(
   record: Admission,
   ownWriters: number,
-  refresh: (location: string) => void,
+  refresh: (record: Admission) => void,
 ): number | undefined {
   const cell = new Int32Array(record.generation);
   const revision = Atomics.load(cell, SqliteDatabaseGenerationSlot.writeRevision);
@@ -304,15 +309,7 @@ export function publishSqliteDatabaseFact(
   revision: number,
   publication: string,
 ): boolean {
-  if (
-    revision !==
-    Atomics.load(
-      new Int32Array(record.generation),
-      key.schemaDependent
-        ? SqliteDatabaseGenerationSlot.schemaRevision
-        : SqliteDatabaseGenerationSlot.factRevision,
-    )
-  ) {
+  if (revision !== readSqliteDatabaseFactRevision(record, key.schemaDependent)) {
     return false;
   }
   if (key.writer === "host") {
@@ -381,16 +378,30 @@ export class SqliteDatabaseAdmissionRegistry {
     setEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY, [...this.published.values()]);
   }
 
-  capture(cursor?: SqliteDatabaseAdmissionCursor): SqliteDatabaseAdmissions {
-    if (!cursor) {
+  capture(
+    cursor?: SqliteDatabaseAdmissionCursor,
+    identities?: ReadonlySet<string>,
+  ): SqliteDatabaseAdmissions {
+    if (!identities && !cursor) {
       this.publish();
       return [...this.published.values()];
     }
-    if (cursor.revision === this.revision) {
+    if (!identities && cursor?.revision === this.revision) {
       return [];
     }
-    const records = [...this.published.values()];
-    cursor.revision = this.revision;
+    const records = identities
+      ? [...identities].flatMap((identity) => {
+          const record = this.published.get(identity);
+          return record && !isSqliteDatabaseAdmissionRetired(record) ? [record] : [];
+        })
+      : [...this.published.values()];
+    if (!cursor) {
+      return records;
+    }
+    // A scoped reply cannot acknowledge snapshots belonging to other databases.
+    if (!identities) {
+      cursor.revision = this.revision;
+    }
     return records.filter((record) => {
       if (cursor.records.has(record)) {
         return false;
