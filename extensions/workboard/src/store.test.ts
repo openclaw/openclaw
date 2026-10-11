@@ -15,6 +15,7 @@ import { createWorkboardSqliteKernel } from "./sqlite-store-kernel.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { WorkboardStore } from "./store.js";
 import { createKernelStores } from "./test/sqlite-kernel.js";
+import { sqliteOnly as test } from "./test/sqlite-only.js";
 import {
   createWorkboardSqliteTestHarness,
   createWorkboardSqliteTestStore,
@@ -409,7 +410,8 @@ describe("WorkboardStore", () => {
     expect((await first.list()).filter((card) => card.status === "running")).toHaveLength(1);
   });
 
-  it("persists boards, cards, subscriptions, and attachment blobs in sqlite", async () => {
+  // Verifies SQLite file permissions, WAL mode, catalogs, and physical blob rows.
+  test("persists boards, cards, subscriptions, and attachment blobs in sqlite", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-sqlite-"));
     const dbPath = path.join(dir, "workboard.sqlite");
     if (process.platform !== "win32") {
@@ -559,7 +561,8 @@ describe("WorkboardStore", () => {
     }
   });
 
-  it("lists sqlite board summaries without hydrating card child rows", async () => {
+  // Injects malformed child rows through a native SQLite file handle.
+  test("lists sqlite board summaries without hydrating card child rows", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-summary-"));
     const dbPath = path.join(dir, "workboard.sqlite");
     try {
@@ -615,7 +618,8 @@ describe("WorkboardStore", () => {
     }
   });
 
-  it("uses rollback journaling on network-backed volumes", () => {
+  // Verifies SQLite journal selection for a network filesystem.
+  test("uses rollback journaling on network-backed volumes", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-sqlite-network-"));
     const dbPath = path.join(dir, "workboard.sqlite");
     const statfs = vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0xff534d42));
@@ -1850,7 +1854,8 @@ describe("WorkboardStore", () => {
     expect(blocked.metadata?.notifications?.[0]?.message.length).toBeLessThanOrEqual(240);
   });
 
-  it("heals oversized notifications during timeout recovery without rewriting ready siblings", async () => {
+  // Injects and inspects malformed notifications through a native SQLite file handle.
+  test("heals oversized notifications during timeout recovery without rewriting ready siblings", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-notification-"));
     const dbPath = path.join(dir, "workboard.sqlite");
     const stores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
@@ -2848,7 +2853,8 @@ describe("WorkboardStore", () => {
     });
   });
 
-  it("deletes only the removed card's physical attachment blobs", async () => {
+  // Inspects physical blob rows through a native SQLite file handle.
+  test("deletes only the removed card's physical attachment blobs", async () => {
     const { store, dbPath } = createWorkboardSqliteTestHarness();
     const removed = await store.create({ title: "Removed card" });
     const retained = await store.create({ title: "Retained card" });
@@ -2882,7 +2888,8 @@ describe("WorkboardStore", () => {
     }
   });
 
-  it("rolls back attachment deletion when the card deletion fails", async () => {
+  // Injects a failing SQLite trigger through a native file handle.
+  test("rolls back attachment deletion when the card deletion fails", async () => {
     const { store, dbPath } = createWorkboardSqliteTestHarness();
     const card = await store.create({ title: "Atomic deletion" });
     const attached = await store.addAttachment(card.id, {
@@ -3261,7 +3268,8 @@ describe("WorkboardStore attachments", () => {
     });
   });
 
-  it("removes attachment blobs when the card attachment index prunes old entries", async () => {
+  // Inspects pruned physical blob rows through a native SQLite file handle.
+  test("removes attachment blobs when the card attachment index prunes old entries", async () => {
     const { store, dbPath } = createWorkboardSqliteTestHarness();
     const card = await store.create({ title: "Many attachments", templateId: "docs" });
     let firstAttachmentId = "";

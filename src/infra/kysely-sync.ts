@@ -1,4 +1,4 @@
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { Compilable, CompiledQuery, Kysely, QueryResult, RawBuilder } from "kysely";
@@ -16,6 +16,9 @@ import {
   kyselyByDatabase,
   queryErrorHandlerByDatabase,
 } from "./kysely-sync-cache-state.js";
+import { PostgresSyncConnection } from "./postgres-sync/connection.js";
+import { OpenClawPostgresDialect, sqliteStringSetNodes } from "./postgres-sync/query-compiler.js";
+import type { SqlConnection } from "./sql-connection.js";
 import { captureSqliteReaderOwner, retainSqliteReader } from "./sqlite-reader-lifecycle.js";
 
 // Node 24.20 and 26.6 fixed all() column counts after statement reprepare (nodejs/node#64219).
@@ -40,7 +43,29 @@ const compileOnlySqliteDialect = new SqliteDialect({
   },
 });
 
-export function getNodeSqliteKysely<Database>(db: DatabaseSync): Kysely<Database> {
+const postgresKyselyByDatabase = new WeakMap<PostgresSyncConnection, Kysely<unknown>>();
+const compileOnlyPostgresDialect = new OpenClawPostgresDialect({
+  pool: async () => {
+    throw new Error("getNodeSqliteKysely() returns a compile-only Kysely facade.");
+  },
+});
+
+export function getNodeSqliteKysely<Database>(db: SqlConnection): Kysely<Database>;
+// Keep the native signature last for existing callers deriving their handle type with Parameters.
+export function getNodeSqliteKysely<Database>(db: DatabaseSync): Kysely<Database>;
+export function getNodeSqliteKysely<Database>(db: SqlConnection): Kysely<Database> {
+  if (db instanceof PostgresSyncConnection) {
+    let kysely = postgresKyselyByDatabase.get(db);
+    if (!kysely) {
+      kysely = new KyselyInstance({ dialect: compileOnlyPostgresDialect });
+      postgresKyselyByDatabase.set(db, kysely);
+    }
+    // SAFETY: this compile-only facade stores no rows; Database supplies the caller's schema types.
+    return kysely as Kysely<Database>;
+  }
+  if (!(db instanceof DatabaseSync)) {
+    throw new TypeError("Unsupported synchronous SQL connection");
+  }
   const existing = kyselyByDatabase.get(db) as Kysely<unknown> | undefined;
   if (existing) {
     return existing as Kysely<Database>;
@@ -63,14 +88,18 @@ export function encodeSqliteStringSet(values: readonly (string | null)[]): strin
 
 export function sqliteStringSet(values: readonly string[]): RawBuilder<string> {
   /* kysely-allow-raw: JSON table-valued selection keeps one read snapshot and outer query ordering. */
-  return kyselySql<string>`(SELECT value FROM json_each(${encodeSqliteStringSet(values)}))`;
+  const expression = kyselySql<string>`(SELECT value FROM json_each(${encodeSqliteStringSet(values)}))`;
+  sqliteStringSetNodes.set(expression.toOperationNode(), "values");
+  return expression;
 }
 
 /** Expands encoded string tuples without adding one SQLite parameter per field. */
 export function sqliteStringSetEntries(
   encoded: string | RawBuilder<string>,
 ): RawBuilder<{ key: number; value: string | null }> {
-  return kyselySql<{ key: number; value: string | null }>`json_each(${encoded})`;
+  const expression = kyselySql<{ key: number; value: string | null }>`json_each(${encoded})`;
+  sqliteStringSetNodes.set(expression.toOperationNode(), "entries");
+  return expression;
 }
 
 function reportNodeSqliteKyselyQueryError(db: DatabaseSync, error: unknown): void {
@@ -101,11 +130,23 @@ function releaseSqliteIterator(
 
 /** Execute a compiled Kysely query synchronously against node:sqlite. */
 function executeCompiledSqliteQuerySync<Row>(
-  db: DatabaseSync,
+  db: SqlConnection,
   compiledQuery: CompiledQuery<Row>,
   firstRowOnly = false,
   parameters = compiledQuery.parameters as SQLInputValue[],
 ): QueryResult<Row> {
+  if (db instanceof PostgresSyncConnection) {
+    const result = db.query(compiledQuery.sql, parameters);
+    // SAFETY: the compiled Kysely query defines Row; the bridge preserves its selected column names.
+    const rows = (firstRowOnly ? result.rows.slice(0, 1) : result.rows) as Row[];
+    // Unlike SQLite rowids, PostgreSQL insert identities must be requested with RETURNING.
+    return result.columns.length > 0
+      ? { rows }
+      : { rows: [], numAffectedRows: BigInt(result.rowCount) };
+  }
+  if (!(db instanceof DatabaseSync)) {
+    throw new TypeError("Unsupported synchronous SQL connection");
+  }
   try {
     const sql = compiledQuery.sql;
     installStatementInvalidation(db);
@@ -178,7 +219,7 @@ function executeCompiledSqliteQuerySync<Row>(
 
 /** Compile and execute a Kysely query synchronously. */
 export function executeSqliteQuerySync<Row>(
-  db: DatabaseSync,
+  db: SqlConnection,
   query: Compilable<Row>,
 ): QueryResult<Row> {
   return executeCompiledSqliteQuerySync<Row>(db, query.compile());
@@ -189,10 +230,11 @@ type SqliteQueryBindingBuilder<Params, Row> = (
 ) => Compilable<Row>;
 
 /** Cache compiled query functions or bundles by native connection. */
-export function createSqliteQueryCache<Queries extends object>(
-  create: (database: DatabaseSync) => Queries,
-): (database: DatabaseSync) => Queries {
-  const queriesByDatabase = new WeakMap<DatabaseSync, Queries>();
+export function createSqliteQueryCache<
+  Queries extends object,
+  Connection extends SqlConnection = DatabaseSync,
+>(create: (database: Connection) => Queries): (database: Connection) => Queries {
+  const queriesByDatabase = new WeakMap<Connection, Queries>();
   return (database) => {
     let queries = queriesByDatabase.get(database);
     if (queries === undefined) {
@@ -227,7 +269,7 @@ export function compileSqliteQueryBindings<Params, Row = unknown>(
 
 /** Compile a fixed query once; bind fresh values through the normal sync executor on each call. */
 export function prepareSqliteQuerySync<Params, Row = unknown>(
-  db: DatabaseSync,
+  db: SqlConnection,
   build: SqliteQueryBindingBuilder<Params, Row>,
 ): (params: Params) => QueryResult<Row> {
   const { compiled, bind } = compileSqliteQueryBindings(build);
@@ -236,7 +278,7 @@ export function prepareSqliteQuerySync<Params, Row = unknown>(
 
 /** Compile a fixed first-row read once and bind fresh values on every execution. */
 export function prepareSqliteQueryTakeFirstSync<Params, Row = unknown>(
-  db: DatabaseSync,
+  db: SqlConnection,
   build: SqliteQueryBindingBuilder<Params, Row>,
 ): (params: Params) => Row | undefined {
   const { compiled, bind } = compileSqliteQueryBindings(build);
@@ -245,7 +287,7 @@ export function prepareSqliteQueryTakeFirstSync<Params, Row = unknown>(
 
 /** Compile once and capture fresh bindings before lazily opening each private iterator. */
 export function prepareSqliteQueryIterator<Params, Row = unknown>(
-  db: DatabaseSync,
+  db: SqlConnection,
   build: SqliteQueryBindingBuilder<Params, Row>,
 ): (params: Params) => IterableIterator<Row> {
   const { compiled, bind } = compileSqliteQueryBindings(build);
@@ -259,9 +301,18 @@ export function prepareSqliteQueryIterator<Params, Row = unknown>(
 
 /** Compile and lazily iterate a Kysely query synchronously against node:sqlite. */
 export function iterateSqliteQuerySync<Row>(
-  db: DatabaseSync,
+  db: SqlConnection,
   query: Compilable<Row>,
 ): IterableIterator<Row> {
+  if (db instanceof PostgresSyncConnection) {
+    // The pilot buffers one result; server-side cursor ownership is outside its scope.
+    return (function* () {
+      yield* executeCompiledSqliteQuerySync(db, query.compile()).rows;
+    })();
+  }
+  if (!(db instanceof DatabaseSync)) {
+    throw new TypeError("Unsupported synchronous SQL connection");
+  }
   const owner = captureSqliteReaderOwner();
   return (function* () {
     const compiledQuery = query.compile();
@@ -296,7 +347,7 @@ export function iterateSqliteQuerySync<Row>(
 
 /** Execute a Kysely query synchronously and return its first row. */
 export function executeSqliteQueryTakeFirstSync<Row>(
-  db: DatabaseSync,
+  db: SqlConnection,
   query: Compilable<Row>,
 ): Row | undefined {
   return executeCompiledSqliteQuerySync(db, query.compile(), true).rows[0];

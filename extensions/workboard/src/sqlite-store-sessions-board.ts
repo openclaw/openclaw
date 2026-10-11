@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   createDefaultWorkboardSessionsBoardSpec,
   normalizeWorkboardSessionsBoardSpec,
@@ -7,6 +6,7 @@ import {
   type WorkboardSessionsBoard,
   type WorkboardSessionsBoardSpec,
 } from "@openclaw/workboard-contract";
+import type { SqlConnection } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -46,7 +46,7 @@ const PREVIOUS_DEFAULT_RULES = new Map(
 
 export class WorkboardSqliteSessionsBoardStore {
   constructor(
-    private readonly db: DatabaseSync,
+    private readonly db: SqlConnection,
     private readonly boards: { lookup(key: string): PersistedWorkboardBoard | undefined },
   ) {}
 
