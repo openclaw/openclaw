@@ -44,13 +44,8 @@ const WAVEFORM_FETCH_TIMEOUT_MS = 30_000;
 const WAVEFORM_DECODE_DURATION_TOLERANCE = 1.2;
 
 function formatChatMediaTime(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) {
-    return "0:00";
-  }
-  const wholeSeconds = Math.floor(seconds);
-  const minutes = Math.floor(wholeSeconds / 60);
-  const remainder = wholeSeconds % 60;
-  return `${minutes}:${String(remainder).padStart(2, "0")}`;
+  const wholeSeconds = Math.floor(Number.isFinite(seconds) && seconds >= 0 ? seconds : 0);
+  return `${Math.floor(wholeSeconds / 60)}:${String(wholeSeconds % 60).padStart(2, "0")}`;
 }
 
 type ChatAudioPlayerProps = {
@@ -73,13 +68,17 @@ function ChatAudioPlayerContent(
 ) {
   host.style.display = "contents";
   const [revision, setRevision] = createSignal(0);
-  const state = {
+  const state: Record<"currentTime" | "duration" | "buffered" | "waveformWidth", number> & {
+    playing: boolean;
+    muted: boolean;
+    waveformPeaks: readonly number[] | null;
+  } = {
     currentTime: 0,
     duration: 0,
     buffered: 0,
     playing: false,
     muted: false,
-    waveformPeaks: null as readonly number[] | null,
+    waveformPeaks: null,
     waveformWidth: 0,
   };
   const publish = () => setRevision((value) => value + 1);

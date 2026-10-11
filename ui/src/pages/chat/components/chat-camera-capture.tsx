@@ -22,12 +22,20 @@ const openCameras = new WeakMap<OpenClawChatCameraCapture, () => void>();
 /** One composer owns the camera, its pending permission request, and the chosen still. */
 function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCapture) {
   const [revision, setRevision] = createSignal(0);
-  const state = {
+  const state: {
+    nativeFallback: boolean;
+    stage: CameraStage;
+    error: string;
+    photoUrl: string;
+    cameras: MediaDeviceInfo[];
+    cameraId: string;
+    videoReady: boolean;
+  } = {
     nativeFallback: false,
-    stage: "closed" as CameraStage,
+    stage: "closed",
     error: "",
     photoUrl: "",
-    cameras: [] as MediaDeviceInfo[],
+    cameras: [],
     cameraId: "",
     videoReady: false,
   };
