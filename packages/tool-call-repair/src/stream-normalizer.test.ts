@@ -711,6 +711,23 @@ describe("normalizePlainTextToolCallStreamEvents trim replay ordering", () => {
     expect(JSON.stringify(events)).not.toContain("<function=read>");
   });
 
+  it("keeps a trimmed cumulative snapshot local to the retained content block", async () => {
+    const events = await normalize([
+      streamTextDelta("[read]", 0),
+      streamTextDelta("x\n<function=read>", 1),
+      textEnd("x\n<function=read></function>", 1),
+    ]);
+    expect(
+      events
+        .filter((event) => event.type === "text_delta")
+        .map((event) => [event.contentIndex, event.delta]),
+    ).toEqual([
+      [0, "[read]"],
+      [1, "x\n"],
+    ]);
+    expect(JSON.stringify(events)).not.toContain("<function=read>");
+  });
+
   it("replays a decided prefix and buffered reasoning in arrival order", async () => {
     const events = await normalize([
       streamTextDelta("[read]"),

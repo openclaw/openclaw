@@ -1444,6 +1444,20 @@ export async function* normalizePlainTextToolCallStreamEvents(
     }
     flushReplayBefore(Number.POSITIVE_INFINITY);
     const trimmedOffset = state.buffer.length - trimmed.text.length;
+    // A trim can drop earlier blocks whole, so the retained suffix may start inside a later
+    // block. Its origin belongs to that block, not to the concatenated buffer: replay
+    // slicing and authoritative snapshots both count offsets from the block's own start.
+    let retainedBlockOffset = 0;
+    if (classification.replayedText !== undefined && trimmedOffset > 0) {
+      for (const part of state.parts) {
+        if (part.end <= trimmedOffset) {
+          continue;
+        }
+        const blockLocal = part.start === 0 ? state.snapshotOffset : 0;
+        retainedBlockOffset = Math.max(0, blockLocal + trimmedOffset - part.start);
+        break;
+      }
+    }
     state.buffer = trimmed.text;
     state.bufferBytes = cappedUtf8ByteLength(trimmed.text);
     state.entries = undefined;
@@ -1451,8 +1465,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
     state.nextScanChars = 256;
     state.parts = trimmed.parts;
     state.sequenceOverCap = classification.replayedText === undefined;
-    state.snapshotOffset =
-      classification.replayedText === undefined ? 0 : state.snapshotOffset + trimmedOffset;
+    state.snapshotOffset = classification.replayedText === undefined ? 0 : retainedBlockOffset;
     state.template = {
       ...state.template,
       contentIndex: trimmed.parts[0]?.contentIndex ?? state.template.contentIndex,
