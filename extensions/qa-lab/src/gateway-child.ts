@@ -264,7 +264,6 @@ async function startOwnedGatewayChild(
       mutateState: (context: QaGatewayChildStateMutationContext) => Promise<void>,
     ) {
       return lifetime.run(async () => {
-        throwActiveChildFailure();
         await stopAttempt();
         await mutateState({ configPath, runtimeEnv: runningEnv, stateDir, tempRoot });
         // Mutation can reopen parent stores; release them before child startup maintenance.
