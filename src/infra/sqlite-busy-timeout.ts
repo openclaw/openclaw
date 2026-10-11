@@ -75,7 +75,7 @@ export function runWithSqliteBusyTimeout<T>(
     if (restored) {
       return;
     }
-    if (database.isOpen) {
+    if (database.isOpen && previousBusyTimeoutMs !== normalizedTimeoutMs) {
       setSqliteBusyTimeout(database, previousBusyTimeoutMs);
     }
     if (previousLockFailureReporting) {
