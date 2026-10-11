@@ -327,16 +327,16 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       return undefined;
     }
     const isSourceOwnerCurrent = () => {
-      const config = options.getConfig();
+      const sourceConfig = options.getConfig();
       if ("source" in project) {
         const { agent, identity } = project.source.owner;
         const agentIdentity = resolveConfiguredGitHubToolIdentity({
-          config,
+          config: sourceConfig,
           agentId: agent.agentId,
           scope: "agent",
         });
         const systemIdentity = resolveConfiguredGitHubToolIdentity({
-          config,
+          config: sourceConfig,
           agentId: agent.agentId,
           scope: "system",
         });
