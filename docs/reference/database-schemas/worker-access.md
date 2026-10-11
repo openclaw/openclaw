@@ -708,6 +708,17 @@ external effect. Actor-bound acceptance does not hold a legacy writer reservatio
 around its commands. Unbound native and SDK callers retain their compatibility
 adapters, whose committed writes invalidate actor facts.
 
+Input staging, transcript acceptance, and run adoption rebase once on an explicit
+stale-version refusal, including when deferred participant recording commits
+ahead of admission. They retain the original lifecycle and pending-input
+predicates, prepared message bytes, and live authority checks. Committed and
+unknown outcomes never replay. Durable commands retain the physical writer FIFO
+across snapshot selection, command settlement, and the single rebase, so another
+queued writer cannot invalidate the refused postimage before its retry enters.
+Transcript appends and terminal accounting use the same command owner. Message
+preparation and external hooks remain outside this reservation; each native
+transaction still settles before another command starts.
+
 Canonical retry payloads stay with the existing bounded reader. A fresh input
 can prove absence from complete MAIN pending, completion, and idempotency facts;
 a positive match cannot substitute metadata for stored bytes. Consumption can
