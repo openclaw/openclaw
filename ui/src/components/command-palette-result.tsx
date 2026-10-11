@@ -7,9 +7,9 @@ import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/displ
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { LitContent } from "../lit/solid-bridge.ts";
 import { renderArtTile } from "../pages/plugins/consent-dialog.ts";
 import type { CommandPaletteItem } from "./command-palette-catalog-search.ts";
-import { PaletteLitContent } from "./command-palette-view.ts";
 import { renderAgentIdentityAvatar } from "./identity-avatar-view.ts";
 import { renderSessionOwnerAvatar } from "./session-owner-chip.ts";
 import { Icon } from "./solid/icon.tsx";
@@ -134,7 +134,7 @@ export function CommandPaletteResult(props: {
               when={props.item.id === "panel-custodian"}
               fallback={<Icon name={props.item.icon} />}
             >
-              <PaletteLitContent content={renderThemeBrandIcon()} />
+              <LitContent render={() => renderThemeBrandIcon()} />
             </Show>
           </span>
         }
@@ -142,17 +142,19 @@ export function CommandPaletteResult(props: {
         <Match when={props.agent}>
           {(agent) => (
             <span class="cmd-palette__avatar" aria-hidden="true">
-              <PaletteLitContent
-                content={renderAgentIdentityAvatar({
-                  id: agent().id,
-                  avatar: resolveAgentAvatarUrl(agent(), props.identity),
-                  textAvatar: resolveAgentTextAvatar(agent(), props.identity),
-                })}
+              <LitContent
+                render={() =>
+                  renderAgentIdentityAvatar({
+                    id: agent().id,
+                    avatar: resolveAgentAvatarUrl(agent(), props.identity),
+                    textAvatar: resolveAgentTextAvatar(agent(), props.identity),
+                  })
+                }
               />
               <Show when={owner()?.id}>
                 <span class="cmd-palette__owner">
-                  <PaletteLitContent
-                    content={renderSessionOwnerAvatar({ ...owner()!, id: owner()!.id! })}
+                  <LitContent
+                    render={() => renderSessionOwnerAvatar({ ...owner()!, id: owner()!.id! })}
                   />
                 </span>
               </Show>
@@ -161,12 +163,14 @@ export function CommandPaletteResult(props: {
         </Match>
         <Match when={props.item.pluginId} keyed>
           {(pluginId) => (
-            <PaletteLitContent
-              content={renderArtTile(pluginId, props.item.label, {
-                iconUrl: props.pluginIconUrls?.[pluginId],
-                onIconError: () => props.onPluginIconError?.(pluginId),
-                className: "cmd-palette__plugin-icon",
-              })}
+            <LitContent
+              render={() =>
+                renderArtTile(pluginId, props.item.label, {
+                  iconUrl: props.pluginIconUrls?.[pluginId],
+                  onIconError: () => props.onPluginIconError?.(pluginId),
+                  className: "cmd-palette__plugin-icon",
+                })
+              }
             />
           )}
         </Match>

@@ -608,6 +608,81 @@ it.each(["npm", "pnpm", "pnpm-workspace", "git", "git-linked", "git-modules"] as
   },
 );
 
+it.each(["npm", "pnpm11"] as const)(
+  "keeps the retained %s runtime inside its install's dependency owner",
+  async (layout) => {
+    const base = await fs.realpath(tempDirs.make("retained-dependency-owner-"));
+    const globalRoot = path.join(base, "prefix", layout === "npm" ? "lib/node_modules" : "v11");
+    const root =
+      layout === "npm"
+        ? path.join(globalRoot, "openclaw")
+        : path.join(globalRoot, ".pnpm/openclaw@1/node_modules/openclaw");
+    const dependency = path.join(
+      globalRoot,
+      layout === "npm" ? "fixture" : ".pnpm/node_modules/fixture",
+    );
+    const ambientModules = path.join(base, "node_modules");
+    for (const directory of [
+      path.join(root, "dist"),
+      dependency,
+      path.join(ambientModules, "ambient-peer"),
+      path.join(ambientModules, "unrelated"),
+    ]) {
+      await mkdir(directory, { recursive: true });
+    }
+    await writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "openclaw", type: "module", dependencies: { fixture: "1.0.0" } }),
+    );
+    await writeFile(path.join(root, "dist/updater.mjs"), 'export { value } from "fixture";');
+    await writeFile(
+      path.join(dependency, "package.json"),
+      JSON.stringify({
+        name: "fixture",
+        type: "module",
+        exports: "./index.js",
+        peerDependencies: { "ambient-peer": "*" },
+        peerDependenciesMeta: { "ambient-peer": { optional: true } },
+      }),
+    );
+    await writeFile(path.join(dependency, "index.js"), 'export const value = "hoisted survived";');
+    await writeFile(
+      path.join(ambientModules, "ambient-peer/package.json"),
+      '{"name":"ambient-peer"}',
+    );
+    await writeFile(path.join(ambientModules, "unrelated/sentinel.txt"), "unrelated dependency");
+    const moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs"));
+    await withRetainedUpdateRuntime(moduleUrl.href, async (retain) => {
+      await retain({
+        mutationRoots: [globalRoot],
+        installTarget: {
+          manager: layout === "npm" ? "npm" : "pnpm",
+          command: layout === "npm" ? "npm" : "pnpm",
+          globalRoot,
+          packageRoot: root,
+        },
+        timeoutMs: 30_000,
+        assertCurrent() {},
+      });
+      const retainedUrl = captureRuntimeWorkerSource(moduleUrl).moduleUrl;
+      const retainedRoot = path.resolve(path.dirname(fileURLToPath(retainedUrl)), "..");
+      const retainedAmbient = path.resolve(retainedRoot, path.relative(root, ambientModules));
+      await rename(globalRoot, `${globalRoot}.previous`);
+      await mkdir(globalRoot);
+      await rm(`${globalRoot}.previous`, { recursive: true });
+      expect((await import(retainedUrl.href)).value).toBe("hoisted survived");
+      await expect(stat(path.join(retainedAmbient, "ambient-peer"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(
+        readFile(path.join(retainedAmbient, "unrelated/sentinel.txt")),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+  },
+);
+
 it("refuses unsafe fallback storage without changing the installed runtime", async () => {
   const base = tempDirs.make("retained-owner-refusal-");
   const owner = path.join(base, "manager-project");

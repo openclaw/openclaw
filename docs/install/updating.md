@@ -455,6 +455,12 @@ verification run only after all file copies succeed. Canonical state and recover
 retain their existing durability guarantees. An older installed updater keeps
 its initial snapshot behavior until you launch an update from the newer version.
 
+Runtime retention looks for hoisted dependencies within the package manager's
+owning installation. Missing optional peers do not cause it to copy unrelated
+ancestor installations. Explicitly linked dependencies retain their own resolution.
+This improvement applies after the newer updater is installed; it cannot shorten
+the retention phase already running in an older updater.
+
 Database rehearsal also avoids a second full backup of each private snapshot.
 Update schema inspection and rehearsal use SQLite online backup with a pinned
 read transaction, so a busy Gateway can keep writing while the copy includes
@@ -670,6 +676,13 @@ their existing behavior.
 Version-bound runtime plugins converge to the base release cohort when the
 core is a correction release (for example, `YYYY.M.P-2` uses plugin
 `YYYY.M.P`).
+`openclaw plugins update` uses the same host-matching targets. Known-incompatible
+official runtime versions, such as Codex releases before 2026.9.7, are reported
+as unavailable before they can register or serve turns. Compatible versions
+remain loadable even when they are older than the host. Run
+`openclaw update repair`, or `openclaw plugins update codex`, then restart the
+Gateway. Newer explicit pins and independently versioned plugins retain their
+existing compatibility behavior.
 Catalog installs created by current OpenClaw versions retain that default
 intent. Verified OpenClaw-owned packages recorded at an exact OpenClaw release
 no newer than core resume their catalog's default selector after a successful

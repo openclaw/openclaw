@@ -21,7 +21,12 @@ declare module "@solidjs/web" {
       Properties<HTMLElementTagNameMap[Tag]>;
 
     interface IntrinsicElements {
-      "openclaw-tooltip": OpenClawElementAttributes<"openclaw-tooltip">;
+      "openclaw-tooltip": HTMLAttributes<HTMLElementTagNameMap["openclaw-tooltip"]> & {
+        "prop:content"?: string;
+        placement?: HTMLElementTagNameMap["openclaw-tooltip"]["placement"];
+        "open-on-click"?: boolean;
+        "auto-size"?: boolean;
+      };
       "openclaw-modal-dialog": OpenClawElementAttributes<"openclaw-modal-dialog"> &
         Partial<
           Pick<

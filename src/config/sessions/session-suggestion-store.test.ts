@@ -292,7 +292,7 @@ describe("session suggestion store", () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
     const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
     await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
-    addSessionSuggestion(scope, {
+    const suggestion = addSessionSuggestion(scope, {
       id: "claimed",
       authorId: "alice",
       text: "dispatch me",
@@ -351,13 +351,13 @@ describe("session suggestion store", () => {
           })
         : null,
     ).toBeNull();
-    expect(
-      finalizeSessionSuggestionClaim(scope, {
-        id: "claimed",
-        token: recovered.token,
-        state: "accepted",
-        expectedSessionId: "session-a",
-      })?.state,
-    ).toBe("accepted");
+    const resolved = finalizeSessionSuggestionClaim(scope, {
+      id: "claimed",
+      token: recovered.token,
+      state: "accepted",
+      expectedSessionId: "session-a",
+    });
+    expect(resolved).toEqual({ ...suggestion, state: "accepted" });
+    expect(await listSessionSuggestions(scope)).toEqual([resolved]);
   });
 });

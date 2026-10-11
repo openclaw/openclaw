@@ -314,6 +314,29 @@ describe("session sharing store", () => {
     });
   });
 
+  it("does not remove a newer membership grant using an older grant", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async ({ env }) => {
+      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+      await upsertSessionEntryCore(scope, { sessionId: "session-main", updatedAt: 1 });
+      const original = addSessionMember(scope, {
+        identityId: "guest",
+        addedBy: "owner",
+        addedAt: 2,
+      }).member;
+      expect(removeSessionMember(scope, "guest", original)).toEqual(original);
+      const replacement = addSessionMember(scope, {
+        identityId: "guest",
+        addedBy: "owner",
+        addedAt: 3,
+      }).member;
+
+      expect(removeSessionMember(scope, "guest", original)).toBeNull();
+      expect(listSessionMembers(scope)).toEqual([replacement]);
+      expect(removeSessionMember(scope, "guest", replacement)).toEqual(replacement);
+      expect(listSessionMembers(scope)).toEqual([]);
+    });
+  });
+
   it("refuses member writes whose expected session instance no longer matches", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async ({ env }) => {
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };

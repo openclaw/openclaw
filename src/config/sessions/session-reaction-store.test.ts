@@ -252,6 +252,9 @@ describe("session reaction store", () => {
     const result = await setSessionReactionAsync(scope, removal);
     expect(result).toMatchObject({ changed: true, newestRemainingEmoji: scenario.expected });
     expect(result.reactions.map(({ emoji }) => emoji)).toEqual(["👍", "🎉"]);
+    expect(listSessionReactions(scope, { sessionId: "session-a" })[reaction.messageId]).toEqual(
+      result.reactions,
+    );
     expect(await setSessionReactionAsync(scope, removal)).toMatchObject({
       changed: false,
       newestRemainingEmoji: scenario.expected,

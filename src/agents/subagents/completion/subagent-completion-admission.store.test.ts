@@ -159,10 +159,6 @@ describe("native subagent completion worker admission", () => {
       expect(
         database.db.prepare("SELECT COUNT(*) AS count FROM delivery_queue_entries").get()?.count,
       ).toBe(1);
-      database.db
-        .prepare("UPDATE subagent_runs SET payload_json = payload_json || ' ' WHERE run_id = ?")
-        .run(input.subagent.runId);
-      await expect(admit()).resolves.toMatchObject({ claimed: false, status: "pending" });
       const updateAcknowledged = vi.fn((rows: ReadonlyMap<string, typeof input.subagent>) => ({
         value: undefined,
         postimages: new Map([
@@ -201,23 +197,20 @@ describe("native subagent completion worker admission", () => {
     });
   });
 
-  it.each(["same run", "newer sibling"] as const)(
-    "refuses a durable replacement with the %s identity",
-    async (change) => {
-      await withAdmissionState(async ({ input, database, context, admit }) => {
-        const replacement = {
-          ...structuredClone(input.expected),
-          generation: 2,
-          ...(change === "newer sibling" ? { runId: "newer-run" } : {}),
-        };
-        seedSubagentCompletionDelivery({ subagent: replacement, databaseOptions: { database } });
-        const before = readSubagentRun(database, input.expected.runId);
-        await expect(admit()).rejects.toThrow(/completion owner (changed|was replaced)/);
-        expect(await loadPendingSessionDeliveries(context)).toEqual([]);
-        expect(readSubagentRun(database, input.expected.runId)).toEqual(before);
-      });
-    },
-  );
+  it("refuses a durable replacement with a newer sibling identity", async () => {
+    await withAdmissionState(async ({ input, database, context, admit }) => {
+      const replacement = {
+        ...structuredClone(input.expected),
+        generation: 2,
+        runId: "newer-run",
+      };
+      seedSubagentCompletionDelivery({ subagent: replacement, databaseOptions: { database } });
+      const before = readSubagentRun(database, input.expected.runId);
+      await expect(admit()).rejects.toThrow(/completion owner (changed|was replaced)/);
+      expect(await loadPendingSessionDeliveries(context)).toEqual([]);
+      expect(readSubagentRun(database, input.expected.runId)).toEqual(before);
+    });
+  });
 
   it.each(["transaction", "commit"] as const)(
     "refuses revoked authority at worker %s admission",

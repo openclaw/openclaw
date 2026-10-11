@@ -18,14 +18,15 @@ import {
 import { t } from "../lib/reactive/i18n.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
+import { LitContent } from "../lit/solid-bridge.ts";
 import { paneDomId } from "../pages/chat/components/chat-composer-dom.ts";
 import type {
   HumanMentionMenu,
   HumanMentionMenuHost,
 } from "../pages/chat/components/chat-composer-mention-menu.ts";
 import { renderSelectedHumanMentions } from "../pages/chat/components/chat-composer-selected-mentions.ts";
-import type { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import "../styles/command-palette.css";
+import type { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import {
   commandPaletteCategoryLabel,
   filterCommandPaletteItems,
@@ -36,7 +37,6 @@ import { COMMAND_PALETTE_INPUT_ID } from "./command-palette-input.ts";
 import { CommandPaletteInput } from "./command-palette-input.tsx";
 import { CommandPaletteResult } from "./command-palette-result.tsx";
 import { SESSION_ACTION_PREFIX } from "./command-palette-session-search.ts";
-import { PaletteLitContent } from "./command-palette-view.ts";
 import {
   CUSTODIAN_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
@@ -458,7 +458,7 @@ function PaletteActions(props: { readProps: () => CommandPaletteProps }) {
           <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.modifiedEnter} />
         </button>
       </openclaw-tooltip>
-      <PaletteLitContent content={current().draft.renderControls()} />
+      <LitContent render={() => current().draft.renderControls()} />
     </>
   );
 }
@@ -540,23 +540,27 @@ function OpenPalette(props: { readProps: () => CommandPaletteProps }) {
           />
           <Show when={current().draft.mentions.length > 0}>
             <div class="cmd-palette__mentions" inert={current().draft.messageLocked}>
-              <PaletteLitContent
-                content={renderSelectedHumanMentions(
-                  current().query,
-                  current().draft.mentions,
-                  () => {
-                    current().draft.setMessage(current().query, []);
-                    current().requestUpdate();
-                    current().mentionHost.getTextarea()?.focus({ preventScroll: true });
-                  },
-                  current().mentionMenu.selectedAvatarUrls,
-                )}
+              <LitContent
+                render={() =>
+                  renderSelectedHumanMentions(
+                    current().query,
+                    current().draft.mentions,
+                    () => {
+                      current().draft.setMessage(current().query, []);
+                      current().requestUpdate();
+                      current().mentionHost.getTextarea()?.focus({ preventScroll: true });
+                    },
+                    current().mentionMenu.selectedAvatarUrls,
+                  )
+                }
               />
             </div>
           </Show>
-          <PaletteLitContent content={current().draft.renderAttachments()} />
-          <PaletteLitContent
-            content={current().mentionMenu.render(current().mentionHost, current().requestUpdate)}
+          <LitContent render={() => current().draft.renderAttachments()} />
+          <LitContent
+            render={() =>
+              current().mentionMenu.render(current().mentionHost, current().requestUpdate)
+            }
           />
           <span
             id={mentionAnnouncementId()}
@@ -583,12 +587,12 @@ function OpenPalette(props: { readProps: () => CommandPaletteProps }) {
           </Show>
           <Show when={recovery()}>
             <div class="cmd-palette__footer">
-              <PaletteLitContent content={recovery()} />
+              <LitContent render={() => recovery()} />
             </div>
           </Show>
         </div>
       </openclaw-modal-dialog>
-      <PaletteLitContent content={current().draft.renderAuxiliary()} />
+      <LitContent render={() => current().draft.renderAuxiliary()} />
     </>
   );
 }

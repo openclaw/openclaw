@@ -89,25 +89,69 @@ async function mountModal(host = container, variant = "", autofocus = true) {
 }
 
 describe.runIf(browserMode)("modal native focus ownership", () => {
-  it.each([false, true])(
-    "returns focus after background inertness clears without replacing new focus (moved=%s)",
-    async (moved) => {
+  it.each(
+    [false, true].flatMap((moved) => ["light", "shadow", "slot"].map((tree) => ({ moved, tree }))),
+  )(
+    "returns focus after background inertness clears without replacing new focus ($tree, moved=$moved)",
+    async ({ moved, tree }) => {
       const background = document.createElement("div");
       const trigger = document.createElement("button");
       const nextTarget = document.createElement("button");
-      background.append(trigger, nextTarget);
-      container.append(background);
+      if (tree === "light") {
+        background.append(trigger, nextTarget);
+        container.append(background);
+      } else if (tree === "shadow") {
+        background.attachShadow({ mode: "open" }).append(trigger, nextTarget);
+        container.append(background);
+      } else {
+        const host = document.createElement("div");
+        host.attachShadow({ mode: "open" }).append(background);
+        container.append(host);
+        background.append(document.createElement("slot"));
+        host.append(trigger, nextTarget);
+      }
       trigger.focus();
       const { modal } = await mountModal();
+      modal.setReturnFocusTarget(trigger);
 
       background.inert = true;
       modal.remove();
+      expect(trigger.matches(":focus")).toBe(false);
       background.inert = false;
       if (moved) {
         nextTarget.focus();
       }
 
-      await expect.poll(() => document.activeElement).toBe(moved ? nextTarget : trigger);
+      await expect.poll(() => (moved ? nextTarget : trigger).matches(":focus")).toBe(true);
+    },
+  );
+
+  it.each(["inert", "reconnected", "removed"])(
+    "drops deferred focus restoration after cancellation (%s)",
+    async (state) => {
+      const background = document.createElement("div");
+      const trigger = document.createElement("button");
+      background.append(trigger);
+      container.append(background);
+      trigger.focus();
+      const { modal } = await mountModal();
+      let restored = false;
+      trigger.addEventListener("openclaw:restore-focus", () => {
+        restored = true;
+      });
+
+      background.inert = true;
+      modal.remove();
+      if (state === "reconnected") {
+        background.inert = false;
+        container.append(modal);
+      } else if (state === "removed") {
+        background.remove();
+      }
+      await Promise.resolve();
+
+      expect(restored).toBe(false);
+      expect(document.activeElement).not.toBe(trigger);
     },
   );
 
