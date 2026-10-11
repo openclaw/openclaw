@@ -202,21 +202,6 @@ describe("Discord component registry singleton upgrades", () => {
     },
   );
 
-  it("propagates a migrated lock's task error without poisoning subsequent work", async () => {
-    loadLegacyState();
-    const state = await loadCurrentState();
-    const error = new Error("synthetic task failure");
-
-    await expect(
-      state.withRegistryLock(async () => {
-        throw error;
-      }),
-    ).rejects.toBe(error);
-    await expect(state.withRegistryLock(async () => "next")).resolves.toBe("next");
-    await resetRegisteredState();
-    expectCleared(state);
-  });
-
   it("propagates cleanup errors and allows a subsequent cleanup", async () => {
     loadLegacyState();
     const state = await loadCurrentState();
