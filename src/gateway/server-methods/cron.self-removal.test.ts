@@ -167,4 +167,155 @@ describe("cron self-removal", () => {
       }
     },
   );
+
+  it.each([
+    { gap: "different operational instance", path: "manual" },
+    { gap: "different operational instance", path: "timer" },
+    { gap: "unbound admission", path: "manual" },
+    { gap: "unbound admission", path: "timer" },
+  ] as const)(
+    "refuses a self-targeted removal that cannot prove the exact live owner ($gap, $path) instead of cancelling the run",
+    async ({ gap, path }) => {
+      const { storePath } = await makeStorePath();
+      const clock = createGatewaySchedulerClock(Date.now());
+      const scheduler = createTestGatewayScheduler(clock.clock);
+      const events: CronEvent[] = [];
+      let abortedAfterRemoval: boolean | undefined;
+      let removalResponse: Parameters<RespondFn> | undefined;
+      const runJob = async ({
+        job,
+        abortSignal,
+        executionIdentity,
+      }: Parameters<NonNullable<CronServiceDeps["runIsolatedAgentJob"]>>[0]) => {
+        const admission = prepareAgentRunAdmission({
+          cfg: {},
+          operationalRunInstance: createOperationalRunInstanceRef(`run-${job.id}`),
+          facts: {
+            runId: `run-${job.id}`,
+            agentId: "main",
+            ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
+          },
+        });
+        const creatorScope = createCronCreatorAuthorityRunScope(`run-${job.id}`, { kind: "local" });
+        try {
+          const admitted = await admission.admit("embedded");
+          if (gap !== "unbound admission") {
+            await executionIdentity?.onPostAdmission?.(admitted);
+          }
+          const delegatedAuthority = expectDefined(
+            getAdmittedRunDelegatedAuthority(admitted),
+            "live scheduled admission",
+          );
+          const client: GatewayClient = {
+            connect: {} as GatewayClient["connect"],
+            internal: {
+              agentRuntimeIdentity: {
+                kind: "agentRuntime",
+                agentId: "main",
+                sessionKey: `agent:main:cron:${job.id}`,
+                operationalRunInstance:
+                  gap === "different operational instance"
+                    ? createOperationalRunInstanceRef(`run-${job.id}`)
+                    : admitted.operationalRunInstance,
+                delegatedAuthority: { kind: "local", ...delegatedAuthority },
+                cronCreatorAuthorityGrant: mintCronCreatorAuthorityGrant(
+                  creatorScope,
+                  abortSignal,
+                  undefined,
+                  undefined,
+                  "requester",
+                ),
+                cronSelfManagementContext: { jobId: job.id, expiresAtMs: Date.now() + 60_000 },
+              },
+            },
+          };
+          const respond = vi.fn<RespondFn>();
+          const params = { id: job.id };
+          await expectDefined(
+            cronHandlers["cron.remove"],
+            "cron.remove",
+          )({
+            req: { type: "req", id: "self-remove", method: "cron.remove", params },
+            params,
+            client,
+            respond,
+            context: createDirectChatContext({
+              cron,
+              cronStorePath: storePath,
+              validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
+            }),
+            isWebchatConnect: () => false,
+          });
+          removalResponse = respond.mock.calls[0];
+          abortedAfterRemoval = abortSignal?.aborted;
+          return {
+            status: "ok" as const,
+            summary: "final reply after refused self-cleanup",
+            notify: "final reply after refused self-cleanup",
+          };
+        } finally {
+          revokeCronCreatorAuthorityRunScope(creatorScope);
+          admission.close();
+        }
+      };
+      const cron = new CronService({
+        scheduler,
+        storePath,
+        cronEnabled: true,
+        defaultAgentId: "main",
+        log: logger,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        onEvent: (event) => events.push(event),
+        runIsolatedAgentJob: runJob,
+      });
+      try {
+        const job = await cron.add(
+          {
+            name: "refused-self-cleanup",
+            enabled: true,
+            deleteAfterRun: false,
+            schedule: { kind: "at", at: new Date(clock.clock.now() + 1_000).toISOString() },
+            sessionTarget: "isolated",
+            wakeMode: "next-heartbeat",
+            payload: { kind: "agentTurn", message: "remove this job, then finish" },
+            delivery: { mode: "none" },
+          },
+          { scheduledToolPolicy: { version: 1, mode: "trusted" } },
+        );
+        if (path === "manual") {
+          await cron.run(job.id, "force");
+        } else {
+          await cron.start();
+          await clock.advanceBy(1_000);
+        }
+        await vi.waitFor(() => {
+          expect(events.filter((event) => event.action === "finished")).toEqual([
+            expect.objectContaining({
+              jobId: job.id,
+              status: "ok",
+              completionStatus: "succeeded",
+              summary: "final reply after refused self-cleanup",
+            }),
+          ]);
+          expect(hasActiveCronJobs()).toBe(false);
+        });
+        const [ok, payload, error] = expectDefined(removalResponse, "removal response");
+        expect(ok).toBe(false);
+        expect(payload).toBeUndefined();
+        expect(error).toMatchObject({
+          message: expect.stringContaining("still running"),
+        });
+        expect(abortedAfterRemoval).toBe(false);
+        // The refused removal keeps the job; a fired one-shot without deleteAfterRun is retained disabled.
+        expect(await cron.readJob(job.id)).toMatchObject({
+          id: job.id,
+          enabled: path === "manual",
+        });
+      } finally {
+        cron.stop();
+        await scheduler.stop();
+      }
+    },
+  );
 });

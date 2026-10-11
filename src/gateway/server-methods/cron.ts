@@ -9,7 +9,6 @@ import {
   validateCronUpdateParams,
   validateWakeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { bindCronSelfRemovalCommitGuard } from "../../cron/active-jobs.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
 import { assertValidCronCreateDelivery } from "../../cron/delivery-channel-validation.js";
@@ -83,6 +82,7 @@ import {
 import { cronListHandler } from "./cron-list.js";
 import { cronRunsHandler } from "./cron-runs.js";
 import { cronScratchHandlers } from "./cron-scratch.js";
+import { resolveCronRemovalCommitGuard } from "./cron-self-removal.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -607,34 +607,23 @@ export const cronHandlers: GatewayRequestHandlers = {
         : undefined;
       let result: Awaited<ReturnType<typeof context.cron.remove>>;
       try {
-        const commitGuard = resolveCronMutationCommitGuard(
+        const commitGuard = resolveCronRemovalCommitGuard({
           client,
           context,
-          {
-            callerScope,
-            jobId,
-            allowCurrentJob: usesCurrentJobCapability,
-            expectedConfigRevision,
-          },
-          { sessionMutationCommitGuard, hasCurrentClientAuthority },
-        );
-        const identity = client?.internal?.agentRuntimeIdentity;
-        const validateAuthority = context.validateAgentRuntimeApprovalAuthority;
-        if (identity && validateAuthority && commitGuard && callerScope?.currentJobId === jobId) {
-          bindCronSelfRemovalCommitGuard(
-            jobId,
-            identity.operationalRunInstance,
-            commitGuard,
-            () => {
-              if (
-                !validateAuthority(identity) ||
-                readCronCallerScope(client)?.currentJobId !== jobId
-              ) {
-                throw new TypeError("cron self-removal authority is no longer active");
-              }
+          callerScope,
+          jobId,
+          commitGuard: resolveCronMutationCommitGuard(
+            client,
+            context,
+            {
+              callerScope,
+              jobId,
+              allowCurrentJob: usesCurrentJobCapability,
+              expectedConfigRevision,
             },
-          );
-        }
+            { sessionMutationCommitGuard, hasCurrentClientAuthority },
+          ),
+        });
         result = commitGuard
           ? await context.cron.remove(jobId, { commitGuard })
           : await context.cron.remove(jobId);

@@ -383,6 +383,23 @@ export function noteActiveCronJobRemoval(
   return marker;
 }
 
+/**
+ * A run removing its own job is accepted only through its exact live owner. Any other
+ * self-targeted caller is refused before the row is deleted, so the live run is never
+ * cancelled as if an operator had removed the job.
+ */
+export function assertCronSelfRemovalOwnerCurrent(jobId: string, commitGuard: () => void): void {
+  const marker = getCurrentCronActiveJobMarker(jobId);
+  if (!marker) {
+    return;
+  }
+  if (getCronActiveJobState().selfRemovalOwners.get(commitGuard)?.() !== marker) {
+    throw new TypeError(
+      "This automation is still running and this call is not its exact live run, so the job was not removed and the run continues. Finish the run instead: one-shot jobs auto-delete after successful completion, and operators can remove the job after the run ends.",
+    );
+  }
+}
+
 /** Completion retains its live receipt after self-removal; closed tools gain no new authority. */
 export function isCronSelfRemovalCurrent(marker: CronActiveJobMarker | undefined): boolean {
   return (
