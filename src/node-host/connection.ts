@@ -172,7 +172,7 @@ export function startNodeHostConnection({
       optionalPublicationStates.get(method) === state;
     if (
       state.unsupported ||
-      (!state.inFlight && isDeepStrictEqual(state.rejectedParams, params)) ||
+      isDeepStrictEqual(state.rejectedParams, params) ||
       isDeepStrictEqual(state.pendingParams, params) ||
       (!state.inFlight && isDeepStrictEqual(state.publishedParams, params))
     ) {
@@ -200,6 +200,7 @@ export function startNodeHostConnection({
           state.pendingParams = undefined;
           continue;
         }
+        state.rejectedParams = undefined;
         try {
           await connectionClient.request(method, nextParams);
           // Request settlement races reconnect teardown. Stale completions must
