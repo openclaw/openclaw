@@ -18,6 +18,7 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
+import { parseNodeWorkerResponse } from "./node-worker-response.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -325,12 +326,10 @@ export function createNodeWorkspaceRetainCoordinator(
             `workspace retain command failed (${result.error?.code ?? "unknown"})`,
         );
       }
-      let payload: unknown;
-      try {
-        payload = result.payloadJSON ? (JSON.parse(result.payloadJSON) as unknown) : undefined;
-      } catch {
-        throw new Error("workspace retain command returned malformed JSON");
-      }
+      const payload = parseNodeWorkerResponse(
+        result.payloadJSON || "null",
+        "workspace retain command",
+      );
       const retained = parseNodeWorkerWorkspaceRetainResult(payload);
       if (!retained) {
         throw new Error("workspace retain command violated its private result contract");

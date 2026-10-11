@@ -138,7 +138,7 @@ the call, so plugin and middleware behavior runs in the harness adapter. Codex
 Code Mode receives generic dynamic results as text and serializes nested
 dynamic calls; callers must parse JSON-looking results and cannot rely on
 `Promise.all` for concurrent submission. For Codex-native tools, Codex owns the
-canonical tool record; OpenClaw can mirror selected events but cannot rewrite
+native tool record; OpenClaw can mirror selected events but cannot rewrite
 the native thread unless Codex exposes that through app-server or native hook
 callbacks.
 

@@ -494,7 +494,6 @@ export {
   runTuiMock,
   runTuiCliActionMock,
   probeGatewayConfiguredModelMock,
-  readActiveGatewayLockPortMock,
   inspectGatewayTlsCertificateMock,
   resolveControlUiLinksMock,
   commanderParseAsyncMock,

@@ -49,7 +49,7 @@ async function inspectStaleShortTermLock(workspaceDir: string, repair: boolean):
     maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
   });
   const lockEntry = await lockStore.lookup(lockKey);
-  if (!lockEntry || !isShortTermLockStealable(lockKey, lockEntry, Date.now())) {
+  if (!lockEntry || !isShortTermLockStealable(lockEntry, Date.now())) {
     return false;
   }
   return repair ? await deleteShortTermLockEntryIfCurrent(lockStore, lockKey, lockEntry) : true;
