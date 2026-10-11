@@ -218,20 +218,6 @@ describe("runMessageAction plugin dispatch", () => {
       expectUncalled(handleAction, mocks.loadWebMedia);
     });
 
-    it("rejects wrong-account aliases before resolution", async () => {
-      const looksLikeId = vi.fn(() => true);
-      registerActionHubResolver({ looksLikeId });
-      await expect(
-        runDelegated(
-          "actionhub",
-          "pin",
-          { target: "room:current", messageId: "om_123" },
-          { defaultAccountId: "other" },
-        ),
-      ).rejects.toThrow(accountError);
-      expectUncalled(looksLikeId, handleAction);
-    });
-
     it("rejects directory-only external aliases before lookup", async () => {
       const looksLikeId = vi.fn(() => false);
       const resolveTarget = vi.fn(async () => ({

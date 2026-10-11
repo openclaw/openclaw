@@ -359,8 +359,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         (input.command.publicationKind === "shared" ||
           input.command.publicationKind === "personal") &&
         typeof input.command.requestId === "string") ||
-      ((input.command.type === "githubPublication.request" ||
-        input.command.type === "githubRepository.request") &&
+      (input.command.type === "githubPublication.request" &&
         typeof input.command.requestId === "string") ||
       ((input.command.type === "githubPublication.knownPullRequestUrls" ||
         input.command.type === "githubRepository.knownPullRequestUrls") &&
@@ -460,6 +459,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       isTuiLastSessionReadCommand(input.command) ||
       input.command.type === "nodeHost.config" ||
       input.command.type === "tts.prefsPath" ||
+      input.command.type === "voicewake.triggers" ||
+      input.command.type === "voicewake.routing" ||
       input.command.type === "operator.channelPolicy" ||
       input.command.type === "preparedPoolPresence.read" ||
       (input.command.type === "onboardingRecommendations.read" &&

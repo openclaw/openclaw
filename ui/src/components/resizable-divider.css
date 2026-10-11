@@ -1,0 +1,72 @@
+resizable-divider {
+  width: var(--resize-handle-size, 6px);
+  cursor: col-resize;
+  flex-shrink: 0;
+  position: relative;
+  touch-action: none;
+  user-select: none;
+}
+resizable-divider::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -4px;
+  right: -4px;
+  bottom: 0;
+}
+/* The visible divider is a centered hairline, not the whole gutter:
+   filling the host paints a fat bar that stacks with neighboring pane
+   borders into a multi-line smear while dragging. */
+resizable-divider::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  inset-inline-start: var(--resize-handle-line-inline, 50%);
+  width: var(--resize-handle-line-size, 1px);
+  transform: translateX(-50%);
+  background: var(--resize-handle-rest-color, var(--border));
+  transition:
+    background 150ms ease-out,
+    width 150ms ease-out;
+}
+resizable-divider:hover::after,
+resizable-divider.dragging::after,
+resizable-divider:focus-visible::after {
+  width: var(--resize-handle-active-line-size, 2px);
+  background: var(--resize-handle-active-color, currentColor);
+}
+resizable-divider:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+resizable-divider[orientation="horizontal"] {
+  width: auto;
+  height: var(--resize-handle-size, 6px);
+  cursor: row-resize;
+}
+resizable-divider[orientation="horizontal"]::before {
+  top: -4px;
+  left: 0;
+  right: 0;
+  bottom: -4px;
+}
+resizable-divider[orientation="horizontal"]::after {
+  top: var(--resize-handle-line-block, 50%);
+  bottom: auto;
+  inset-inline-start: 0;
+  left: 0;
+  right: 0;
+  width: auto;
+  height: var(--resize-handle-line-size, 1px);
+  transform: translateY(-50%);
+  transition:
+    background 150ms ease-out,
+    height 150ms ease-out;
+}
+resizable-divider[orientation="horizontal"]:hover::after,
+resizable-divider[orientation="horizontal"].dragging::after,
+resizable-divider[orientation="horizontal"]:focus-visible::after {
+  width: auto;
+  height: var(--resize-handle-active-line-size, 2px);
+}

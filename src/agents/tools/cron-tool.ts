@@ -188,18 +188,18 @@ function buildCronToolDescription(params: { triggersEnabled: boolean }): string 
     ? '\n- {kind:"stream",command:[argv]}: supervised process output.'
     : "";
   const scriptPayloadLine = params.triggersEnabled
-    ? '\n- {kind:"script",script}: main|isolated only.'
+    ? '\n- {kind:"script",script}: headless, main|isolated only; automations is self-scoped (no add/update/run/wake), cannot resume a conversation.'
     : "";
   const triggerSection = params.triggersEnabled
     ? `TRIGGER (condition watcher on every/cron): {script}. Never model-poll. Headless check: 30s/5 tool calls/16KB state. Read frozen trigger.state; return json({fire,message?,state?}) with new state for dedupe. fire:false saves state without a model call; fire:true runs payload with self-contained message. Fire on failures/timeouts too. Keep checks read-only; actions belong in payload. once:true disables after first fire. Code Mode: await exec({command:"..."}).`
     : `TRIGGERS DISABLED (cron.triggers.enabled=false): triggers, script payloads, and stream schedules are unavailable. For a conditional watcher, say it is unsupported; never model-poll or silently substitute an unconditional job. Plain time-based schedules remain available.`;
   const silentWatcherCue = params.triggersEnabled ? ' Silent watcher=>mode:"none".' : "";
   const scriptCue = params.triggersEnabled
-    ? " Use triggers/script payloads to skip the model on quiet checks. Scripts reach MCP only through toolsAllow entries <server>__tool or <server>__*. Throw to record script failure (returning {error} succeeds); only failure alerts wait for consecutive failures, run output follows delivery."
+    ? " Use triggers/script payloads to skip the model on quiet checks. Scripts reach MCP only through toolsAllow entries <server>__tool or <server>__*. Throw to record script failure (returning {error} succeeds); recurring-job failure alerts wait for consecutive failures, run output follows delivery."
     : "";
   return `Schedule reminders, delayed self-wakeups, recurring work${params.triggersEnabled ? ", event watchers" : ""}. Never exec sleep/poll as timer.
 
-ACTIONS: status | list (summaries; follow nextOffset) | get jobId (full details) | add job | update jobId job (partial; null clears) | remove jobId (operator removal requests active-run cancellation) | run jobId (runMode:"force"=now; waits up to timeoutMs, default 60s; unfinished runs return runId) | runs jobId runId? (history) | next_check in:"30m" (own paced run) | wake text (caller-owned session; mode defaults to next-heartbeat). Check unfinished runs later with runs, never a scheduled verification job.
+ACTIONS: status | list (summaries; follow nextOffset) | get jobId (full details) | add job | update jobId job (partial; null clears) | remove jobId (operator removal requests active-run cancellation) | run jobId (runMode:"force"=now; waits up to timeoutMs, default 60s; unfinished runs return runId) | runs jobId runId? (history) | next_check in:"30m" (own paced run) | wake text (caller-owned session; mode defaults to next-heartbeat). Check unfinished runs later with runs, never a scheduled verification job. wake has no delay; for a later resume use an at job below.
 
 SCOPE: Authenticated configured channel owners and Control UI administrators can manage any Gateway automation. Other turns see caller-visible jobs and scoped counts only: an empty list or failed list/get/update/remove (including not-found) does not establish global absence, even for IDs from your history. Never recreate or replace a known automation for update/remove/reconciliation based on these results; report the visibility limit and ask an authorized administrator to check through a fresh authenticated owner/administrator turn or the Automations page. New requested automations may still be created.
 
@@ -211,10 +211,10 @@ SCHEDULE:
 - {kind:"cron",expr,tz?:"IANA"}: wall time in tz, never UTC-convert; omitted tz=Gateway host local.${streamScheduleLine}
 
 TARGET+PAYLOAD:
-- "current" (agentTurn default): detached run reads bounded conversation context and commits its final result here. It uses the scheduled agent's workspace/session, not the conversation worktree or cloud placement; verify checkout/tool access before delegating work. Delivery does not resume the original agent.
+- "current" (agentTurn default): detached run reads bounded conversation context and commits its final result here. It uses the scheduled agent's workspace/session, not the conversation worktree or cloud placement; verify checkout/tool access before delegating work. To resume the real conversation use "session:<key>".
 - "isolated": fresh detached session; results recorded in run history.
 - "main" = heartbeat lane; payload {kind:"systemEvent",text} (systemEvent default target).
-- "session:<key>" = named session.
+- "session:<key>" + agentTurn runs a turn inside that existing conversation (same history, saved workspace/worktree). To come back here later (wait for CI, recheck), add an at + agentTurn job with sessionTarget "session:<your session key from Runtime>" and message = instructions for your next turn.
 - {kind:"agentTurn",message}; timeoutSeconds 0=none.
 - Inherited MCP authority covers model-callable tools, not interactive app-view-only capabilities.${scriptPayloadLine}
 
@@ -226,7 +226,7 @@ ${triggerSection}
 
 DELIVERY: omitted=announce. current commits to this conversation and sends once for external chats; isolated uses the last route or, without one, commits to the creating conversation. Set channel/to for a specific chat; let the scheduler deliver instead of messaging inside the run.${silentWatcherCue} webhook POSTs the finished-run event to URL in \`to\`; successful empty summaries stay silent. Add completionDestination:{mode:"webhook",to:"https://..."} to announce for both.
 
-FAILURE ALERTS: routed jobs default to 2 consecutive execution failures and 1h cooldown. failureAlert:false disables execution/delivery alerts, not auto-disable notices. bestEffort suppresses inherited execution alerts. Required-delivery failures use an alternate route, bypass after, and share the cooldown without incrementing the execution streak.
+FAILURE ALERTS: routed jobs default to 2 consecutive execution failures and 1h cooldown; terminal one-shot failures bypass that count. failureAlert:false disables execution/delivery alerts, not auto-disable notices. bestEffort suppresses inherited execution alerts. Required-delivery failures use an alternate route, bypass after, and share the cooldown without incrementing the execution streak.
 
 Main-job wakeMode: "now"(default)|"next-heartbeat". Scheduled runs: self status/list/get/runs/remove + own next_check only. Use jobId. contextMessages 0-10 embeds recent chat lines in reminder text.`;
 }

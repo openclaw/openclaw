@@ -1194,7 +1194,7 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
         "vitest.config.mts",
         `
       import {sharedVitestConfig as shared} from ${JSON.stringify(pathToFileURL(path.join(root, "test/vitest/vitest.shared.config.ts")).href)};
-      export default Promise.resolve({plugins:shared.plugins,test:{include:[${JSON.stringify(convertPathToPattern(test))}]}});
+      export default Promise.resolve({plugins:shared.plugins,test:{environment:shared.test.environment,include:[${JSON.stringify(convertPathToPattern(test))}]}});
     `,
       );
       const imported = await node([
@@ -1311,7 +1311,7 @@ export default class {
         `
       import {sharedVitestConfig as shared} from ${JSON.stringify(pathToFileURL(path.join(root, "test/vitest/vitest.shared.config.ts")).href)};
       // This fixture tests live-source reruns independently of native filesystem notifications.
-      export default {root:${JSON.stringify(directory)},plugins:shared.plugins,server:{watch:{usePolling:true}},test:{include:[${JSON.stringify(convertPathToPattern(test))}],pool:'forks',maxWorkers:1,reporters:['default',${JSON.stringify(reporter)}]}};
+      export default {root:${JSON.stringify(directory)},plugins:shared.plugins,server:{watch:{usePolling:true}},test:{environment:shared.test.environment,include:[${JSON.stringify(convertPathToPattern(test))}],pool:'forks',maxWorkers:1,reporters:['default',${JSON.stringify(reporter)}]}};
     `,
       );
       const handle = spawnWatchedVitestProcess({

@@ -19,7 +19,6 @@ const SNAPSHOT_CACHE_MAX_ENTRIES = 128;
 const CAPTURE_MARKER = "__OPENCLAW_SHELL_SNAPSHOT_CAPTURE__";
 const ENV_MARKER = "__OPENCLAW_SHELL_SNAPSHOT_ENV__";
 const EXEC_SHELL_SNAPSHOT_ENV = "OPENCLAW_EXEC_SHELL_SNAPSHOT";
-const VALID_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SNAPSHOT_SHELLS = new Set(["bash", "zsh"]);
 const SNAPSHOT_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
 const SAFE_ENV_NAMES = new Set([
@@ -367,7 +366,6 @@ function parseSafeEnvExports(envJson: string): string {
   return Object.entries(parsed)
     .filter(
       (entry): entry is [string, string] =>
-        VALID_ENV_NAME.test(entry[0]) &&
         SAFE_ENV_NAMES.has(entry[0]) &&
         !SECRET_ENV_PATTERN.test(entry[0]) &&
         typeof entry[1] === "string",
@@ -455,9 +453,7 @@ async function runShell(opts: {
     child.on("exit", (status) => {
       setTimeout(() => finish(status), 250);
     });
-    child.on("close", (status) => {
-      finish(status);
-    });
+    child.on("close", finish);
   });
 }
 

@@ -205,15 +205,30 @@ describe("Claude imported internal inputs", () => {
     expect(importUnmatched(content)).toMatchObject({ content });
   });
 
-  it.each(["", 'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"a":1}\n```\n\n'])(
-    "drops queued system event lines from a real user turn",
-    (context) => {
-      for (const stamp of ["2026-10-04 13:15:44 GMT+8", "2026-10-04T05:15:44Z", "unknown-time"]) {
-        const events = `System: [${stamp}] Model switched.\nSystem: more\n\n`;
-        const text = `${context}${events}real question`;
-        expect(importUnmatched(text)?.content).toBe(`${context}real question`);
+  it.each([
+    "",
+    'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"a":1}\n```\n\n',
+    'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"history_count":2}\n```\n\n' +
+      "Recent chat history: ⟦openclaw:ctx⟧\n" +
+      "#123 2026-10-11 12:20:09 GMT+5:30 Alice: The conservatory has 137 benches.\n" +
+      "#124 2026-10-11 12:20:20 GMT+5:30 Alice: /model anthropic/claude-haiku-4-5\n\n",
+  ])("drops queued system event lines from a real user turn", (context) => {
+    for (const stamp of [
+      "2026-10-04 13:15:44 GMT+8",
+      "2026-10-11 12:20:20 GMT+5:30",
+      "2026-10-04T05:15:44Z",
+      "unknown-time",
+    ]) {
+      const events = `System: [${stamp}] Model switched.\nSystem: more\n\n`;
+      for (const question of [
+        "real question",
+        "Please explain this header:\n\nContext: ⟦openclaw:ctx⟧\nexample",
+        "Please explain this header:\n\nContext:\n<active_memory_plugin>\nexample\n</active_memory_plugin>",
+      ]) {
+        const text = `${context}${events}${question}`;
+        expect(importUnmatched(text)?.content).toBe(`${context}${question}`);
         // The canonical row holds the turn without the queued events; the pair is one turn.
-        const canonical = { role: "user", content: `${context}real question`, timestamp: 1 };
+        const canonical = { role: "user", content: `${context}${question}`, timestamp: 1 };
         expect(
           mergeImportedChatHistoryMessages({
             localMessages: [canonical],
@@ -221,10 +236,10 @@ describe("Claude imported internal inputs", () => {
           }),
         ).toMatchObject([canonical]);
       }
-      const untouched = "real question\n\nSystem: quoted log line\n\nmore";
-      expect(importUnmatched(untouched)).toMatchObject({ content: untouched });
-    },
-  );
+    }
+    const untouched = "real question\n\nSystem: quoted log line\n\nmore";
+    expect(importUnmatched(untouched)).toMatchObject({ content: untouched });
+  });
 
   it("hides decorated internal rows through JSONL import, merge and the common client history projection", async () => {
     await withClaudeProjectsDir(async ({ filePath, readMessages }) => {

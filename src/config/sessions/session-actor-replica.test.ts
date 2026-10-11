@@ -1,6 +1,6 @@
 import path from "node:path";
 import "../../test-utils/prepare-compiled-subprocesses.js";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import {
   readSqliteDatabaseScopedWriteTokenForPath,
@@ -8,6 +8,7 @@ import {
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import type { SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
 import { patchSessionEntry as patchSdkSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -38,14 +39,17 @@ import {
 } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type {
   SessionActorHotState,
+  SessionActorOperations,
   SessionActorOutcome,
   SessionActorReceipt,
 } from "./session-actor-contract.js";
 import { hydrateSessionActorState } from "./session-actor-hydration.worker.js";
 import {
   createSessionActorReplica,
+  readSessionActorRowFacts,
   retainSessionActorEntryFacts,
 } from "./session-actor-replica.js";
+import { createSessionActor } from "./session-actor.js";
 import { mutatePendingInput, readPendingInput } from "./session-pending-input-operations.kernel.js";
 import type { PendingInputMutation } from "./session-pending-input-operations.types.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
@@ -166,6 +170,67 @@ function committed(
   return { kind: "committed", value: undefined, receipt };
 }
 
+it.each(["worker read", "disclosure"] as const)(
+  "returns a newer committed replica when a receipt arrives during %s",
+  async (arrival) => {
+    await withReplica(async ({ replica, load, scope }) => {
+      const initial = load();
+      const started = Promise.withResolvers<void>();
+      const reply = Promise.withResolvers<SessionActorHotState>();
+      const execute = vi
+        .fn<SqliteWorkerStore<SessionActorOperations>["execute"]>()
+        .mockReturnValue(reply.promise);
+      const actor = createSessionActor({
+        target: initial.target,
+        lifetime: { assertCurrent() {}, assertReadable() {} },
+        replica,
+        transport: {
+          run: async (operation) => {
+            const result = operation({
+              execute,
+              captureGeneration: () => ({ assertCurrent() {} }),
+            });
+            started.resolve();
+            return result;
+          },
+          async release() {},
+        },
+      });
+      const publish = () => {
+        const pending = replica.beginCommand();
+        replaceSessionEntrySync(scope, {
+          sessionId: "replica-session",
+          updatedAt: 2,
+          label: "after",
+        });
+        expect(pending.settle(committed(command(initial, "newer"), load("first", 1)))).toBe(true);
+      };
+      const authorize = vi.fn(() => {
+        if (arrival === "disclosure" && authorize.mock.calls.length === 1) {
+          publish();
+        }
+      });
+      try {
+        const reading = actor.read({ assertCurrent() {}, authorize });
+        await started.promise;
+        if (arrival === "worker read") {
+          publish();
+        }
+        reply.resolve(initial);
+        expect((await reading).entry).toMatchObject({ updatedAt: 2, label: "after" });
+        expect(execute).toHaveBeenCalledOnce();
+        expect(authorize).toHaveBeenLastCalledWith(
+          "commit",
+          expect.objectContaining({ entry: expect.objectContaining({ updatedAt: 2 }) }),
+        );
+      } finally {
+        reply.resolve(initial);
+        await actor.release();
+      }
+    });
+  },
+);
+
 it("shares committed facts across released handles and retires them for writes and worker loss", async () => {
   await withReplica((fixture) => {
     const first = hydrate(fixture);
@@ -235,7 +300,6 @@ it("retains unrelated session postimages but invalidates a shared physical sessi
           sibling
             .prepare("UPDATE session_windows SET display_name = ? WHERE session_id = ?")
             .run("sibling-window", "other-session");
-          expect(fixture.replica.read()).toBeUndefined();
         }),
     );
     expect(fixture.replica.read()).toEqual(snapshot);
@@ -302,7 +366,6 @@ it("invalidates partial native publications before disclosure and count-only par
               updatedAt: 5,
               label: "rolled back",
             });
-            expect(replica.read()).toBeUndefined();
             throw new Error("abort replica fixture");
           },
           { agentId: scope.agentId, path: database.path, env: scope.env },
@@ -435,6 +498,55 @@ it("invalidates for native owner, replacement, transcript and deletion writers",
     );
     expect(replica.read()).toBeUndefined();
     expect(hydrate(fixture).entry).toBeUndefined();
+  });
+});
+
+it("reuses list facts and invalidates summary watermarks after transcript writes", async () => {
+  await withReplica((fixture) => {
+    const { scope } = fixture;
+    replaceSessionEntrySync(scope, {
+      sessionId: "replica-session",
+      updatedAt: 1,
+      skillsSnapshot: { prompt: "Saved instructions", skills: [] },
+      activitySummary: {
+        version: 1,
+        text: "No messages yet",
+        updatedAt: 1,
+        sessionId: "replica-session",
+        generation: null,
+        maxSeq: null,
+        leafEntryId: null,
+        coveredMessages: 0,
+        totalMessages: 0,
+        omittedContent: false,
+      },
+    });
+    const before = hydrate(fixture);
+    const target = { path: scope.storePath, sessionKey: scope.sessionKey };
+    const facts = readSessionActorRowFacts(target);
+    expect(before.entry?.skillsSnapshot?.prompt).toBe("Saved instructions");
+    expect(facts?.entry).not.toHaveProperty("skillsSnapshot");
+    expect(facts).toMatchObject({
+      hasBoard: false,
+      activitySummaryWatermark: { generation: null, maxSeq: null },
+    });
+    if (!facts) {
+      throw new Error("Expected resident row facts");
+    }
+    facts.entry.label = "caller edit";
+    expect(readSessionActorRowFacts(target)?.entry.label).toBeUndefined();
+
+    const appended = appendTranscriptEventSync(
+      { ...scope, sessionId: "replica-session" },
+      { type: "proof", id: "summary-watermark" },
+    );
+    expect(appended.ok).toBe(true);
+    expect(readSessionActorRowFacts(target)).toBeUndefined();
+    const after = hydrate(fixture);
+    expect(after.transcript.watermark).not.toEqual(before.transcript.watermark);
+    expect(readSessionActorRowFacts(target)?.activitySummaryWatermark).toEqual(
+      after.transcript.watermark,
+    );
   });
 });
 

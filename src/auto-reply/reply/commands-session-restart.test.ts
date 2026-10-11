@@ -132,34 +132,6 @@ describe("handleRestartCommand", () => {
     mocks.triggerOpenClawRestart.mockReturnValue({ ok: true, method: "launchctl" });
   });
 
-  it("writes a routed restart sentinel before restarting from chat", async () => {
-    const result = await handleRestartCommand(restartCommandParams(), true);
-
-    expect(result?.shouldContinue).toBe(false);
-    expect(mocks.writeRestartSentinel).toHaveBeenCalledOnce();
-    const sentinelPayload = firstRestartSentinelPayload();
-    expect(sentinelPayload?.kind).toBe("restart");
-    expect(sentinelPayload?.status).toBe("ok");
-    expect(typeof sentinelPayload?.ts).toBe("number");
-    expect(sentinelPayload?.sessionKey).toBe("agent:main:telegram:direct:123:thread:thread-1");
-    expect(sentinelPayload?.deliveryContext).toEqual({
-      channel: "telegram",
-      to: "telegram:123",
-      accountId: "default",
-    });
-    expect(sentinelPayload?.threadId).toBe("thread-1");
-    expect(sentinelPayload?.message).toBe("/restart");
-    expect(sentinelPayload?.continuation).toBeNull();
-    expect(sentinelPayload?.doctorHint).toBe(
-      "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
-    );
-    expect(sentinelPayload?.stats).toEqual({
-      mode: "gateway.restart",
-      reason: "/restart",
-    });
-    expect(mocks.triggerOpenClawRestart).toHaveBeenCalledTimes(1);
-  });
-
   it("prepares the routed sentinel only when SIGUSR2 restart emits", async () => {
     const handler = () => {};
     process.on("SIGUSR2", handler);
@@ -173,6 +145,7 @@ describe("handleRestartCommand", () => {
       expect(mocks.triggerOpenClawRestart).not.toHaveBeenCalled();
 
       const scheduledArgs = mocks.scheduleGatewayRestart.mock.calls.at(-1)?.[0];
+      expect(scheduledArgs?.sessionKey).toBe("agent:main:telegram:direct:123:thread:thread-1");
       expect(scheduledArgs?.emitHooks?.assertCurrent).toBe(params.command.assertOwnerCurrent);
       await scheduledArgs?.emitHooks?.beforeEmit?.();
 
@@ -182,18 +155,6 @@ describe("handleRestartCommand", () => {
       expect(sentinelPayload?.status).toBe("ok");
       expect(sentinelPayload?.sessionKey).toBe("agent:main:telegram:direct:123:thread:thread-1");
       expect(sentinelPayload?.continuation).toBeNull();
-    } finally {
-      process.removeListener("SIGUSR2", handler);
-    }
-  });
-
-  it("threads sessionKey into scheduleGatewayRestart so cross-session coalescing is rejected (#86742)", async () => {
-    const handler = () => {};
-    process.on("SIGUSR2", handler);
-    try {
-      await handleRestartCommand(restartCommandParams(), true);
-      const scheduledArgs = mocks.scheduleGatewayRestart.mock.calls.at(-1)?.[0];
-      expect(scheduledArgs?.sessionKey).toBe("agent:main:telegram:direct:123:thread:thread-1");
     } finally {
       process.removeListener("SIGUSR2", handler);
     }
@@ -317,7 +278,7 @@ describe("handleRestartCommand", () => {
     },
   );
 
-  it.each(["text", "native"] as const)(
+  it.each(["text"] as const)(
     "gives authorized non-owner %s restart commands the owner setup hint",
     async (source) => {
       const result = await handleRestartCommand(

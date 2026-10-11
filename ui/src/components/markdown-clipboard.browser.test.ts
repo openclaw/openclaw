@@ -4,7 +4,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { renderMessageImages } from "../pages/chat/components/chat-message-images.ts";
 import { renderMessageMarkdown } from "../pages/chat/components/chat-message-text.ts";
 import { exportWidget } from "../pages/chat/components/widget-export.ts";
-import "../pages/chat/components/browser-tab-card.ts";
+import "../pages/chat/components/browser-tab-card.tsx";
 import { renderCopyButton } from "./copy-button.ts";
 import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
 import "./markdown-mermaid.ts";
@@ -126,8 +126,8 @@ async function mountBrowserCard() {
   return {
     card,
     copy: () =>
-      card.shadowRoot
-        ?.querySelector("wa-dropdown")
+      card
+        .querySelector("wa-dropdown")
         ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "copy-url" } } })),
   };
 }

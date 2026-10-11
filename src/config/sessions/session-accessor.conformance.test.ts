@@ -14,7 +14,7 @@ import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-age
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
-import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
+import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.test-support.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   encodeSessionArchiveContent,

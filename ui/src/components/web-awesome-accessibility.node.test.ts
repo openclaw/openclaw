@@ -178,6 +178,7 @@ describe.runIf(canRunPlaywrightChromium(executablePath))("Web Awesome accessibil
           }),
           root,
         );
+        await root.querySelector("openclaw-panel-tab-strip").updateComplete;
         await root.querySelector("wa-tab-group").updateComplete;
       `,
       async (_page, accessibility) => {

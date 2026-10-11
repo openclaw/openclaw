@@ -122,14 +122,6 @@ async function readSessionCompanionContextFromEntry(
     let scannedMessages = 0;
     let totalMessages = 0;
     let stoppedAtOlderByteBoundary = false;
-    let snapshot:
-      | {
-          activeLeafEntryId?: string | null;
-          generation?: string;
-          indexedSeq: number;
-          totalMessages: number;
-        }
-      | undefined;
     const contextMessages: SessionCompanionContextMessage[] = [];
     while (
       contextMessages.length < CONTEXT_MAX_MESSAGES &&
@@ -145,21 +137,6 @@ async function readSessionCompanionContextFromEntry(
       });
       assertCurrent?.();
       if (params.signal?.aborted) {
-        return { kind: "unavailable" };
-      }
-      const pageSnapshot = {
-        activeLeafEntryId: page.activeLeafEntryId,
-        generation: page.snapshot.generation,
-        indexedSeq: page.snapshot.indexedSeq,
-        totalMessages: page.totalMessages,
-      };
-      snapshot ??= pageSnapshot;
-      if (
-        pageSnapshot.activeLeafEntryId !== snapshot.activeLeafEntryId ||
-        pageSnapshot.generation !== snapshot.generation ||
-        pageSnapshot.indexedSeq !== snapshot.indexedSeq ||
-        pageSnapshot.totalMessages !== snapshot.totalMessages
-      ) {
         return { kind: "unavailable" };
       }
       totalMessages = page.totalMessages;
@@ -189,21 +166,6 @@ async function readSessionCompanionContextFromEntry(
       contextMessages.length < CONTEXT_MAX_MESSAGES &&
       offset < totalMessages &&
       !stoppedAtOlderByteBoundary
-    ) {
-      return { kind: "unavailable" };
-    }
-    const fence = await readSessionTranscriptBoundedMessageTailPageAsync(scope, {
-      maxBytes: 0,
-      maxMessages: 0,
-      offset: 0,
-    });
-    if (
-      params.signal?.aborted ||
-      !snapshot ||
-      fence.activeLeafEntryId !== snapshot.activeLeafEntryId ||
-      fence.snapshot.generation !== snapshot.generation ||
-      fence.snapshot.indexedSeq !== snapshot.indexedSeq ||
-      fence.totalMessages !== snapshot.totalMessages
     ) {
       return { kind: "unavailable" };
     }

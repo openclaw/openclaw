@@ -32,7 +32,7 @@ export type PanelHostedTabsElement = HTMLElement & {
   readonly hostedTabs: PanelHostedTab[];
   readonly activeHostedTabId: string | null;
   /** Header actions while this panel is the active side panel; rendered by the host in light DOM. */
-  readonly hostedActions?: TemplateResult | typeof nothing;
+  readonly hostedActions?: TemplateResult | Node | typeof nothing;
   selectHostedTab(id: string): void;
   closeHostedTab(id: string): Promise<void>;
 };

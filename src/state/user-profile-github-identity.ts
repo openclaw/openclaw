@@ -26,6 +26,7 @@ import {
 import type { UserProfileMutationContext } from "./user-profile-mutation.js";
 import {
   selectProfileDisplayEntries,
+  hasProfileRoleColumn,
   selectUserProfileEmailAlias,
   selectResolvedUserProfileMetadataById,
   setUserProfileEmailBinding,
@@ -39,6 +40,7 @@ import type {
   ProfileDisplayRow,
   UserProfileGitHubAttribution,
   UserProfileGitHubAttributionRead,
+  UserProfileRoleAuthority,
 } from "./user-profiles.types.js";
 
 const GITHUB_PROVIDER = "github";
@@ -104,7 +106,17 @@ export function selectStoredGitHubIdentities(
       .where("subject", "in", accountIds.map(String))
       .where("user_profiles.merged_into", "is", null);
   }
-  const rows = executeSqliteQuerySync(db, query).rows;
+  return projectStoredGitHubIdentities(executeSqliteQuerySync(db, query).rows);
+}
+
+function projectStoredGitHubIdentities(
+  rows: readonly {
+    profile_id: string;
+    subject: string | null;
+    canonical_login: string | null;
+    primary_github_account_id?: number | null;
+  }[],
+): Map<string, { accounts: StoredGitHubIdentity[]; primary: StoredGitHubIdentity | undefined }> {
   const profiles = new Map<
     string,
     { accounts: StoredGitHubIdentity[]; primaryId: number | null }
@@ -135,6 +147,62 @@ export function selectStoredGitHubIdentities(
       },
     ]),
   );
+}
+
+/** One statement keeps canonical ownership, role, and verified login in the same snapshot. */
+export function selectUserProfileRoleAuthority(
+  db: DatabaseSync,
+  profileId: string,
+): UserProfileRoleAuthority | undefined {
+  if (!tableExists(db, "user_profiles")) {
+    return undefined;
+  }
+  const columns = readGitHubColumns(db);
+  const hasRole = hasProfileRoleColumn(getAdmittedSqliteSchemaFacts(db));
+  const query = userProfilesDb(db)
+    .selectFrom("user_profiles as requested")
+    .leftJoin("user_profiles as canonical", (join) =>
+      join
+        .onRef("canonical.id", "=", "requested.merged_into")
+        .on("requested.merged_into", "!=", ""),
+    )
+    .innerJoin("user_profiles as profile", (join) =>
+      join.on((eb) => eb("profile.id", "=", eb.fn.coalesce("canonical.id", "requested.id"))),
+    )
+    .where("requested.id", "=", profileId)
+    .select("profile.id as profile_id")
+    .select((eb) => [
+      hasRole ? "profile.role" : eb.val<string | null>(null).as("role"),
+      columns.primaryAccount
+        ? "profile.primary_github_account_id"
+        : eb.val<number | null>(null).as("primary_github_account_id"),
+    ]);
+  const rows = executeSqliteQuerySync(
+    db,
+    columns.verifiedLogin
+      ? query
+          .leftJoin("user_profile_identities as identity", (join) =>
+            join
+              .onRef("identity.profile_id", "=", "profile.id")
+              .on("identity.provider", "=", GITHUB_PROVIDER)
+              .on("identity.canonical_login", "is not", null),
+          )
+          .select(["identity.subject", "identity.canonical_login"])
+          .orderBy("identity.subject", "asc")
+      : query.select((eb) => [
+          eb.val<string | null>(null).as("subject"),
+          eb.val<string | null>(null).as("canonical_login"),
+        ]),
+  ).rows;
+  const profile = rows[0];
+  return profile
+    ? {
+        profileId: profile.profile_id,
+        role: profile.role ?? null,
+        githubLogin:
+          projectStoredGitHubIdentities(rows).get(profile.profile_id)?.primary?.login ?? null,
+      }
+    : undefined;
 }
 
 export function selectProfileAccessEntries(
