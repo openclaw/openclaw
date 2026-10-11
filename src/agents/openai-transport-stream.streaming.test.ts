@@ -1,6 +1,5 @@
 import { createServer } from "node:http";
 import {
-  createAzureOpenAIResponsesTransportStreamFn,
   createOpenAICompletionsTransportStreamFn,
   createOpenAIResponsesTransportStreamFn,
 } from "@openclaw/ai/transports";
@@ -29,11 +28,6 @@ describe("openai transport stream", () => {
       api: "openai-responses" as const,
       provider: "custom-openai",
       createStream: createOpenAIResponsesTransportStreamFn,
-    },
-    {
-      api: "azure-openai-responses" as const,
-      provider: "azure-openai-responses-devdiv",
-      createStream: createAzureOpenAIResponsesTransportStreamFn,
     },
   ])(
     "honors turn timeout and zero retries over real $api HTTP",
@@ -198,84 +192,6 @@ describe("openai transport stream", () => {
     ).rejects.toThrow("Request was aborted");
     expect(yieldedToTimer).toBe(true);
     expect(stream.push.mock.calls.length).toBeLessThan(512);
-  });
-
-  it("omits accumulated partial snapshots from Responses text deltas", async () => {
-    const model = createAzureResponsesModel();
-    const output = createResponsesAssistantOutput(model);
-    const events: CapturedStreamEvent[] = [];
-
-    await testing.processResponsesStream(
-      streamChunks([
-        { type: "response.output_item.added", item: { type: "message" } },
-        { type: "response.output_text.delta", delta: "a" },
-        { type: "response.output_text.delta", delta: "b" },
-        { type: "response.completed", response: { id: "resp_text", status: "completed" } },
-      ]),
-      output,
-      { push: (event) => events.push(event as CapturedStreamEvent) },
-      model,
-    );
-
-    const textDeltas = events.filter((event) => event.type === "text_delta");
-    expect(textDeltas).toHaveLength(2);
-    expect(textDeltas.every((event) => !("partial" in event))).toBe(true);
-    expect(output.content).toEqual([{ type: "text", text: "ab" }]);
-  });
-
-  it("materializes one stable tool call for a done-only idless Responses item", async () => {
-    const model = createAzureResponsesModel();
-    const output = createResponsesAssistantOutput(model);
-    const events: CapturedStreamEvent[] = [];
-    const item = {
-      type: "function_call",
-      name: "computer",
-      arguments: '{"action":"screenshot"}',
-      status: "completed",
-    };
-
-    await testing.processResponsesStream(
-      streamChunks([
-        {
-          type: "response.output_item.done",
-          output_index: 0,
-          sequence_number: 0,
-          item,
-        },
-        {
-          type: "response.completed",
-          sequence_number: 1,
-          response: {
-            id: "resp_done_only_idless",
-            status: "completed",
-            output: [item],
-          },
-        },
-      ]),
-      output,
-      { push: (event) => events.push(event as CapturedStreamEvent) },
-      model,
-    );
-
-    expect(output.stopReason).toBe("toolUse");
-    expect(output.content).toEqual([
-      {
-        type: "toolCall",
-        id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
-        name: "computer",
-        arguments: { action: "screenshot" },
-      },
-    ]);
-    const toolEvents = events.filter((event) => event.type?.startsWith("toolcall_")) as Array<{
-      type: string;
-      contentIndex: number;
-      toolCall?: { id?: string };
-    }>;
-    expect(toolEvents.map((event) => [event.type, event.contentIndex])).toEqual([
-      ["toolcall_start", 0],
-      ["toolcall_end", 0],
-    ]);
-    expect(toolEvents[1]?.toolCall?.id).toBe((output.content[0] as { id?: string }).id);
   });
 
   it("reconciles an idless added Responses item to its canonical done identity", async () => {

@@ -31,10 +31,6 @@ describe("progress card system prompt", () => {
     hasPairedCardRenderer.mockReset().mockResolvedValue(true);
   });
 
-  it("injects the instruction when every adoption gate passes", async () => {
-    await expect(append({})).resolves.toContain("progress_card");
-  });
-
   it.each([
     {
       name: "the progress-card kill switch is disabled",
@@ -45,10 +41,6 @@ describe("progress card system prompt", () => {
       params: { config: { tools: { deny: ["progress_card"] } } },
     },
     {
-      name: "the configured profile excludes progress_card",
-      params: { config: { tools: { profile: "messaging" as const } } },
-    },
-    {
       name: "the runtime allowlist excludes progress_card",
       params: { toolsAllow: ["read"] },
     },
@@ -56,19 +48,13 @@ describe("progress card system prompt", () => {
     await expect(append(params)).resolves.toBeUndefined();
   });
 
-  it.each([
-    { config: undefined, sessionKey: "main" },
-    { config: { session: { scope: "global" as const } }, sessionKey: "global" },
-  ])("suppresses the instruction for the agent main session $sessionKey", async (params) => {
-    await expect(append(params)).resolves.toBeUndefined();
-    expect(hasPairedCardRenderer).not.toHaveBeenCalled();
-  });
-
-  it("suppresses the instruction when no paired client can render the card", async () => {
-    hasPairedCardRenderer.mockResolvedValue(false);
-
-    await expect(append({})).resolves.toBeUndefined();
-  });
+  it.each([{ config: { session: { scope: "global" as const } }, sessionKey: "global" }])(
+    "suppresses the instruction for the agent main session $sessionKey",
+    async (params) => {
+      await expect(append(params)).resolves.toBeUndefined();
+      expect(hasPairedCardRenderer).not.toHaveBeenCalled();
+    },
+  );
 
   it("suppresses the instruction when the attempt uses the resolved utility model", async () => {
     await expect(

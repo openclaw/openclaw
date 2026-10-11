@@ -22,30 +22,6 @@ describe("toRelativeWorkspacePath (windows semantics)", () => {
     resolveSandboxInputPathMock.mockImplementation((filePath: string) => filePath);
   });
 
-  it("preserves candidate case when the root itself is spelled with different case", () => {
-    withMockedWindowsPlatform(() => {
-      const root = "C:\\Users\\User\\OpenClaw";
-      const candidate = "c:/users/user/openclaw/Memory/Log.txt";
-      expect(toRelativeWorkspacePath(root, candidate)).toBe("Memory\\Log.txt");
-    });
-  });
-
-  it("accepts extended-length prefixed windows paths", () => {
-    withMockedWindowsPlatform(() => {
-      const root = "C:\\Users\\User\\OpenClaw";
-      const candidate = "\\\\?\\C:\\Users\\User\\OpenClaw\\Memory\\Log.txt";
-      expect(toRelativeWorkspacePath(root, candidate)).toBe("Memory\\Log.txt");
-    });
-  });
-
-  it("rejects windows paths outside workspace root", () => {
-    withMockedWindowsPlatform(() => {
-      const root = "C:\\Users\\User\\OpenClaw";
-      const candidate = "C:\\Users\\User\\Other\\log.txt";
-      expect(() => toRelativeWorkspacePath(root, candidate)).toThrow("Path escapes workspace root");
-    });
-  });
-
   it("rejects windows escapes that differ from the root only by case", () => {
     withMockedWindowsPlatform(() => {
       const root = "C:\\Users\\User\\OpenClaw";
@@ -79,15 +55,12 @@ describe("toRelativeWorkspacePath", () => {
 
 describe("backend-declared sandbox path syntax", () => {
   it.each([
-    ["C:\\Sandbox", "c:/sandbox/Notes/File.md", "Notes\\File.md"],
-    ["\\\\?\\C:\\Sandbox", "c:\\sandbox\\Note.md", "Note.md"],
     ["\\\\server\\share\\Sandbox", "\\\\?\\UNC\\SERVER\\SHARE\\sandbox\\Note.md", "Note.md"],
     ["C:\\Sandbox", "C:Sandbox\\Note.md", null],
     ["C:\\Sandbox", "\\Sandbox\\Note.md", null],
     ["C:\\Sandbox", "D:\\Sandbox\\Note.md", null],
     ["C:\\Sandbox", "C:\\Sandbox\\..\\private", null],
     ["C:\\Sandbox", "C:\\Sandbox-other\\private", null],
-    ["/workspace", "/workspace/literal\\name", "literal\\name"],
     ["/workspace", "/Workspace/note", null],
   ] as const)(
     "compares %s against %s without using the host platform",

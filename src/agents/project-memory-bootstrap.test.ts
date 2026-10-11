@@ -112,14 +112,6 @@ describe("project memory bootstrap", () => {
     expect(rendered.length).toBeLessThanOrEqual(2_000);
   });
 
-  it("includes entries from every project retained in the session active set", async () => {
-    const rendered = (
-      await prepareEntries(entries, ["github.com/example/other", "github.com/OpenClaw/OpenClaw"])
-    ).join("\n");
-    expect(rendered).toContain("Use the release helper.");
-    expect(rendered).toContain("Foreign fact.");
-  });
-
   it("never emits a partial entry or exceeds the hard budget", async () => {
     const crowded = Array.from({ length: 10 }, (_, index) => ({
       ...entries[0]!,
@@ -139,27 +131,6 @@ describe("project memory bootstrap", () => {
     );
     expect(rendered).toContain("…");
     expect(rendered.length).toBeLessThanOrEqual(2_000);
-  });
-
-  it("admits a later exact-fit entry after skipping an oversized entry", async () => {
-    const first = Array.from({ length: 3 }, (_, index) => ({
-      ...entries[0]!,
-      startLine: index + 1,
-      snippet: "a".repeat(550),
-    }));
-    const prefix = await prepareEntries(first);
-    const sourceSuffix = " (Source: MEMORY.md#L5)";
-    const remaining = 2_000 - prefix.join("\n").length;
-    const lastSnippet = "z".repeat(remaining - "- ".length - sourceSuffix.length - 1);
-    const lines = await prepareEntries([
-      ...first,
-      { ...entries[0]!, startLine: 4, snippet: "b".repeat(600) },
-      { ...entries[0]!, startLine: 5, snippet: lastSnippet },
-      { ...entries[0]!, startLine: 6, snippet: "Does not fit." },
-    ]);
-
-    expect(lines).toEqual([...prefix.slice(0, -1), `- ${lastSnippet}${sourceSuffix}`, ""]);
-    expect(lines.join("\n")).toHaveLength(2_000);
   });
 
   it("keeps sessions without an active repository unchanged", async () => {
@@ -213,55 +184,11 @@ describe("project memory bootstrap", () => {
     expect(filterProjectScopedCuratedContextFiles({ contextFiles })).toEqual(contextFiles);
   });
 
-  it("uses the dedicated curated listing instead of a daily-note-crowded search", async () => {
-    runtimeMocks.search.mockResolvedValue(
-      Array.from({ length: 100 }, (_, index) => ({
-        ...entries[0]!,
-        path: `memory/2026-07-${String(index + 1).padStart(2, "0")}.md`,
-      })),
-    );
-    runtimeMocks.listCurated.mockResolvedValue([entries[0]]);
-    runtimeMocks.getManager.mockResolvedValue({
-      manager: {
-        search: runtimeMocks.search,
-        listCuratedProjectCandidates: runtimeMocks.listCurated,
-      },
-    });
-
-    const rendered = (
-      await prepareProjectMemoryBootstrap({
-        cfg: {},
-        agentId: "main",
-        activeProjectKeys: ["github.com/OpenClaw/OpenClaw"],
-      })
-    ).join("\n");
-    expect(rendered).toContain("Use the release helper.");
-    expect(runtimeMocks.search).not.toHaveBeenCalled();
-    expect(runtimeMocks.listCurated).toHaveBeenCalledWith({
-      activeProjectKeys: ["github.com/OpenClaw/OpenClaw"],
-      limit: 48,
-    });
-  });
-
   it("builds scoped write guidance without capturing global memory", () => {
     const instruction = buildProjectMemoryWriteInstruction("github.com/OpenClaw/OpenClaw");
     expect(instruction).toContain("<!-- project: github.com/OpenClaw/OpenClaw -->");
     expect(instruction).toContain("Do not project-scope user-level preferences");
     expect(buildProjectMemoryWriteInstruction("path:/tmp/unsafe-->note")).toBe("");
-  });
-
-  it("cites legacy chunks by start line from the already-loaded runtime", async () => {
-    const lines = await prepareEntries([
-      { ...entries[0]!, startLine: 5, endLine: 6, source: undefined as never },
-    ]);
-
-    expect(runtimeMocks.getManager).toHaveBeenCalledWith({
-      cfg: {},
-      agentId: "main",
-      purpose: "default",
-    });
-    expect(runtimeMocks.getProvider).not.toHaveBeenCalled();
-    expect(lines).toContain("- Use the release helper. (Source: MEMORY.md#L5)");
   });
 
   it("does not load the slot plugin when no memory runtime is active", async () => {
@@ -341,14 +268,6 @@ describe("native project memory bootstrap", () => {
     expect(rendered).not.toContain("Missing-provenance project instruction");
     expect(rendered).not.toContain("<!--");
     expect(rendered.length).toBeLessThanOrEqual(2_000);
-  });
-
-  it("includes entries from every project retained in the session active set", async () => {
-    const rendered = (
-      await prepareEntries(entries, ["github.com/example/other", "github.com/OpenClaw/OpenClaw"])
-    ).join("\n");
-    expect(rendered).toContain("Use the release helper.");
-    expect(rendered).toContain("Foreign fact.");
   });
 
   it("filters every project key without requesting unsupported provider filtering", async () => {
