@@ -199,14 +199,11 @@ export function isValidSecretRef(ref: SecretRef): boolean {
   if (!isValidSecretProviderAlias(ref.provider)) {
     return false;
   }
-  if (ref.source === "env") {
+  if (ref.source === "env" || ref.source === "store") {
     return isValidEnvSecretRefId(ref.id);
   }
   if (ref.source === "file") {
     return isValidFileSecretRefId(ref.id);
-  }
-  if (ref.source === "store") {
-    return isValidEnvSecretRefId(ref.id);
   }
   return isValidExecSecretRefId(ref.id);
 }
@@ -240,19 +237,15 @@ export function normalizeAndGroupSecretRefs(refs: SecretRef[]): ProviderRefGroup
         `Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (ref: ${ref.source}:${ref.provider}:${id}).`,
       );
     }
-    if (ref.source === "env" && !isValidEnvSecretRefId(id)) {
+    if ((ref.source === "env" || ref.source === "store") && !isValidEnvSecretRefId(id)) {
+      const label = ref.source === "env" ? "Env" : "Store";
       throw new Error(
-        `Env secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (ref: ${ref.source}:${ref.provider}:${id}).`,
+        `${label} secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (ref: ${ref.source}:${ref.provider}:${id}).`,
       );
     }
     if (ref.source === "file" && !isValidFileSecretRefId(id)) {
       throw new Error(
         `File secret reference id must be an absolute JSON pointer or "value" (ref: ${ref.source}:${ref.provider}:${id}).`,
-      );
-    }
-    if (ref.source === "store" && !isValidEnvSecretRefId(id)) {
-      throw new Error(
-        `Store secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (ref: ${ref.source}:${ref.provider}:${id}).`,
       );
     }
     if (ref.source === "exec" && !isValidExecSecretRefId(id)) {

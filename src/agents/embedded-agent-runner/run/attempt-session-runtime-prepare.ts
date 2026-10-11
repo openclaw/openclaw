@@ -6,7 +6,7 @@ import { bindCodeModeSessionStore } from "../../code-mode-session-store.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { getOpenClawSystemUpdateKind } from "../../internal-runtime-context.js";
 import type { AgentSession } from "../../sessions/index.js";
-import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
+import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { getProviderPromptState } from "../provider-prompt-state.js";
 import {
   retainEmbeddedSessionPromptState,
@@ -135,11 +135,13 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     attempt.model.api,
     attempt.model.baseUrl,
     transcriptPolicy.inHistorySystemUpdates === true,
+    // Personal bootstrap follows the selected human, not only the session ID.
+    attempt.bootstrapUserProfileId,
   ]);
   // Retire old overrides before new carriers without checkpointing unadmitted notices.
   const retireSystemPromptUpdates = () =>
     sessionLock.withOwnedTranscriptWrite(() =>
-      withSessionManagerWrite(sessionManager, async () => {
+      withSessionManagerAppend(sessionManager, async () => {
         runAbortSignal.throwIfAborted();
         await retireSessionSystemPrompt(sessionPromptState, promptRouteKey, (customType, data) =>
           sessionManager.appendCustomEntryAsync(customType, data),

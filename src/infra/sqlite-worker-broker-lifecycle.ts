@@ -1,9 +1,11 @@
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
+import { trackSqliteDatabaseAdmissionWorker } from "./sqlite-database-admission.js";
 import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
@@ -25,6 +27,10 @@ import type { SqliteWorkerRuntimePreparation } from "./sqlite-worker-runtime-pre
 import { createCpuTrackedWorker } from "./worker-cpu.js";
 
 type RuntimeSource = { moduleUrl: string; carrierUrl: URL; sourceLoaderUrl?: string };
+
+function cleanupFailures(results: PromiseSettledResult<unknown>[]): unknown[] {
+  return results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+}
 
 /** The broker retains these maps; this owner drains clients before native close custody. */
 export function createSqliteWorkerLifecycle({
@@ -89,10 +95,6 @@ export function createSqliteWorkerLifecycle({
     return prepared;
   }
 
-  function beginClose(): number {
-    return ++closeEpoch;
-  }
-
   async function finishClose(epoch: number, succeeded: boolean): Promise<void> {
     const results = await Promise.allSettled([
       ...[...preparedRuntimes].flatMap(([prepared, runtime]) =>
@@ -104,9 +106,7 @@ export function createSqliteWorkerLifecycle({
       ),
       ...[...slots].filter((slot) => !reservedSlots.has(slot)).map(retireEmpty),
     ]);
-    const errors = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
+    const errors = cleanupFailures(results);
     if (errors.length) {
       await Promise.allSettled([...preparedRuntimes.keys()].map((prepared) => prepared.release()));
       throwSqliteLifecycleErrors(errors, "SQLite prepared runtime cleanup failed");
@@ -128,7 +128,7 @@ export function createSqliteWorkerLifecycle({
     operations: Iterable<Promise<void>>;
     waiters: Iterable<Iterable<(error?: unknown) => void>>;
   }): Promise<void> {
-    const epoch = beginClose();
+    const epoch = ++closeEpoch;
     // Seal clients and pending dispatch before the first await; accepted scopes still settle.
     inputAdmission.invalidatePreparations();
     for (const waiting of waiters) {
@@ -146,9 +146,7 @@ export function createSqliteWorkerLifecycle({
       const results = await Promise.allSettled(
         [...actors.values()].map((actor) => closeActor(actor)),
       );
-      errors.push(
-        ...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
-      );
+      errors.push(...cleanupFailures(results));
       await inputAdmission.joinPreparations();
     } catch (error) {
       errors.push(error);
@@ -168,6 +166,7 @@ export function createSqliteWorkerLifecycle({
     moduleUrl: string,
   ): Promise<Slot | undefined> {
     options.assertCurrent?.();
+    options.signal?.throwIfAborted();
     const prepared = options.runtimePreparation;
     const runtime = prepared ? preparedRuntimes.get(prepared) : undefined;
     if (
@@ -182,15 +181,24 @@ export function createSqliteWorkerLifecycle({
       (!runtime.preempted && (runtime.slot.failed || runtime.slot.retiring || runtime.slot.exited))
     ) {
       if (runtime && prepared) {
-        await prepared.release();
+        await racePromiseWithAbortSignal(
+          prepared.release(),
+          options.signal,
+          (signal) => signal.reason,
+        );
       }
       throw new SqliteWorkerError("SQLite prepared runtime is no longer available", "closed");
     }
     preparedRuntimes.delete(prepared);
     reservedSlots.delete(runtime.slot);
     if (runtime.preempted) {
-      await runtime.preempted;
+      await racePromiseWithAbortSignal(
+        runtime.preempted,
+        options.signal,
+        (signal) => signal.reason,
+      );
       options.assertCurrent?.();
+      options.signal?.throwIfAborted();
       if (runtime.closeEpoch !== closeEpoch || completedCloseEpoch !== closeEpoch) {
         throw new SqliteWorkerError("SQLite prepared runtime close epoch changed", "closed");
       }
@@ -206,7 +214,9 @@ export function createSqliteWorkerLifecycle({
     limits: { maxWorkers: number; maxStores: number },
     createReplyOwner: (slot: Slot) => SqliteWorkerReplyOwner,
   ): Promise<Slot> {
+    options.signal?.throwIfAborted();
     options.assertCurrent?.();
+    options.signal?.throwIfAborted();
     if (options.runtimePreparation) {
       const prepared = await consumeRuntimePreparation(options, moduleUrl);
       return (
@@ -251,12 +261,20 @@ export function createSqliteWorkerLifecycle({
           // Accepted native work owns capacity before speculative code preparation.
           reservedSlots.delete(optional.slot);
           optional.preempted = retire(optional.slot);
-          await optional.preempted;
+          await racePromiseWithAbortSignal(
+            optional.preempted,
+            options.signal,
+            (signal) => signal.reason,
+          );
           return acquireSlot(options, moduleUrl, limits, createReplyOwner);
         }
         const retiring = [...slots].filter((slot) => Boolean(slot.failed || slot.retiring));
         if (retiring.length > 0) {
-          await Promise.race(retiring.map(({ exit }) => exit));
+          await racePromiseWithAbortSignal(
+            Promise.race(retiring.map(({ exit }) => exit)),
+            options.signal,
+            (signal) => signal.reason,
+          );
           return acquireSlot(options, moduleUrl, limits, createReplyOwner);
         }
         throw new SqliteWorkerError(
@@ -276,14 +294,16 @@ export function createSqliteWorkerLifecycle({
   function createSlot(
     options: Pick<
       PreparedSqliteWorkerOpen,
-      "carrierUrl" | "runtimeGeneration" | "target" | "assertCurrent"
+      "carrierUrl" | "runtimeGeneration" | "target" | "assertCurrent" | "signal"
     >,
     borrowedGenerationSlot: boolean,
     createReplyOwner: (slot: Slot) => SqliteWorkerReplyOwner,
     runtimeSource?: RuntimeSource,
   ): Slot {
+    options.signal?.throwIfAborted();
     ensureSqliteLibrarySelected();
     options.assertCurrent?.();
+    options.signal?.throwIfAborted();
     // Slot listeners share this closure scope; never capture the opening admission in it.
     const { carrierUrl } = options;
     const { worker, exited } = runInDetachedAsyncContext(() => ({
@@ -304,6 +324,7 @@ export function createSqliteWorkerLifecycle({
       }),
       exited: createDeferredCore(),
     }));
+    trackSqliteDatabaseAdmissionWorker(worker);
     const slot: Slot = {
       ...(options.target ? { ephemeral: true as const } : {}),
       runtimeGeneration: options.runtimeGeneration,
@@ -343,9 +364,7 @@ export function createSqliteWorkerLifecycle({
     await Promise.all(retained.map(async (actor) => await actor.settlement));
     return async () => {
       const results = await retirement;
-      const errors = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
+      const errors = cleanupFailures(results);
       throwSqliteLifecycleErrors(errors, "Retained SQLite worker cleanup failed");
       await Promise.all(
         [...slots]
@@ -399,9 +418,7 @@ export function createSqliteWorkerLifecycle({
     actor.retirement = (async () => {
       const results = await Promise.allSettled(clients.map((client) => client.close()));
       await actor.settlement;
-      const errors = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
+      const errors = cleanupFailures(results);
       if (!errors.length) {
         try {
           await closeActor(actor);

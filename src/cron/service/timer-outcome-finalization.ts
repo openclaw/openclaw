@@ -6,7 +6,6 @@ import {
   finishCronRunReceiptAsync,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
-import type { CronJob } from "../types.js";
 import { locked } from "./locked.js";
 import { clearManualCronJobActive, maybeNotifyManualIsolatedSetupTimeout } from "./ops-shared.js";
 import { releaseQueuedCronRun, supersedeActivatedCronRun } from "./run-admission.js";
@@ -15,7 +14,7 @@ import { recordQuietCronEvaluation } from "./run-history.js";
 import { resolveCronRunReceiptTerminalStatus } from "./run-receipts.js";
 import { applyCronRuntimeRowsToState, publishCronRuntimeRows } from "./runtime-publication.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
-import { emit, type CronServiceState, type DeferredCronNotifications } from "./state.js";
+import { emit, type CronServiceState } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 import {
@@ -156,7 +155,6 @@ export async function finalizeCompletedCronRunOutcomes(
         return;
       }
 
-      const postPersistNotifications: DeferredCronNotifications = [];
       const receipts: CronFinalizationReceipt[] = finalizedOutcomes.flatMap((outcome) =>
         outcome.runReceipt && outcome.runReceiptContext
           ? [
@@ -179,43 +177,34 @@ export async function finalizeCompletedCronRunOutcomes(
             ]
           : [],
       );
+      const committedOutcomes = finalizedOutcomes;
       const committed = await finalizeCronRuntimeRows({
         state,
         context,
-        jobIds: finalizedOutcomes.map((outcome) => outcome.jobId),
         receipts,
-        markers: finalizedOutcomes.map((outcome) => outcome.activeJobMarker),
-        mutate: ({ jobs, retiredTriggerReceiptIds }) => {
-          const upsertedJobs: CronJob[] = [];
-          const removedJobs: CronJob[] = [];
-          const eventPlans: Array<{ outcome: TimedCronRunOutcome; job?: CronJob }> = [];
-          for (const outcome of finalizedOutcomes) {
-            const job = jobs.get(outcome.jobId);
-            if (!job || outcome.activeJobMarker?.jobRemoved === true) {
-              eventPlans.push({ outcome });
-              continue;
-            }
-            if (
-              applyOutcomeToAuthoritativeJob(state, job, outcome, {
-                request: outcome.request,
-                deferredNotifications: postPersistNotifications,
-                triggerStateRetired:
-                  outcome.runReceipt && retiredTriggerReceiptIds.has(outcome.runReceipt.receiptId),
-              })
-            ) {
-              removedJobs.push(job);
-            } else {
-              upsertedJobs.push(job);
-            }
-            eventPlans.push({ outcome, job: structuredClone(job) });
-          }
+        outcomes: finalizedOutcomes.map((outcome) => {
+          const {
+            activeJobMarker,
+            reservationIdentity: _reservationIdentity,
+            runReceiptContext: _runReceiptContext,
+            request,
+            ...completed
+          } = outcome;
           return {
-            deletedJobIds: removedJobs.map((job) => job.id),
-            jobs: upsertedJobs,
-            value: { eventPlans, removedJobs, upsertedJobs },
+            ...completed,
+            activeJobMarker: activeJobMarker && {
+              jobRemoved: activeJobMarker.jobRemoved,
+              scheduleMutated: activeJobMarker.scheduleMutated,
+              triggerMutated: activeJobMarker.triggerMutated,
+            },
+            request: request && {
+              preserveCadence: request.preserveCadence,
+              scheduleOwnershipAtMs: request.scheduleOwnershipAtMs,
+            },
           };
-        },
+        }),
       });
+      const postPersistNotifications = committed.notifications;
       applyCronRuntimeRowsToState(
         state,
         committed.upsertedJobs,
@@ -246,21 +235,19 @@ export async function finalizeCompletedCronRunOutcomes(
       }
       const publishedJobIds = new Set(finalizedOutcomes.map((outcome) => outcome.jobId));
       for (const plan of committed.eventPlans) {
-        if (!publishedJobIds.has(plan.outcome.jobId)) {
+        const outcome = committedOutcomes[plan.outcomeIndex]!;
+        if (!publishedJobIds.has(outcome.jobId)) {
           continue;
         }
-        if (plan.outcome.request) {
-          if (
-            plan.job &&
-            !(plan.outcome.status === "ok" && plan.outcome.triggerEval?.fired === false)
-          ) {
-            await emitCronOutcomeForJob(state, plan.job, plan.outcome);
-            emittedRequests.add(plan.outcome);
+        if (outcome.request) {
+          if (plan.job && !(outcome.status === "ok" && outcome.triggerEval?.fired === false)) {
+            await emitCronOutcomeForJob(state, plan.job, outcome);
+            emittedRequests.add(outcome);
           }
         } else if (plan.job) {
-          emitCronOutcomeEventForJob(state, plan.job, plan.outcome);
+          emitCronOutcomeEventForJob(state, plan.job, outcome);
         } else {
-          await applyOutcomeToStoredJob(state, plan.outcome, {
+          await applyOutcomeToStoredJob(state, outcome, {
             deferredNotifications: postPersistNotifications,
           });
         }

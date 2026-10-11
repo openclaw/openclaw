@@ -14,6 +14,7 @@ export type LeaseScenario = {
   invalidConfig?: boolean;
   failDoctor?: "pre" | "post";
   doctorWarnings?: string[];
+  completeDeferredPluginMigration?: string;
   readinessFailure?: "finding" | "execution";
   hostVersion?: string;
   writerConfig?: OpenClawConfig;
@@ -213,7 +214,7 @@ export async function runUpdateLeaseChild(): Promise<void> {
       const { defaultRuntime: runtime } = await import("../../runtime.js");
       const options = { repair: true, nonInteractive: true, workspaceSuggestions: false };
       const prompter = createDoctorPrompter({ runtime, options });
-      const configResult = await loadAndMaybeMigrateDoctorConfig({
+      await using configResult = await loadAndMaybeMigrateDoctorConfig({
         options,
         prompter,
         runtime,
@@ -259,6 +260,14 @@ export async function runUpdateLeaseChild(): Promise<void> {
       await writeUpdatePostInstallDoctorResult({
         resultPath,
         result: { status: "ok", warnings: scenario.doctorWarnings },
+      });
+    }
+    if (phase === "pre" && scenario.completeDeferredPluginMigration) {
+      const { recordDeferredPluginMigrations } =
+        await import("../../infra/deferred-plugin-migrations.js");
+      await recordDeferredPluginMigrations({
+        pending: [],
+        resolvedPluginIds: [scenario.completeDeferredPluginMigration],
       });
     }
     return;

@@ -96,7 +96,7 @@ async function prepare(cfg: OpenClawConfig, adapter: SessionBindingAdapter, dire
 }
 
 it.each(["ambiguous", "main-session"])(
-  "resolves conversation bindings with %s routing",
+  "resolves conversation bindings with %s routing without synchronous persistence",
   async (routing) => {
     const mainSession = routing === "main-session";
     const record = binding(mainSession ? "agent:second:home" : "agent:second:acp:bound-session");
@@ -107,11 +107,16 @@ it.each(["ambiguous", "main-session"])(
       cfg.bindings = [{ agentId: "first", match: { channel: "discord" } }];
       cfg.session = { mainKey: "home" };
     }
+    const touch = vi.fn(() => {
+      throw new Error("Routing preflight must not perform synchronous persistence");
+    });
     const result = await prepare(cfg, {
       ...scope,
       listBySession: () => [record],
       resolveByConversation: (ref) => (ref.conversationId === channelId ? record : null),
+      touch,
     });
+    expect(touch).not.toHaveBeenCalled();
     expect(result.effectiveRoute.agentId).toBe("second");
     expect(result.baseSessionKey).toBe(record.targetSessionKey);
     expect(result.threadBinding).toEqual(record);
@@ -174,11 +179,14 @@ it.each(["plugin", "configured", "ignored-stale", "derived", "dm"])(
         : null;
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
+    let holdRead = false;
     const lookup = (ref: Conversation) =>
       ref.conversationId === conversation.conversationId ? current : null;
     const read = vi.fn(async (ref: Conversation) => {
-      entered.resolve();
-      await release.promise;
+      if (holdRead) {
+        entered.resolve();
+        await release.promise;
+      }
       return lookup(ref);
     });
     const { effectiveRoute: route } = await prepare(
@@ -193,6 +201,7 @@ it.each(["plugin", "configured", "ignored-stale", "derived", "dm"])(
       },
       direct,
     );
+    holdRead = true;
     expect(route.agentId).toBe(configured || stale ? "work" : "main");
     if (configured) {
       expect(route.sessionKey).toContain("agent:work:acp:");

@@ -9,7 +9,7 @@ import type {
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { readNonEmptyStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
-import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
+import type { ChatCompletion, ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import {
   createOpenAICompletionsToolCallDeltaNormalizer,
@@ -36,11 +36,8 @@ import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-p
 import { withFirstStreamEventTimeout } from "../utils/stream-first-event-timeout.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
-import {
-  createDsmlRecoverer,
-  type DeepSeekDsmlRecoveredPart,
-  type RecoveredDeepSeekDsmlToolCall,
-} from "./openai-completions-dsml.js";
+import { createDsmlRecoverer } from "./openai-completions-dsml.js";
+import { createGemmaToolCallRecoverer } from "./openai-completions-gemma.js";
 import { getCompat } from "./openai-transport-params.js";
 import {
   isOpenAICompletionsThinkingEnabled,
@@ -53,6 +50,7 @@ import {
   type OpenAICompletionsTextSource,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
+import type { RecoveredTextToolCall, TextToolCallRecoveryPart } from "./text-tool-call-recovery.js";
 import { iterateModelStream, throwIfModelStreamAborted } from "./transport-stream-shared.js";
 
 type OpenAICompatibleChoice = ChatCompletionChunk["choices"][number] & {
@@ -100,22 +98,8 @@ function extractToolCallThoughtSignature(toolCall: unknown): string | undefined 
   );
 }
 
-/** Classify raw provider progress before tool buffering or reasoning display filtering. */
-export function hasOpenAICompletionsChunkProgress(
-  chunk: OpenAICompatibleChatCompletionChunk,
-): boolean {
-  const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
-  const usage = chunk.usage || choice?.usage;
-  const delta = choice?.delta ?? choice?.message;
-  return Boolean(
-    usage ||
-    choice?.finish_reason ||
-    (delta && (delta.tool_calls?.length || hasOpenAICompletionsDeltaContent(delta))),
-  );
-}
-
 export async function processCompletionsStream(
-  responseStream: AsyncIterable<ChatCompletionChunk>,
+  responseStream: AsyncIterable<ChatCompletionChunk | ChatCompletion>,
   output: MutableAssistantOutput,
   model: Model,
   stream: { push(event: AssistantMessageEvent): void },
@@ -130,14 +114,15 @@ export async function processCompletionsStream(
   const shouldFilterDeepSeekDsmlText = !directMode && compat.thinkingFormat === "deepseek";
   const deepSeekTextFilter = shouldFilterDeepSeekDsmlText ? createDeepSeekTextFilter() : null;
   const deepSeekToolCallRecoverer = shouldFilterDeepSeekDsmlText ? createDsmlRecoverer() : null;
+  const gemmaToolCallRecoverer =
+    !directMode && /gemma-?4/i.test(model.id) ? createGemmaToolCallRecoverer() : null;
   const reasoningTagTextPartitioner = createReasoningTagTextPartitioner();
   if (options?.strictReasoningTags) {
     reasoningTagTextPartitioner.markStrict();
   }
-  type ToolCallBlock = ToolCall & { partialArgs: string };
+  type ToolCallBlock = ToolCall & { partialJson: string };
   let currentBlock: TextBlock | ThinkingBlock | ToolCallBlock | null = null;
-  let directTextBlock: TextBlock | null = null;
-  let directThinkingBlock: ThinkingBlock | null = null;
+  const directContent: { block: TextBlock | ThinkingBlock | null } = { block: null };
   let currentTextSource: OpenAICompletionsTextSource | undefined;
   let pendingInterruptedTextBlock: TextBlock | null = null;
   let confirmedInterruptedTextBlock: TextBlock | null = null;
@@ -149,20 +134,28 @@ export async function processCompletionsStream(
   // Preview schedules are per active tool call; WeakMap keys die with the block.
   const toolArgumentPreviewSchedules = new WeakMap<ToolCallBlock, ToolArgumentPreviewSchedule>();
   const provisionalCommentaryTags = directMode ? options.provisionalCommentaryTags : new Map();
-  const contentBlockIndices = new WeakMap<TextBlock | ThinkingBlock, number>();
-  const toolCallBlockIndices = new WeakMap<ToolCallBlock, number>();
+  const blockIndices = new WeakMap<TextBlock | ThinkingBlock | ToolCallBlock, number>();
   let explicitVisibleTextBlocks: Set<TextBlock> | undefined;
   const normalizeToolCallDeltas = createOpenAICompletionsToolCallDeltaNormalizer();
   let finishReason: string | undefined;
   let sawNativeToolCallDelta = false;
   const blockIndex = () =>
     directMode && currentBlock && currentBlock.type !== "toolCall"
-      ? (contentBlockIndices.get(currentBlock) ?? output.content.length - 1)
+      ? (blockIndices.get(currentBlock) ?? output.content.length - 1)
       : output.content.length - 1;
   let chunkPushedEvent = false;
   const pushStreamEvent = (event: AssistantMessageEvent) => {
     chunkPushedEvent = true;
     stream.push(event);
+  };
+  const appendToolCallBlock = (block: ToolCallBlock) => {
+    output.content.push(block);
+    blockIndices.set(block, output.content.length - 1);
+    pushStreamEvent({
+      type: "toolcall_start",
+      contentIndex: blockIndices.get(block) ?? -1,
+      partial: output,
+    });
   };
   const queuePostToolCallDelta = (next: CompletionsReasoningDelta) => {
     const nextBytes = Buffer.byteLength(next.text, "utf8");
@@ -184,69 +177,55 @@ export async function processCompletionsStream(
     }
     previous.text += next.text;
   };
-  const appendThinkingDelta = (reasoningDelta: { signature?: string; text: string }) => {
+  const appendContentDelta = (delta: CompletionsReasoningDelta) => {
     flushPendingPostToolCallDeltas();
-    if (directMode && directThinkingBlock) {
-      currentBlock = directThinkingBlock;
+    if (directMode && directContent.block?.type === delta.kind) {
+      currentBlock = directContent.block;
     }
-    if (!currentBlock || currentBlock.type !== "thinking") {
-      options?.beforeContentBlock?.("thinking");
-      const thinkingSignature = reasoningDelta.signature;
-      currentBlock = {
-        type: "thinking",
-        thinking: "",
-        ...(thinkingSignature ? { thinkingSignature } : {}),
-      };
-      if (directMode) {
-        directTextBlock = null;
-        directThinkingBlock = currentBlock;
-      }
-      output.content.push(currentBlock);
-      contentBlockIndices.set(currentBlock, output.content.length - 1);
-      pushStreamEvent({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
-    }
-    appendAssistantThinking(currentBlock, reasoningDelta.text);
-    pushStreamEvent({
-      type: "thinking_delta",
-      contentIndex: blockIndex(),
-      delta: reasoningDelta.text,
-      partial: output,
-    });
-  };
-  const appendTextDelta = (text: string, source?: OpenAICompletionsTextSource) => {
-    flushPendingPostToolCallDeltas();
-    if (directMode && directTextBlock) {
-      currentBlock = directTextBlock;
-    }
-    if (currentBlock?.type === "text" && currentTextSource !== source) {
+    if (
+      delta.kind === "text" &&
+      currentBlock?.type === "text" &&
+      currentTextSource !== delta.source
+    ) {
       currentBlock = null;
     }
-    if (!currentBlock || currentBlock.type !== "text") {
-      options?.beforeContentBlock?.("text");
-      currentBlock = { type: "text", text: "" };
-      currentTextSource = source;
-      if (directMode) {
-        directTextBlock = currentBlock;
-        directThinkingBlock = null;
+    if (!currentBlock || currentBlock.type !== delta.kind) {
+      options?.beforeContentBlock?.(delta.kind);
+      if (delta.kind === "text") {
+        currentBlock = { type: "text", text: "" };
+        currentTextSource = delta.source;
+        if (delta.source === "reasoning_detail") {
+          (explicitVisibleTextBlocks ??= new Set()).add(currentBlock);
+        }
+      } else {
+        currentBlock = {
+          type: "thinking",
+          thinking: "",
+          ...(delta.signature ? { thinkingSignature: delta.signature } : {}),
+        };
       }
-      if (source === "reasoning_detail") {
-        (explicitVisibleTextBlocks ??= new Set()).add(currentBlock);
+      if (directMode) {
+        directContent.block = currentBlock;
       }
       output.content.push(currentBlock);
-      contentBlockIndices.set(currentBlock, output.content.length - 1);
-      pushStreamEvent({ type: "text_start", contentIndex: blockIndex(), partial: output });
+      blockIndices.set(currentBlock, output.content.length - 1);
+      pushStreamEvent({ type: `${delta.kind}_start`, contentIndex: blockIndex(), partial: output });
     }
-    currentBlock.text += text;
-    if (pendingInterruptedTextBlock && text.trim()) {
-      confirmedInterruptedTextBlock = pendingInterruptedTextBlock;
-      pendingInterruptedTextBlock = null;
+    if (currentBlock.type === "thinking") {
+      appendAssistantThinking(currentBlock, delta.text);
+    } else {
+      currentBlock.text += delta.text;
+      if (pendingInterruptedTextBlock && delta.text.trim()) {
+        confirmedInterruptedTextBlock = pendingInterruptedTextBlock;
+        pendingInterruptedTextBlock = null;
+      }
     }
-    pushStreamEvent({
-      type: "text_delta",
-      contentIndex: blockIndex(),
-      delta: text,
-      ...(directMode ? { partial: output } : {}),
-    });
+    const event = { contentIndex: blockIndex(), delta: delta.text };
+    if (delta.kind === "thinking") {
+      pushStreamEvent({ type: "thinking_delta", ...event, partial: output });
+    } else {
+      pushStreamEvent({ type: "text_delta", ...event, ...(directMode ? { partial: output } : {}) });
+    }
   };
   const flushPendingPostToolCallDeltas = () => {
     if (currentBlock?.type === "toolCall" || pendingPostToolCallDeltas.length === 0) {
@@ -257,10 +236,8 @@ export async function processCompletionsStream(
     pendingPostToolCallDeltas = [];
     pendingPostToolCallBytes = 0;
     for (const delta of bufferedDeltas) {
-      if (delta.kind === "text") {
-        appendTextDelta(delta.text, delta.source);
-      } else if (emitReasoning) {
-        appendThinkingDelta(delta);
+      if (delta.kind === "text" || emitReasoning) {
+        appendContentDelta(delta);
       }
     }
   };
@@ -271,30 +248,29 @@ export async function processCompletionsStream(
     if (currentBlock?.type === "toolCall" && !directMode) {
       queuePostToolCallDelta({ kind: "text", text });
     } else {
-      appendTextDelta(text);
+      appendContentDelta({ kind: "text", text });
     }
   };
   const appendReasoningDeltas = (reasoningDeltas: readonly CompletionsReasoningDelta[]) => {
-    for (const reasoningDelta of reasoningDeltas) {
-      if (reasoningDelta.kind === "thinking" && !emitReasoning) {
+    for (const delta of reasoningDeltas) {
+      if (delta.kind === "thinking" && !emitReasoning) {
         continue;
       }
       if (currentBlock?.type === "toolCall" && !directMode) {
-        queuePostToolCallDelta({ ...reasoningDelta });
+        queuePostToolCallDelta({ ...delta });
         continue;
       }
-      if (reasoningDelta.kind === "text") {
-        appendTextDelta(reasoningDelta.text, reasoningDelta.source);
-      } else {
-        appendThinkingDelta(
-          directMode && model.provider === "opencode-go" && reasoningDelta.signature === "reasoning"
-            ? { ...reasoningDelta, signature: "reasoning_content" }
-            : reasoningDelta,
-        );
-      }
+      appendContentDelta(
+        delta.kind === "thinking" &&
+          directMode &&
+          model.provider === "opencode-go" &&
+          delta.signature === "reasoning"
+          ? { ...delta, signature: "reasoning_content" }
+          : delta,
+      );
     }
   };
-  const appendRecoveredToolCall = (toolCall: RecoveredDeepSeekDsmlToolCall) => {
+  const appendRecoveredToolCall = (toolCall: RecoveredTextToolCall) => {
     if (currentBlock?.type === "toolCall") {
       currentBlock = null;
       flushPendingPostToolCallDeltas();
@@ -305,29 +281,23 @@ export async function processCompletionsStream(
     );
     const block: ToolCallBlock = {
       type: "toolCall",
-      // DSML has no provider call id. A response-local counter would alias a
+      // Recovered text has no provider call id. A response-local counter would alias a
       // later assistant response and could collapse distinct mutating calls.
       id: `call_${randomUUID().replaceAll("-", "").slice(0, 24)}`,
       name: toolCall.name,
       arguments: toolCall.arguments,
-      partialArgs: toolCall.partialArgs,
+      partialJson: toolCall.partialJson,
     };
     currentBlock = block;
-    output.content.push(block);
-    toolCallBlockIndices.set(block, output.content.length - 1);
-    pushStreamEvent({
-      type: "toolcall_start",
-      contentIndex: toolCallBlockIndices.get(block) ?? -1,
-      partial: output,
-    });
+    appendToolCallBlock(block);
     pushStreamEvent({
       type: "toolcall_delta",
-      contentIndex: toolCallBlockIndices.get(block) ?? -1,
-      delta: toolCall.partialArgs,
+      contentIndex: blockIndices.get(block) ?? -1,
+      delta: toolCall.partialJson,
       partial: output,
     });
   };
-  const appendRecoveredParts = (recoveredParts: readonly DeepSeekDsmlRecoveredPart[]) => {
+  const appendRecoveredParts = (recoveredParts: readonly TextToolCallRecoveryPart[]) => {
     for (const recoveredPart of recoveredParts) {
       if (recoveredPart.kind === "toolCall") {
         appendRecoveredToolCall(recoveredPart);
@@ -357,11 +327,29 @@ export async function processCompletionsStream(
     if (latestBlock?.type === "text" || latestBlock?.type === "toolCall") {
       return;
     }
-    appendThinkingDelta({ text: "" });
+    appendContentDelta({ kind: "thinking", text: "" });
   };
-  const flushReasoningTagTextPartitioner = () => {
-    for (const delta of reasoningTagTextPartitioner.flush()) {
+  const flushReasoningTagTextPartitioner = (allowRecovery = true) => {
+    const recoverUnclosed =
+      allowRecovery &&
+      !output.openclawDelivery?.textPhaseRequiresTerminal &&
+      output.stopReason !== "length" &&
+      output.stopReason !== "error" &&
+      output.stopReason !== "aborted";
+    for (const delta of reasoningTagTextPartitioner.flush({ recoverUnclosed })) {
       appendPartitionedVisibleDelta(delta);
+    }
+  };
+  // Recover raw arguments before reasoning-tag filtering can alter their bytes.
+  const flushGemmaToolCallRecoverer = (allowRecovery = true) => {
+    for (const part of gemmaToolCallRecoverer?.flush(allowRecovery) ?? []) {
+      if (part.kind === "toolCall") {
+        appendRecoveredToolCall(part);
+      } else {
+        for (const delta of reasoningTagTextPartitioner.pushVisible(part.text)) {
+          appendPartitionedVisibleDelta(delta);
+        }
+      }
     }
   };
   const sealTextBeforeReasoning = () => {
@@ -379,20 +367,12 @@ export async function processCompletionsStream(
     }
     currentBlock = null;
     if (directMode) {
-      directTextBlock = null;
+      directContent.block = null;
     }
     currentTextSource = undefined;
   };
-  const beginReasoning = (hasFollowingVisibleText: boolean, forceStrict = false) => {
-    if (!output.openclawDelivery?.textPhaseRequiresTerminal) {
-      output.openclawDelivery = {
-        ...output.openclawDelivery,
-        textPhaseRequiresTerminal: true,
-      };
-    }
-    if (forceStrict || reasoningTagTextPartitioner.hasPending()) {
-      reasoningTagTextPartitioner.markStrict();
-    }
+  const beginReasoning = (hasFollowingVisibleText: boolean) => {
+    output.openclawDelivery = { ...output.openclawDelivery, textPhaseRequiresTerminal: true };
     // Let following text finish syntax already owned by the Markdown
     // parser; otherwise packet batching cannot erase a lane boundary.
     if (!hasFollowingVisibleText || !reasoningTagTextPartitioner.hasPendingSyntax()) {
@@ -435,7 +415,16 @@ export async function processCompletionsStream(
       });
     }
     const rawChoiceDelta = choice?.delta ?? choice?.message;
-    notifyLlmRequestActivity(options?.signal, hasOpenAICompletionsChunkProgress(chunk));
+    // Classify before legacy-tool buffering and hidden-reasoning display filtering.
+    notifyLlmRequestActivity(
+      options?.signal,
+      Boolean(
+        usage ||
+        choice?.finish_reason ||
+        (rawChoiceDelta &&
+          (rawChoiceDelta.tool_calls?.length || hasOpenAICompletionsDeltaContent(rawChoiceDelta))),
+      ),
+    );
     if (!choice) {
       emitReasoningUsageActivity(hasReasoningUsageActivity);
       continue;
@@ -472,16 +461,16 @@ export async function processCompletionsStream(
       const lastVisibleTextIndex = contentDeltas.findLastIndex((delta) => delta.kind === "text");
       const hasSameChunkVisibleText = reasoningBatch.hasVisibleText || lastVisibleTextIndex !== -1;
       if (hasReasoningThinking) {
-        beginReasoning(hasSameChunkVisibleText, true);
+        beginReasoning(hasSameChunkVisibleText);
         appendReasoningDeltas(reasoningDeltas);
       }
       for (const [contentDeltaIndex, contentDelta] of contentDeltas.entries()) {
         if (contentDelta.kind === "text") {
-          const routedDeltas = hasReasoningThinking
-            ? reasoningTagTextPartitioner.push(contentDelta.text)
-            : reasoningTagTextPartitioner.pushVisible(contentDelta.text);
-          for (const routedDelta of routedDeltas) {
-            appendPartitionedVisibleDelta(routedDelta);
+          const parts = gemmaToolCallRecoverer?.push(contentDelta.text) ?? [contentDelta];
+          for (const part of parts) {
+            for (const routedDelta of reasoningTagTextPartitioner.pushVisible(part.text)) {
+              appendPartitionedVisibleDelta(routedDelta);
+            }
           }
         } else {
           const hasLaterVisibleText = contentDeltaIndex < lastVisibleTextIndex;
@@ -490,7 +479,7 @@ export async function processCompletionsStream(
             if (currentBlock?.type === "toolCall" && !directMode) {
               queuePostToolCallDelta(contentDelta);
             } else {
-              appendThinkingDelta(contentDelta);
+              appendContentDelta(contentDelta);
             }
           }
         }
@@ -500,8 +489,10 @@ export async function processCompletionsStream(
       }
       const toolCallDeltas = normalizedDelta.toolCalls;
       if (toolCallDeltas.length > 0) {
+        // Native calls own mixed streams; emit pending raw text in its original position.
+        flushGemmaToolCallRecoverer(false);
         sawNativeToolCallDelta = true;
-        flushReasoningTagTextPartitioner();
+        flushReasoningTagTextPartitioner(false);
         rememberPendingCommentaryTags(
           provisionalCommentaryTags,
           tagPendingCommentaryText(output.content),
@@ -520,26 +511,20 @@ export async function processCompletionsStream(
             }
             const initialSig = directMode ? undefined : extractToolCallThoughtSignature(toolCall);
             options?.beforeContentBlock?.("toolCall");
-            if (directMode) {
-              directThinkingBlock = null;
+            if (directMode && directContent.block?.type === "thinking") {
+              directContent.block = null;
             }
             block = {
               type: "toolCall",
               id: toolCall.id || "",
               name: toolCall.function?.name || "",
               arguments: {},
-              partialArgs: "",
+              partialJson: "",
               ...(initialSig ? { thoughtSignature: initialSig } : {}),
             };
             encryptedReasoning.rememberToolCall(block.id, block);
             toolArgumentPreviewSchedules.set(block, createToolArgumentPreviewSchedule());
-            output.content.push(block);
-            toolCallBlockIndices.set(block, output.content.length - 1);
-            pushStreamEvent({
-              type: "toolcall_start",
-              contentIndex: toolCallBlockIndices.get(block) ?? -1,
-              partial: output,
-            });
+            appendToolCallBlock(block);
           }
           if (streamIndex !== undefined && !toolCallBlocksByIndex.has(streamIndex)) {
             toolCallBlocksByIndex.set(streamIndex, block);
@@ -573,17 +558,17 @@ export async function processCompletionsStream(
           }
           const toolArgumentsDelta = toolCall.function?.arguments;
           if (toolArgumentsDelta) {
-            block.partialArgs += toolArgumentsDelta;
+            block.partialJson += toolArgumentsDelta;
             // Preview refresh is scheduled geometrically; the terminal
             // finalize re-parses the full buffer authoritatively either way.
-            if (toolArgumentPreviewSchedules.get(block)?.(block.partialArgs.length)) {
-              block.arguments = parseStreamingJson(block.partialArgs);
+            if (toolArgumentPreviewSchedules.get(block)?.(block.partialJson.length)) {
+              block.arguments = parseStreamingJson(block.partialJson);
             }
           }
           if (toolArgumentsDelta || directMode) {
             pushStreamEvent({
               type: "toolcall_delta",
-              contentIndex: toolCallBlockIndices.get(block) ?? -1,
+              contentIndex: blockIndices.get(block) ?? -1,
               delta: toolArgumentsDelta ?? "",
               partial: output,
             });
@@ -601,6 +586,7 @@ export async function processCompletionsStream(
   if (!finishReason && (directMode || options?.sawStreamDONE?.() === false)) {
     throw new Error("Stream ended without finish_reason");
   }
+  flushGemmaToolCallRecoverer();
   flushReasoningTagTextPartitioner();
   appendRecoveredParts(deepSeekToolCallRecoverer?.flush() ?? []);
   for (const part of deepSeekTextFilter?.flush() ?? []) {

@@ -23,6 +23,7 @@ describe("shared proof capture", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
     document.body.replaceChildren();
   });
@@ -352,43 +353,35 @@ describe("shared proof capture", () => {
       const logs = vi.spyOn(console, "error").mockImplementation(() => {});
       vi.spyOn(performance, "getEntriesByType").mockReturnValue([]);
       const app = document.createElement("openclaw-app");
-      Object.assign(app, {
-        runtime: {
-          context: {
-            gateway: {
-              snapshot: {
-                phase: failure === "storage" ? "private-phase" : "connected",
-                hello: {
-                  token: "private-hello",
-                  auth: { recoveryScope: "private-recovery" },
-                  server: { host: "private-host", address: "private-ip" },
-                  device: { id: "private-device" },
-                  model: "private-model",
-                },
-              },
-            },
-            agents: {
-              state: {
-                connected: true,
-                agentsLoading: failure === "storage" ? "private-loading" : true,
-                agentsError: "private-agent-error",
-                agentsList: { agents: [{ id: "private-agent" }, { id: "private-agent-two" }] },
-              },
-            },
-            router: {
-              getState: () => ({
-                status: failure === "storage" ? "private-router-status" : "success",
-                matches: [{ routeId: failure === "screenshot" ? "private-route" : "agents" }],
-                pendingMatches: [{ routeId: "private-pending-route" }],
-                resolvedLocation: {
-                  pathname: "/settings/agents/private-agent/files",
-                  search: "?token=private-token",
-                  hash: "#private-hash",
-                },
-              }),
+      vi.stubGlobal("openclawControlUi", {
+        diagnostics: () => ({
+          gateway: {
+            phase: failure === "storage" ? "private-phase" : "connected",
+            hello: {
+              token: "private-hello",
+              auth: { recoveryScope: "private-recovery" },
+              server: { host: "private-host", address: "private-ip" },
+              device: { id: "private-device" },
+              model: "private-model",
             },
           },
-        },
+          roster: {
+            connected: true,
+            agentsLoading: failure === "storage" ? "private-loading" : true,
+            agentsError: "private-agent-error",
+            agentsList: { agents: [{ id: "private-agent" }, { id: "private-agent-two" }] },
+          },
+          router: {
+            status: failure === "storage" ? "private-router-status" : "success",
+            matches: [{ routeId: failure === "screenshot" ? "private-route" : "agents" }],
+            pendingMatches: [{ routeId: "private-pending-route" }],
+            resolvedLocation: {
+              pathname: "/settings/agents/private-agent/files",
+              search: "?token=private-token",
+              hash: "#private-hash",
+            },
+          },
+        }),
       });
       const composer = document.createElement("div");
       composer.className = "agent-chat__composer-combobox";
@@ -807,6 +800,7 @@ describe("resolvePlaywrightChromiumExecutablePath", () => {
 
 describe("waitForControlUiRoute", () => {
   afterEach(() => {
+    vi.unstubAllGlobals();
     document.body.replaceChildren();
   });
 
@@ -823,17 +817,16 @@ describe("waitForControlUiRoute", () => {
         }
         expect(predicate(target)).toBe(false);
         const app = document.createElement("openclaw-app");
-        Object.assign(app, {
-          runtime: {
-            router: {
-              getState: () => ({
-                status: "success",
-                resolvedLocation: { pathname: window.location.pathname },
-                matches: [{ routeId: "chat" }],
-                pendingMatches: [],
-              }),
+        vi.stubGlobal("openclawControlUi", {
+          snapshot: () => ({
+            routeReady: true,
+            route: {
+              status: "success",
+              resolvedLocation: { pathname: window.location.pathname },
+              matches: [{ routeId: "chat" }],
+              pendingMatches: [],
             },
-          },
+          }),
         });
         document.body.append(app);
         expect(predicate(target)).toBe(true);

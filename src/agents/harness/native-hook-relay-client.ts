@@ -3,6 +3,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { sleep } from "../../utils/sleep.js";
+import { setSafeTimeout } from "../../utils/timer-delay.js";
 import { readNativeHookRelayClientBridgeRecord } from "./native-hook-relay-client-store.js";
 import { DEFAULT_RELAY_TIMEOUT_MS } from "./native-hook-relay-constants.js";
 import { codexNativeHookRelayResponseCodec } from "./native-hook-relay-response-codec.js";
@@ -33,57 +34,74 @@ export async function invokeNativeHookRelayBridge(
   const event = readNativeHookRelayEvent(params.event);
   const timeoutMs = normalizePositiveInteger(params.timeoutMs, DEFAULT_RELAY_TIMEOUT_MS);
   const registrationTimeoutMs = normalizePositiveInteger(params.registrationTimeoutMs, timeoutMs);
-  const startedAt = Date.now();
+  const startedAt = performance.now();
+  const deadline = new AbortController();
+  const signal = params.signal
+    ? AbortSignal.any([params.signal, deadline.signal])
+    : deadline.signal;
+  const timer = setSafeTimeout(
+    () => deadline.abort(new Error("native hook relay bridge timed out")),
+    timeoutMs,
+  );
+  timer.unref();
   let lastError: unknown = new Error("native hook relay bridge not found");
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const record = await readNativeHookRelayClientBridgeRecord({
-        relayId,
-        stateDbPath: params.stateDbPath,
-      });
-      if (!record) {
-        throw new Error("native hook relay bridge not found");
-      }
-      // A dead owning process leaves an unreachable loopback port on record;
-      // treat it as absent instead of spending the deadline on a dead connect.
-      if (isPidDefinitelyDead(record.pid)) {
-        throw new Error("native hook relay bridge not found");
-      }
-      if (Date.now() > record.expiresAtMs) {
-        throw new Error("native hook relay bridge expired");
-      }
-      const remainingMs = timeoutMs - (Date.now() - startedAt);
-      if (remainingMs <= 0) {
-        throw new Error("native hook relay bridge timed out");
-      }
-      return await postNativeHookRelayBridgeRecord({
-        record,
-        timeoutMs: remainingMs,
-        payload: {
-          provider,
+  try {
+    while (performance.now() - startedAt < timeoutMs) {
+      signal.throwIfAborted();
+      try {
+        const record = await readNativeHookRelayClientBridgeRecord({
           relayId,
-          event,
-          generation: params.generation,
-          rawPayload: params.rawPayload,
-        },
-      });
-    } catch (error) {
-      lastError = error;
-      const elapsedMs = Date.now() - startedAt;
-      if (
-        error instanceof Error &&
-        error.message === "native hook relay bridge not found" &&
-        elapsedMs >= registrationTimeoutMs
-      ) {
-        break;
+          stateDbPath: params.stateDbPath,
+          signal,
+        });
+        signal.throwIfAborted();
+        if (!record || isPidDefinitelyDead(record.pid)) {
+          throw new Error("native hook relay bridge not found");
+        }
+        if (Date.now() > record.expiresAtMs) {
+          throw new Error("native hook relay bridge expired");
+        }
+        if (performance.now() - startedAt >= timeoutMs) {
+          throw new Error("native hook relay bridge timed out");
+        }
+        const response = await postNativeHookRelayBridgeRecord({
+          record,
+          signal,
+          payload: {
+            provider,
+            relayId,
+            event,
+            generation: params.generation,
+            rawPayload: params.rawPayload,
+          },
+        });
+        signal.throwIfAborted();
+        if (performance.now() - startedAt >= timeoutMs) {
+          throw new Error("native hook relay bridge timed out");
+        }
+        return response;
+      } catch (error) {
+        signal.throwIfAborted();
+        lastError = error;
+        const elapsedMs = performance.now() - startedAt;
+        if (
+          error instanceof Error &&
+          error.message === "native hook relay bridge not found" &&
+          elapsedMs >= registrationTimeoutMs
+        ) {
+          break;
+        }
+        if (!isRetryableNativeHookRelayBridgeLookupError({ error, elapsedMs })) {
+          break;
+        }
+        await sleep(Math.min(NATIVE_HOOK_BRIDGE_RETRY_INTERVAL_MS, timeoutMs - elapsedMs), signal);
       }
-      if (!isRetryableNativeHookRelayBridgeLookupError({ error, elapsedMs })) {
-        break;
-      }
-      await sleep(Math.min(NATIVE_HOOK_BRIDGE_RETRY_INTERVAL_MS, timeoutMs - elapsedMs));
     }
+    signal.throwIfAborted();
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  } finally {
+    clearTimeout(timer);
   }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 function postNativeHookRelayBridgeRecord(params: {
@@ -92,17 +110,19 @@ function postNativeHookRelayBridgeRecord(params: {
     port: number;
     token: string;
   };
-  timeoutMs: number;
+  signal: AbortSignal;
   payload: InvokeNativeHookRelayParams;
 }): Promise<NativeHookRelayProcessResponse> {
+  params.signal.throwIfAborted();
   const body = JSON.stringify(params.payload);
   return new Promise((resolve, reject) => {
-    let settled = false;
-    const rejectOnce = (error: unknown) => {
-      if (!settled) {
-        settled = true;
-        reject(toErrorObject(error, "Non-Error rejection"));
-      }
+    let outcome:
+      | { ok: true; value: NativeHookRelayProcessResponse }
+      | { ok: false; error: Error }
+      | undefined;
+    const fail = (error: unknown) => {
+      outcome ??= { ok: false, error: toErrorObject(error, "Non-Error rejection") };
+      req.destroy();
     };
     const req = httpRequest(
       {
@@ -110,7 +130,9 @@ function postNativeHookRelayBridgeRecord(params: {
         method: "POST",
         path: "/invoke",
         port: params.record.port,
-        timeout: params.timeoutMs,
+        // A relay owns one request, not an idle pooled socket beyond completion.
+        agent: false,
+        signal: params.signal,
         headers: {
           authorization: `Bearer ${params.record.token}`,
           "content-type": "application/json",
@@ -125,15 +147,14 @@ function postNativeHookRelayBridgeRecord(params: {
           const chunkText = typeof chunk === "string" ? chunk : String(chunk);
           responseBytes += Buffer.byteLength(chunkText);
           if (responseBytes > MAX_NATIVE_HOOK_BRIDGE_RESPONSE_BYTES) {
-            rejectOnce(new Error("native hook relay bridge response too large"));
-            res.destroy();
+            fail(new Error("native hook relay bridge response too large"));
             return;
           }
           responseText += chunkText;
         });
-        res.on("error", rejectOnce);
+        res.on("error", fail);
         res.on("end", () => {
-          if (settled) {
+          if (outcome) {
             return;
           }
           try {
@@ -141,21 +162,26 @@ function postNativeHookRelayBridgeRecord(params: {
               | { ok: true; result: NativeHookRelayProcessResponse }
               | { ok: false; error?: string };
             if (parsed.ok) {
-              settled = true;
-              resolve(parsed.result);
-              return;
+              outcome = { ok: true, value: parsed.result };
+            } else {
+              fail(new Error(parsed.error || "native hook relay bridge failed"));
             }
-            rejectOnce(new Error(parsed.error || "native hook relay bridge failed"));
           } catch (error) {
-            rejectOnce(error);
+            fail(error);
           }
         });
       },
     );
-    req.on("timeout", () => {
-      req.destroy(new Error("native hook relay bridge timed out"));
+    req.on("error", fail);
+    // Abort/error delivery precedes physical socket closure. Do not let the CLI
+    // emit its terminal response or start a fallback while this transport lives.
+    req.once("close", () => {
+      if (outcome?.ok) {
+        resolve(outcome.value);
+      } else {
+        reject(outcome?.error ?? new Error("native hook relay bridge closed before its response"));
+      }
     });
-    req.on("error", rejectOnce);
     req.end(body);
   });
 }

@@ -63,22 +63,15 @@ export function createChannelSecretTargetRegistryEntries(params: {
   account?: readonly (string | ChannelSecretTargetPathSpec)[];
   channel?: readonly (string | ChannelSecretTargetPathSpec)[];
 }): SecretTargetRegistryEntry[] {
-  return [
-    ...(params.account ?? []).map((spec) =>
+  const entriesForScope = (scope: "account" | "channel") =>
+    (params[scope] ?? []).map((spec) =>
       buildChannelSecretTargetRegistryEntry({
         channelKey: params.channelKey,
-        scope: "account",
+        scope,
         spec,
       }),
-    ),
-    ...(params.channel ?? []).map((spec) =>
-      buildChannelSecretTargetRegistryEntry({
-        channelKey: params.channelKey,
-        scope: "channel",
-        spec,
-      }),
-    ),
-  ];
+    );
+  return [...entriesForScope("account"), ...entriesForScope("channel")];
 }
 
 type ChannelSecretCollectorParams = {
@@ -149,16 +142,13 @@ export function createSimpleChannelSecretContract(params: {
       ? params.mode.collectionFields
       : [...new Set([...params.accountFields, ...params.channelFields])];
 
-  const collectRuntimeConfigAssignments = (collectorParams: {
-    config: { channels?: Record<string, unknown> };
-    defaults?: SecretDefaults;
-    context: ResolverContext;
-  }): void => {
-    if (params.mode === "channel-only") {
-      const channel = getChannelRecord(collectorParams.config, params.channelKey);
-      if (!channel) {
-        return;
-      }
+  const collectRuntimeConfigAssignments = (collectorParams: ChannelSecretCollectorParams): void => {
+    const channelOnly = params.mode === "channel-only";
+    const channel = getChannelRecord(collectorParams.config, params.channelKey);
+    if (!channel) {
+      return;
+    }
+    if (channelOnly) {
       for (const field of collectionFields) {
         collectSecretInputAssignment({
           value: channel[field],
@@ -184,11 +174,7 @@ export function createSimpleChannelSecretContract(params: {
       return;
     }
 
-    const resolved = getChannelSurface(collectorParams.config, params.channelKey);
-    if (!resolved) {
-      return;
-    }
-    const { channel, surface } = resolved;
+    const surface = resolveChannelAccountSurface(channel);
     for (const field of collectionFields) {
       const topInactiveReason =
         params.mode === "channel-surface"

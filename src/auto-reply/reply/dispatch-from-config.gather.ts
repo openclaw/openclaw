@@ -50,7 +50,6 @@ import {
 } from "./dispatch-from-config.context.js";
 import { createShouldEmitVerboseProgress } from "./dispatch-from-config.harness-defaults.js";
 import { createDispatchReplyOperationCoordinator } from "./dispatch-from-config.lifecycle.js";
-import { createFinalizationAwareTtsPayloadApplier } from "./dispatch-from-config.payloads.js";
 import {
   loadPreparedModelRuntime,
   loadRuntimePlugins,
@@ -479,13 +478,7 @@ export async function gatherDispatchRequest(
     routeThreadId,
     sessionWorkerPlacementContext: normalizedParams.sessionWorkerPlacementContext,
   });
-  const { getDispatchReplyOperation, getPreDispatchAbortSignal } = replyOperationCoordinator;
-  const maybeApplyTtsWithFinalizationLease = createFinalizationAwareTtsPayloadApplier({
-    preparedTtsPreferences,
-    getReplyOperation: getDispatchReplyOperation,
-    hasInboundAudio: () =>
-      inboundAudio || getDispatchReplyOperation()?.acceptedSteeredInboundAudio === true,
-  });
+  const { getPreDispatchAbortSignal } = replyOperationCoordinator;
   const pluginRegistry =
     preparedReplyDispatchRuntime?.inboundPluginRegistry ??
     (await traceReplyPhase("reply.load_runtime_plugin_registry_handle", async () => {
@@ -610,7 +603,6 @@ export async function gatherDispatchRequest(
     pluginRegistry,
     replyOperationRunState,
     ...replyOperationCoordinator,
-    maybeApplyTtsWithFinalizationLease,
     hookRunner,
     timestamp,
     messageIdForHook,

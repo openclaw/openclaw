@@ -23,7 +23,10 @@ import { resolveUserPath } from "../utils.js";
 import { isImmutableGitCommitRef } from "./git-install.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
-import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
+import type {
+  PluginInstallArtifactConsentHandler,
+  PluginInstallPolicyRequest,
+} from "./install-types.js";
 import { installPluginFromPath, type InstallPluginResult } from "./install.js";
 
 const DEFAULT_MARKETPLACE_DOWNLOAD_TIMEOUT_MS = 120_000;
@@ -235,57 +238,41 @@ function marketplaceEntryGitRef(source: MarketplaceEntrySource): string | undefi
   }
 }
 
-function marketplaceInstallPolicySource(params: {
+function marketplaceInstallPolicyRequest(params: {
   marketplaceOrigin: MarketplaceManifestOrigin;
   marketplaceRef?: string;
   resolvedPath: string;
   source: MarketplaceEntrySource;
-}): InstallPolicySource {
+  requestedSpecifier: string;
+}): PluginInstallPolicyRequest {
   const archive = Boolean(resolveArchiveKind(params.resolvedPath));
+  const remote = params.marketplaceOrigin === "remote";
+  const gitSource =
+    params.source.kind === "github" ||
+    params.source.kind === "git" ||
+    params.source.kind === "git-subdir" ||
+    (params.source.kind === "url" && !resolveArchiveKind(params.source.url));
+  let source: InstallPolicySource;
   if (params.source.kind === "path" && !hasHttpUrlPrefix(params.source.path)) {
-    const remote = params.marketplaceOrigin === "remote";
-    return {
+    source = {
       kind: archive ? "archive" : remote ? "git" : "local-path",
       authority: remote ? "third-party" : "user",
       mutable: remote ? !isImmutableGitCommitRef(params.marketplaceRef) : true,
       network: remote,
     };
+  } else {
+    source = {
+      kind: archive || params.source.kind === "path" || !gitSource ? "archive" : "git",
+      authority: "third-party",
+      mutable: !isImmutableGitCommitRef(marketplaceEntryGitRef(params.source)),
+      network: true,
+    };
   }
   return {
-    kind:
-      archive ||
-      params.source.kind === "path" ||
-      (params.source.kind === "url" && resolveArchiveKind(params.source.url))
-        ? "archive"
-        : "git",
-    authority: "third-party",
-    mutable: !isImmutableGitCommitRef(marketplaceEntryGitRef(params.source)),
-    network: true,
+    kind: archive ? "plugin-archive" : remote || gitSource ? "plugin-git" : "plugin-dir",
+    requestedSpecifier: params.requestedSpecifier,
+    source,
   };
-}
-
-function marketplaceInstallPolicyRequestKind(params: {
-  marketplaceOrigin: MarketplaceManifestOrigin;
-  resolvedPath: string;
-  source: MarketplaceEntrySource;
-}): "plugin-archive" | "plugin-dir" | "plugin-git" {
-  if (resolveArchiveKind(params.resolvedPath)) {
-    return "plugin-archive";
-  }
-  if (params.marketplaceOrigin === "remote") {
-    return "plugin-git";
-  }
-  if (
-    params.source.kind === "github" ||
-    params.source.kind === "git" ||
-    params.source.kind === "git-subdir"
-  ) {
-    return "plugin-git";
-  }
-  if (params.source.kind === "url" && !resolveArchiveKind(params.source.url)) {
-    return "plugin-git";
-  }
-  return "plugin-dir";
 }
 
 function parseMarketplaceManifest(
@@ -1104,20 +1091,13 @@ export async function installPluginFromMarketplace(
         expectedPluginId: params.expectedPluginId,
         onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
         beforePersistentApply: params.beforePersistentApply,
-        installPolicyRequest: {
-          kind: marketplaceInstallPolicyRequestKind({
-            marketplaceOrigin: loaded.marketplace.origin,
-            resolvedPath: resolved.path,
-            source: entry.source,
-          }),
+        installPolicyRequest: marketplaceInstallPolicyRequest({
+          marketplaceOrigin: loaded.marketplace.origin,
+          marketplaceRef: loaded.marketplace.remoteRef,
+          resolvedPath: resolved.path,
+          source: entry.source,
           requestedSpecifier: `${entry.name}@${params.marketplace}`,
-          source: marketplaceInstallPolicySource({
-            marketplaceOrigin: loaded.marketplace.origin,
-            marketplaceRef: loaded.marketplace.remoteRef,
-            resolvedPath: resolved.path,
-            source: entry.source,
-          }),
-        },
+        }),
       }),
     );
     if (!result.ok) {

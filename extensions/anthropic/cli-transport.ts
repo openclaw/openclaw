@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
-import type { CliBackendExecuteContext } from "openclaw/plugin-sdk/cli-backend";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { signalProcessTree } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createClaudeCliProcessOwner, type ClaudeCliSecretInput } from "./cli-process.js";
+import {
+  createClaudeCliProcessOwner,
+  type ClaudeCliProcessContext,
+  type ClaudeCliSecretInput,
+} from "./cli-process.js";
 
 // Match the host's per-record JSONL budget, including large image/tool records.
 const MAX_LINE_CHARS = 8 * 1024 * 1024;
@@ -11,17 +14,24 @@ const MAX_LINE_CHARS = 8 * 1024 * 1024;
 const CLOSE_GRACE_MS = 500;
 const KILL_GRACE_MS = 1_000;
 
+export type ClaudeCliTransport = {
+  close(): void;
+  waitForExit(): Promise<void>;
+  send(message: Record<string, unknown>): Promise<void>;
+  initialize(): Promise<Record<string, unknown>>;
+};
+
 /** One Claude Code subprocess and its bidirectional stream-json control channel. */
 export function createClaudeCliTransport(params: {
-  context: CliBackendExecuteContext;
+  context: ClaudeCliProcessContext;
   args: string[];
   initialize: Record<string, unknown>;
-  currentContext: () => CliBackendExecuteContext | undefined;
+  currentContext: () => ClaudeCliProcessContext | undefined;
   secretInput?: ClaudeCliSecretInput;
   onMessage: (message: Record<string, unknown>) => Promise<void>;
   onRequest: (request: Record<string, unknown>, signal: AbortSignal) => Promise<() => unknown>;
   onError: (error: unknown) => void;
-}) {
+}): ClaudeCliTransport {
   const owner = createClaudeCliProcessOwner(params.currentContext, params.secretInput);
   let child: ReturnType<typeof owner.spawn>;
   try {
@@ -35,7 +45,11 @@ export function createClaudeCliTransport(params: {
   }
   const requests = new Map<string, AbortController>();
   const initializeId = randomUUID();
-  const { promise: ready, resolve: resolveReady, reject: rejectReady } = createDeferred<void>();
+  const {
+    promise: ready,
+    resolve: resolveReady,
+    reject: rejectReady,
+  } = createDeferred<Record<string, unknown>>();
   // A child can fail before its caller reaches initialize().
   void ready.catch(() => {});
   let closed = false;
@@ -251,7 +265,7 @@ export function createClaudeCliTransport(params: {
       const response = message.response;
       if (isRecord(response) && response.request_id === initializeId) {
         if (response.subtype === "success") {
-          resolveReady();
+          resolveReady(isRecord(response.response) ? response.response : {});
         } else {
           throw new Error("Claude CLI initialization failed.");
         }
@@ -312,7 +326,7 @@ export function createClaudeCliTransport(params: {
         request_id: initializeId,
         request: { subtype: "initialize", ...params.initialize },
       });
-      await ready;
+      return await ready;
     },
   };
 }

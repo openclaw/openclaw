@@ -35,10 +35,8 @@ import { readTranscriptContextVersionInTransaction } from "./session-accessor.sq
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { planSessionEntryMaintenance } from "./store-maintenance-plan.js";
-import {
-  resolveSessionMaintenancePreserveKeys,
-  type SessionMaintenancePreservationSnapshot,
-} from "./store-maintenance-preserve-snapshot.js";
+import { resolveSessionMaintenancePreserveKeys } from "./store-maintenance-preserve-snapshot.js";
+import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import { shouldRunSessionEntryMaintenance } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
@@ -231,6 +229,8 @@ export function prepareSessionEntryMaintenanceInDatabase(
       },
     };
   }
+  // Selected victims have not changed yet; their future age hint is not committed.
+  invalidateSessionEntryMaintenanceAgeFact(reader.db);
   const readInputs = (database: Pick<OpenClawAgentDatabase, "db">) => {
     const db = getSessionKysely(database.db);
     const rows = executeSqliteQuerySync(

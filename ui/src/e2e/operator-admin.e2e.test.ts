@@ -482,13 +482,13 @@ suite.define(() => {
       await expect
         .poll(() => skillCard.getByRole("img", { name: /Needs Setup.*deploy-helper/ }).isVisible())
         .toBe(true);
-      expect(await page.locator(".skill-discovery wa-switch").count()).toBe(0);
+      expect(await page.locator(".skill-discovery").getByRole("switch").count()).toBe(0);
       await page.getByRole("button", { name: "Skill settings", exact: true }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/skills");
       await page.getByRole("button", { name: "Open Deploy Helper details" }).click();
       const skillDialog = page.locator("openclaw-modal-dialog", { hasText: "Deploy Helper" });
-      const globalSkillToggle = skillDialog.locator("wa-switch.settings-toggle");
-      await expect.poll(() => globalSkillToggle.getAttribute("disabled")).not.toBeNull();
+      const globalSkillToggle = skillDialog.getByRole("switch");
+      await expect.poll(() => globalSkillToggle.isDisabled()).toBe(true);
       await globalSkillToggle.click({ force: true });
       expect(await gateway.getRequests("skills.update")).toHaveLength(0);
       const install = skillDialog.getByRole("button", { name: "Install Deploy Helper" });
@@ -644,7 +644,7 @@ suite.define(() => {
       await page.getByRole("combobox", { name: "Fallback" }).selectOption("allowlist");
       const autoAllowSwitch = page
         .locator(".settings-row", { hasText: "Auto-allow skill CLIs" })
-        .locator("wa-switch");
+        .getByRole("switch");
       await autoAllowSwitch.click();
       await page.getByRole("textbox", { name: "Pattern" }).fill("/usr/bin/gh");
       await screenshot(
@@ -672,13 +672,7 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("combobox", { name: "Fallback" }).inputValue())
         .toBe("allowlist");
-      await expect
-        .poll(() =>
-          autoAllowSwitch.evaluate(
-            (element) => (element as HTMLElement & { checked: boolean }).checked,
-          ),
-        )
-        .toBe(true);
+      await expect.poll(() => autoAllowSwitch.isChecked()).toBe(true);
       await expect
         .poll(() => page.getByRole("textbox", { name: "Pattern" }).inputValue())
         .toBe("/usr/bin/gh");

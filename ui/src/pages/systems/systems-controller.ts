@@ -116,6 +116,13 @@ export class SystemsController {
     this.storageProbeRequests.clear();
   }
 
+  private clearBackups(error: string | null = null): void {
+    this.cancelBackups();
+    this.backups = null;
+    this.backupsError = error;
+    this.storageProbes.clear();
+  }
+
   refreshBackups(): Promise<void> {
     return this.readBackupState();
   }
@@ -358,10 +365,7 @@ export class SystemsController {
           this.clear();
         } else if (changed) {
           this.cancelRefresh();
-          this.cancelBackups();
-          this.backups = null;
-          this.backupsError = null;
-          this.storageProbes.clear();
+          this.clearBackups();
           this.resetDesktopSetup();
           this.telemetry.clear();
           if (snapshot.phase === "connected") {
@@ -369,10 +373,7 @@ export class SystemsController {
           }
         }
         if (!hasOperatorReadAccess(snapshot.hello?.auth ?? null)) {
-          this.cancelBackups();
-          this.backups = null;
-          this.storageProbes.clear();
-          this.backupsError = t("systems.backups.readAccessRequired");
+          this.clearBackups(t("systems.backups.readAccessRequired"));
         }
         this.notify();
       }),
@@ -423,10 +424,7 @@ export class SystemsController {
 
   private clear(): void {
     this.cancelRefresh();
-    this.cancelBackups();
-    this.backups = null;
-    this.backupsError = null;
-    this.storageProbes.clear();
+    this.clearBackups();
     this.inventory = null;
     this.rows = [];
     this.selectedId = null;
@@ -468,7 +466,6 @@ export class SystemsController {
     try {
       const inventory = await loadSystemsInventory(this.context.gateway, {
         signal: request.signal,
-        isCurrent,
         fresh: refreshIntent === "manual",
       });
       if (!inventory && isCurrent()) {

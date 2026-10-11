@@ -275,10 +275,7 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   private notifyConnectError(error: Error) {
-    if (this.pendingConnectError) {
-      return;
-    }
-    if (isRetryableGatewayStartupUnavailableError(error)) {
+    if (this.pendingConnectError || isRetryableGatewayStartupUnavailableError(error)) {
       return;
     }
     if (

@@ -196,6 +196,14 @@ type GatewayKernelContext = {
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  /** Instance-owned startup observation; never lends preparation or write authority. */
+  agentDatabaseStartup?: {
+    readonly hasPendingAgents: boolean;
+    waitForAgentPreparation: (
+      agentId: string,
+      options?: { signal?: AbortSignal },
+    ) => Promise<void> | undefined;
+  };
   channelAdmissionAudit?: import("../../channels/message-access/admission-evidence.js").ChannelAdmissionAudit;
   /** Last serving policy committed by this Gateway, excluding tentative secret activation. */
   getCommittedRuntimeConfig?: () => OpenClawConfig;
@@ -482,7 +490,11 @@ export type GatewayRequestOptions = {
   expectedProfileBinding?: import("../expected-profile.js").ExpectedProfileBinding;
   /** In-process source refresh before handler entry; never retained by the handler. */
   prepareDispatchCurrent?: () => Promise<void>;
-  /** In-process Gateway lifetime guard composed into durable session mutations. */
+  /**
+   * In-process Gateway lifetime guard composed into durable session mutations.
+   * @deprecated For approval persistence use api.runtime.gateway.request with host-bound authority;
+   * opaque approval commit callbacks are removed in the next Plugin SDK major.
+   */
   sessionMutationCommitGuard?: () => void;
   /** In-process caller lifetime; never serialized into a Gateway request frame. */
   signal?: AbortSignal;
@@ -501,7 +513,7 @@ export type SessionMutationAuthorization = {
       sessionKey: string;
       entry: import("../../config/sessions/types.js").SessionEntry | undefined;
       readSource?: import("../../config/sessions/session-entry-read-source.types.js").CapturedSessionEntryReadSource;
-      members: readonly import("../../config/sessions/session-sharing-store.kernel.js").SessionMember[];
+      members: readonly import("../../config/sessions/session-membership-facts.types.js").SessionMember[];
     },
     consume: () => T,
     assertSourceCurrent: () => void,
@@ -511,10 +523,16 @@ export type SessionMutationAuthorization = {
   admittedTarget?: Readonly<{ agentId: string; sessionKey: string; sessionId: string }>;
   assertCurrent: () => void;
   /** Prepare captured agent-store reads before a shared-state worker takes its write lock. */
-  prepareWorkerGrant?: () => Promise<{
+  prepareWorkerGrant?: (
+    target?: Omit<
+      import("../../config/sessions/session-source-authority.js").SessionSourceTransactionGrant,
+      "assertCurrent"
+    >,
+  ) => Promise<{
     assertCurrent: () => void;
     assertLifetimeCurrent: () => void;
     release: () => void | Promise<void>;
+    transaction?: import("../../config/sessions/session-source-authority.js").SessionSourceTransactionGrant;
   }>;
   /** Original host/session authority for committed input custody, without the selection precondition. */
   assertAdmittedInputCurrent?: () => void;
@@ -527,6 +545,7 @@ export type SessionMutationAuthorization = {
     storePath: string;
     sessionId: string;
     lifecycleRevision?: string;
+    readSource?: import("../../config/sessions/session-entry-read-source.types.js").CapturedSessionEntryReadSource;
   }) => void;
   assertTargetCurrent: (target: {
     sessionKey: string;

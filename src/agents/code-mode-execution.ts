@@ -230,7 +230,6 @@ function dispatchCodeModeRequests(
   }
   pending.push(
     ...createPendingBridgeStates(newPendingRequests, {
-      config: params.config,
       inbox: params.owner.inbox,
       results: params.owner.results,
       sessionStore: params.owner.sessionStore,

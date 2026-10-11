@@ -77,6 +77,18 @@ function* recentSessions(db: DatabaseSync, since: number) {
   }
 }
 
+function sessionEntryProjection(query: ReturnType<typeof getNodeSqliteKysely<DB>>) {
+  return query.selectFrom("session_nodes").select((eb) =>
+    eb
+      .case()
+      .when(eb.fn<number>("octet_length", ["entry_json"]), "<=", MAX_PROJECTION_BYTES)
+      .then(eb.ref("entry_json"))
+      .else(null)
+      .end()
+      .as("entry"),
+  );
+}
+
 function* agentHotPages(
   db: DatabaseSync,
   now: number,
@@ -85,66 +97,32 @@ function* agentHotPages(
   for (const row of recentSessions(db, now - RECENT_MS)) {
     executeSqliteQuerySync(
       db,
-      query
-        .selectFrom("session_nodes")
-        .select((eb) =>
-          eb
-            .case()
-            .when(eb.fn<number>("octet_length", ["entry_json"]), "<=", MAX_PROJECTION_BYTES)
-            .then(eb.ref("entry_json"))
-            .else(null)
-            .end()
-            .as("entry"),
-        )
-        .where("session_key", "=", row.session_key),
+      sessionEntryProjection(query).where("session_key", "=", row.session_key),
     );
-    executeSqliteQuerySync(
-      db,
-      query
+    for (const column of ["active_position", "event_seq", "message_position"] as const) {
+      const recent = query
         .selectFrom("session_transcript_active_events")
-        .select("active_position")
-        .where("session_id", "=", row.current_session_id)
-        .orderBy("active_position", "desc")
-        .limit(256),
-    );
-    executeSqliteQuerySync(
-      db,
-      query
-        .selectFrom("session_transcript_active_events")
-        .select("event_seq")
-        .where("session_id", "=", row.current_session_id)
-        .orderBy("event_seq", "desc")
-        .limit(256),
-    );
-    executeSqliteQuerySync(
-      db,
-      query
-        .selectFrom("session_transcript_active_events")
-        .select("message_position")
-        .where("session_id", "=", row.current_session_id)
-        .where("message_position", "is not", null)
-        .orderBy("message_position", "desc")
-        .limit(256),
-    );
-    executeSqliteQuerySync(
-      db,
-      query
+        .select(column)
+        .where("session_id", "=", row.current_session_id);
+      executeSqliteQuerySync(
+        db,
+        (column === "message_position" ? recent.where(column, "is not", null) : recent)
+          .orderBy(column, "desc")
+          .limit(256),
+      );
+    }
+    for (const messagesOnly of [false, true]) {
+      const recent = query
         .selectFrom("transcript_event_identities")
         .select("seq")
-        .where("session_id", "=", row.current_session_id)
-        .orderBy("seq", "desc")
-        .limit(256),
-    );
-    executeSqliteQuerySync(
-      db,
-      query
-        .selectFrom("transcript_event_identities")
-        .select("seq")
-        .where("session_id", "=", row.current_session_id)
-        .where("event_type", "=", "message")
-        .orderBy("seq", "desc")
-        .limit(256),
-    );
+        .where("session_id", "=", row.current_session_id);
+      executeSqliteQuerySync(
+        db,
+        (messagesOnly ? recent.where("event_type", "=", "message") : recent)
+          .orderBy("seq", "desc")
+          .limit(256),
+      );
+    }
     yield;
   }
   // Finish the metadata pass before spending its remaining budget on recent payload pages.
@@ -169,22 +147,16 @@ function* agentHotPages(
         db,
         query
           .selectFrom("transcript_events")
-          .select((eb) => [
-            eb
-              .case()
-              .when(eb.fn<number>("octet_length", ["event_json"]), "<=", MAX_PAYLOAD_BYTES)
-              .then(eb.ref("event_json"))
-              .else(null)
-              .end()
-              .as("json"),
-            eb
-              .case()
-              .when(eb.fn<number>("octet_length", ["event_zstd"]), "<=", MAX_PAYLOAD_BYTES)
-              .then(eb.ref("event_zstd"))
-              .else(null)
-              .end()
-              .as("compressed"),
-          ])
+          .select((eb) => {
+            const bounded = <Column extends "event_json" | "event_zstd">(column: Column) =>
+              eb
+                .case()
+                .when(eb.fn<number>("octet_length", [column]), "<=", MAX_PAYLOAD_BYTES)
+                .then(eb.ref(column))
+                .else(null)
+                .end();
+            return [bounded("event_json").as("json"), bounded("event_zstd").as("compressed")];
+          })
           .where("session_id", "=", row.current_session_id)
           .where("seq", "in", sequences),
       );
@@ -248,17 +220,7 @@ function* warm(
       setSqliteBusyTimeout(db, 0);
       db.exec("PRAGMA cache_size = -1024; PRAGMA mmap_size = 0;"); // sqlite-allow-raw -- Bound the private cache and account for pread bytes.
       const query = getNodeSqliteKysely<DB>(db);
-      const hotQuery = query
-        .selectFrom("session_nodes")
-        .select((eb) =>
-          eb
-            .case()
-            .when(eb.fn<number>("octet_length", ["entry_json"]), "<=", MAX_PROJECTION_BYTES)
-            .then(eb.ref("entry_json"))
-            .else(null)
-            .end()
-            .as("entry"),
-        )
+      const hotQuery = sessionEntryProjection(query)
         .where("updated_at", ">=", input.now - RECENT_MS)
         .orderBy("updated_at", "desc")
         .limit(8);

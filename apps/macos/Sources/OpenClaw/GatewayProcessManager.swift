@@ -1123,7 +1123,7 @@ extension GatewayProcessManager {
             return (
                 self.isCurrentGatewayReadiness(context) &&
                     self.childSupervisor.processIdentifier == readinessPID,
-                readinessPID)
+                readinessPID, true)
         }
         if !requiresLaunchdProof {
             return (self.isCurrentGatewayReadiness(context), readinessPID, true)

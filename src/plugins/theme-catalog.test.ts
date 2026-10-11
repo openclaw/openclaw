@@ -132,6 +132,11 @@ describe("manifest theme catalog", () => {
         createThemeDefinitionFixture({
           dark: createThemePaletteFixture({ primary: "#ff33aa" }),
           mascot: "none",
+          brandName: "Mission Control",
+          brandIcon: "mark",
+          workingIndicator: "brand",
+          lobsterdex: false,
+          communityLinks: false,
           workingPhrases: ["Building", "Compiling"],
           critters: ["penguin", "fedora"],
           avatarHat: "fedora",
@@ -145,11 +150,21 @@ describe("manifest theme catalog", () => {
     fs.unlinkSync(path.join(plugin.rootDir, "theme.json"));
     expect(withPluginMetadataSnapshotScope(after, readTheme)).toMatchObject({
       mascot: "none",
+      brandName: "Mission Control",
+      brandIcon: "mark",
+      workingIndicator: "brand",
+      lobsterdex: false,
+      communityLinks: false,
       workingPhrases: ["Building", "Compiling"],
       critters: ["penguin", "fedora"],
       avatarHat: "fedora",
       definition: {
         mascot: "none",
+        brandName: "Mission Control",
+        brandIcon: "mark",
+        workingIndicator: "brand",
+        lobsterdex: false,
+        communityLinks: false,
         workingPhrases: ["Building", "Compiling"],
         critters: ["penguin", "fedora"],
         avatarHat: "fedora",
@@ -165,23 +180,11 @@ describe("manifest theme catalog", () => {
     expect(withPluginMetadataSnapshotScope(before, readTheme)).not.toHaveProperty("avatarHat");
   });
 
-  it("hides a disabled owner's themes without changing retained palette bytes", () => {
-    const snapshot = fixture().readSnapshot();
-    const disabled = {
-      ...snapshot,
-      index: {
-        ...snapshot.index,
-        plugins: snapshot.index.plugins.map((plugin) => ({ ...plugin, enabled: false })),
-      },
-    };
-    expect(withPluginMetadataSnapshotScope(disabled, listPluginThemes)).toEqual([]);
-    expect(withPluginMetadataSnapshotScope(snapshot, listPluginThemes)).toHaveLength(1);
-  });
-
   it("projects captured artwork URLs and changes only the edited content revision on publication", () => {
     const plugin = fixture(undefined, "@scope/pack");
     const svg = '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h20v10H0z"/></svg>';
     fs.writeFileSync(path.join(plugin.rootDir, "hat.svg"), svg);
+    fs.writeFileSync(path.join(plugin.rootDir, "icon.svg"), svg);
     fs.writeFileSync(path.join(plugin.rootDir, "critter.svg"), svg);
     fs.writeFileSync(
       path.join(plugin.rootDir, "openclaw.plugin.json"),
@@ -191,6 +194,7 @@ describe("manifest theme catalog", () => {
         themes: [
           {
             ...plugin.declaration,
+            icons: { rocket: "icon.svg" },
             hats: { beret: "hat.svg" },
             critters: {
               ferris: { source: "critter.svg", title: "a crab, allegedly", crossMs: 15000 },
@@ -201,14 +205,21 @@ describe("manifest theme catalog", () => {
     );
     fs.writeFileSync(
       path.join(plugin.rootDir, "theme.json"),
-      JSON.stringify({ ...plugin.definition, avatarHat: "beret", critters: ["ferris"] }),
+      JSON.stringify({
+        ...plugin.definition,
+        brandIcon: "rocket",
+        avatarHat: "beret",
+        critters: ["ferris"],
+      }),
     );
     const before = plugin.readSnapshot();
     const original = withPluginMetadataSnapshotScope(before, listPluginThemes)[0];
     expect(original).toMatchObject({
+      brandIcon: "rocket",
       avatarHat: "beret",
       critters: ["ferris"],
       artwork: {
+        icons: { rocket: { url: expect.stringMatching(/\/neon\/icon\/rocket\?v=[a-f0-9]{12}$/) } },
         hats: {
           beret: {
             url: expect.stringMatching(
@@ -227,10 +238,13 @@ describe("manifest theme catalog", () => {
     });
     const replacement = svg.replace("h20", "h30");
     fs.writeFileSync(path.join(plugin.rootDir, "hat.svg"), replacement);
+    fs.writeFileSync(path.join(plugin.rootDir, "icon.svg"), replacement);
     const after = plugin.readSnapshot();
     fs.unlinkSync(path.join(plugin.rootDir, "hat.svg"));
+    fs.unlinkSync(path.join(plugin.rootDir, "icon.svg"));
     fs.unlinkSync(path.join(plugin.rootDir, "critter.svg"));
     const updated = withPluginMetadataSnapshotScope(after, listPluginThemes)[0];
+    expect(updated?.artwork?.icons?.rocket?.url).not.toBe(original?.artwork?.icons?.rocket?.url);
     expect(updated?.artwork?.hats?.beret?.url).not.toBe(original?.artwork?.hats?.beret?.url);
     expect(updated?.artwork?.critters).toEqual(original?.artwork?.critters);
     expect(withPluginMetadataSnapshotScope(before, listPluginThemes)[0]).toEqual(original);
@@ -244,6 +258,22 @@ describe("manifest theme catalog", () => {
         resolvePluginThemeArtwork(plugin.id, "neon", "hat", "beret"),
       ),
     ).toBe(replacement);
+    expect(
+      withPluginMetadataSnapshotScope(before, () =>
+        resolvePluginThemeArtwork(plugin.id, "neon", "icon", "rocket"),
+      ),
+    ).toBe(svg);
+    expect(
+      withPluginMetadataSnapshotScope(after, () =>
+        resolvePluginThemeArtwork(plugin.id, "neon", "icon", "rocket"),
+      ),
+    ).toBe(replacement);
+    after.index.plugins[0]!.enabled = false;
+    expect(
+      withPluginMetadataSnapshotScope(after, () =>
+        resolvePluginThemeArtwork(plugin.id, "neon", "icon", "rocket"),
+      ),
+    ).toBeUndefined();
   });
 
   it.each([

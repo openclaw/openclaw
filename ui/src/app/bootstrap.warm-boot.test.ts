@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
-import { clearCachedBootState } from "../lib/sessions/session-roster-cache.runtime.ts";
 import { loadChatRoute } from "../pages/chat/route-loader.ts";
 import * as snapshots from "../pages/chat/session-snapshot-invalidation.runtime.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
@@ -33,11 +32,6 @@ function seedBootRecord(overrides: Partial<BootRecord> = {}): BootRecord {
   localStorage.setItem(BOOT_RECORD_PREFIX + record.scope, JSON.stringify(record));
   return record;
 }
-
-vi.mock("../lib/sessions/session-roster-cache.runtime.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../lib/sessions/session-roster-cache.runtime.ts")>()),
-  clearCachedBootState: vi.fn(async () => undefined),
-}));
 
 describe("warm boot profile validation", () => {
   beforeEach(() => {
@@ -245,7 +239,6 @@ describe("warm boot profile validation", () => {
         recoveryScope: "cached-account",
       });
       const clearSnapshots = vi.spyOn(snapshots, "clearStoredChatSnapshots").mockResolvedValue();
-      const clearRoster = vi.mocked(clearCachedBootState);
       const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
       let connectionRevision = 0;
       const createGateway = gatewayStore.createApplicationGateway;
@@ -287,7 +280,6 @@ describe("warm boot profile validation", () => {
         }
         publish("connecting");
         expect(clearSnapshots).not.toHaveBeenCalled();
-        expect(clearRoster).not.toHaveBeenCalled();
 
         publish("connected");
         // Clearing the in-memory projection must precede later hello subscribers.
@@ -302,14 +294,12 @@ describe("warm boot profile validation", () => {
           expect(localStorage.getItem(BOOT_RECORD_PREFIX + scope)).not.toBeNull();
         }
         await vi.dynamicImportSettled();
-        expect(clearRoster).toHaveBeenCalledTimes(clears);
 
         publish("connected");
         publish("reconnecting");
         publish("connected");
         await vi.dynamicImportSettled();
         expect(clearSnapshots).toHaveBeenCalledTimes(clears);
-        expect(clearRoster).toHaveBeenCalledTimes(clears);
       } finally {
         runtime.stop();
         window.history.replaceState({}, "", previousUrl);

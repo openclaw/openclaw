@@ -15,6 +15,7 @@ import {
   replaceSessionEntry,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import * as entryPatch from "../../config/sessions/session-entry-patch.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
@@ -619,10 +620,18 @@ describe("createReplyRestartRecoveryClaimController", () => {
     ]);
   });
 
-  it.each(["metadata", "source-claim"] as const)(
-    "checks foreign %s changes in the admission writer without another preparation",
-    async (change) => {
+  it.each([
+    { stage: "admission", change: "metadata" },
+    { stage: "admission", change: "source-claim" },
+    { stage: "cleanup", change: "metadata" },
+    { stage: "cleanup", change: "source-claim" },
+  ] as const)(
+    "checks foreign $change changes in the $stage writer without another preparation",
+    async ({ stage, change }) => {
       const fixture = await createAcknowledgedClaim();
+      if (stage === "cleanup") {
+        await expect(fixture.controller.admitUserTurn(fixture.recorder)).resolves.toBe("admitted");
+      }
       const databasePath = resolveSqliteTargetFromSessionStorePath(fixture.scope.storePath, {
         agentId: fixture.scope.agentId,
       }).path;
@@ -655,14 +664,18 @@ describe("createReplyRestartRecoveryClaimController", () => {
         });
       });
       try {
-        const outcome = await fixture.controller
-          .admitUserTurn(fixture.recorder)
-          .catch((error: unknown) => error);
+        const outcome = await (
+          stage === "cleanup"
+            ? fixture.controller.clear()
+            : fixture.controller.admitUserTurn(fixture.recorder)
+        ).catch((error: unknown) => error);
         if (change === "metadata") {
-          expect(outcome).toBe("admitted");
+          expect(outcome).toBe(stage === "cleanup" ? undefined : "admitted");
           expect(fixture.current().model).toBe("foreign-model");
-        } else {
+        } else if (stage === "admission") {
           expect(isRestartRecoveryClaimChangedError(outcome)).toBe(true);
+        } else {
+          expect(outcome).toBeUndefined();
         }
         expect(spy).toHaveBeenCalledOnce();
         expect(prepare).not.toHaveBeenCalled();
@@ -678,13 +691,53 @@ describe("createReplyRestartRecoveryClaimController", () => {
             .get(fixture.scope.sessionKey),
         ).toEqual({
           status: null,
-          runId: "recovery-run",
-          sourceRunId: change === "metadata" ? fixture.sourceTurnId : "foreign-source",
-          fingerprint: change === "metadata" ? null : "acknowledged-fingerprint",
+          runId: stage === "cleanup" && change === "metadata" ? null : "recovery-run",
+          sourceRunId:
+            change === "source-claim"
+              ? "foreign-source"
+              : stage === "cleanup"
+                ? null
+                : fixture.sourceTurnId,
+          fingerprint:
+            stage === "admission" && change === "source-claim" ? "acknowledged-fingerprint" : null,
         });
       } finally {
         spy.mockRestore();
         foreign.close();
+      }
+    },
+  );
+
+  it.each(["session", "lifecycle"] as const)(
+    "does not install a replacement %s after refused claim cleanup",
+    async (replacement) => {
+      const fixture = await createAcknowledgedClaim();
+      await fixture.controller.admitUserTurn(fixture.recorder);
+      const original = structuredClone(fixture.current());
+      const successor = {
+        ...original,
+        ...(replacement === "session" ? { sessionId: "successor-session" } : {}),
+        lifecycleRevision: "successor-generation",
+      };
+      const patch = entryPatch.patchSessionEntryInWorker;
+      let storedSuccessor: InternalSessionEntry | undefined;
+      const spy = vi.spyOn(entryPatch, "patchSessionEntryInWorker").mockImplementation((params) => {
+        // The released synchronous writer can replace the row after host admission.
+        replaceSessionEntrySync(fixture.scope, successor);
+        storedSuccessor = structuredClone(fixture.read());
+        return patch(params);
+      });
+      try {
+        await fixture.controller.clear();
+        expect(spy).toHaveBeenCalledOnce();
+        expect(fixture.current()).toEqual(original);
+        expect(storedSuccessor).toMatchObject({
+          sessionId: successor.sessionId,
+          lifecycleRevision: successor.lifecycleRevision,
+        });
+        expect(fixture.read()).toEqual(storedSuccessor);
+      } finally {
+        spy.mockRestore();
       }
     },
   );

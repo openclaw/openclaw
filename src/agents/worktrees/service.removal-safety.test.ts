@@ -2,8 +2,10 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as gitExec from "../../infra/git-exec.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import * as checkoutGitOwner from "./checkout-git-config.js";
@@ -97,6 +99,78 @@ describe("managed removal custody", () => {
     expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.outcome).toBe("retained-dirty");
     expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("hidden change\n");
   });
+
+  it.each([
+    { missing: false, outcome: "archives" },
+    { missing: true, outcome: "preserves" },
+  ])(
+    "$outcome a clean partial worktree without rebuilding its tree (missing=$missing)",
+    async ({ missing }) => {
+      const source = repo;
+      await git(source, "config", "uploadpack.allowFilter", "true");
+      repo = path.join(root, "partial");
+      await git(
+        root,
+        "clone",
+        "--filter=blob:none",
+        "--no-checkout",
+        pathToFileURL(source).href,
+        repo,
+      );
+      const packDirectory = path.join(repo, ".git", "objects", "pack");
+      const initialPacks = new Set(await fs.readdir(packDirectory));
+      await git(repo, "checkout", "main");
+      const blobPacks = (await fs.readdir(packDirectory)).filter(
+        (name) => name.endsWith(".pack") && !initialPacks.has(name),
+      );
+      expect(blobPacks).toHaveLength(1);
+      const created = await materializeManagedWorktreeFixture({
+        env,
+        name: "missing-clean-blob",
+        now: Date.now(),
+        repoRoot: repo,
+        stateDir: env.OPENCLAW_STATE_DIR!,
+        ownerKind: "session",
+      });
+      const head = await git(created.path, "rev-parse", "HEAD");
+      const tree = await git(created.path, "rev-parse", "HEAD^{tree}");
+      // Give Git an unambiguously non-racy stat entry before losing the promised pack.
+      await fs.utimes(path.join(created.path, "README.md"), 1_600_000_000, 1_600_000_000);
+      await git(created.path, "update-index", "--refresh");
+      if (missing) {
+        for (const pack of blobPacks) {
+          await fs.unlink(path.join(packDirectory, pack));
+          await fs.unlink(path.join(packDirectory, pack.replace(/\.pack$/, ".idx")));
+        }
+      }
+      await git(repo, "remote", "set-url", "origin", path.join(root, "unavailable"));
+      expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+
+      const commands = vi.spyOn(gitExec, "executeGitCommandBytes");
+      if (missing) {
+        const failure: unknown = await service
+          .remove({ id: created.id, reason: "archive" })
+          .catch((error: unknown) => error);
+        expect(commands.mock.calls.some(([, args]) => args.includes("write-tree"))).toBe(false);
+        expect(failure).toBeInstanceOf(Error);
+        expect(failure).toMatchObject({
+          message: expect.stringMatching(
+            /missing blob [a-f0-9]{40,64}; repair the repository before retrying cleanup/,
+          ),
+        });
+        expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBeUndefined();
+        expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+      } else {
+        const removed = await service.remove({ id: created.id, reason: "archive" });
+        expect(removed.removed).toBe(true);
+        expect(await git(repo, "rev-parse", `${removed.snapshotRef}^{tree}`)).toBe(tree);
+        expect(await git(repo, "rev-parse", `${removed.snapshotRef}^`)).toBe(head);
+        expect(await git(repo, "show", `${removed.snapshotRef}:README.md`)).toBe("base");
+        await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(commands.mock.calls.some(([, args]) => args.includes("write-tree"))).toBe(false);
+      }
+    },
+  );
 
   it("finalizes source-only deletion after its producer and command scope are revoked", async () => {
     const created = await materializeManagedWorktreeFixture({
@@ -289,15 +363,21 @@ describe("managed removal custody", () => {
     await expect(
       service.remove({ id: created.id, reason: "archive", allowSnapshotLoss: true }),
     ).rejects.toThrow("injected pending-ref deletion failure");
+    fault.mockRestore();
     expect(getRegistryWorktree(env, created.id)).toMatchObject({ removedAt: now });
     expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBeUndefined();
     expect(await git(repo, "rev-parse", pendingRef)).toBe(head);
 
     now += 31 * 24 * 60 * 60 * 1000;
-    const failed = await service.gc();
-    expect(failed.snapshotsPruned).toBe(0);
-    expect(getRegistryWorktree(env, created.id)).toBeDefined();
-    fault.mockRestore();
+    const lock = path.join(repo, ".git", `${pendingRef}.lock`);
+    await fs.writeFile(lock, "", { flag: "wx" });
+    try {
+      const failed = await service.gc();
+      expect(failed.snapshotsPruned).toBe(0);
+      expect(getRegistryWorktree(env, created.id)).toBeDefined();
+    } finally {
+      await fs.unlink(lock);
+    }
     const retried = await service.gc();
     expect(retried.snapshotsPruned).toBe(1);
     expect(getRegistryWorktree(env, created.id)).toBeUndefined();

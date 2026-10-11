@@ -2,7 +2,10 @@ import type { SessionTranscriptReadScope } from "../config/sessions/session-acce
 import type { SessionTranscriptInitializationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import type { SessionEntryReplacementCommit } from "../config/sessions/session-accessor.sqlite-replacement-types.js";
 import type { ResolvedTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
-import type { SessionEntryCohortRequest } from "../config/sessions/session-entry-read.types.js";
+import type {
+  SessionEntryCohortRequest,
+  SessionEntryReadWorkerInput,
+} from "../config/sessions/session-entry-read.types.js";
 import type {
   SessionTranscriptExecutionReadInputs,
   SessionTranscriptExecutionReadResult,
@@ -14,6 +17,7 @@ import {
 } from "../infra/sqlite-worker-operation-admission.js";
 import { readTrajectoryRuntimeRetentionLease } from "../trajectory/runtime-retention.contract.js";
 import type { AgentDatabaseMaintenanceOperations } from "./openclaw-agent-execution-maintenance.js";
+import type { loadAgentVoiceSessionOperations } from "./openclaw-agent-execution-voice-operations.js";
 import type { AgentWorkerOperationContext } from "./openclaw-agent-operation-context.js";
 import type { WorkerOperationHandlers, WorkerOperations } from "./worker-operation-registry.js";
 
@@ -24,6 +28,7 @@ let transcript:
   | {
       initialize: typeof import("../config/sessions/session-accessor.sqlite-transcript-header.js").ensureTranscriptHeader;
       assertIdentity: typeof import("../config/sessions/session-accessor.sqlite-scope.js").assertSqliteTranscriptWriteIdentity;
+      readPublication: typeof import("../config/sessions/session-transcript-authority.js").readStagedSessionTranscriptAuthority;
     }
   | undefined;
 
@@ -31,10 +36,12 @@ export function prepareAgentTranscript() {
   return Promise.all([
     import("../config/sessions/session-accessor.sqlite-transcript-header.js"),
     import("../config/sessions/session-accessor.sqlite-scope.js"),
-  ]).then(([header, scope]) => {
+    import("../config/sessions/session-transcript-authority.js"),
+  ]).then(([header, scope, authority]) => {
     transcript = {
       initialize: header.ensureTranscriptHeader,
       assertIdentity: scope.assertSqliteTranscriptWriteIdentity,
+      readPublication: authority.readStagedSessionTranscriptAuthority,
     };
   });
 }
@@ -46,7 +53,7 @@ export async function loadAgentTranscriptOperations() {
       if (!transcript) {
         throw new Error("Session transcript initialization was not prepared");
       }
-      const { initialize } = transcript;
+      const { initialize, readPublication } = transcript;
       const assertIdentity: typeof transcript.assertIdentity = transcript.assertIdentity;
       assertIdentity(input);
       return context.writeTransaction(
@@ -67,6 +74,7 @@ export async function loadAgentTranscriptOperations() {
               },
             },
           );
+          publication.transcriptPublication = readPublication(current);
           deferSqliteWorkerCommitReceipt(current.db, publication);
           context.admit("commit", publication);
           return publication;
@@ -250,10 +258,12 @@ export async function loadAgentTranscriptReadOperations() {
 }
 
 export async function loadAgentReplacementOperations() {
-  const [kernel, { assertSessionSubagentRunsCurrent }] = await Promise.all([
-    import("../config/sessions/session-accessor.sqlite-replacement-state.js"),
-    import("../config/sessions/session-accessor.sqlite-descendant-basis.js"),
-  ]);
+  const [kernel, { assertSessionSubagentRunsCurrent }, { sealSessionEntryPublicationSource }] =
+    await Promise.all([
+      import("../config/sessions/session-accessor.sqlite-replacement-state.js"),
+      import("../config/sessions/session-accessor.sqlite-descendant-basis.js"),
+      import("../config/sessions/session-entry-publication-source.js"),
+    ]);
   return {
     "session.entries.replace": (
       input: SessionEntryReplacementCommit & { initializeTranscript?: TranscriptInitialization },
@@ -284,11 +294,18 @@ export async function loadAgentReplacementOperations() {
             });
           }
         });
-        const publication = kernel.prepareSessionEntryReplacementPublication(result, current);
+        const publication = kernel.prepareSessionEntryReplacementPublication(result, current, {
+          captureFullFacts: true,
+        });
+        const candidate = { ...result, publication };
+        if (publication.source && publication.fullEntries?.size) {
+          sealSessionEntryPublicationSource(publication.source);
+        }
+        kernel.boundSessionEntryReplacementPublication(publication, candidate);
         deferSqliteWorkerCommitReceipt(current.db, publication);
         context.admit("commit", publication);
         assertSessionSubagentRunsCurrent(input, context.options.env ?? process.env);
-        return { ...result, publication };
+        return candidate;
       }),
   } satisfies Handlers;
 }
@@ -314,16 +331,18 @@ export async function loadAgentRestartRecoveryOperations() {
 
 export async function loadAgentEntryReadOperations() {
   const kernel = await import("../config/sessions/session-entry-read.worker.js");
-  const { readSessionEntryCohort, readSessionEntryDataInDatabase } =
-    await import("../config/sessions/session-entry-cohort.worker.js");
+  const result = await import("../config/sessions/session-entry-read-result.worker.js");
+  const cohort = await import("../config/sessions/session-entry-cohort.worker.js");
   return {
+    "session.entry.readResult": (input: SessionEntryReadWorkerInput, { open }) =>
+      result.readSessionEntryResult(input, open()),
     "session.entry.read": (input: { sessionKey: string } | SessionEntryCohortRequest, { open }) => {
       const database = open();
       return "sessionKeys" in input
-        ? readSessionEntryCohort(database, input, (request) =>
+        ? cohort.readSessionEntryCohort(database, input, (request) =>
             kernel.readExactSessionEntriesWithLifecycle(request, database),
           )
-        : readSessionEntryDataInDatabase(database, input.sessionKey);
+        : cohort.readSessionEntryDataInDatabase(database, input.sessionKey);
     },
   } satisfies Handlers;
 }
@@ -350,6 +369,26 @@ export async function loadAgentCompoundOperations() {
     "session.turn.commit": turn.commitSessionTurn,
     "session.lifecycle.reset": reset.commitSessionReset,
     "session.lifecycle.project": lifecycle.commitSessionLifecycleProjection,
+  } satisfies Handlers;
+}
+
+export async function loadAgentPurgeOperations() {
+  const purge = await import("../config/sessions/session-agent-purge.worker.js");
+  return {
+    "session.agentPurge.prepare": purge.prepareSessionAgentPurge,
+    "session.agentPurge.commit": purge.commitSessionAgentPurge,
+  } satisfies Handlers;
+}
+
+export async function loadAgentMaintenanceFinalizationOperations() {
+  const finalization =
+    await import("../config/sessions/session-maintenance-finalization.worker.js");
+  const maintenanceStore =
+    await import("../config/sessions/session-accessor.sqlite-maintenance-store.js");
+  return {
+    "session.maintenance.finalize": finalization.finalizeSessionMaintenance,
+    "session.maintenance.size": (input: { sessionIds: string[] }, { open }) =>
+      maintenanceStore.readSessionTranscriptJsonlBytesInDatabase(open(), input.sessionIds),
   } satisfies Handlers;
 }
 
@@ -573,6 +612,8 @@ export async function loadConversationDeliveryOperations() {
 }
 
 export async function loadConversationRegistryOperations() {
+  const { deferConversationWorkerReceipt } =
+    await import("../config/sessions/session-accessor.sqlite-conversation-publication.js");
   const { prepareConversationIdentities, upsertConversationIdentities } =
     await import("../config/sessions/session-accessor.sqlite-conversation.js");
   const { selectConversationRowsFromDatabase, resolveConversationInDatabase } =
@@ -590,7 +631,10 @@ export async function loadConversationRegistryOperations() {
     ) => {
       const prepared = prepareConversationIdentities(input.identities);
       return writeTransaction("conversation.register", "Conversation registration", (database) => {
-        upsertConversationIdentities(database, prepared, input.discoveredAt);
+        const publication = upsertConversationIdentities(database, prepared, input.discoveredAt);
+        if (publication && typeof publication.source.identity === "string") {
+          deferConversationWorkerReceipt(database.db, publication);
+        }
         const rows = input.query
           ? selectConversationRowsFromDatabase(database, input.query)
           : undefined;
@@ -658,12 +702,15 @@ export async function loadUsageCacheOperations() {
 
 export type RegisteredAgentWorkerOperations = WorkerOperations<
   Awaited<ReturnType<typeof loadUsageCacheOperations>> &
+    Awaited<ReturnType<typeof loadAgentVoiceSessionOperations>> &
     Awaited<ReturnType<typeof loadAgentTranscriptOperations>> &
     Awaited<ReturnType<typeof loadAgentTranscriptReadOperations>> &
     Awaited<ReturnType<typeof loadAgentReplacementOperations>> &
     Awaited<ReturnType<typeof loadAgentEntryReadOperations>> &
     Awaited<ReturnType<typeof loadAgentEntryPatchOperations>> &
     Awaited<ReturnType<typeof loadAgentCompoundOperations>> &
+    Awaited<ReturnType<typeof loadAgentPurgeOperations>> &
+    Awaited<ReturnType<typeof loadAgentMaintenanceFinalizationOperations>> &
     Awaited<ReturnType<typeof loadAgentNativeBindingOperations>> &
     Awaited<ReturnType<typeof loadAgentMessageCutOperations>> &
     Awaited<ReturnType<typeof loadAgentRestartRecoveryOperations>> &

@@ -52,7 +52,6 @@ import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
 import { releaseGatewaySessionStoreFixture } from "../test/server-sessions-resources.test-helpers.js";
 import { sessionCreateHandlers } from "./sessions-create.js";
 import { identifiedClient } from "./sessions-sharing.test-support.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
 
 installGatewayTestHooks();
 registerAgentSessionLoopTestLifecycle();
@@ -145,7 +144,6 @@ async function createHostedChildFixture(
   const dispatchEntered = createDeferred();
   const provider = vi.fn();
   const persistenceResult = vi.fn();
-  let originalHandler: GatewayRequestHandlerOptions | undefined;
   let sourceCurrent = true;
   let hostCurrent = true;
   let gatewayCurrent = true;
@@ -192,13 +190,7 @@ async function createHostedChildFixture(
           name: "sessions.create",
           scope: "operator.write",
           owner: { kind: "core", area: "sessions" },
-          handler: async (options) => {
-            originalHandler = options;
-            await expectDefined(
-              sessionCreateHandlers["sessions.create"],
-              "creation owner",
-            )(options);
-          },
+          handler: expectDefined(sessionCreateHandlers["sessions.create"], "creation owner"),
         },
       ],
       registry,
@@ -375,10 +367,6 @@ async function createHostedChildFixture(
       gatewayCurrent = false;
     },
     abortSignal: () => signal.abort(new Error("explicit request signal closed")),
-    replaceHandler: () => {
-      expectDefined(originalHandler, "original request handler").context =
-        createDirectChatContext();
-    },
     finish,
     [Symbol.asyncDispose]: async () => {
       try {
@@ -588,16 +576,7 @@ describe("hosted creation transfers accepted child input", () => {
     },
   );
 
-  it.each([
-    "source",
-    "host",
-    "signal",
-    "gateway",
-    "handler",
-    "ACL",
-    "lifecycle",
-    "replacement",
-  ] as const)(
+  it.each(["source", "host", "signal", "gateway", "ACL", "lifecycle", "replacement"] as const)(
     "retains the original %s boundary after child ACK and parent closure",
     async (change) => {
       await using fixture = await createHostedChildFixture();
@@ -616,8 +595,6 @@ describe("hosted creation transfers accepted child input", () => {
         fixture.abortSignal();
       } else if (change === "gateway") {
         fixture.closeGateway();
-      } else if (change === "handler") {
-        fixture.replaceHandler();
       } else if (change === "ACL") {
         await patchSessionEntryCore(scope, () => ({ visibility: "draft" }));
       } else if (change === "lifecycle") {

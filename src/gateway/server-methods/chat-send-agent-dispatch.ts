@@ -6,6 +6,7 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { classifyAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
+import { resolveWebchatPromptCacheKey } from "../../agents/embedded-agent-runner/run/session-boundary-prompt-cache-key.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/dispatch.js";
 import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.js";
@@ -25,13 +26,11 @@ import { updateChatRunProvider } from "../chat-abort.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { chatRunBelongsToSelectedAgent } from "../chat-run-owner.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
+import { prepareGatewaySkillLibraryTurn } from "../skill-library-authoring.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
-import { broadcastChatDelta, broadcastChatError } from "./chat-broadcast.js";
+import { broadcastChatDelta } from "./chat-broadcast.js";
 import type { StartChatDispatchParams } from "./chat-send-agent-dispatch.types.js";
-import {
-  resolveWebchatPromptCacheKey,
-  scheduleChatDashboardSessionTitle,
-} from "./chat-send-background.js";
+import { scheduleChatDashboardSessionTitle } from "./chat-send-background.js";
 import { readChatSendReplyPayload } from "./chat-send-command-replies.js";
 import {
   createChatSendDispatchErrorLifecycle,
@@ -69,7 +68,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     client,
     context,
     toolsAllow,
-    prepareSkillLibraryAuthoring,
+    skillLibrary,
     cronCreatorAuthority,
     assertDashboardReadCurrent,
     externalAuthorityAdmission,
@@ -301,9 +300,11 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             }
           }
           phase?.mark("preparation");
-          await turn.prepareSessionCreation();
-          phase?.mark("authoring");
-          const skillLibraryAuthoring = await prepareSkillLibraryAuthoring();
+          const skillLibraryAuthoring = await prepareGatewaySkillLibraryTurn(
+            skillLibrary,
+            turn.prepareSessionCreation,
+            () => phase?.mark("authoring"),
+          );
           admission.assertWorkAdmissionCurrent();
           phase?.mark("preparation");
           const pluginBoundMedia = await pluginBoundMediaPromise;
@@ -526,7 +527,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       ),
     )
     .then(async (dispatchResult) => {
-      diagnostics.finish();
+      diagnostics.finish(queuedFollowup);
       if (acceptedMessageInjection || queuedFollowup.isEnqueued() || queuedFollowup.isTerminal()) {
         return;
       }
@@ -622,22 +623,17 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
               suppressFinal: runtimeFailed,
             });
           }
-          const shouldBroadcastAgentError =
+          const hasTerminalAgentError =
             hasReturnedAgentError && (runtimeFailed || !finalizedSourceReply);
           if (!context.chatRunState.hasAbortMarker(clientRunId)) {
-            if (shouldBroadcastAgentError) {
-              broadcastChatError({
-                terminalEntry: sessionBinding,
-                context,
-                runId: clientRunId,
-                sessionKey,
-                agentId,
+            if (hasTerminalAgentError) {
+              dispatchErrorLifecycle.broadcastError({
                 errorMessage: returnedAgentErrorMessage,
                 errorKind: runtimeClassification === "timeout" ? "timeout" : undefined,
                 stopReason: runtimeOutcome?.stopReason,
               });
             }
-            const returnedAgentError = shouldBroadcastAgentError
+            const returnedAgentError = hasTerminalAgentError
               ? errorShape(
                   ErrorCodes.UNAVAILABLE,
                   returnedAgentErrorMessage ?? "agent returned an error payload",
@@ -649,8 +645,8 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
               session: captureAgentJobSession(sessionBinding),
               entry: {
                 ts: Date.now(),
-                ok: !shouldBroadcastAgentError,
-                payload: shouldBroadcastAgentError
+                ok: !hasTerminalAgentError,
+                payload: hasTerminalAgentError
                   ? {
                       runId: clientRunId,
                       status: runtimeClassification === "timeout" ? "timeout" : "error",
@@ -693,7 +689,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       );
     })
     .catch((error: unknown) => {
-      diagnostics.finish();
+      diagnostics.finish(queuedFollowup);
       return dispatchErrorLifecycle.handleError(error);
     })
     .finally(() => replyAdmissionTicket?.release());
@@ -709,7 +705,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       emitSessionsChanged(
         context,
         { sessionKey, agentId, reason: "agent.input.settled" },
-        { accessChanged: false },
+        { accessChanged: false, rowScope: "runtime" },
       );
       if (userTurnRecorder.isBlocked() && attachments.offloadedRefs.length > 0) {
         // A blocked turn persists only the redacted block reason — no media

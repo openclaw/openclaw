@@ -1,3 +1,5 @@
+import { raceWithTimeout } from "@openclaw/retry";
+import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import type {
   PreparedModelCatalogInventory,
   PreparedModelCatalogProviderFacts,
@@ -7,6 +9,17 @@ import type {
 // Failed discovery keeps saved rows; its catalog owner retries off the read path with capped backoff.
 const FAILED_DISCOVERY_RETRY_MS = 30_000;
 const FAILED_DISCOVERY_RETRY_MAX_MS = 30 * 60_000;
+const MODEL_CATALOG_FOREGROUND_WAIT_MS = 5_000;
+
+export function waitForDiscovery(
+  discovery: Promise<ModelCatalogSnapshot>,
+  readPublished: () => ModelCatalogSnapshot,
+  wait = false,
+): Promise<ModelCatalogSnapshot> {
+  return wait
+    ? discovery
+    : raceWithTimeout(discovery, MODEL_CATALOG_FOREGROUND_WAIT_MS, readPublished, { ref: false });
+}
 
 function failedDiscoveryFacts(previous: PreparedModelCatalogProviderFacts | undefined) {
   const discoveryFailures = (previous?.discoveryFailures ?? 0) + 1;
@@ -52,10 +65,7 @@ export function recordFailedDiscovery(
 export function createFailedDiscoveryRetry(
   retirementSignal: AbortSignal,
   readIdleInventory: () => PreparedModelCatalogInventory | undefined,
-  acquire: (
-    options: PreparedModelCatalogRefreshOptions,
-    acquireNative: boolean,
-  ) => Promise<unknown>,
+  acquire: (options: PreparedModelCatalogRefreshOptions) => Promise<unknown>,
 ) {
   let timer: NodeJS.Timeout | undefined;
   const failedDeadlines = () =>
@@ -82,7 +92,7 @@ export function createFailedDiscoveryRetry(
           return;
         }
         // The acquisition re-arms when it settles.
-        void acquire({ providerIds, refresh: true }, false).catch(() => undefined);
+        void acquire({ providerIds, refresh: true }).catch(() => undefined);
       },
       Math.max(0, due - Date.now()),
     ).unref();

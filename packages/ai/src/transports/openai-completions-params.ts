@@ -37,8 +37,8 @@ import {
   isNativeOpenAIEndpoint,
   type ResolvedOpenAICompletionsCompat,
 } from "./openai-completions-compat.js";
-import { applyDirectCompletionsReasoningAndRouting } from "./openai-completions-direct-policy.js";
 import { isAzureOpenAICompatibleHost } from "./openai-completions-host.js";
+import { applyCompletionsReasoningAndRouting } from "./openai-completions-policy.js";
 import {
   applyCompletionsReplay,
   COMPLETIONS_REASONING_REPLAY_FIELDS,
@@ -77,14 +77,12 @@ function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl">): boolea
 
 function resolveOpenAICompletionsMaxTokens(
   model: OpenAIModeModel,
-  options: Pick<OpenAICompletionsOptions, "maxTokens"> | undefined,
+  options: OpenAICompletionsOptions | undefined,
 ): { maxTokens: number | undefined; clampToModelMaxTokens: boolean } {
   if (options?.maxTokens) {
     return { maxTokens: options.maxTokens, clampToModelMaxTokens: true };
   }
-  const paramsMaxTokens = resolveMaxTokensParam(
-    (model as { params?: Record<string, unknown> }).params,
-  );
+  const paramsMaxTokens = resolveMaxTokensParam(model.params);
   if (paramsMaxTokens) {
     return { maxTokens: paramsMaxTokens, clampToModelMaxTokens: false };
   }
@@ -94,15 +92,6 @@ function resolveOpenAICompletionsMaxTokens(
 function resolveOpenAICompletionsModelMaxTokens(model: OpenAIModeModel): number | undefined {
   const maxTokens = asPositiveFiniteNumber(model.maxTokens);
   return maxTokens === undefined ? undefined : Math.floor(maxTokens);
-}
-
-function resolveOpenAICompletionsEffectiveContextTokens(
-  model: OpenAIModeModel,
-): number | undefined {
-  return (
-    asPositiveFiniteNumber((model as { contextTokens?: number }).contextTokens) ??
-    asPositiveFiniteNumber(model.contextWindow)
-  );
 }
 
 const OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN = 1.25;
@@ -125,7 +114,7 @@ function estimateJsonChars(value: unknown, fallback: number): number {
 // replay turns are reflected in the output cap.
 function estimateOpenAICompletionsInputTokens(payload: {
   messages: unknown[];
-  tools?: unknown[];
+  tools?: CompletionsRequest["tools"];
   response_format?: unknown;
 }): number {
   let adjustedChars = 0;
@@ -184,51 +173,6 @@ function estimateOpenAICompletionsContentChars(value: unknown): number {
     adjustedChars += estimateJsonChars(block, 256);
   }
   return adjustedChars;
-}
-
-/** Identify an automatic context cap without changing the final hook-shaped payload. */
-export function resolveOpenAICompletionsContextBudgetLimit(
-  model: OpenAIModeModel,
-  params: Record<string, unknown>,
-  options: Pick<OpenAICompletionsOptions, "maxTokens"> | undefined,
-): number | undefined {
-  const messages = params.messages;
-  const tools = params.tools;
-  if (!Array.isArray(messages) || (tools !== undefined && !Array.isArray(tools))) {
-    return undefined;
-  }
-  const caps = [params.max_tokens, params.max_completion_tokens].filter(
-    (value) => value !== undefined,
-  );
-  const cap = caps[0];
-  if (
-    typeof cap !== "number" ||
-    !Number.isSafeInteger(cap) ||
-    cap < 1 ||
-    caps.some((value) => value !== cap)
-  ) {
-    return undefined;
-  }
-  const budget = resolveOpenAICompletionsMaxTokens(model, options);
-  const modelMaxTokens = resolveOpenAICompletionsModelMaxTokens(model);
-  if (
-    budget.maxTokens === undefined ||
-    !(budget.maxTokens > cap) ||
-    (budget.clampToModelMaxTokens && modelMaxTokens !== undefined && modelMaxTokens <= cap) ||
-    !detectOpenAICompletionsCompat(model).capabilities.usesExplicitProxyLikeEndpoint
-  ) {
-    return undefined;
-  }
-  const contextTokens = resolveOpenAICompletionsEffectiveContextTokens(model);
-  if (contextTokens === undefined) {
-    return undefined;
-  }
-  const estimatedInputTokens = estimateOpenAICompletionsInputTokens({
-    messages,
-    tools,
-    response_format: params.response_format,
-  });
-  return Math.max(1, contextTokens - estimatedInputTokens - 1) === cap ? cap : undefined;
 }
 
 function convertTools(
@@ -300,7 +244,7 @@ type CompletionsRequestPolicy =
 type CompletionsRequest = Record<string, unknown> & {
   model: string;
   messages: unknown[];
-  stream: true;
+  stream: boolean;
   tools?: ReturnType<typeof convertTools>["tools"];
 };
 
@@ -351,10 +295,10 @@ export function buildOpenAICompletionsRequest(
   const params: CompletionsRequest = {
     model: model.id,
     messages,
-    stream: true,
+    stream: (options?.streaming ?? model.params?.streaming) !== false,
     ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat),
   };
-  if (compat.supportsUsageInStreaming) {
+  if (params.stream && compat.supportsUsageInStreaming) {
     params.stream_options = { include_usage: true };
   }
   if (compat.supportsStore) {
@@ -415,7 +359,12 @@ export function buildOpenAICompletionsRequest(
       } else if (hasToolCallHistory(context.messages)) {
         params.tools = [];
       }
-      if (policy.mode === "direct" && compat.zaiToolStream && converted.tools.length > 0) {
+      if (
+        policy.mode === "direct" &&
+        params.stream &&
+        compat.zaiToolStream &&
+        converted.tools.length > 0
+      ) {
         params.tool_stream = true;
       }
       if (policy.mode === "managed" && options?.toolChoice) {
@@ -475,7 +424,11 @@ export function buildOpenAICompletionsRequest(
               simpleReasoning,
             )) ??
         (usesBinaryOpenRouterThinking ? undefined : "high"));
-  const reasoning = resolveOpenAIRequestReasoning(model, requestedEffort);
+  const reasoning = resolveOpenAIRequestReasoning(
+    model,
+    requestedEffort,
+    compat.reasoningEffortForOff,
+  );
   const { effort, thinkingEnabled } = reasoning;
   {
     const maxTokenBudget =
@@ -483,7 +436,9 @@ export function buildOpenAICompletionsRequest(
         ? { maxTokens: options?.maxTokens, clampToModelMaxTokens: true }
         : resolveOpenAICompletionsMaxTokens(model, options);
     const effectiveMaxTokens = maxTokenBudget.maxTokens;
-    const effectiveContextTokens = resolveOpenAICompletionsEffectiveContextTokens(model);
+    const effectiveContextTokens =
+      asPositiveFiniteNumber((model as { contextTokens?: number }).contextTokens) ??
+      asPositiveFiniteNumber(model.contextWindow);
     let clampedMaxTokens = effectiveMaxTokens;
     const modelMaxTokens = resolveOpenAICompletionsModelMaxTokens(model);
     if (
@@ -508,8 +463,17 @@ export function buildOpenAICompletionsRequest(
       effectiveContextTokens !== undefined
     ) {
       const estimatedInputTokens = estimateOpenAICompletionsInputTokens(params);
-      const remainingBudget = Math.max(1, effectiveContextTokens - estimatedInputTokens - 1);
+      const remainingBudget = Math.max(0, effectiveContextTokens - estimatedInputTokens - 1);
       if (clampedMaxTokens > remainingBudget) {
+        if (remainingBudget < MIN_USEFUL_OUTPUT_TOKENS) {
+          throw Object.assign(
+            new Error(
+              `Context window exceeded: estimated input ${estimatedInputTokens} leaves only ` +
+                `${remainingBudget} output tokens within the ${effectiveContextTokens}-token context.`,
+            ),
+            { code: "context_length_exceeded" },
+          );
+        }
         clampedMaxTokens = remainingBudget;
         emitModelTransportDebug(
           log,
@@ -517,22 +481,6 @@ export function buildOpenAICompletionsRequest(
             `model=${model.id} requested=${effectiveMaxTokens} output=${clampedMaxTokens} ` +
             `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}`,
         );
-        if (remainingBudget < MIN_USEFUL_OUTPUT_TOKENS) {
-          if (model.reasoning && thinkingEnabled !== false) {
-            throw Object.assign(
-              new Error(
-                `Context window exceeded: estimated input ${estimatedInputTokens} leaves only ` +
-                  `${remainingBudget} output tokens within the ${effectiveContextTokens}-token context.`,
-              ),
-              { code: "context_length_exceeded" },
-            );
-          }
-          log.warn(
-            `[completions] insufficient_output_budget provider=${model.provider} api=${model.api} ` +
-              `model=${model.id} output=${clampedMaxTokens} ` +
-              `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}`,
-          );
-        }
       }
     }
     if (policy.mode === "direct" ? options?.maxTokens : clampedMaxTokens) {
@@ -550,41 +498,15 @@ export function buildOpenAICompletionsRequest(
       params.reasoning = { effort };
     }
   }
-  if (policy.mode === "direct") {
-    applyDirectCompletionsReasoningAndRouting(params, model, reasoning, compat);
-  } else {
-    let suppressScalarEffort = false;
-    if (model.reasoning) {
-      const enabled = thinkingEnabled ?? false;
-      if (compat.thinkingFormat === "qwen-chat-template") {
-        params.chat_template_kwargs = { enable_thinking: enabled };
-        suppressScalarEffort = true;
-      } else if (compat.thinkingFormat === "qwen") {
-        params.enable_thinking = enabled;
-        suppressScalarEffort = true;
-      } else if (compat.thinkingFormat === "together") {
-        params.reasoning = { enabled };
-        suppressScalarEffort = !enabled;
-      }
-    }
-    if (
-      !isOpenRouter &&
-      effort &&
-      model.reasoning &&
-      compat.supportsReasoningEffort &&
-      !suppressScalarEffort
-    ) {
-      params.reasoning_effort = effort;
-    }
-    if (compat.cacheControlFormat === "anthropic") {
-      applyCompletionsAnthropicCacheControl(
-        params,
-        cacheControl ?? null,
-        cacheOptOutIndexes,
-        markTools,
-        !managedCompat?.requiresStringContent,
-      );
-    }
+  applyCompletionsReasoningAndRouting(params, model, reasoning, compat, policy.mode);
+  if (policy.mode === "managed" && compat.cacheControlFormat === "anthropic") {
+    applyCompletionsAnthropicCacheControl(
+      params,
+      cacheControl ?? null,
+      cacheOptOutIndexes,
+      markTools,
+      !managedCompat?.requiresStringContent,
+    );
   }
   if (params.tools?.length && isKnownOpenAICompletionsEndpoint(model)) {
     // Native Chat Completions rejects tools with enabled GPT-5.6 reasoning,

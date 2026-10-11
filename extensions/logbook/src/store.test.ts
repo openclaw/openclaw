@@ -1,8 +1,10 @@
 import {
+  copyFileSync,
   existsSync,
   linkSync,
   mkdirSync,
   mkdtempSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -219,6 +221,9 @@ describe("LogbookStore", () => {
     const batch = await store.latestBatch();
     await store.close();
     const databasePath = path.join(dir, "logbook.sqlite");
+    // Build the old format on a physical file this process has not admitted.
+    renameSync(databasePath, `${databasePath}.seed`);
+    copyFileSync(`${databasePath}.seed`, databasePath);
     const database = new DatabaseSync(databasePath);
     database.exec(`
       DROP INDEX IF EXISTS idx_logbook_frames_captured_at;
@@ -579,6 +584,9 @@ describe("LogbookStore", () => {
     await store.saveStandup(DAY, "Preserved future-version fixture");
     await store.close();
     const databasePath = path.join(dir, "logbook.sqlite");
+    // The future-version file must reach its first managed admission here.
+    renameSync(databasePath, `${databasePath}.seed`);
+    copyFileSync(`${databasePath}.seed`, databasePath);
     const future = new DatabaseSync(databasePath);
     future.exec("PRAGMA user_version = 2");
     future.close();

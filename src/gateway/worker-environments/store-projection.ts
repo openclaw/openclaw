@@ -1,10 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Buffer } from "node:buffer";
+import { randomUUID } from "node:crypto";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
-import { registerListener } from "../../shared/listeners.js";
+import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import type { WorkerCredentialRecord } from "./credential.js";
 import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import type { WorkerEnvironmentAttachmentRecord } from "./session-attachment.js";
@@ -15,6 +16,7 @@ import {
   digestWorkerCredentialAuthority,
   encodeWorkerEnvironmentTransferAuthority,
 } from "./store-commit-authority.js";
+import { WorkerEnvironmentInventoryClosedError } from "./store-errors.js";
 import { assertShape } from "./store-validation.js";
 import type { WorkerEnvironmentCommitAdmission, WorkerEnvironmentFacts } from "./store.types.js";
 
@@ -51,18 +53,6 @@ function applyNativeOverlay(
   });
 }
 
-function assertEnvironmentShape(record: WorkerEnvironmentRecord): void {
-  assertShape(
-    record.state,
-    record.leaseId,
-    record.nodeDeviceId,
-    record.sshEndpoint,
-    record.desktop,
-    record.bootstrapReceipt,
-    record.attachedSessionIds,
-  );
-}
-
 const ownAdmission = new AsyncLocalStorage<object>();
 function createWorkerEnvironmentProjection() {
   const environments = new Map<string, WorkerEnvironmentRecord>();
@@ -95,7 +85,7 @@ function createWorkerEnvironmentProjection() {
   let reconcilable: WorkerEnvironmentRecord[] | undefined;
   const assertActive = () => {
     if (!active) {
-      throw new Error("Worker environment inventory has closed");
+      throw new WorkerEnvironmentInventoryClosedError();
     }
   };
   const assertReadable = (
@@ -129,6 +119,7 @@ function createWorkerEnvironmentProjection() {
     reconcilable = undefined;
   };
   return {
+    incarnation: randomUUID(),
     get active() {
       return active;
     },
@@ -234,8 +225,10 @@ function createWorkerEnvironmentProjection() {
     },
     publishCredentialRevoked(environmentId: string) {
       assertActive();
-      for (const listener of revocationListeners) {
-        listener(environmentId);
+      const failures: unknown[] = [];
+      notifyListeners(revocationListeners, environmentId, (error) => failures.push(error));
+      if (failures.length) {
+        throw new AggregateError(failures, "Worker environment revocation publication failed");
       }
     },
     install(facts: WorkerEnvironmentFacts, revision: number, notify = true) {
@@ -378,7 +371,7 @@ function createWorkerEnvironmentProjection() {
       assertReadable(id, "environment");
       const record = environments.get(id);
       if (record) {
-        assertEnvironmentShape(record);
+        assertShape(record);
       }
       return record;
     },
@@ -423,7 +416,7 @@ function createWorkerEnvironmentProjection() {
       assertActive();
       sorted ??= freezeJsonSnapshot([...environments.values()].toSorted(compare));
       if (!reconcile) {
-        sorted.forEach(assertEnvironmentShape);
+        sorted.forEach(assertShape);
         return sorted;
       }
       reconcilable ??= freezeJsonSnapshot(
@@ -434,7 +427,7 @@ function createWorkerEnvironmentProjection() {
               Buffer.compare(Buffer.from(a.providerId), Buffer.from(b.providerId)) || compare(a, b),
           ),
       );
-      reconcilable.forEach(assertEnvironmentShape);
+      reconcilable.forEach(assertShape);
       return reconcilable;
     },
     hasSessionAttachment(environmentId: string) {

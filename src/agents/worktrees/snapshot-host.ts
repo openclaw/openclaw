@@ -24,7 +24,7 @@ import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
 import { resolveRepository } from "./service-preparation.js";
 import type { ExactStateRetirement } from "./snapshot-exact-state-contract.js";
 import { readExactStateSnapshot } from "./snapshot-exact-state.js";
-import { clearExactRestoreReceipt, readExactRestoreReceipt } from "./snapshot-restore-exact.js";
+import { readExactRestoreReceipt } from "./snapshot-restore-exact.js";
 import type {
   ManagedWorktreeRecord,
   RetireManagedWorktreeSnapshotParams,
@@ -104,12 +104,13 @@ export async function captureManagedWorktreeSnapshot(params: {
                 ],
                 effect.input.purpose,
                 true,
+                signal,
               );
               assertCurrent();
               return undefined;
             case "worktree.snapshot-provisioned-reset":
             case "worktree.snapshot-provisioned-chunk":
-              return await writeProvisioned(effect, () => signal.throwIfAborted());
+              return await writeProvisioned(effect, signal);
             case "worktree.eviction-fence":
             case "worktree.eviction-admit":
               throw new Error("Snapshot capture cannot authorize worktree eviction");
@@ -151,8 +152,8 @@ export async function verifyManagedWorktreeExactSnapshot(params: {
       signal: params.signal,
       assertCurrent: params.assertCurrent,
       git: params.git.worker,
-      onEffect: async () => {
-        params.signal?.throwIfAborted();
+      onEffect: async (_effect, { signal }) => {
+        signal.throwIfAborted();
         params.assertCurrent();
         return undefined;
       },
@@ -443,6 +444,8 @@ async function retireManagedWorktreeSnapshot(params: {
           assertProjectionCurrent();
         };
         if (await worktreePathExists(record.repoRoot)) {
+          const deletions = [`delete refs/openclaw/removals/${record.id}\0\0`];
+          let assertDeletionCurrent = beforeRun;
           if (record.snapshotRef) {
             const found = await runGit(
               record.repoRoot,
@@ -469,6 +472,7 @@ async function retireManagedWorktreeSnapshot(params: {
             };
             const registrations = exactRecord ? await listGitWorktrees(record.repoRoot) : [];
             if (exactRecord) {
+              assertDeletionCurrent = assertNoLiveSource;
               assertNoLiveSource();
               if (registrations.some((entry) => entry.path === record.path)) {
                 throw new Error(
@@ -510,34 +514,24 @@ async function retireManagedWorktreeSnapshot(params: {
             // Missing metadata can mean a prior expiry already deleted the ref.
             // Finalize the expired row idempotently, but never infer or delete an
             // unknown retained directory without its captured identity.
-            await requireGit(
-              record.repoRoot,
-              ["update-ref", "-d", record.snapshotRef, ...(snapshot ? [snapshot] : [])],
-              {
-                signal,
-                beforeRun: exactRecord ? assertNoLiveSource : beforeRun,
-              },
-            );
+            deletions.push(`delete ${record.snapshotRef}\0${snapshot ?? ""}\0`);
             if (exactRecord) {
               const receipt = await readExactRestoreReceipt(record, {
                 signal,
                 beforeRun: assertNoLiveSource,
               });
               if (receipt) {
-                await clearExactRestoreReceipt(record, receipt, {
-                  signal,
-                  beforeRun: assertNoLiveSource,
-                });
+                deletions.push(`delete ${receipt.ref}\0${receipt.commit}\0`);
               }
             }
           }
-          // Snapshot-loss removal can leave only a pending HEAD pin. Keep its
-          // registry owner until that pin has been cleared too.
-          await requireGit(
-            record.repoRoot,
-            ["update-ref", "-d", "refs/openclaw/removals/" + record.id],
-            { signal, beforeRun },
-          );
+          // One transaction retires all recovery refs with at most one packed-refs rewrite.
+          // Snapshot-loss removal may have only the pending HEAD pin remaining.
+          await requireGit(record.repoRoot, ["update-ref", "--stdin", "-z"], {
+            signal,
+            beforeRun: assertDeletionCurrent,
+            input: `start\0${deletions.join("")}prepare\0commit\0`,
+          });
         }
       },
     });

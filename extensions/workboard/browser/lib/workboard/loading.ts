@@ -1,5 +1,4 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { setWorkboardCards } from "./card-state.ts";
 import { normalizeWorkboardChange } from "./change-payload.ts";
 import { formatError } from "./normalization-utils.ts";
@@ -7,18 +6,12 @@ import { normalizeCardsPayload } from "./normalization.ts";
 import {
   getWorkboardRuntime,
   getWorkboardState,
-  isCurrentWorkboardLoadGeneration,
-  nextWorkboardLoadGeneration,
   workboardHasActiveWrites,
-  type WorkboardHost,
-  type WorkboardLoadToken,
+  type WorkboardClientContext,
 } from "./runtime.ts";
 import type { WorkboardRefreshSource, WorkboardUiState } from "./types.ts";
 
-type LoadWorkboardParams = {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
-  requestUpdate?: () => void;
+type LoadWorkboardParams = WorkboardClientContext & {
   force?: boolean;
   refreshDiagnostics?: boolean;
   preserveError?: boolean;
@@ -28,15 +21,12 @@ export async function loadWorkboard(params: LoadWorkboardParams): Promise<boolea
   return await loadWorkboardInternal(params);
 }
 
-export async function loadWorkboardCatalog(
-  params: Pick<LoadWorkboardParams, "host" | "client" | "requestUpdate">,
-): Promise<boolean> {
-  return await loadWorkboardInternal({ ...params, force: true }, undefined, true);
+export async function loadWorkboardCatalog(params: WorkboardClientContext): Promise<boolean> {
+  return await loadWorkboardInternal({ ...params, force: true }, true);
 }
 
 async function loadWorkboardInternal(
   params: LoadWorkboardParams,
-  queuedAfterGeneration?: number,
   catalogOnly = false,
 ): Promise<boolean> {
   const runtime = getWorkboardRuntime(params.host);
@@ -52,31 +42,19 @@ async function loadWorkboardInternal(
   const client = params.client;
   const existingLoad = runtime.loadPromise;
   if (existingLoad) {
-    const existingGeneration = runtime.loadGeneration;
-    const requiresTaskLoad = !catalogOnly && runtime.loadToken?.catalogOnly;
+    const requiresTaskLoad = !catalogOnly && runtime.loadCatalogOnly;
     const result = await existingLoad;
-    const existingLoadIsCurrent =
-      existingGeneration !== undefined &&
-      isCurrentWorkboardLoadGeneration(params.host, existingGeneration);
-    const currentLoadMarker = runtime.loadToken;
-    // Only follow a replacement created by this load's forced-waiter queue.
-    // Fresh loads after teardown or writes must not revive stale callers.
-    const queuedLoadReplacedExisting =
-      existingGeneration !== undefined &&
-      currentLoadMarker?.queuedAfterGeneration === existingGeneration &&
-      Boolean(runtime.loadPromise);
     // Forced callers carry their own diagnostics/task-refresh contract, so a
     // weaker in-flight load cannot satisfy them.
     return (params.force || requiresTaskLoad) &&
-      (existingLoadIsCurrent || queuedLoadReplacedExisting) &&
+      runtime.loadClient === client &&
       !state.dispatching &&
       !workboardHasActiveWrites(state)
-      ? await loadWorkboardInternal(params, existingGeneration, catalogOnly)
+      ? await loadWorkboardInternal(params, catalogOnly)
       : result;
   }
-  const generation = nextWorkboardLoadGeneration(params.host);
-  const loadToken: WorkboardLoadToken = { queuedAfterGeneration, catalogOnly };
-  runtime.loadToken = loadToken;
+  runtime.loadCatalogOnly = catalogOnly;
+  runtime.loadClient = client;
   if (!catalogOnly) {
     state.loadAttempted = true;
     state.loading = true;
@@ -87,13 +65,13 @@ async function loadWorkboardInternal(
     state.lastRefreshError = null;
     params.requestUpdate?.();
   }
-  const loadPromise = (async () => {
+  const loadPromise: Promise<boolean> = Promise.resolve().then(async () => {
     try {
       if (params.refreshDiagnostics) {
         try {
           await client.request("workboard.cards.diagnostics.refresh", {});
         } catch (error) {
-          if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
+          if (runtime.loadPromise === loadPromise) {
             state.lastRefreshError = formatError(error);
           }
         }
@@ -102,7 +80,7 @@ async function loadWorkboardInternal(
         "workboard.cards.list",
         runtime.cardsRevision ? { sinceRevision: runtime.cardsRevision } : {},
       );
-      if (!isCurrentWorkboardLoadGeneration(params.host, generation)) {
+      if (runtime.loadPromise !== loadPromise) {
         return false;
       }
       const unchanged = isRecord(payload) && payload.unchanged === true;
@@ -140,7 +118,7 @@ async function loadWorkboardInternal(
       state.loaded = true;
       return true;
     } catch (error) {
-      if (!catalogOnly && isCurrentWorkboardLoadGeneration(params.host, generation)) {
+      if (!catalogOnly && runtime.loadPromise === loadPromise) {
         const formattedError = formatError(error);
         if (params.preserveError) {
           state.lastRefreshError = formattedError;
@@ -151,32 +129,26 @@ async function loadWorkboardInternal(
       }
       return false;
     } finally {
-      const isCurrentGeneration = isCurrentWorkboardLoadGeneration(params.host, generation);
-      const ownsLoad = runtime.loadToken === loadToken;
-      if (!catalogOnly && !isCurrentGeneration && !state.loaded) {
-        state.loadAttempted = false;
-      }
-      if (!catalogOnly && (isCurrentGeneration || (ownsLoad && !state.draftSaving))) {
-        state.loading = false;
-      }
-      if (ownsLoad) {
+      if (runtime.loadPromise === loadPromise) {
+        if (!catalogOnly && !state.draftSaving) {
+          state.loading = false;
+        }
         delete runtime.loadPromise;
-        delete runtime.loadToken;
+        delete runtime.loadCatalogOnly;
       }
       params.requestUpdate?.();
     }
-  })();
+  });
   runtime.loadPromise = loadPromise;
   return await loadPromise;
 }
 
-export async function refreshWorkboard(params: {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
-  requestUpdate?: () => void;
-  source: WorkboardRefreshSource;
-  refreshDiagnostics?: boolean;
-}): Promise<boolean> {
+export async function refreshWorkboard(
+  params: WorkboardClientContext & {
+    source: WorkboardRefreshSource;
+    refreshDiagnostics?: boolean;
+  },
+): Promise<boolean> {
   const state = getWorkboardState(params.host);
   const passive = params.source === "live";
   if (state.dispatching || workboardHasActiveWrites(state)) {

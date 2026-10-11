@@ -69,7 +69,7 @@ async function createFixture(label: string) {
   return { state, config, registry };
 }
 
-it("joins accepted Memory sync through Gateway close without reopening its executor between publications", async ({
+it("joins accepted Memory sync through Gateway close before its first publication without reopening its executor", async ({
   signal,
 }) => {
   const original = captureActivePluginRegistrySnapshot();
@@ -154,7 +154,27 @@ it("joins accepted Memory sync through Gateway close without reopening its execu
       embeddingEntered.resolve();
       await releaseEmbedding.promise;
     });
-    syncing = manager.sync({ reason: "accepted-before-close", force: true });
+    const acceptedLeases = readLeases();
+    expect(acceptedLeases.length).toBeGreaterThan(0);
+    expect(agentOpenRequests().length).toBeGreaterThan(0);
+    messages.mockClear();
+    let closeRequested = false;
+    syncing = manager.sync({
+      reason: "accepted-before-close",
+      force: true,
+      progress: () => {
+        if (closeRequested) {
+          return;
+        }
+        closeRequested = true;
+        // The first report precedes awaited source reads and the first publication.
+        markGatewayRestartDraining();
+        beginGatewayShutdownCleanup();
+        assert(server);
+        closing = server.close({ reason: "accepted Memory sync close" });
+        void closing.catch(() => {});
+      },
+    });
     void syncing.catch(() => {});
     await withinTest(
       awaitGateBeforeSettlement(
@@ -164,16 +184,7 @@ it("joins accepted Memory sync through Gateway close without reopening its execu
       ),
       signal,
     );
-    const acceptedLeases = readLeases();
-    expect(acceptedLeases.length).toBeGreaterThan(0);
-    expect(agentOpenRequests().length).toBeGreaterThan(0);
-    // Cache reads have admitted the native writer; remaining cache/index writes
-    // must finish on that generation after the real close prelude begins.
-    messages.mockClear();
-    markGatewayRestartDraining();
-    beginGatewayShutdownCleanup();
-    closing = server.close({ reason: "accepted Memory sync close" });
-    void closing.catch(() => {});
+    assert(closing, "Memory sync did not report progress before embedding");
     await withinTest(
       awaitGateBeforeSettlement(
         closePreludeEntered.promise,

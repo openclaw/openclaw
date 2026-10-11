@@ -8,7 +8,6 @@ import {
 } from "../../api/gateway.ts";
 import {
   deleteSessionPlacementDraft,
-  deleteRecoveredSessionPlacementDraft,
   startSessionPlacementInitialTurn,
 } from "./session-placement-startup.ts";
 
@@ -757,7 +756,7 @@ describe("session placement startup", () => {
       .mockResolvedValueOnce({ ok: true, deleted: true });
 
     await expect(
-      deleteRecoveredSessionPlacementDraft(clientWith(request), params.key, params.agentId),
+      deleteSessionPlacementDraft(clientWith(request), params.key, params.agentId, true),
     ).resolves.toBeUndefined();
     expect(request.mock.calls).toEqual([
       ["sessions.describe", { key: params.key }],
@@ -788,7 +787,7 @@ describe("session placement startup", () => {
     const request = vi.fn().mockRejectedValueOnce(new Error("gateway unavailable"));
 
     await expect(
-      deleteRecoveredSessionPlacementDraft(clientWith(request), params.key, params.agentId),
+      deleteSessionPlacementDraft(clientWith(request), params.key, params.agentId, true),
     ).resolves.toBe("session placement could not be verified");
     expect(request).toHaveBeenCalledOnce();
     expect(request).toHaveBeenCalledWith("sessions.describe", { key: params.key });
@@ -798,7 +797,7 @@ describe("session placement startup", () => {
     const request = vi.fn().mockResolvedValueOnce({ session: null });
 
     await expect(
-      deleteRecoveredSessionPlacementDraft(clientWith(request), params.key, params.agentId),
+      deleteSessionPlacementDraft(clientWith(request), params.key, params.agentId, true),
     ).resolves.toBeUndefined();
     expect(request).toHaveBeenCalledTimes(1);
   });

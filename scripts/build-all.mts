@@ -28,7 +28,7 @@ import {
 } from "./lib/local-build-metadata.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import type { MemoryLimitParams } from "./lib/process-memory.mts";
-import { captureRunNodeInputState } from "./lib/run-node-input-state.mts";
+import { resolveRunNodeInputSignature } from "./lib/run-node-input-state.mts";
 import { preflightInstalledSourceArtifacts } from "./lib/source-update-artifact-preflight.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
@@ -68,8 +68,6 @@ const TSDOWN_AI_OUTPUT_ROOT = tsdownPackageOutputRoot("ai");
 const TSDOWN_MAIN_PACKAGE_OUTPUT_ROOTS = TSDOWN_PACKAGE_OUTPUT_ROOTS.filter(
   (root) => root !== TSDOWN_AI_OUTPUT_ROOT,
 );
-const declarationCacheOutputs = (roots: string[]) =>
-  roots.map((root) => ({ path: root, extensions: TSDOWN_DECLARATION_EXTENSIONS }));
 const tsxScript = (script: string, ...args: string[]) => ["--import", "tsx", script, ...args];
 const nodeStep = (label: string, args: string[]): BuildAllStep => ({
   label,
@@ -77,6 +75,20 @@ const nodeStep = (label: string, args: string[]): BuildAllStep => ({
 });
 const tsxStep = (label: string, script: string, ...args: string[]) =>
   nodeStep(label, tsxScript(script, ...args));
+const declarationStep = (
+  label: string,
+  config: string,
+  roots: string[],
+  ...args: string[]
+): BuildAllStep => ({
+  ...tsxStep(label, "scripts/tsdown-build.mts", "--config", config, ...args),
+  cache: {
+    inputs: [...TSDOWN_DECLARATION_TOOL_INPUTS, config, TSDOWN_PACKAGES_CACHE_INPUT],
+    outputs: roots.map((root) => ({ path: root, extensions: TSDOWN_DECLARATION_EXTENSIONS })),
+    restore: "always",
+    runOnHit: { env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" } },
+  },
+});
 const pluginAssetStep = (phase: "build" | "copy") =>
   nodeStep(`plugins:assets:${phase}`, [
     "--import",
@@ -93,39 +105,14 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
   ]),
   pluginAssetStep("build"),
   tsxStep("tsdown", "scripts/tsdown-build.mts"),
-  {
-    ...tsxStep("tsdown-ai", "scripts/tsdown-build.mts", "--config", "tsdown.ai.config.ts"),
-    cache: {
-      inputs: [
-        ...TSDOWN_DECLARATION_TOOL_INPUTS,
-        "tsdown.ai.config.ts",
-        TSDOWN_PACKAGES_CACHE_INPUT,
-      ],
-      outputs: declarationCacheOutputs([TSDOWN_AI_OUTPUT_ROOT]),
-      restore: "always",
-      runOnHit: {
-        env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
-      },
-    },
-  },
-  {
-    ...tsxStep(
-      "tsdown-packages",
-      "scripts/tsdown-build.mts",
-      "--config",
-      "tsdown.config.ts",
-      "--filter",
-      TSDOWN_PACKAGE_CONFIG_GROUP,
-    ),
-    cache: {
-      inputs: [...TSDOWN_DECLARATION_TOOL_INPUTS, "tsdown.config.ts", TSDOWN_PACKAGES_CACHE_INPUT],
-      outputs: declarationCacheOutputs(TSDOWN_MAIN_PACKAGE_OUTPUT_ROOTS),
-      restore: "always",
-      runOnHit: {
-        env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
-      },
-    },
-  },
+  declarationStep("tsdown-ai", "tsdown.ai.config.ts", [TSDOWN_AI_OUTPUT_ROOT]),
+  declarationStep(
+    "tsdown-packages",
+    "tsdown.config.ts",
+    TSDOWN_MAIN_PACKAGE_OUTPUT_ROOTS,
+    "--filter",
+    TSDOWN_PACKAGE_CONFIG_GROUP,
+  ),
   {
     ...tsxStep(
       "tsdown-unified",
@@ -209,15 +196,14 @@ const CI_ARTIFACT_STEP_LABELS = [
   "write-plugin-sdk-entry-dts",
   ...FINAL_BUILD_ARTIFACTS_STEP_LABELS,
 ];
-const FULL_COMPILER_STEP_LABELS = [
-  "tsdown-ai",
-  "tsdown-packages",
-  "tsdown-unified",
-  "write-unified-entry-dts",
-] as const;
-// The full declaration generation includes SDK outputs and has its own runtime-independent cache.
+// Isolated plugins finish generating source assets before declarations capture
+// their resolution namespace, so the first build seals reusable cache inputs.
 const FULL_RUNTIME_STEP_LABELS = ASSET_RUNTIME_STEP_LABELS.flatMap((step) =>
-  step === "tsdown" ? FULL_COMPILER_STEP_LABELS : [step],
+  step === "tsdown"
+    ? ["tsdown-ai", "tsdown-packages", "tsdown-unified"]
+    : step === "external-plugins:local-dist"
+      ? [step, "write-unified-entry-dts"]
+      : [step],
 );
 const FULL_BUILD_STEP_LABELS = [
   "native-protocol",
@@ -232,8 +218,7 @@ const BUILD_ALL_PROFILES: Record<string, string[]> = {
   // Smoke builds retain typed compilation and publication checks without the UI/metadata tail.
   strictSmoke: [...FULL_RUNTIME_STEP_LABELS, "check-plugin-sdk-exports"],
   pluginSdkStrictSmoke: [
-    ...FULL_COMPILER_STEP_LABELS,
-    ...RUNTIME_STEP_LABELS,
+    ...FULL_RUNTIME_STEP_LABELS.filter((step) => !step.startsWith("plugins:assets:")),
     "check-plugin-sdk-exports",
   ],
   gatewayWatch: ["tsdown", ...RUNTIME_STEP_LABELS],
@@ -249,23 +234,17 @@ const FULL_RUNTIME_ONLY_STEPS = [
   ...BUILD_METADATA_STEP_LABELS,
 ];
 
+const FULL_BUILD_PROFILE_STEP_ENV = {
+  tsdown: {
+    OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+  },
+  "tsdown-unified": {
+    OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+  },
+};
 const BUILD_ALL_PROFILE_STEP_ENV: Record<string, Record<string, NodeJS.ProcessEnv>> = {
-  full: {
-    tsdown: {
-      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
-    },
-    "tsdown-unified": {
-      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
-    },
-  },
-  package: {
-    tsdown: {
-      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
-    },
-    "tsdown-unified": {
-      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
-    },
-  },
+  full: FULL_BUILD_PROFILE_STEP_ENV,
+  package: FULL_BUILD_PROFILE_STEP_ENV,
   ciArtifacts: {
     tsdown: {
       // Global declaration emission is ~95% of the tsdown wall clock and PR
@@ -544,22 +523,19 @@ export async function runBuildAllSteps(
     !params.runStep && steps.some((step) => step.label.endsWith("build-stamp"));
   const hasAssetBuild =
     capturesNativeInputs && steps.some((step) => step.label === "plugins:assets:build");
-  const assetInputState = hasAssetBuild
-    ? captureRunNodeInputState(inputDeps, "build", { assetPhase: true })
-    : null;
-  let buildInputState =
+  let buildInputSignature =
     capturesNativeInputs && !hasAssetBuild && steps.some((step) => step.label === "build-stamp")
-      ? captureRunNodeInputState(inputDeps, "build")
+      ? resolveRunNodeInputSignature(inputDeps, "build")
       : null;
   const runtimeEnv = {
     ...buildEnv,
     ...steps.find((step) => step.label === "runtime-postbuild")?.env,
   };
-  let runtimeInputState =
+  let runtimeInputSignature =
     capturesNativeInputs &&
     !hasAssetBuild &&
     steps.some((step) => step.label === "runtime-postbuild-stamp")
-      ? captureRunNodeInputState({ ...inputDeps, env: runtimeEnv }, "runtime")
+      ? resolveRunNodeInputSignature({ ...inputDeps, env: runtimeEnv }, "runtime")
       : null;
   let stampsInvalidated = false;
   const invalidateInputStamps = () => {
@@ -588,7 +564,7 @@ export async function runBuildAllSteps(
         (buildStamp ? writeBuildStamp : writeRuntimePostBuildStamp)({
           cwd,
           env: buildStamp ? buildEnv : runtimeEnv,
-          inputState: buildStamp ? buildInputState : runtimeInputState,
+          inputSignature: buildStamp ? buildInputSignature : runtimeInputSignature,
         });
         return { status: 0 };
       }
@@ -655,19 +631,11 @@ export async function runBuildAllSteps(
       break;
     }
     if (step.label === "plugins:assets:build" && !params.runStep) {
-      const current = captureRunNodeInputState(inputDeps, "build", { assetPhase: true });
-      if (
-        assetInputState &&
-        (!current ||
-          current.signature !== assetInputState.signature ||
-          current.generation !== assetInputState.generation)
-      ) {
-        throw new Error("Build inputs changed during asset preparation; rerun the build");
-      }
-      buildInputState = assetInputState ? captureRunNodeInputState(inputDeps, "build") : null;
-      runtimeInputState = assetInputState
-        ? captureRunNodeInputState({ ...inputDeps, env: runtimeEnv }, "runtime")
-        : null;
+      buildInputSignature = resolveRunNodeInputSignature(inputDeps, "build");
+      runtimeInputSignature = resolveRunNodeInputSignature(
+        { ...inputDeps, env: runtimeEnv },
+        "runtime",
+      );
     }
     // Runtime-only tsdown cleans its output roots. Cache hits restore
     // declarations again after that pass so the full build stays complete.

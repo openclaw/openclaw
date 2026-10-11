@@ -10,7 +10,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { buildExecApprovalUnavailableReplyPayload } from "../infra/exec-approval-reply.js";
 import {
   type ExecApprovalInitiatingSurfaceState,
-  resolveExecApprovalInitiatingSurfaceState,
+  resolveExecApprovalInitiatingSurfaceStateAsync,
 } from "../infra/exec-approval-surface.js";
 import {
   minSecurity,
@@ -151,16 +151,16 @@ export async function resolveExecHostApprovalContext(params: {
 }
 
 /** Resolves approval delivery availability for the initiating channel/account. */
-function resolveExecApprovalUnavailableState(params: {
+async function resolveExecApprovalUnavailableState(params: {
   turnSourceChannel?: string;
   turnSourceAccountId?: string;
   preResolvedDecision: string | null | undefined;
-}): {
+}): Promise<{
   initiatingSurface: ExecApprovalInitiatingSurfaceState;
   sentApproverDms: boolean;
   unavailableReason: ExecApprovalUnavailableReason | null;
-} {
-  const initiatingSurface = resolveExecApprovalInitiatingSurfaceState({
+}> {
+  const initiatingSurface = await resolveExecApprovalInitiatingSurfaceStateAsync({
     channel: params.turnSourceChannel,
     accountId: params.turnSourceAccountId,
   });
@@ -202,7 +202,7 @@ async function createAndRegisterDefaultExecApprovalRequest(
   const registration = await params.register(approvalId);
   const preResolvedDecision = registration.finalDecision;
   const { initiatingSurface, sentApproverDms, unavailableReason } =
-    resolveExecApprovalUnavailableState({
+    await resolveExecApprovalUnavailableState({
       turnSourceChannel: params.turnSourceChannel,
       turnSourceAccountId: params.turnSourceAccountId,
       preResolvedDecision,

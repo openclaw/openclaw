@@ -1,4 +1,5 @@
 import {
+  hashText,
   MEMORY_CHUNKING_VERSION,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -53,6 +54,110 @@ function isMemoryIndexIdentityDirty(
 }
 
 describe("memory reindex state", () => {
+  it("automatically upgrades raw EmbeddingGemma indexes before checking the changed cache key", () => {
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          meta: createMeta({ model: "embeddinggemma", providerKey: "raw-inputs" }),
+          provider: { id: "openai", model: "embeddinggemma" },
+        }),
+      ),
+    ).toEqual({
+      status: "mismatched",
+      reason: "index embedding input format changed",
+      code: "embedding_input_format",
+      owner: "openclaw",
+      versionOrder: "older",
+      lexicalCompatible: true,
+    });
+  });
+
+  it("upgrades opaque aliases using their provider's canonical model format", () => {
+    const params = createIdentityParams({
+      meta: createMeta({ model: "/cache/opaque.gguf", providerKey: "raw-inputs" }),
+      provider: { id: "openai", model: "embeddinggemma" },
+      providerAliases: [{ model: "/cache/opaque.gguf", providerKey: "prefixed-inputs" }],
+    });
+    expect(resolveMemoryIndexIdentityState(params)).toMatchObject({
+      code: "embedding_input_format",
+      owner: "openclaw",
+      versionOrder: "older",
+      lexicalCompatible: true,
+    });
+    expect(
+      resolveMemoryIndexIdentityState({
+        ...params,
+        meta: createMeta({
+          model: "/cache/opaque.gguf",
+          providerKey: "prefixed-inputs",
+          embeddingInputFormatVersion: 1,
+        }),
+      }),
+    ).toEqual({ status: "valid" });
+  });
+
+  it("keeps a model switch configuration-owned after an embedding format upgrade", () => {
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          meta: createMeta({ model: "embeddinggemma", embeddingInputFormatVersion: 1 }),
+        }),
+      ),
+    ).toMatchObject({ status: "mismatched", code: "model", owner: "configuration" });
+    expect(resolveMemoryIndexIdentityState(createIdentityParams())).toEqual({ status: "valid" });
+  });
+
+  it("does not serve a changed corpus while an embedding format rebuild is pending", () => {
+    const state = resolveMemoryIndexIdentityState(
+      createIdentityParams({
+        meta: createMeta({ model: "embeddinggemma", scopeHash: "old-corpus" }),
+        provider: { id: "openai", model: "embeddinggemma" },
+      }),
+    );
+    expect(state).toMatchObject({ code: "embedding_input_format", owner: "openclaw" });
+    expect(state).not.toHaveProperty("lexicalCompatible", true);
+  });
+
+  it("preserves newer embedding formats even when the chunker is older", () => {
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          meta: createMeta({
+            model: "embeddinggemma",
+            embeddingInputFormatVersion: 2,
+            chunkingVersion: MEMORY_CHUNKING_VERSION - 1,
+          }),
+        }),
+      ),
+    ).toMatchObject({ code: "embedding_input_format", versionOrder: "newer" });
+  });
+
+  it("excludes raw-input cache identities for every alias without invalidating other models", () => {
+    const provider = { id: "local", model: "embeddinggemma" };
+    const alias = { model: "/cache/renamed.gguf", cacheKeyData: { source: "cached-model" } };
+    const identities = resolveMemoryIndexProviderIdentities({ provider, aliases: [alias] });
+    expect(identities[0]?.providerKey).not.toBe(
+      hashText(JSON.stringify({ provider: "local", model: "embeddinggemma" })),
+    );
+    expect(identities[1]?.providerKey).not.toBe(hashText(JSON.stringify(alias.cacheKeyData)));
+    // Host formatting must not overwrite an adapter's own cache settings.
+    expect(
+      resolveMemoryIndexProviderIdentities({
+        provider,
+        cacheKeyData: { embeddingInputFormatVersion: 1 },
+      }),
+    ).not.toEqual(
+      resolveMemoryIndexProviderIdentities({
+        provider,
+        cacheKeyData: { embeddingInputFormatVersion: 2 },
+      }),
+    );
+    expect(
+      resolveMemoryIndexProviderIdentities({ provider: { id: "local", model: "other" } }),
+    ).toMatchObject([
+      { providerKey: hashText(JSON.stringify({ provider: "local", model: "other" })) },
+    ]);
+  });
   it("invalidates indexes with missing provenance version as OpenClaw-owned", () => {
     expect(
       resolveMemoryIndexIdentityState(

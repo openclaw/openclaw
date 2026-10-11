@@ -23,12 +23,14 @@ import {
   ImmutableInstallDescriptorSchema,
   ImmutableInstallRecordSchema,
   ImmutablePreparedGenerationSchema,
+  ImmutableRetainedGenerationSchema,
   type ImmutableInstallDescriptor,
   type ImmutableInstallRecord,
   type ImmutablePreparedGeneration,
 } from "./update-immutable-install-schema.js";
 
 const MAX_RECORD_BYTES = 1024 * 1024;
+const MAX_RELEASE_ROWS = 4096;
 type ImmutableRow = {
   slot: number;
   revision: number;
@@ -36,8 +38,160 @@ type ImmutableRow = {
   prepared_json: string;
   activation_json?: string;
 };
+type ImmutableReleaseRow = {
+  sha: string;
+  path: string;
+  identity: string;
+  build_digest: string;
+  published_revision: number;
+  verified_revision: number | null;
+};
 const queries = (db: DatabaseSync) =>
-  getNodeSqliteKysely<{ immutable_installation: ImmutableRow }>(db);
+  getNodeSqliteKysely<{
+    immutable_installation: ImmutableRow;
+    immutable_release_generations: ImmutableReleaseRow;
+  }>(db);
+
+function createReleaseInventory(db: DatabaseSync): void {
+  executeSqliteQuerySync(
+    db,
+    queries(db)
+      .schema.createTable("immutable_release_generations")
+      .addColumn("sha", "text", (column) => column.primaryKey().notNull())
+      .addColumn("path", "text", (column) => column.notNull())
+      .addColumn("identity", "text", (column) => column.notNull())
+      .addColumn("build_digest", "text", (column) => column.notNull())
+      .addColumn("published_revision", "integer", (column) => column.notNull())
+      .addColumn("verified_revision", "integer")
+      .modifyEnd(sql`STRICT`),
+  );
+}
+
+function readReleaseInventory(db: DatabaseSync, record: ImmutableInstallRecord): void {
+  if (!record.descriptor.releaseRetention) {
+    return;
+  }
+  const rows = executeSqliteQuerySync(
+    db,
+    queries(db)
+      .selectFrom("immutable_release_generations")
+      .select((eb) =>
+        (
+          [
+            ["sha", "=", 40],
+            ["path", "<=", 4096],
+            ["identity", "<=", 256],
+            ["build_digest", "=", 64],
+          ] as const
+        ).map(([column, comparison, maxBytes]) =>
+          eb
+            .case()
+            .when(eb.fn<number>("length", [eb.cast(column, "blob")]), comparison, maxBytes)
+            .then(eb.ref(column))
+            .end()
+            .as(column),
+        ),
+      )
+      .select(["published_revision", "verified_revision"])
+      .orderBy("published_revision")
+      .orderBy("sha")
+      .limit(MAX_RELEASE_ROWS + 1),
+  ).rows;
+  if (rows.length > MAX_RELEASE_ROWS) {
+    throw new Error("Immutable release inventory exceeds its admission budget; nothing removed.");
+  }
+  record.releases = rows.map((row) => {
+    const generation = ImmutableRetainedGenerationSchema.parse({
+      sha: row.sha,
+      path: row.path,
+      identity: row.identity,
+      buildDigest: row.build_digest,
+      publishedRevision: row.published_revision,
+      verifiedRevision: row.verified_revision,
+    });
+    if (
+      generation.path !== path.join(record.descriptor.root, "releases", generation.sha) ||
+      generation.publishedRevision > record.revision ||
+      (generation.verifiedRevision !== null &&
+        (generation.verifiedRevision < generation.publishedRevision ||
+          generation.verifiedRevision > record.revision))
+    ) {
+      throw new Error("Immutable release inventory has invalid path or revision evidence.");
+    }
+    return generation;
+  });
+  if (Buffer.byteLength(JSON.stringify(record)) > MAX_RECORD_BYTES) {
+    throw new Error("Immutable installation and release inventory exceed 1 MiB; nothing removed.");
+  }
+}
+
+function recordReleaseInventory(
+  db: DatabaseSync,
+  expected: ImmutableInstallRecord,
+  next: ImmutableInstallRecord,
+): void {
+  if (!next.descriptor.releaseRetention) {
+    return;
+  }
+  if (!expected.descriptor.releaseRetention) {
+    createReleaseInventory(db);
+  }
+  const prepared = next.prepared;
+  if (prepared && !isDeepStrictEqual(prepared, expected.prepared)) {
+    const retained = expected.releases?.find((entry) => entry.sha === prepared.sha);
+    if (retained) {
+      if (
+        retained.path !== prepared.path ||
+        retained.identity !== prepared.identity ||
+        retained.buildDigest !== prepared.buildDigest
+      ) {
+        throw new Error("Immutable release publication conflicts with its retained identity.");
+      }
+    } else {
+      executeSqliteQuerySync(
+        db,
+        queries(db).insertInto("immutable_release_generations").values({
+          sha: prepared.sha,
+          path: prepared.path,
+          identity: prepared.identity,
+          build_digest: prepared.buildDigest,
+          published_revision: next.revision,
+          verified_revision: null,
+        }),
+      );
+    }
+  }
+  const accepted = next.activation?.lastResult;
+  if (
+    accepted?.outcome === "succeeded" &&
+    !next.activation?.operation &&
+    accepted.operationId !== expected.activation?.lastResult?.operationId &&
+    accepted.selectedSha === next.descriptor.current.sha &&
+    expected.activation?.operation?.candidate.sha === accepted.selectedSha
+  ) {
+    const current = next.descriptor.current;
+    const retained = expected.releases?.find((entry) => entry.sha === current.sha);
+    if (
+      retained &&
+      (retained.path !== current.path ||
+        retained.identity !== current.identity ||
+        retained.buildDigest !== current.buildDigest)
+    ) {
+      throw new Error("Immutable release verification conflicts with its retained identity.");
+    }
+    // A legacy preparation has no inventory row: acceptance must not backfill one.
+    executeSqliteQuerySync(
+      db,
+      queries(db)
+        .updateTable("immutable_release_generations")
+        .set({ verified_revision: next.revision })
+        .where("sha", "=", current.sha)
+        .where("path", "=", current.path)
+        .where("identity", "=", current.identity)
+        .where("build_digest", "=", current.buildDigest),
+    );
+  }
+}
 
 function rootOwnedIdentity(file: string, directory: boolean): string {
   const stat = fs.lstatSync(file, { bigint: true });
@@ -131,6 +285,7 @@ function readRecord(db: DatabaseSync, root: string, rootIdentity: string): Immut
   if (record.descriptor.root !== root || record.descriptor.rootIdentity !== rootIdentity) {
     throw new Error("Immutable installation control does not match the installation.");
   }
+  readReleaseInventory(db, record);
   return record;
 }
 
@@ -286,6 +441,10 @@ export function createImmutableInstallRecord(
                 )
                 .modifyEnd(sql`STRICT`),
             );
+            if (descriptor.releaseRetention) {
+              createReleaseInventory(db);
+              record.releases = [];
+            }
             executeSqliteQuerySync(
               db,
               queries(db)
@@ -348,12 +507,25 @@ export function updateImmutableInstallRecord(
   changes: Pick<ImmutableInstallRecord, "descriptor" | "prepared" | "activation">,
   assertCurrent: () => void,
 ): ImmutableInstallRecord {
-  const next = validateRecord({ ...changes, revision: expected.revision + 1 });
+  const next = validateRecord({
+    descriptor: changes.descriptor,
+    prepared: changes.prepared,
+    activation: changes.activation,
+    revision: expected.revision + 1,
+  });
   if (
     next.descriptor.root !== expected.descriptor.root ||
     next.descriptor.rootIdentity !== expected.descriptor.rootIdentity
   ) {
     throw new Error("Immutable update cannot transfer installation ownership.");
+  }
+  if (
+    (expected.descriptor.version === 3 && next.descriptor.version !== 3) ||
+    (expected.descriptor.releaseRetention && !next.descriptor.releaseRetention)
+  ) {
+    throw new Error(
+      "Immutable update cannot discard its adopted control format or retention policy.",
+    );
   }
   assertCurrent();
   return withImmutableControl(expected.descriptor.root, true, (db, transact, read) => {
@@ -374,6 +546,7 @@ export function updateImmutableInstallRecord(
               .addColumn("activation_json", "text", (column) => column.notNull().defaultTo("null")),
           );
         }
+        recordReleaseInventory(db, expected, next);
         executeSqliteQuerySync(
           db,
           queries(db)

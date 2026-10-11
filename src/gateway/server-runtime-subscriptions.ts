@@ -1,4 +1,5 @@
 // Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
+import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import { isDefinitiveRunLifecycle } from "../agents/agent-run-terminal-outcome.js";
 import {
   isAuditLedgerEnabled,
@@ -24,7 +25,7 @@ import {
   getAgentRunContext,
   getAgentRunContextOwnerStatus,
 } from "../infra/agent-run-registry.js";
-import { captureAgentRunTerminalWriteContext } from "../infra/agent-run-terminal-writes.js";
+import { captureAgentRunTerminalPersistence } from "../infra/agent-run-terminal-writes.js";
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
@@ -323,18 +324,13 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
             getSessionRowProjection: params.getSessionRowProjection,
             loadGatewaySessionLifecycleSnapshotForEvent: (key, options) => {
               // Tool progress must not wait for optional row enrichment before reply capture.
-              if (
-                !options?.ownerEvent &&
-                params.getSessionRowProjection?.()?.needsMaterialization
-              ) {
-                return { row: null };
-              }
               const owner = options?.ownerEvent
                 ? eventRowOwners.get(options.ownerEvent)
                 : undefined;
               if (
-                options?.ownerEvent &&
-                (!owner?.record || !owner.projection.isCurrent(owner.record))
+                options?.ownerEvent
+                  ? !owner?.record || !owner.projection.isCurrent(owner.record)
+                  : params.getSessionRowProjection?.()?.needsMaterialization
               ) {
                 return { row: null };
               }
@@ -467,7 +463,11 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
         ) {
           entry.projectSessionTerminalPending = terminal;
           entry.projectSessionTerminalObservedAt = observedAt;
-          if (definitiveTerminal && terminalOwnerCurrent) {
+          if (
+            definitiveTerminal &&
+            terminalOwnerCurrent &&
+            !isAgentLifecycleYieldedWaiting(evt.data)
+          ) {
             markChatAbortTerminalOutcome(entry);
           }
           if (terminal) {
@@ -509,7 +509,7 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
           evt.projectSessionLifecycle !== false &&
           trackedOwnerIsCurrent &&
           claimIsComplete;
-        const writeContext = captureAgentRunTerminalWriteContext(evt.runId);
+        const { writeContext, track } = captureAgentRunTerminalPersistence(evt.runId);
         const prepareTerminalPersistence = (sessionKey: string, agentId = sessionAgentId) => {
           const persistence = sessionLifecyclePersistence.observe({
             sessionKey,
@@ -549,7 +549,7 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
         if (canPersistTerminal) {
           if (knownSessionKey) {
             const persistence = prepareTerminalPersistence(knownSessionKey);
-            writeContext?.track(persistence);
+            track?.(persistence);
           } else {
             // Context cleanup can precede a terminal event. Resolve its persisted
             // run mapping before the lazy chat handler consumes the same event.
@@ -562,7 +562,7 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
                 await prepareTerminalPersistence(selected.sessionKey, selected.agentId);
               }
             });
-            writeContext?.track(terminalPreparation);
+            track?.(terminalPreparation);
           }
         }
       }

@@ -7,7 +7,6 @@ import { prepareWorktreeRunEndClose } from "../agents/worktrees/run-end-lifecycl
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { listLoadedChannelPluginsForRegistry } from "../channels/plugins/registry-loaded.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { beginCronReceiptAuthorityClose } from "../cron/store/receipt-authority-owner.js";
 import { markGatewaySuspendExiting } from "../infra/gateway-suspend-coordinator.js";
 import { commitPresence, upsertPresence } from "../infra/system-presence.js";
 import { stopGatewayDiagnosticHeartbeat } from "../logging/diagnostic.js";
@@ -390,9 +389,6 @@ export async function prepareGatewayLifecycle(params: {
     worktreeRunEnd.beginClose();
     sandboxRegistry.beginClose();
     talkClose.beginClose();
-    if (prelude) {
-      beginCronReceiptAuthorityClose();
-    }
     void stopModelAccountsForClose();
     void closeAuthProfileUsage(params.sdkResourceHost);
     runtime.scheduler.beginClose();
@@ -453,13 +449,15 @@ export async function prepareGatewayLifecycle(params: {
       step("health-work", () => healthWork.drain()),
     ]);
   };
+  // Set synchronously by prepareClose, before the close plan reaches the prelude.
+  let exitAfterClose = false;
   const runClosePrelude = async () => {
     await beginClosePrelude();
     stopNodeConnectionNotifications();
     watchNodeHttpRuntime.close();
     await shutdownRuntime.runGatewayClosePrelude({
       stopDiagnostics: stopGatewayDiagnosticHeartbeat,
-      skillsChangeUnsub: runtimeState.skillsChangeUnsub,
+      skillsChangeUnsub: () => runtimeState.skillsChangeUnsub({ exitAfterClose }),
       disposeNodeReapproval: () => nodeReapprovalCoordinator.dispose(),
       stopChannelHealthMonitor: async () => {
         const monitor = runtimeState?.channelHealthMonitor;
@@ -505,14 +503,13 @@ export async function prepareGatewayLifecycle(params: {
     }
   };
   const prepareClose = async (optsValue?: GatewayCloseOptions) => {
+    exitAfterClose = optsValue?.exitAfterClose === true;
     // Recovery and reply cancellation must precede services that join those replies.
     await markClosePreludeStarted(optsValue);
     const preparation = await shutdownRuntime.prepareGatewayClose(
       {
         resolveGatewayContext: runtime.resolvePluginGatewayContext,
         preparePluginRegistryClose: () => pluginRuntime.prepareClose(),
-        // Preparation can publish writes before it has a native database borrower.
-        drainPersistence: () => drainClosePersistence().then(() => runtimeState.agentUnsub?.()),
         chatRunState,
         chatAbortControllers,
         chatQueuedTurns,

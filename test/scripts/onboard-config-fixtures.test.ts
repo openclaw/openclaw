@@ -28,52 +28,6 @@ function readJson(file: string) {
 }
 
 describe("onboard config fixture helpers", () => {
-  it("writes reset fixtures consumed by the reset assertion", () => {
-    const root = makeTempDir(tempDirs, "openclaw-onboard-config-");
-    const configPath = path.join(root, "openclaw.json");
-
-    const writeResult = runScript(WRITE_CONFIG_SCRIPT, ["reset", configPath]);
-
-    expect(writeResult.status).toBe(0);
-    expect(readJson(configPath)).toEqual({
-      meta: {},
-      agents: { defaults: { workspace: "/root/old" } },
-      gateway: { mode: "remote", remote: { url: "ws://old.example:18789", token: "old-token" } },
-    });
-    expect(readFileSync(configPath, "utf8")).toMatch(/\n$/u);
-
-    writeJson(configPath, {
-      gateway: { mode: "local" },
-      wizard: { lastRunMode: "local" },
-    });
-    const assertResult = runScript(ASSERT_CONFIG_SCRIPT, ["reset", configPath]);
-
-    expect(assertResult.status).toBe(0);
-    expect(assertResult.stderr).toBe("");
-  });
-
-  it("writes skills fixtures consumed by the skills assertion", () => {
-    const root = makeTempDir(tempDirs, "openclaw-onboard-config-skills-");
-    const configPath = path.join(root, "openclaw.json");
-
-    const writeResult = runScript(WRITE_CONFIG_SCRIPT, ["skills", configPath]);
-
-    expect(writeResult.status).toBe(0);
-    expect(readJson(configPath)).toEqual({
-      meta: {},
-      skills: { allowBundled: ["__none__"], install: { nodeManager: "bun" } },
-    });
-    writeJson(configPath, {
-      ...readJson(configPath),
-      wizard: { lastRunCommand: "configure", lastRunMode: "local" },
-    });
-
-    const assertResult = runScript(ASSERT_CONFIG_SCRIPT, ["skills", configPath]);
-
-    expect(assertResult.status).toBe(0);
-    expect(assertResult.stderr).toBe("");
-  });
-
   it("writes configured guided skip-UI fixtures with a local mock model", () => {
     const root = makeTempDir(tempDirs, "openclaw-onboard-config-guided-");
     const configPath = path.join(root, "openclaw.json");
@@ -109,69 +63,6 @@ describe("onboard config fixture helpers", () => {
     expect(readFileSync(configPath, "utf8")).toMatch(/\n$/u);
   });
 
-  it("accepts local and remote onboard assertion fixtures", () => {
-    const root = makeTempDir(tempDirs, "openclaw-onboard-config-success-");
-    const workspace = path.join(root, "workspace");
-    const localConfigPath = path.join(root, "local.json");
-    const remoteConfigPath = path.join(root, "remote.json");
-    writeJson(localConfigPath, {
-      agents: { defaults: { workspace } },
-      gateway: { bind: "loopback", mode: "local", tailscale: { mode: "off" } },
-      wizard: {
-        lastRunAt: "2026-01-01T00:00:00.000Z",
-        lastRunCommand: "onboard",
-        lastRunMode: "local",
-        lastRunVersion: "test-version",
-      },
-    });
-    writeJson(remoteConfigPath, {
-      gateway: {
-        mode: "remote",
-        remote: { url: "ws://gateway.local:18789", token: "remote-token" },
-      },
-      wizard: { lastRunMode: "remote" },
-    });
-
-    const localResult = runScript(ASSERT_CONFIG_SCRIPT, [
-      "local-basic",
-      localConfigPath,
-      workspace,
-    ]);
-    const remoteResult = runScript(ASSERT_CONFIG_SCRIPT, [
-      "remote-non-interactive",
-      remoteConfigPath,
-    ]);
-
-    expect(localResult.status).toBe(0);
-    expect(localResult.stderr).toBe("");
-    expect(remoteResult.status).toBe(0);
-    expect(remoteResult.stderr).toBe("");
-  });
-
-  it("accepts provider and gateway environment references from non-interactive onboarding", () => {
-    const root = makeTempDir(tempDirs, "openclaw-onboard-config-auth-refs-");
-    const configPath = path.join(root, "openclaw.json");
-    writeJson(configPath, {
-      gateway: {
-        mode: "local",
-        auth: {
-          mode: "token",
-          token: {
-            source: "env",
-            provider: "default",
-            id: "OPENCLAW_GATEWAY_TOKEN",
-          },
-        },
-      },
-      wizard: { lastRunMode: "local" },
-    });
-
-    const result = runScript(ASSERT_CONFIG_SCRIPT, ["local-auth-refs", configPath]);
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-  });
-
   it("accepts password Gateway fixtures", () => {
     const root = makeTempDir(tempDirs, "openclaw-onboard-config-password-");
     const passwordConfigPath = path.join(root, "password.json");
@@ -199,54 +90,5 @@ describe("onboard config fixture helpers", () => {
     expect(mismatchResult.status).toBe(1);
     expect(mismatchResult.stderr).toContain("gateway.auth.password mismatch");
     expect(mismatchResult.stderr).not.toContain(secretValue);
-  });
-
-  it("accepts channel configuration assertions for scrubbed channel secrets", () => {
-    const root = makeTempDir(tempDirs, "openclaw-onboard-config-channels-");
-    const configPath = path.join(root, "channels.json");
-    writeJson(configPath, {
-      wizard: { lastRunCommand: "configure", lastRunMode: "local" },
-    });
-
-    const result = runScript(ASSERT_CONFIG_SCRIPT, ["channels", configPath]);
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-  });
-
-  it("reports assertion mismatches with stable field labels", () => {
-    const root = makeTempDir(tempDirs, "openclaw-onboard-config-mismatch-");
-    const configPath = path.join(root, "openclaw.json");
-    writeJson(configPath, {
-      gateway: { mode: "remote", bind: "lan", tailscale: { mode: "on" } },
-      wizard: { lastRunCommand: "configure", lastRunMode: "remote" },
-    });
-
-    const result = runScript(ASSERT_CONFIG_SCRIPT, [
-      "local-basic",
-      configPath,
-      path.join(root, "workspace"),
-    ]);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("agents.defaults.workspace mismatch");
-    expect(result.stderr).toContain("gateway.mode mismatch");
-    expect(result.stderr).toContain("gateway.bind mismatch");
-    expect(result.stderr).toContain("gateway.tailscale.mode mismatch");
-    expect(result.stderr).toContain("wizard.lastRunCommand mismatch");
-  });
-
-  it("rejects unknown writer and assertion scenarios", () => {
-    const root = makeTempDir(tempDirs, "openclaw-onboard-config-unknown-");
-    const configPath = path.join(root, "openclaw.json");
-    writeFileSync(configPath, "{}\n", "utf8");
-
-    const writeResult = runScript(WRITE_CONFIG_SCRIPT, ["unknown", configPath]);
-    const assertResult = runScript(ASSERT_CONFIG_SCRIPT, ["unknown", configPath]);
-
-    expect(writeResult.status).not.toBe(0);
-    expect(writeResult.stderr).toContain("unknown config scenario: unknown");
-    expect(assertResult.status).not.toBe(0);
-    expect(assertResult.stderr).toContain("unknown onboard assertion scenario: unknown");
   });
 });

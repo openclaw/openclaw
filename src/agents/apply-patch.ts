@@ -318,14 +318,11 @@ async function resolvePatchInputPaths(
 
 function formatSummary(summary: ApplyPatchSummary): string {
   const lines = ["Success. Updated the following files:"];
-  for (const file of summary.added) {
-    lines.push(`A ${file}`);
-  }
-  for (const file of summary.modified) {
-    lines.push(`M ${file}`);
-  }
-  for (const file of summary.deleted) {
-    lines.push(`D ${file}`);
+  const filesByMarker = { A: summary.added, M: summary.modified, D: summary.deleted };
+  for (const [marker, files] of Object.entries(filesByMarker)) {
+    for (const file of files) {
+      lines.push(`${marker} ${file}`);
+    }
   }
   return lines.join("\n");
 }
@@ -547,7 +544,7 @@ function parseUpdateFileChunk(
     );
   }
 
-  if (startIndex >= lines.length) {
+  if (startIndex >= lines.length || lines[startIndex] === EOF_MARKER) {
     throw new Error(
       `Invalid patch hunk at line ${lineNumber + 1}: Update hunk does not contain any lines`,
     );
@@ -564,11 +561,6 @@ function parseUpdateFileChunk(
   let parsedLines = 0;
   for (const line of lines.slice(startIndex)) {
     if (line === EOF_MARKER) {
-      if (parsedLines === 0) {
-        throw new Error(
-          `Invalid patch hunk at line ${lineNumber + 1}: Update hunk does not contain any lines`,
-        );
-      }
       chunk.isEndOfFile = true;
       parsedLines += 1;
       break;

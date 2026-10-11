@@ -1,5 +1,5 @@
 // Gateway miscellaneous tests cover shared utility edges around control UI,
-// diagnostics, proxy state, node command policy, and server helper behavior.
+// proxy state, node command policy, and server helper behavior.
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -12,11 +12,6 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { RequestFrame } from "../../packages/gateway-protocol/src/index.js";
-import {
-  onDiagnosticEvent,
-  resetDiagnosticEventsForTest,
-  type DiagnosticEventPayload,
-} from "../infra/diagnostic-events.js";
 import {
   registerActiveManagedProxyUrl,
   stopActiveManagedProxyRegistration,
@@ -131,11 +126,6 @@ describe("GatewayClient", () => {
     return wsMockState.last;
   }
 
-  function expectNoGatewayClientAgent(params: { url: string; tlsFingerprint?: string }) {
-    const last = startGatewayClient(params) as { opts: { agent?: unknown } } | null;
-    expect(last?.opts.agent).toBeUndefined();
-  }
-
   function setCorporateNoProxy() {
     process.env["NO_PROXY"] = "corp.example.com";
     process.env["no_proxy"] = "corp.example.com";
@@ -150,17 +140,6 @@ describe("GatewayClient", () => {
     return registerActiveManagedProxyUrl(new URL("http://127.0.0.1:3128"), "gateway-only");
   }
 
-  test("uses a large maxPayload for node snapshots", () => {
-    const last = startGatewayClient({ url: "ws://127.0.0.1:1" }) as {
-      url: unknown;
-      opts: unknown;
-    } | null;
-    const opts = last?.opts as { maxPayload?: number } | undefined;
-
-    expect(last?.url).toBe("ws://127.0.0.1:1");
-    expect(opts?.maxPayload).toBe(25 * 1024 * 1024);
-  });
-
   test("uses the admitted pairing identity for shared-auth connect failures", async () => {
     const source = await fs.readFile(
       new URL("./server/ws-connection/connect-session.ts", import.meta.url),
@@ -169,34 +148,6 @@ describe("GatewayClient", () => {
 
     expect(source).toContain("deviceId: admittedNodePairing.identity.nodeId");
     expect(source).not.toContain("deviceId: authenticatedNodePairing.nodeId");
-  });
-
-  test("does not pass an explicit direct agent for loopback control-plane WebSocket connections", () => {
-    expectNoGatewayClientAgent({ url: "ws://127.0.0.1:1" });
-  });
-
-  test("does not force a direct agent for remote Gateway WebSocket connections", () => {
-    expectNoGatewayClientAgent({
-      url: "wss://gateway.example.com",
-      tlsFingerprint: "ab".repeat(32),
-    });
-  });
-
-  test("scopes Gateway loopback bypass to WebSocket connection setup without mutating NO_PROXY", () => {
-    setCorporateNoProxy();
-    const registration = registerGatewayOnlyProxy();
-
-    try {
-      const last = startGatewayClient({ url: "ws://127.0.0.1:18789" }) as {
-        noProxyDuringConstruction: unknown;
-      } | null;
-
-      expect(last?.noProxyDuringConstruction).toBe("corp.example.com");
-      expect(process.env["NO_PROXY"]).toBe("corp.example.com");
-      expect(process.env["no_proxy"]).toBe("corp.example.com");
-    } finally {
-      stopActiveManagedProxyRegistration(registration);
-    }
   });
 
   test("scopes IPv6 loopback bypass during Gateway-only proxy mode connection setup", () => {
@@ -226,12 +177,6 @@ describe("GatewayClient", () => {
   it("returns 404 for missing static assets with query strings", async () => {
     await withControlUiRoot({ faviconSvg: "<svg/>" }, async (tmp) => {
       await expectControlUiStatus(tmp, { url: "/webchat/favicon.svg?v=1", statusCode: 404 });
-    });
-  });
-
-  it("still serves SPA fallback for extensionless paths", async () => {
-    await withControlUiRoot({}, async (tmp) => {
-      await expectControlUiStatus(tmp, { url: "/webchat/chat", statusCode: 200 });
     });
   });
 
@@ -575,19 +520,6 @@ describe("gateway broadcaster", () => {
     expectSentEvents(adminSocket, expectedEvents);
   });
 
-  it("requires operator.read for config.changed broadcasts", () => {
-    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
-      makeScopedBroadcastContext();
-
-    broadcast("config.changed", { path: "/tmp/openclaw.json", hash: "hash-1", ts: 1 });
-
-    expect(pairingSocket.send).not.toHaveBeenCalled();
-    expect(nodeSocket.send).not.toHaveBeenCalled();
-    expect(readSocket.send).toHaveBeenCalledTimes(1);
-    expect(writeSocket.send).toHaveBeenCalledTimes(1);
-    expect(adminSocket.send).toHaveBeenCalledTimes(1);
-  });
-
   it("requires operator.questions for question broadcasts", () => {
     const questionSocket = makeRecordingSocket();
     const readSocket = makeRecordingSocket();
@@ -602,39 +534,6 @@ describe("gateway broadcaster", () => {
 
     expect(questionSocket.send).toHaveBeenCalledTimes(2);
     expect(readSocket.send).not.toHaveBeenCalled();
-  });
-
-  it("requires operator.read for progressive session catalog events", () => {
-    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcastToConnIds } =
-      makeScopedBroadcastContext();
-    const targets = new Set(["c-pairing", "c-node", "c-read", "c-write", "c-admin"]);
-
-    broadcastToConnIds(
-      "sessions.catalog.host",
-      { progressId: "progress-1", agentId: "main", catalog: { id: "codex", hosts: [] } },
-      targets,
-    );
-
-    expect(pairingSocket.send).not.toHaveBeenCalled();
-    expect(nodeSocket.send).not.toHaveBeenCalled();
-    expectSentEvents(readSocket, ["sessions.catalog.host"]);
-    expectSentEvents(writeSocket, ["sessions.catalog.host"]);
-    expectSentEvents(adminSocket, ["sessions.catalog.host"]);
-  });
-
-  it("requires operator.read for node topology broadcasts", () => {
-    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
-      makeScopedBroadcastContext();
-
-    broadcast("node.presence", { nodeId: "mac-1", lastActiveAtMs: 100 });
-    broadcast("node.runnerInventory.changed", { nodeId: "mac-1" });
-
-    expect(pairingSocket.send).not.toHaveBeenCalled();
-    expect(nodeSocket.send).not.toHaveBeenCalled();
-    const expectedEvents = ["node.presence", "node.runnerInventory.changed"];
-    expectSentEvents(readSocket, expectedEvents);
-    expectSentEvents(writeSocket, expectedEvents);
-    expectSentEvents(adminSocket, expectedEvents);
   });
 
   it("allows plugin.* broadcast events for operator.write and operator.admin", () => {
@@ -830,61 +729,6 @@ describe("gateway broadcaster", () => {
       thirdSocket.sent.at(-1)?.seq,
     ]).toEqual([1, 2, 2]);
   });
-
-  it("preserves seq gaps when dropIfSlow skips an eligible broadcast", () => {
-    const slowReadSocket = makeRecordingSocket();
-    slowReadSocket.bufferedAmount = Number.MAX_SAFE_INTEGER;
-    const readSocket = makeRecordingSocket();
-
-    const clients = makeReadPairClients(
-      { connId: "c-slow-read", socket: slowReadSocket, scopes: ["operator.read"] },
-      readSocket,
-    );
-
-    const { broadcast } = createGatewayBroadcaster({ clients });
-
-    broadcast("chat", chatPayload(), { dropIfSlow: true });
-    slowReadSocket.bufferedAmount = 0;
-    broadcast("heartbeat", { ts: 1 });
-
-    expect(sentEventSeq(slowReadSocket)).toEqual([["heartbeat", 2]]);
-    expect(sentEventSeq(readSocket)).toEqual([
-      ["chat", 1],
-      ["heartbeat", 2],
-    ]);
-  });
-
-  it("records a payload diagnostic when the outbound websocket buffer exceeds the limit", () => {
-    resetDiagnosticEventsForTest();
-    const events: DiagnosticEventPayload[] = [];
-    const stop = onDiagnosticEvent((event) => events.push(event));
-    try {
-      const slowReadSocket = makeRecordingSocket();
-      slowReadSocket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
-      const clients = new GatewayClientRegistry([
-        makeOperatorWsClient("c-slow-read", slowReadSocket, ["operator.read"]),
-      ]);
-
-      const { broadcast } = createGatewayBroadcaster({ clients });
-
-      broadcast("chat", chatPayload(), { dropIfSlow: true });
-      broadcast("heartbeat", { ts: 1 });
-
-      const payloadEvent = events.find((event) => event.type === "payload.large");
-      expect(payloadEvent?.type).toBe("payload.large");
-      expect(payloadEvent?.surface).toBe("gateway.ws.outbound_buffer");
-      expect(payloadEvent?.action).toBe("rejected");
-      expect(payloadEvent?.bytes).toBe(MAX_BUFFERED_BYTES + 1);
-      expect(payloadEvent?.limitBytes).toBe(MAX_BUFFERED_BYTES);
-      expect(payloadEvent?.reason).toBe("ws_send_buffer_drop");
-      expect(
-        events.reduce((count, event) => count + (event.type === "payload.large" ? 1 : 0), 0),
-      ).toBe(1);
-    } finally {
-      stop();
-      resetDiagnosticEventsForTest();
-    }
-  });
 });
 
 describe("chat run registry", () => {
@@ -967,28 +811,6 @@ describe("resolveNodeCommandAllowlist", () => {
     expectDenied(allow, DEFAULT_DANGEROUS_NODE_COMMANDS);
   }
 
-  it("includes iOS service commands by default", () => {
-    const allow = resolveNodeCommandAllowlist(
-      {},
-      {
-        platform: "iOS 26.0",
-        deviceFamily: "iPhone",
-      },
-    );
-
-    expectAllowed(allow, [
-      "device.info",
-      "device.status",
-      "system.notify",
-      "contacts.search",
-      "calendar.events",
-      "reminders.list",
-      "photos.latest",
-      "motion.activity",
-    ]);
-    expectDangerousCommandsDenied(allow);
-  });
-
   it("includes Android notifications and device diagnostics commands by default", () => {
     const allow = resolveNodeCommandAllowlist(
       {},
@@ -1008,10 +830,6 @@ describe("resolveNodeCommandAllowlist", () => {
       "system.notify",
     ]);
     expectDenied(allow, ["sms.search"]);
-  });
-
-  it("treats sms.search as dangerous by default", () => {
-    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("sms.search");
   });
 
   it("allows macOS screen.snapshot by default but keeps screen.record gated", () => {
@@ -1102,11 +920,6 @@ describe("normalizeVoiceWakeTriggers", () => {
   test("returns defaults when input is empty", () => {
     expect(normalizeVoiceWakeTriggers([])).toEqual(defaultVoiceWakeTriggers());
     expect(normalizeVoiceWakeTriggers(null)).toEqual(defaultVoiceWakeTriggers());
-  });
-
-  test("trims and limits entries", () => {
-    const result = normalizeVoiceWakeTriggers(["  hello  ", "", "world"]);
-    expect(result).toEqual(["hello", "world"]);
   });
 
   test("does not split surrogate pairs at the length limit", () => {

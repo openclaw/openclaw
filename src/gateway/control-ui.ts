@@ -13,7 +13,7 @@ import {
 import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
-import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
+import { openLocalFileSafely } from "../infra/fs-safe.js";
 import { createHttpRequestAbortSignal } from "../infra/http-request-lifecycle.js";
 import { assertLocalMediaAllowed, LocalMediaAccessError } from "../media/local-media-access.js";
 import { resolveMediaReferenceLocalPathInfo } from "../media/media-reference.js";
@@ -43,11 +43,11 @@ import {
 } from "./assistant-media-errors.js";
 import {
   resolveAssistantMediaPolicy,
+  assertAssistantMediaPolicyCurrent,
   createAssistantMediaTicket,
   verifyAssistantMediaTicket,
   type AssistantMediaTicketPayload,
 } from "./assistant-media-policy.js";
-import { isControlUiPrecompressedAssetExtension } from "./control-ui-asset-manifest.js";
 import { resolveControlUiBootstrapPresentation } from "./control-ui-bootstrap-presentation.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
@@ -400,27 +400,13 @@ export async function handleControlUiAssistantMediaRequest(
     : ticket?.file && sameSession && policy.canAllow
       ? ticket.file
       : undefined;
-  const assertCurrentPolicy = () => {
-    // Reapply durable profile, role, and session owners after every async preparation.
-    // A global access epoch changes on ordinary session activity, so it cannot revoke tickets.
-    const current = resolveAssistantMediaPolicy({ ...policyParams, reader: policy.reader });
-    if (
-      requestAuth?.hasCurrentClientAuthority?.() === false ||
-      !current ||
-      current.session?.sessionKey !== policy.session?.sessionKey ||
-      current.session?.agentId !== policy.session?.agentId ||
-      current.session?.sessionId !== policy.session?.sessionId ||
-      current.remote !== policy.remote ||
-      current.executionCwd !== policy.executionCwd ||
-      current.workspaceOnly !== policy.workspaceOnly ||
-      current.localRoots.length !== policy.localRoots.length ||
-      current.localRoots.some((root, index) => root !== policy.localRoots[index]) ||
-      (allowance && policy.workspaceOnly && !current.canAllow)
-    ) {
-      throw new FsSafeError("path-mismatch", "Media access changed");
-    }
-    return current;
-  };
+  const assertCurrentPolicy = () =>
+    assertAssistantMediaPolicyCurrent(
+      policyParams,
+      policy,
+      Boolean(allowance),
+      requestAuth ?? undefined,
+    );
   if (isMetaRequest) {
     const requestAbort = createHttpRequestAbortSignal(res.req, res);
     using _ = { [Symbol.dispose]: requestAbort.cleanup };
@@ -668,6 +654,89 @@ function matchesControlUiBootstrapConfigPath(pathname: string, basePath: string)
   );
 }
 
+async function prepareControlUiBootstrapConfig(
+  req: IncomingMessage,
+  res: ServerResponse,
+  opts: ControlUiRequestOptions | undefined,
+  basePath: string,
+  terminalEnabled: boolean,
+  replyOnFailure = true,
+) {
+  let pluginFrameGrants: readonly ControlUiPluginFrameGrantAck[] = [];
+  const requestAuth = await authorizeControlUiReadRequestOrReply({
+    ...opts,
+    req,
+    res,
+    cfg: opts?.cfg ?? opts?.config,
+    replyOnFailure,
+    onPluginFrameGrants: (grants) => {
+      pluginFrameGrants = grants;
+    },
+  });
+  if (!requestAuth) {
+    return null;
+  }
+  requestAuth.assertCurrent();
+  if (req.method === "HEAD") {
+    return { config: undefined, requestAuth };
+  }
+  const config = opts?.config;
+  const [assistant, pluginControlUiModules, devGitBranch] = await Promise.all([
+    (async () => {
+      const resolvedIdentity = config
+        ? await resolveAssistantIdentity({ cfg: config, agentId: opts?.agentId })
+        : undefined;
+      const identity = resolvedIdentity ?? DEFAULT_ASSISTANT_IDENTITY;
+      const avatarProjection =
+        config && resolvedIdentity
+          ? await resolveGatewayAssistantAvatar({
+              cfg: config,
+              identity: resolvedIdentity,
+              httpBasePath: basePath,
+            })
+          : { avatar: identity.avatar, resolution: null };
+      return { identity, agentId: resolvedIdentity?.agentId, avatarProjection };
+    })(),
+    import("./control-ui-plugin-assets.js").then(({ listControlUiPluginCatalog }) =>
+      listControlUiPluginCatalog().then(
+        ({ plugins }) => plugins,
+        // The post-connect plugins.controlUi.list RPC owns user-visible catalog errors.
+        () => [],
+      ),
+    ),
+    resolveDevInstallGitBranch(),
+  ]);
+  const { identity, agentId: assistantAgentId, avatarProjection } = assistant;
+  const avatarMeta = controlUiAvatarResolutionMeta(avatarProjection.resolution);
+  requestAuth.assertCurrent();
+  const bootstrapConfig = {
+    basePath,
+    assistantName: identity.name,
+    assistantAvatar: avatarProjection.avatar,
+    assistantAvatarSource: avatarMeta.avatarSource,
+    assistantAvatarStatus: avatarMeta.avatarStatus,
+    assistantAvatarReason: avatarMeta.avatarReason,
+    ...(assistantAgentId ? { assistantAgentId } : {}),
+    serverVersion: resolveRuntimeServiceVersion(process.env),
+    serverBuildId:
+      config?.gateway?.controlUi?.root === undefined
+        ? (resolveRuntimeServiceBuildId() ?? undefined)
+        : undefined,
+    devGitBranch: devGitBranch ?? undefined,
+    ...resolveControlUiBootstrapPresentation(config),
+    terminalEnabled,
+    cliAgentsEnabled: config?.gateway?.cliAgents?.enabled !== false,
+    pluginAssetsRequireAuth: opts?.auth !== undefined && opts.auth.mode !== "none",
+    pluginControlUiModules,
+    pluginFrameGrants: pluginFrameGrants.map(({ pluginId, path: grantPath, match }) => ({
+      pluginId,
+      path: grantPath,
+      match,
+    })),
+  } satisfies ControlUiBootstrapConfig;
+  return { config: bootstrapConfig, requestAuth };
+}
+
 export async function handleControlUiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -715,68 +784,17 @@ export async function handleControlUiHttpRequest(
   }
 
   if (matchesControlUiBootstrapConfigPath(pathname, basePath)) {
-    let pluginFrameGrants: readonly ControlUiPluginFrameGrantAck[] = [];
-    const requestAuth = await authorizeControlUiReadRequestOrReply({
-      ...opts,
+    const bootstrap = await prepareControlUiBootstrapConfig(
       req,
       res,
-      cfg: opts?.cfg ?? opts?.config,
-      onPluginFrameGrants: (grants) => {
-        pluginFrameGrants = grants;
-      },
-    });
-    if (!requestAuth) {
-      return true;
-    }
-    requestAuth.assertCurrent();
-    if (req.method === "HEAD") {
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.setHeader("Cache-Control", "no-cache");
-      res.end();
-      return true;
-    }
-    const config = opts?.config;
-    const resolvedIdentity = config
-      ? await resolveAssistantIdentity({ cfg: config, agentId: opts?.agentId })
-      : undefined;
-    const identity = resolvedIdentity ?? DEFAULT_ASSISTANT_IDENTITY;
-    const assistantAgentId = resolvedIdentity?.agentId;
-    const avatarProjection =
-      config && resolvedIdentity
-        ? await resolveGatewayAssistantAvatar({
-            cfg: config,
-            identity: resolvedIdentity,
-            httpBasePath: basePath,
-          })
-        : { avatar: identity.avatar, resolution: null };
-    const avatarMeta = controlUiAvatarResolutionMeta(avatarProjection.resolution);
-    const devGitBranch = (await resolveDevInstallGitBranch()) ?? undefined;
-    requestAuth.assertCurrent();
-    sendJson(res, 200, {
+      opts,
       basePath,
-      assistantName: identity.name,
-      assistantAvatar: avatarProjection.avatar,
-      assistantAvatarSource: avatarMeta.avatarSource,
-      assistantAvatarStatus: avatarMeta.avatarStatus,
-      assistantAvatarReason: avatarMeta.avatarReason,
-      ...(assistantAgentId ? { assistantAgentId } : {}),
-      serverVersion: resolveRuntimeServiceVersion(process.env),
-      serverBuildId:
-        config?.gateway?.controlUi?.root === undefined
-          ? (resolveRuntimeServiceBuildId() ?? undefined)
-          : undefined,
-      devGitBranch,
-      ...resolveControlUiBootstrapPresentation(config),
       terminalEnabled,
-      cliAgentsEnabled: config?.gateway?.cliAgents?.enabled !== false,
-      pluginAssetsRequireAuth: opts?.auth !== undefined && opts.auth.mode !== "none",
-      pluginFrameGrants: pluginFrameGrants.map(({ pluginId, path: grantPath, match }) => ({
-        pluginId,
-        path: grantPath,
-        match,
-      })),
-    } satisfies ControlUiBootstrapConfig);
+    );
+    if (bootstrap) {
+      bootstrap.requestAuth.assertCurrent();
+      sendJson(res, 200, bootstrap.config);
+    }
     return true;
   }
 
@@ -850,10 +868,7 @@ export async function handleControlUiHttpRequest(
   const isBundledRoot = rootState.kind === "bundled";
   // Bundled sidecars are implementation artifacts selected through
   // Accept-Encoding. Configured roots retain ordinary .br/.gz resources.
-  if (
-    isBundledRoot &&
-    isControlUiPrecompressedAssetExtension(path.extname(fileRel).toLowerCase())
-  ) {
+  if (isBundledRoot && [".br", ".gz"].includes(path.extname(fileRel).toLowerCase())) {
     respondControlUiNotFound(res);
     return true;
   }
@@ -910,6 +925,9 @@ export async function handleControlUiHttpRequest(
         asset = await readControlUiRootAsset(rootState, fileRel, true);
         continue;
       }
+      const bootstrap = opts?.auth
+        ? await prepareControlUiBootstrapConfig(req, res, opts, basePath, terminalEnabled, false)
+        : undefined;
       await serveControlUiIndexHtml(
         req,
         res,
@@ -920,7 +938,11 @@ export async function handleControlUiHttpRequest(
         opts?.config?.gateway?.controlUi?.environment,
         publicAssetBuildId,
         opts?.sessionEntryPath,
-        opts?.isSessionEntryCurrent,
+        () =>
+          bootstrap?.requestAuth.hasCurrentClientAuthority() !== false &&
+          opts?.isSessionEntryCurrent?.() !== false,
+        opts?.auth?.mode === "trusted-proxy",
+        bootstrap?.config,
       );
       return true;
     }

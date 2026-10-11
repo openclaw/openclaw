@@ -14,6 +14,7 @@ import * as agentProvenance from "../state/agent-provenance.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { readAgentProvenance } from "../test-utils/agent-provenance.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import {
@@ -283,7 +284,7 @@ describe("custodian role creation through persisted configuration", () => {
           workspace,
           identity: template.identity,
         });
-        expect(agentProvenance.readAgentProvenance(id)).toMatchObject({
+        expect(readAgentProvenance(id)).toMatchObject({
           createdVia: "agent",
           creatorAgentId: "planner",
         });

@@ -1,7 +1,7 @@
 import { consume } from "@lit/context";
-import "../../styles/config.css";
 import { initialState, Task, TaskStatus } from "@lit/task";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
+import "../../styles/config.css";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { html as staticHtml, literal } from "lit/static-html.js";
@@ -18,10 +18,10 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { hasNativeBrowserBridge } from "../../app/native-browser-host.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
-import { selectThemeSettings } from "../../app/server-prefs-intent.ts";
+import { resetServerUiPref, selectThemeSettings } from "../../app/server-prefs-controls.ts";
 import { canSyncAppearancePreference } from "../../app/server-prefs-profile-runtime.ts";
+import * as serverUiPrefs from "../../app/server-prefs-reconcile.ts";
 import { isAppearancePref, type ResettableServerUiPrefKey } from "../../app/server-prefs-state.ts";
-import { resetServerUiPref, resolveServerUiPrefState } from "../../app/server-prefs.ts";
 import {
   loadSettings,
   normalizeCatalogOpenTarget,
@@ -64,7 +64,6 @@ import {
   discoverRealtimeTalkInputs,
   observeRealtimeTalkDevices,
   realtimeTalkDeviceIssueMessage,
-  type RealtimeTalkInputDevice,
 } from "../chat/talk/input.ts";
 import { switchActiveRealtimeTalkCameras } from "../chat/talk/session.ts";
 import { isUnknownSystemInfoMethodError } from "../connection/system-info.ts";
@@ -112,11 +111,10 @@ type SessionObserverModelsResult = {
 };
 const EMPTY_SESSION_CATALOG_LABELS: ReadonlyMap<string, string> = new Map();
 
-function createMediaDeviceState(): {
-  devices: RealtimeTalkInputDevice[];
-  permissionRequired: boolean;
-  loading: boolean;
-  error: string | null;
+function createMediaDeviceState(): Omit<
+  NonNullable<ConfigProps["microphone"]>,
+  "selectedDeviceId"
+> & {
   loaded: boolean;
   requestsPermission: boolean;
 } {
@@ -715,7 +713,7 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   private currentSyncedPref<K extends ResettableServerUiPrefKey>(key: K) {
     const appearance = isAppearancePref(key);
-    return resolveServerUiPrefState(
+    return serverUiPrefs.resolveServerUiPrefState(
       this.context.runtimeConfig.state.configSnapshot?.config,
       key,
       this.context.gateway.connection.gatewayUrl,

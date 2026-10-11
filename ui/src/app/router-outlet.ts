@@ -11,6 +11,7 @@ import { t } from "../i18n/index.ts";
 import { isAgentDatabaseInspectionPendingError } from "../lib/gateway-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import type { ApplicationContext } from "./context.ts";
+import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import { RouterOutletController, selectRenderedRouteMatch } from "./router-outlet-controller.ts";
 import {
   isStaleChunkImportError,
@@ -161,7 +162,7 @@ class OpenClawRoutePresentation extends OpenClawLightDomElement {
   }
 }
 
-class OpenClawRouterOutlet extends OpenClawLightDomElement {
+class OpenClawRouterOutlet extends OpenClawLightDomElement implements ControlUiReadinessOutlet {
   @property({ attribute: false }) router?: ApplicationRouter;
   @property({ attribute: false }) retryContext?: ApplicationContext;
   @property({ attribute: false }) onNotFound?: () => boolean | void;
@@ -185,6 +186,40 @@ class OpenClawRouterOutlet extends OpenClawLightDomElement {
   private scopeGeneration = 0;
   private scopeRefreshing = false;
   private retiredSessionMatches = new Set<string>();
+  private renderedPresentationSettled = false;
+  private committedPresentationSettled = false;
+  private readonly presentationWaiters = new Set<() => void>();
+
+  get presentationSettled(): boolean {
+    return this.isConnected && !this.isUpdatePending && this.committedPresentationSettled;
+  }
+
+  async settlePresentation(): Promise<boolean> {
+    while (this.isConnected) {
+      await this.updateComplete;
+      if (!this.isConnected) {
+        return false;
+      }
+      if (!this.retainedUnmountGate.retiring && !this.transientUnmountGate.retiring) {
+        await this.retainedPresentation.value?.updateComplete;
+        if (this.isUpdatePending) {
+          continue;
+        }
+        return this.presentationSettled;
+      }
+      await new Promise<void>((resolve) => {
+        this.presentationWaiters.add(resolve);
+      });
+    }
+    return false;
+  }
+
+  private notifyPresentationWaiters(): void {
+    for (const resolve of this.presentationWaiters) {
+      resolve();
+    }
+    this.presentationWaiters.clear();
+  }
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -195,10 +230,21 @@ class OpenClawRouterOutlet extends OpenClawLightDomElement {
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this.outlet.disconnect();
+    this.committedPresentationSettled = false;
+    this.notifyPresentationWaiters();
   }
 
   protected override willUpdate(): void {
+    this.committedPresentationSettled = false;
     this.synchronizeOutletInputs();
+  }
+
+  protected override updated(): void {
+    this.committedPresentationSettled =
+      this.renderedPresentationSettled &&
+      !this.retainedUnmountGate.retiring &&
+      !this.transientUnmountGate.retiring;
+    this.notifyPresentationWaiters();
   }
 
   private synchronizeOutletInputs(): void {
@@ -262,6 +308,7 @@ class OpenClawRouterOutlet extends OpenClawLightDomElement {
   }
 
   override render() {
+    this.renderedPresentationSettled = false;
     const router = this.router;
     if (!router) {
       return nothing;
@@ -280,6 +327,13 @@ class OpenClawRouterOutlet extends OpenClawLightDomElement {
       : undefined;
     const explicitOwnerKey = renderedMatch?.error === undefined ? declaredOwnerKey : undefined;
     const waiting = renderedMatch?.status === "pending" || renderedMatch?.isFetching === "loader";
+    this.renderedPresentationSettled =
+      snapshot.status !== "idle" &&
+      snapshot.status !== "loading" &&
+      !snapshot.pending &&
+      !snapshot.startupPending &&
+      scopeReady &&
+      !waiting;
     const retainPending =
       waiting && this.retainedPresented && this.retainedOwnerKey === explicitOwnerKey;
     const presentRetained =
