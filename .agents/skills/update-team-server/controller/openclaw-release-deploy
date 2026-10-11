@@ -3371,8 +3371,8 @@ publish_release() (
 		! -e "$build_directory/.git/objects/info/alternates" ]] ||
 		fail 'candidate is not a standalone clone of the frozen official SHA'
 	bounded_build "$build_budget" "${cache_environment[@]}" pnpm -C "$build_directory" install --frozen-lockfile >&2
-	bounded_build "$build_budget" "${cache_environment[@]}" env NODE_OPTIONS=--max-old-space-size=24576 \
-		pnpm -C "$build_directory" build:runtime >&2
+	bounded_build "$build_budget" "${cache_environment[@]}" env NODE_OPTIONS=--max-old-space-size=24576 OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=1 \
+		pnpm -C "$build_directory" build >&2
 	proof validate-release "$build_directory" "$target_sha" "$root_uid" candidate >/dev/null
 	# Every runtime symlink is release-local; installed hardlinks/reflinks survive cache unlink.
 	clean_candidate "$candidate_cache_path" "$build_home/cache" "$deploy_file_uid" "$deploy_gid" "$candidate_cache_identity"
