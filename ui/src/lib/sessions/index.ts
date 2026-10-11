@@ -2,24 +2,26 @@ import type { SessionCatalogPullRequestSummary } from "../../../../packages/gate
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../../src/gateway/control-ui-contract.js";
 import { registerListener } from "../../../../src/shared/listeners.js";
 import type { SessionsListResult } from "../../api/types.ts";
+import type { BootRecord } from "../../app/boot-record.ts";
 import type { ConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import { type SelectedAgentSource, watchSelectedAgent } from "../agents/watch-selected-agent.ts";
 import { formatUiError } from "../format-error.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
 import type { SessionCreateOutcome } from "./create.ts";
+import { captureBootRoster } from "./session-boot-roster.ts";
+import { createSessionBootSnapshot } from "./session-boot-snapshot.ts";
 import type { SessionCapability, SessionGateway, SessionState } from "./session-capability.ts";
 import { createSessionDeletions } from "./session-deletions.ts";
 import { createSessionEventSubscriptionOwner } from "./session-event-subscription.ts";
 import { createSessionGitHubPublication } from "./session-github-publication.ts";
 import { createSessionGroupCatalog } from "./session-group-catalog.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "./session-key.ts";
+import { isPrimarySessionListQuery } from "./session-list-query.ts";
 import { createSessionMutations } from "./session-mutations.ts";
 import { optimisticSessionRowFields } from "./session-pending-rows.ts";
 import { createSessionPermissionProjection } from "./session-permission-projection.ts";
 import { createSessionReconciliation } from "./session-reconciliation.ts";
 import { sessionRetryDelayMs } from "./session-retry.ts";
-import { createSessionRosterCacheLifecycle } from "./session-roster-cache-lifecycle.ts";
-import type { SessionRosterCacheOptions } from "./session-roster-cache.ts";
 import { createSessionRosterRefresh } from "./session-roster-refresh.ts";
 import { sanitizeSessionRow } from "./session-row-reconcile.ts";
 import type { SessionRunTerminal } from "./session-run-terminal.ts";
@@ -62,7 +64,8 @@ export type {
 export function createSessionCapability(
   gateway: SessionGateway,
   agentSelection: SelectedAgentSource,
-  cacheOptions: SessionRosterCacheOptions & {
+  cacheOptions: {
+    bootRecord?: BootRecord | null;
     connectionBootstrap?: ConnectionBootstrapCoordinator;
   } = {},
 ): SessionCapability {
@@ -89,7 +92,7 @@ export function createSessionCapability(
     }
     presentation = { result: null, agentId: null };
   };
-  const cacheLifecycle = createSessionRosterCacheLifecycle(gateway, agentSelection, cacheOptions, {
+  const cacheLifecycle = createSessionBootSnapshot(gateway, agentSelection, cacheOptions, {
     readState: () => state,
     publish: (next) => {
       // Cache admission and retirement already own credential/profile boundaries.
@@ -105,8 +108,6 @@ export function createSessionCapability(
       }
       publish(next);
     },
-    connected: () => connection.capture() !== null,
-    query: () => roster.lastOptions(),
   });
 
   const connection = createGatewayConnectionLifecycle(gateway.snapshot);
@@ -165,7 +166,6 @@ export function createSessionCapability(
       }
     }
     githubPublication.observeRows(next.result?.sessions ?? [], next.agentId);
-    cacheLifecycle.persist(next);
     notifySubscribers();
   };
 
@@ -647,6 +647,12 @@ export function createSessionCapability(
       return cacheLifecycle.routingDefaults;
     },
     whenCachedRosterSettled: () => cacheLifecycle.settled,
+    captureBootRoster: () =>
+      connection.capture() &&
+      reconnectListRevision === null &&
+      isPrimarySessionListQuery(roster.lastOptions())
+        ? captureBootRoster(state)
+        : null,
     captureConnectionScope: connection.capture,
     isConnectionScopeCurrent: connection.isCurrent,
     describe: roster.observations.descriptions.describe,

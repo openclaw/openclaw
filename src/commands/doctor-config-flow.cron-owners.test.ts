@@ -85,7 +85,7 @@ async function backups() {
 
 async function repair(state: OpenClawTestState) {
   return withDoctorConfigMaintenance(async () => {
-    const ctx = await prepareDoctorContext(state.configPath);
+    await using ctx = await prepareDoctorContext(state.configPath);
     await runInitialConfigWriteHealth(ctx);
     return ctx;
   });

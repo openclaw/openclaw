@@ -1,9 +1,9 @@
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { SessionTranscriptInstance } from "./session-accessor.sqlite-contract.js";
-import { listSessionTranscriptInstances } from "./session-accessor.sqlite-entry.js";
 import { listSessionTranscriptArchivesReadOnly } from "./session-accessor.sqlite-history.js";
 import { listSessionParticipantsReadOnly } from "./session-accessor.sqlite-participant-read.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import { listSessionTranscriptInstances } from "./session-history.js";
 import type {
   MemorySessionSelectors,
   MemorySessionTarget,

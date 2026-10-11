@@ -303,7 +303,7 @@ export async function planClawPackageRemovals(
     if (!managedCleanup && !explicitlySelected && cleanup.mode !== "remove-if-unused") {
       retain(
         packageRef.origin === "claw-introduced"
-          ? "Claw add introduced this shared requirement; removal releases its dependency edge and retains the artifact. Use its canonical owner separately to uninstall it."
+          ? "Claw add introduced this shared requirement; removal releases its dependency edge and retains the artifact. Use its own uninstall command separately."
           : "Referenced resources are retained unless a separate cleanup mode selects them.",
       );
       continue;
@@ -325,7 +325,7 @@ export async function planClawPackageRemovals(
       cleanup.mode === "remove-if-unused"
     ) {
       retain(
-        "Global plugins are excluded from generic remove-if-unused cleanup; select the plugin explicitly to invoke its canonical owner.",
+        "Global plugins are excluded from generic remove-if-unused cleanup; select the plugin explicitly to invoke its own uninstaller.",
       );
       continue;
     }
@@ -572,7 +572,7 @@ async function applyClawPackageRemovalsUnlocked(
         }
         if (decision.packageRef.kind === "plugin") {
           if (!decision.pluginId) {
-            throw new Error("Plugin removal plan is missing canonical install identity.");
+            throw new Error("Plugin removal plan is missing recorded install identity.");
           }
           const resolution = await (deps.resolvePlugin ?? resolveInstalledClawHubPlugin)({
             clawhubPackage: decision.packageRef.ref,
@@ -613,7 +613,7 @@ async function applyClawPackageRemovalsUnlocked(
           }
         } else {
           if (!decision.skillPlan) {
-            throw new Error("Skill removal plan is missing canonical uninstall state.");
+            throw new Error("Skill removal plan is missing recorded uninstall state.");
           }
           await assertCurrentAsync();
           externalMutationStarted = true;

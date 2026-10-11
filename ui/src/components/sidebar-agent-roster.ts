@@ -8,6 +8,7 @@ import { registerAgentsHomeEnglish } from "../i18n/locales/en-agents-home.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { AgentRosterElement } from "../lib/agents/roster-element.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { newSessionSearch } from "../pages/new-session/location.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.ts";
@@ -31,7 +32,30 @@ import "../styles/sidebar-agent-roster.css";
 registerAgentsHomeEnglish();
 type RosterHost = AppSidebarRenderHost & SessionListHost;
 
+function cachedRosterCards(host: RosterHost) {
+  return host.sidebarSnapshot?.cards.map((card) => ({
+    ...card,
+    avatar: card.avatar ?? null,
+    textAvatar: card.textAvatar ?? null,
+    role: card.role,
+    model: card.model,
+    activeNow: false,
+    unreadCount: 0,
+    lastActiveAt: 0,
+    preview: undefined,
+    target: sessionNavigationTarget({
+      face: "chat",
+      sessionKey: card.mainKey,
+      fallbackAgentId: card.id,
+      basePath: host.basePath,
+    }),
+  }));
+}
+
 class SidebarAgentRoster extends AgentRosterElement {
+  protected override cards() {
+    return cachedRosterCards(this.host) ?? super.cards();
+  }
   // Selection, menus, drag state, and presence belong to the mutable host, not the row projection.
   @property({ attribute: false, hasChanged: () => true }) host!: RosterHost;
   @property({ attribute: false }) sections: SidebarVisibleSections["sections"] = [];
@@ -48,7 +72,11 @@ class SidebarAgentRoster extends AgentRosterElement {
     const gatewayUrl = this.context.gateway.connection.gatewayUrl;
     if (this.settingsScope !== gatewayUrl) {
       this.settingsScope = gatewayUrl;
-      this.collapsed = new Set(loadSettings(gatewayUrl).sidebarCollapsedAgentIds ?? []);
+      this.collapsed = new Set(
+        this.host.sidebarSnapshot?.collapsedAgentIds ??
+          loadSettings(gatewayUrl).sidebarCollapsedAgentIds ??
+          [],
+      );
     }
     const store = rosterActivityStore(this.context);
     store.setInvolvingMe(this.involvingMe);
@@ -295,11 +323,15 @@ class SidebarAgentRoster extends AgentRosterElement {
 customElements.define("openclaw-sidebar-agent-roster", SidebarAgentRoster);
 
 class SidebarNewSessionMenu extends AgentRosterElement {
+  protected override cards() {
+    return cachedRosterCards(this.host) ?? super.cards();
+  }
   @property({ attribute: false }) host!: RosterHost;
+  @property({ attribute: false }) access!: ReturnType<RosterHost["readNewSessionAccess"]>;
 
   override render() {
     return this.avatars.withActiveRoutes(() => {
-      const access = this.host.readNewSessionAccess();
+      const access = this.access;
       const cards = this.cards();
       return html`<wa-dropdown
         class="sidebar-new-session-menu"
@@ -363,17 +395,17 @@ customElements.define("openclaw-sidebar-new-session-menu", SidebarNewSessionMenu
 export function renderSidebarNewSessionMenu(host: RosterHost) {
   return html`<openclaw-sidebar-new-session-menu
     .host=${host}
+    .access=${host.readNewSessionAccess()}
     .active=${host.navigationVisible}
   ></openclaw-sidebar-new-session-menu>`;
 }
 
 export function renderSidebarPinnedSession(host: RosterHost, session: SidebarRecentSession) {
   const agentId = host.sessionNavigationAgentId(session);
-  const card = host.sessionDataContext
-    ? rosterActivityStore(host.sessionDataContext).snapshot.cards.find(
-        (agent) => agent.id === agentId,
-      )
-    : undefined;
+  const cards =
+    cachedRosterCards(host) ??
+    (host.sessionDataContext ? rosterActivityStore(host.sessionDataContext).snapshot.cards : []);
+  const card = cards.find((agent) => agent.id === agentId);
   return renderSessionTree({
     host,
     session,
