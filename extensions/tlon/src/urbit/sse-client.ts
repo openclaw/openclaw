@@ -121,6 +121,7 @@ export class UrbitSSEClient {
     await ensureUrbitChannelOpen(this.channelRequestContext(), {
       createBody: this.subscriptions,
       createAuditContext: "tlon-urbit-channel-create",
+      beforeRequest: () => this.reconnectAbortController.signal.throwIfAborted(),
     });
   }
 
@@ -180,11 +181,13 @@ export class UrbitSSEClient {
     await this.createCurrentChannel();
 
     await this.openStream();
+    this.reconnectAbortController.signal.throwIfAborted();
     this.isConnected = true;
     this.reconnectAttempts = 0;
   }
 
   async openStream() {
+    this.reconnectAbortController.signal.throwIfAborted();
     // Use AbortController with manual timeout so we only abort during initial connection,
     // not after the SSE stream is established and actively streaming.
     const controller = new AbortController();
@@ -207,7 +210,8 @@ export class UrbitSSEClient {
         ssrfPolicy: this.ssrfPolicy,
         lookupFn: this.lookupFn,
         fetchImpl: this.fetchImpl,
-        signal: controller.signal,
+        signal: AbortSignal.any([controller.signal, this.reconnectAbortController.signal]),
+        beforeRequest: () => this.reconnectAbortController.signal.throwIfAborted(),
         auditContext: "tlon-urbit-sse-stream",
       });
     } finally {
@@ -217,6 +221,10 @@ export class UrbitSSEClient {
     }
 
     const { response, release } = stream;
+    if (this.aborted) {
+      await release();
+      return;
+    }
     this.streamRelease = release;
 
     if (!response.ok) {
@@ -468,6 +476,10 @@ export class UrbitSSEClient {
       if (this.onReconnect) {
         await this.onReconnect(this);
       }
+      // Authentication can finish after the monitor has stopped this client.
+      if (this.aborted) {
+        return;
+      }
 
       try {
         // Reopen the same Eyre channel. Its queue retains every unacked event;
@@ -483,10 +495,16 @@ export class UrbitSSEClient {
         await this.createCurrentChannel();
         await this.openStream();
       }
+      if (this.aborted) {
+        return;
+      }
       this.isConnected = true;
       this.reconnectAttempts = 0;
       this.logger.log?.("[SSE] Reconnection successful!");
     } catch (error) {
+      if (this.aborted) {
+        return;
+      }
       this.logger.error?.(`[SSE] Reconnection failed: ${String(error)}`);
       await this.attemptReconnect();
     }
