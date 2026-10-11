@@ -643,6 +643,7 @@ function renderChatPaneLayoutMenu(props: ChatPaneHeaderProps) {
       const action = allActions.find((candidate) => candidate.id === event.detail.item.value);
       if (event.currentTarget && action && action.kind !== "status" && !action.disabled) {
         event.preventDefault();
+        // SAFETY: This wa-select listener is bound directly to this wa-dropdown instance.
         const menu = event.currentTarget as WaDropdown;
         pendingLayoutActions.set(menu, action.onActivate);
         // Opening and closing in one Lit update skips the hide event. Let the
