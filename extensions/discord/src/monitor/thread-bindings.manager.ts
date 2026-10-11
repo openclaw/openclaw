@@ -1,6 +1,6 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
-  registerSessionBindingAdapter,
+  registerSessionBindingAdapterV2,
   resolveThreadBindingFarewellText,
   resolveThreadBindingThreadName,
   unregisterSessionBindingAdapter,
@@ -598,9 +598,10 @@ function createLoadedThreadBindingManager(
     defaults: { idleTimeoutMs, maxAgeMs },
     resolveCurrentCfg,
     resolveCurrentToken,
+    assertCurrent: assertManagerCurrent,
   });
 
-  registerSessionBindingAdapter(sessionBindingAdapter);
+  registerSessionBindingAdapterV2(sessionBindingAdapter);
 
   MANAGERS_BY_ACCOUNT_ID.set(accountId, manager);
   return manager;

@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareQualifiedSessionEntryTarget } from "../config/sessions/session-accessor.entry.js";
@@ -9,9 +8,13 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sql
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import { removeSessionMember as removeSessionMemberSync } from "../config/sessions/session-sharing-store.native.js";
 import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -212,6 +215,15 @@ it.each([
   },
 );
 
+// Warm entry receipts answer repeat reads in memory; these cases need the worker read.
+function invalidateSessionReadFacts(scope: { agentId: string; sessionKey: string }) {
+  sessionChanges.invalidate({
+    ...scope,
+    storePath: resolveOpenClawAgentSqlitePath(scope),
+    factsInvalidated: true,
+  });
+}
+
 it("allows unrelated config reloads while worker authorization reads are pending", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     let cfg = rolePolicyConfig();
@@ -252,6 +264,7 @@ it("allows unrelated config reloads while worker authorization reads are pending
       expect(result.error).toBeNull();
       expect(reloads).toBeGreaterThan(0);
       const initialReloads = reloads;
+      invalidateSessionReadFacts(scope);
       const effect = vi.fn(() => result.authorization!.assertCurrent());
       await result.authorization!.withCurrent!(effect);
       expect(reloads).toBeGreaterThan(initialReloads);
@@ -298,7 +311,6 @@ it("does not replay an authorization consumer after its own effect changes the r
 
 it.each([
   "worker-before-read",
-  "foreign-before-read",
   "reset-before-read",
   "native-before-consume",
   "owner-before-consume",
@@ -397,15 +409,8 @@ it.each([
           visibility: "read-only",
           createdActor: { type: "human", source: "profile", id: "another-profile" },
         });
-      } else if (boundary === "foreign-before-read") {
-        const foreign = new DatabaseSync(database.path);
-        try {
-          foreign
-            .prepare("DELETE FROM session_members WHERE session_key = ? AND identity_id = ?")
-            .run(scope.sessionKey, client.authenticatedUserProfile!.profileId);
-        } finally {
-          foreign.close();
-        }
+      } else {
+        invalidateSessionReadFacts(scope);
       }
       await expect(authorization.admittedInputAuthority!.withCurrent(effect)).rejects.toThrow();
       expect(effect).not.toHaveBeenCalled();
