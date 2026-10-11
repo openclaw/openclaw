@@ -253,7 +253,7 @@ describe("worker placement dispatch reclaim", () => {
     expect(harness.log).toContain("placement:draining");
     expect(harness.log).toContain("placement:reconciling");
     expect(harness.log).not.toContain("placement:reclaimed");
-    expect(placementStore.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
+    expect(await placementStore.getPlacementMoveAsync(REQUEST.sessionId)).toBeUndefined();
   });
 
   it.each(["stop", "move"])(
@@ -409,7 +409,7 @@ describe("worker placement dispatch reclaim", () => {
       }),
     ).rejects.toThrow("move barrier interrupted");
     expect(placementStore.get(active.sessionId)).toMatchObject({ state: "draining" });
-    expect(placementStore.getPlacementMove(active.sessionId)).toMatchObject({
+    expect(await placementStore.getPlacementMoveAsync(active.sessionId)).toMatchObject({
       target: { kind: "gateway" },
       lastError: "move barrier interrupted",
     });
@@ -423,7 +423,7 @@ describe("worker placement dispatch reclaim", () => {
     await restarted.service.reconcile();
 
     expect(restartedStore.get(active.sessionId)).toMatchObject({ state: "local" });
-    expect(restartedStore.getPlacementMove(active.sessionId)).toBeUndefined();
+    expect(await restartedStore.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
   });
 
   it("completes a restarted pending result through its Gateway move intent", async () => {
@@ -461,7 +461,7 @@ describe("worker placement dispatch reclaim", () => {
     await restarted.service.reconcile();
 
     expect(restartedStore.get(active.sessionId)).toMatchObject({ state: "local" });
-    expect(restartedStore.getPlacementMove(active.sessionId)).toBeUndefined();
+    expect(await restartedStore.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
     expect(restarted.log).not.toContain("placement:reclaimed");
   });
 

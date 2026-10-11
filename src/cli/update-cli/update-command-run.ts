@@ -5,12 +5,10 @@ import {
   SUPPORTED_NODE_VERSION_RANGE,
 } from "../../../node-version.mjs";
 import { assertConfigWriteAllowedInCurrentMode } from "../../config/config.js";
-import { resolveConfigPath } from "../../config/paths.js";
 import { resolveGatewayNativeServiceIdentityConflict } from "../../daemon/constants.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
-import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   formatExternalSupervisorUpdateRequired,
@@ -74,17 +72,11 @@ import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-stat
 import { VERSION } from "../../version.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import type { UpdateDisplayProgress } from "./progress.js";
-import {
-  parseUpdateTimeoutMs,
-  resolveUpdateRoot,
-  usesCandidateUpdateAdmission,
-  type UpdateCommandOptions,
-} from "./shared.js";
+import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
 import { resolveForegroundUpdateAdmission } from "./update-command-handoff.js";
 import type { UpdateInitializationAdmission } from "./update-command-initialization-types.js";
 import { resolveMutableUpdateInstallKind } from "./update-command-install-kind.js";
-import { revalidateUpdateDatabaseContext } from "./update-command-managed-context.js";
 import {
   admitMutableUpdateSignalRun,
   retireMutableUpdateSignalRun,
@@ -97,7 +89,6 @@ import {
   resolveServiceRefreshEnv,
 } from "./update-command-service-env.js";
 import {
-  GatewayServiceUpdateOwnershipError,
   assertGatewayServiceManagementAllowedForUpdate,
   isGatewayServiceManagementAllowedForUpdate,
   readManagedGatewayServiceForUpdate,
@@ -198,39 +189,6 @@ export async function admitUpdateCommandRun(params: {
     env,
     recoverOrphanedSidecars: false,
   });
-  if (params.initialization) {
-    const initialized = params.initialization;
-    if (
-      resolvePathViaExistingAncestorSync(resolveOpenClawStateSqlitePath(env)) !==
-        initialized.databasePath ||
-      resolvePathViaExistingAncestorSync(resolveConfigPath(env)) !== initialized.configPath
-    ) {
-      throw new GatewayServiceUpdateOwnershipError(
-        "Gateway state or configuration selectors changed during target initialization. Retry from the installation's current owning account.",
-        undefined,
-        undefined,
-        "service-context-changed",
-      );
-    }
-    if (initialized.target) {
-      const current = await revalidateUpdateDatabaseContext({
-        env,
-        readEnv: env,
-        config: initialized.target.configSnapshot.sourceConfig,
-        configSnapshot: initialized.target.configSnapshot,
-        ...(initialized.target.updateInstallKind === "package" &&
-        usesCandidateUpdateAdmission(params.opts, params.installKind ?? "unknown")
-          ? { configValidation: "candidate" as const }
-          : {}),
-        ...(initialized.target.legacyConfigPlan
-          ? { legacyConfigPlan: initialized.target.legacyConfigPlan }
-          : {}),
-      });
-      initialized.target.configSnapshot = current.configSnapshot;
-      initialized.target.legacyConfigPlan = current.legacyConfigPlan;
-      initialized.target.configReadFailure = undefined;
-    }
-  }
   const meta = await readControlPlaneUpdateSentinelMeta(env);
   await resolveForegroundUpdateAdmission({
     root: params.root,

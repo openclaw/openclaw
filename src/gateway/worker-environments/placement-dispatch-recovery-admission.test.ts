@@ -259,7 +259,7 @@ describe("placement recovery session admission with persisted placements", () =>
       let sweep: Promise<void> | undefined;
       try {
         await localEntered.promise;
-        const intent = placements.getPlacementMove(REQUEST.sessionId);
+        const intent = await placements.getPlacementMoveAsync(REQUEST.sessionId);
         expect(placements.get(REQUEST.sessionId)?.state).toBe("local");
         const observation = observe(harness);
         sweep = coordinated.reconcileActive(mode === "targeted" ? active.environmentId : undefined);
@@ -272,7 +272,7 @@ describe("placement recovery session admission with persisted placements", () =>
           state: "local",
           recoveryError: null,
         });
-        expect(placements.getPlacementMove(REQUEST.sessionId)).toEqual(intent);
+        expect(await placements.getPlacementMoveAsync(REQUEST.sessionId)).toEqual(intent);
       } finally {
         releaseDestination.resolve();
         await expect(move).rejects.toThrow("fixture destination unavailable");
@@ -326,11 +326,11 @@ describe("placement recovery session admission with persisted placements", () =>
     let recovery: Promise<void> | undefined;
     try {
       await claimWaitEntered.promise;
-      const intent = placements.getPlacementMove(REQUEST.sessionId);
+      const intent = await placements.getPlacementMoveAsync(REQUEST.sessionId);
       expect(intent).toBeDefined();
       recovery = coordinated.reconcileActive(active.environmentId);
       await recovery;
-      expect(placements.getPlacementMove(REQUEST.sessionId)).toEqual(intent);
+      expect(await placements.getPlacementMoveAsync(REQUEST.sessionId)).toEqual(intent);
       expect(placements.get(REQUEST.sessionId)).toMatchObject({
         state: "draining",
         turnClaim: { claimId: claim.claimId },
@@ -345,10 +345,10 @@ describe("placement recovery session admission with persisted placements", () =>
       }
     }
     await expect(move).rejects.toBe(interruption);
-    expect(placements.getPlacementMove(REQUEST.sessionId)).toBeDefined();
+    expect(await placements.getPlacementMoveAsync(REQUEST.sessionId)).toBeDefined();
     await coordinated.reconcileActive(active.environmentId);
     expect(placements.get(REQUEST.sessionId)?.state).toBe("local");
-    expect(placements.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
+    expect(await placements.getPlacementMoveAsync(REQUEST.sessionId)).toBeUndefined();
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 
