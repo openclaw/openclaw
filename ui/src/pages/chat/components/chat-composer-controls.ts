@@ -10,10 +10,10 @@ import {
   createSignal,
   flush,
   onCleanup,
-  untrack,
   type Component,
   type Accessor,
 } from "solid-js";
+import { renderKbd } from "../../../components/kbd.ts";
 
 function createProjectedProps<P extends object>(read: Accessor<P>): P {
   const owner = getOwner();
@@ -116,27 +116,24 @@ export function solidTemplate<P extends object>(component: Component<P>, props: 
 
 /** Opaque content remains with its existing Lit owner until that caller is ported. */
 export function LitContent(props: { value: unknown }) {
-  let element: HTMLSpanElement | undefined;
+  const element = document.createElement("span");
+  element.style.display = "contents";
   createRenderEffect(
     () => props.value,
     (value) => {
-      if (element) {
-        renderLit(value ?? nothing, element);
-      }
+      renderLit(value ?? nothing, element);
     },
   );
   onCleanup(() => {
-    if (element) {
-      renderLit(nothing, element);
-    }
+    renderLit(nothing, element);
   });
-  return (
-    <span
-      style={{ display: "contents" }}
-      ref={(node) => {
-        element = node;
-        renderLit(untrack(() => props.value) ?? nothing, node);
-      }}
-    />
-  );
+  return element;
+}
+
+export function hasComposerContent(value: unknown): boolean {
+  return value !== undefined && value !== nothing;
+}
+
+export function renderComposerSendTooltip(label: string, alternate: string, modifier: string) {
+  return html`${label}${" "}${renderKbd("⏎", { inline: true })}${" · "}${alternate}${" "}${renderKbd(modifier.split(/(⌘)/u).filter(Boolean), { inline: true })}`;
 }

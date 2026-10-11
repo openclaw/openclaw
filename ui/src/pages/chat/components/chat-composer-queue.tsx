@@ -1,4 +1,3 @@
-import { nothing } from "lit";
 import { For, createMemo, onCleanup } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../i18n/index.ts";
@@ -17,7 +16,7 @@ import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
 import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
-import { LitContent, solidTemplate } from "./chat-composer-interop.tsx";
+import { hasComposerContent, LitContent, solidTemplate } from "./chat-composer-controls.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 
 type ChatQueueProps = {
@@ -297,7 +296,7 @@ function ChatQueueItem(rowProps: {
   const reorder = () => rowProps.reorder;
   const edit = createMemo(() => rowProps.controls.queuedEdit);
   const authorAvatar = createMemo(() => renderChatAuthorAvatar(item().sender));
-  const hasAuthorAvatar = createMemo(() => authorAvatar() !== nothing);
+  const hasAuthorAvatar = createMemo(() => hasComposerContent(authorAvatar()));
   const images = createMemo(() =>
     item().attachments?.filter((attachment) => attachment.mimeType.startsWith("image/")),
   );

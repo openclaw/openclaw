@@ -10,7 +10,7 @@ import { registerModelAccountsEnglish } from "../../../i18n/locales/en-model-acc
 import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
-import { solidTemplate } from "./chat-composer-interop.tsx";
+import { solidTemplate } from "./chat-composer-controls.ts";
 import { ChatModelAccountSectionView } from "./chat-model-account-control.tsx";
 
 registerModelAccountsEnglish();

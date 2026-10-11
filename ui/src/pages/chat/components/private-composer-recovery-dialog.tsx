@@ -5,7 +5,7 @@ import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { downloadBlobFile } from "../../../lib/download.ts";
 import { getChatAttachmentBlob } from "../attachment-payload-store.ts";
-import { solidTemplate } from "./chat-composer-interop.tsx";
+import { solidTemplate } from "./chat-composer-controls.ts";
 
 type PrivateComposerDraft = {
   text: string;

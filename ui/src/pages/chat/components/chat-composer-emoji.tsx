@@ -9,8 +9,8 @@ import {
   suggestEmoji,
   type EmojiTarget,
 } from "../../../lib/chat/emoji.ts";
+import { solidTemplate } from "./chat-composer-controls.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
-import { solidTemplate } from "./chat-composer-interop.tsx";
 import {
   handleComposerMenuKeydown,
   ComposerMenu,

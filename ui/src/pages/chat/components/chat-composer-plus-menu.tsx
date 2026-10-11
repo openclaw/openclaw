@@ -27,7 +27,7 @@ import "../../../components/web-awesome.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { handleChatAttachmentMenuSelection } from "./chat-attachment-inputs.ts";
 import { useSingleAttachmentPicker } from "./chat-attachment-picker-policy.ts";
-import { LitContent, solidTemplate } from "./chat-composer-interop.tsx";
+import { LitContent, solidTemplate } from "./chat-composer-controls.ts";
 import {
   handleComposerLibrarySelection,
   renderComposerLibraryMenuSolid,

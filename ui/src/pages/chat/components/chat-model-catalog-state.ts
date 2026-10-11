@@ -1,6 +1,6 @@
 import { t } from "../../../i18n/index.ts";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
-import { solidTemplate } from "./chat-composer-interop.tsx";
+import { solidTemplate } from "./chat-composer-controls.ts";
 import { ChatModelCatalogRefresh, ChatModelCatalogState } from "./chat-model-catalog-state.tsx";
 
 export type ChatModelCatalogStateProps = {

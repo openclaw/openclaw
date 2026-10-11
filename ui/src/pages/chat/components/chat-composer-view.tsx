@@ -1,5 +1,4 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { nothing } from "lit";
 import { createMemo, createRenderEffect, onCleanup, Show, untrack } from "solid-js";
 import "../../../styles/chat/composer-surface.css";
 import "../../../components/mcp-app-catalog.ts";
@@ -19,6 +18,7 @@ import {
   renderAttachmentReadStatus,
 } from "./chat-attachments.ts";
 import { renderContextNoticeSolid } from "./chat-composer-context.tsx";
+import { hasComposerContent, LitContent } from "./chat-composer-controls.ts";
 import type { ChatRunControlsProps } from "./chat-composer-controls.tsx";
 import {
   renderChatAbortActionSolid,
@@ -28,7 +28,6 @@ import {
 import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import { GoalComposerMode, type GoalComposerController } from "./chat-composer-goal-mode.tsx";
 import { renderChatGoalRecoverySolid } from "./chat-composer-goal.tsx";
-import { LitContent } from "./chat-composer-interop.tsx";
 import { HumanMentionMenuView, type HumanMentionMenuHost } from "./chat-composer-mention-menu.tsx";
 import type { resolveComposerMenus } from "./chat-composer-menus.ts";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
@@ -524,7 +523,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                   <div class="agent-chat__composer-meta agent-chat__composer-context">
                     {contextNotice()}
                   </div>
-                  {composerControls() !== undefined && composerControls() !== nothing ? (
+                  {hasComposerContent(composerControls()) ? (
                     <>
                       {" "}
                       <div class="agent-chat__composer-controls">

@@ -1,6 +1,6 @@
 import { createMemo, createSignal, onCleanup, untrack } from "solid-js";
+import { solidTemplate } from "./chat-composer-controls.ts";
 import { createChatComposerContext } from "./chat-composer-frame.ts";
-import { solidTemplate } from "./chat-composer-interop.tsx";
 import { getChatComposerState } from "./chat-composer-state.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 import { renderChatComposerView } from "./chat-composer-view.tsx";

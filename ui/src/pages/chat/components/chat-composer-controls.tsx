@@ -1,7 +1,5 @@
-import { html } from "lit";
 import { For, createEffect, createMemo } from "solid-js";
 import type { ChatFollowUpMode } from "../../../app/settings.ts";
-import { renderKbd } from "../../../components/kbd.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
@@ -16,7 +14,7 @@ import {
 } from "../talk/input.ts";
 import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
 import type { RealtimeTalkStatus } from "../talk/session.ts";
-import { LitContent, solidTemplate } from "./chat-composer-interop.tsx";
+import { LitContent, solidTemplate, renderComposerSendTooltip } from "./chat-composer-controls.ts";
 import {
   renderChatVoiceStatus,
   renderMicrophoneActivity,
@@ -506,7 +504,7 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
       : label();
   const tooltipTemplate = () =>
     alternateAvailable()
-      ? html`${label()}${" "}${renderKbd("⏎", { inline: true })}${" · "}${alternateLabel()}${" "}${renderKbd(t("chat.sendShortcutModifierEnter").split(/(⌘)/u).filter(Boolean), { inline: true })}`
+      ? renderComposerSendTooltip(label(), alternateLabel(), t("chat.sendShortcutModifierEnter"))
       : undefined;
   const voiceErrored = () => props.voiceStatus === "error";
   const cameraLabel = () =>

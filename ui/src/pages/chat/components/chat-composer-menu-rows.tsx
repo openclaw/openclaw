@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
-import { LitContent } from "./chat-composer-interop.tsx";
+import { LitContent } from "./chat-composer-controls.ts";
 
 export function menuDivider(): JSX.Element {
   return <div class="agent-chat__capability-menu-divider" role="separator"></div>;

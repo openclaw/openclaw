@@ -3,7 +3,7 @@ import { createSignal, onCleanup } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { LitContent, solidTemplate } from "./chat-composer-interop.tsx";
+import { LitContent, solidTemplate } from "./chat-composer-controls.ts";
 
 it("retains the input through prop updates and retires each disconnected Solid owner", () => {
   const mounted = vi.fn();

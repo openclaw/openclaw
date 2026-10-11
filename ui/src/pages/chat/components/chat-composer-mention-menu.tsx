@@ -10,9 +10,9 @@ import { t } from "../../../i18n/index.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import { MAX_HUMAN_MENTIONS, updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
-import { paneDomId } from "./chat-composer-dom.ts";
+import { LitContent, solidTemplate } from "./chat-composer-controls.ts";
 import "../../../styles/chat/mention-menu.css";
-import { LitContent, solidTemplate } from "./chat-composer-interop.tsx";
+import { paneDomId } from "./chat-composer-dom.ts";
 import {
   handleComposerMenuKeydown,
   ComposerMenu,
