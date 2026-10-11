@@ -78,6 +78,7 @@ describe("agent file requests", () => {
         agentId: "main",
         name: "AGENTS.md",
         content: "new instructions",
+        expectedWorkspace: "workspace",
         expectedHash: "a".repeat(64),
       });
       expect(state.agentFileEditors["AGENTS.md"]?.content).toBe("new instructions");
@@ -148,6 +149,7 @@ describe("agent file requests", () => {
         agentId: "main",
         name: "AGENTS.md",
         content: "edited after reset",
+        expectedWorkspace: "workspace",
         expectedHash: refreshedHash,
       });
     },
@@ -368,6 +370,7 @@ describe("agent file requests", () => {
         agentId: "main",
         name: "AGENTS.md",
         content: "original\noperator note",
+        expectedWorkspace: "workspace",
         expectedHash: loadedHash,
       },
     ];
@@ -414,6 +417,7 @@ describe("agent file requests", () => {
         agentId: "main",
         name: "AGENTS.md",
         content: "original\noperator note",
+        expectedWorkspace: "workspace",
         expectedHash: loadedHash,
       },
     ]);
@@ -555,6 +559,7 @@ describe("agent file requests", () => {
           agentId: "main",
           name: "AGENTS.md",
           content: "original\noperator note",
+          expectedWorkspace: "workspace",
           ...(missing ? { expectedMissing: true } : { expectedHash: currentHash }),
         },
       ]);

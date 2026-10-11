@@ -460,6 +460,54 @@ suite.define(() => {
         await expect.poll(() => editor.inputValue()).toBe("Saved latest instructions");
         expect(await missingHint.count()).toBe(0);
         await captureAgentFileScreenshot(page, "09-created-file-survives-stale-list.png");
+
+        await editor.fill("Draft started in the original workspace");
+        const movedFile = {
+          ...fileGet("main", "Saved latest instructions"),
+          workspace: "/tmp/openclaw-e2e/replacement-workspace",
+          file: {
+            ...fileGet("main", "Saved latest instructions").file,
+            path: "/tmp/openclaw-e2e/replacement-workspace/AGENTS.md",
+          },
+        };
+        await gateway.setMethodResponse("agents.files.list", {
+          agentId: "main",
+          workspace: movedFile.workspace,
+          files: [movedFile.file],
+        });
+        await gateway.setMethodResponse("agents.files.get", movedFile);
+        await gateway.setMethodResponse("agents.files.set", {
+          cases: [
+            {
+              match: { expectedWorkspace: fileList("main").workspace },
+              response: {
+                __mockError: {
+                  code: "INVALID_REQUEST",
+                  details: { type: "agent_file_conflict", name: "AGENTS.md" },
+                  message:
+                    'Agent workspace changed since "AGENTS.md" was read. Your draft is preserved. Reload to use the current workspace file, or Overwrite to save this draft in the current workspace.',
+                },
+              },
+            },
+            { response: { ok: true, ...movedFile } },
+          ],
+        });
+        await refresh.click();
+        await page
+          .locator(".agent-file-sub")
+          .filter({ hasText: "replacement-workspace" })
+          .waitFor();
+        await refresh.locator(":scope:enabled").waitFor();
+        await save.click();
+        await page.locator(".callout.danger").filter({ hasText: "workspace changed" }).waitFor();
+        await captureAgentFileScreenshot(page, "10-workspace-target-change.png");
+        expect(await editor.inputValue()).toBe("Draft started in the original workspace");
+        await page
+          .locator(".callout.danger")
+          .getByRole("button", { name: "Overwrite", exact: true })
+          .click();
+        await save.locator(":scope:disabled").waitFor();
+        expect(await page.locator(".callout.danger").count()).toBe(0);
       },
     );
   });
