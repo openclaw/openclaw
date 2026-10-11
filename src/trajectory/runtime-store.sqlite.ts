@@ -5,6 +5,8 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { captureIncognitoSessionOperation } from "../config/sessions/session-incognito-binding.js";
+import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -60,9 +62,9 @@ export type SqliteTrajectoryRuntimeAppend = Pick<
   discardPrevious?: boolean;
 };
 
-type SqliteTrajectoryRuntimeReadScope = Omit<
+export type SqliteTrajectoryRuntimeReadScope = Omit<
   SqliteTrajectoryRuntimeScope,
-  "maxGlobalRuntimeBytes" | "maxRuntimeBytes"
+  "assertCommitAllowed" | "maxGlobalRuntimeBytes" | "maxRuntimeBytes"
 > & {
   /** Byte budget enforced via SQL before parsing rows; ignored for tail-bounded reads. */
   maxEventBytes?: number;
@@ -210,7 +212,29 @@ export function appendSqliteTrajectoryRuntimeEventsWithWriter(
 export async function loadSqliteTrajectoryRuntimeEvents(
   scope: SqliteTrajectoryRuntimeReadScope,
 ): Promise<TrajectoryEvent[]> {
-  return loadSqliteTrajectoryRuntimeEventRowsSync(scope).map((row) => row.event);
+  const incognito = captureIncognitoSessionOperation(scope);
+  if (incognito) {
+    const session = incognito.actor.sessions
+      .deadlines()
+      .find((entry) => entry.sessionId === scope.sessionId);
+    if (!session) {
+      incognito.actor.assertReadable();
+      return [];
+    }
+    return incognito.actor.sessions.sideData(incognito.authority, {
+      type: "session.trajectory.read",
+      input: {
+        sessionKey: session.sessionKey,
+        sessionId: scope.sessionId,
+        maxEventBytes: scope.maxEventBytes,
+        maxEventCount: scope.maxEventCount,
+      },
+    });
+  }
+  const options = toDatabaseOptions(resolveSqliteReadScope(scope));
+  return withSessionHistoryWorkerDatabase(options, (reader) =>
+    reader.readTrajectoryEvents({ scope }),
+  );
 }
 
 /** Loads runtime trajectory event rows with storage seqs for follow/export cursors. */

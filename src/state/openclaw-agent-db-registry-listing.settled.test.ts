@@ -44,17 +44,23 @@ it("reuses migration admission across registry writes and refuses a changed lega
     runSqliteReadOperationSync(db, () =>
       readRegisteredAgentDatabaseRows(db, options.path, artifactPreserving),
     );
-  const probes = trackSqliteStatementExecutions(db, ["legacyWatches", "auditSchema"], (sql) =>
-    sql.includes('from "session_watch_cursors"')
-      ? "legacyWatches"
-      : /\bPRAGMA\s+(?:table_info|index_list|index_info)\([^)]*audit_/iu.test(sql)
-        ? "auditSchema"
-        : null,
+  const probes = trackSqliteStatementExecutions(
+    db,
+    ["legacyWatches", "auditSchema", "registryCatalog"],
+    (sql) =>
+      sql.includes('from "session_watch_cursors"')
+        ? "legacyWatches"
+        : /select "type" from "sqlite_master"/iu.test(sql)
+          ? "registryCatalog"
+          : /\bPRAGMA\s+(?:table_info|index_list|index_info)\([^)]*audit_/iu.test(sql)
+            ? "auditSchema"
+            : null,
   );
   try {
     expect(read()).toEqual([]);
     expect(probes.counts.legacyWatches).toBe(1);
     expect(probes.counts.auditSchema).toBe(0);
+    expect(probes.counts.registryCatalog).toBe(0);
     db.exec(`INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at, size_bytes)
       VALUES ('worker', 'agents/worker/openclaw-agent.sqlite', 1, 10, NULL)`);
     expect(read()).toEqual([
@@ -67,6 +73,7 @@ it("reuses migration admission across registry writes and refuses a changed lega
       },
     ]);
     expect(probes.counts.legacyWatches).toBe(1);
+    expect(probes.counts.registryCatalog).toBe(0);
 
     db.exec("ALTER TABLE session_watch_cursors DROP COLUMN provenance");
     expect(() => read()).toThrow("legacy agent database registry schema");

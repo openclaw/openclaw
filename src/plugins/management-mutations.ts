@@ -222,7 +222,7 @@ export async function installManagedPlugin(
         warnings.push(...(installed.warnings ?? []));
         if (params.request.source === "clawhub" && installed.clawhub) {
           if (!params.clawManaged && installed.clawhub.version) {
-            markClawPackageIndependentlyOwned({
+            await markClawPackageIndependentlyOwned({
               kind: "plugin",
               source: "clawhub",
               ref: installed.clawhub.clawhubPackage,

@@ -24,7 +24,14 @@ import type {
 
 type ConfigMachineStateReadCommand = Extract<
   OpenClawStateReadCommand,
-  { type: "nodeHost.config" | "operator.channelPolicy" | "tts.prefsPath" }
+  {
+    type:
+      | "nodeHost.config"
+      | "operator.channelPolicy"
+      | "tts.prefsPath"
+      | "voicewake.triggers"
+      | "voicewake.routing";
+  }
 >;
 
 export function isConfigMachineStateReadCommand(
@@ -33,7 +40,9 @@ export function isConfigMachineStateReadCommand(
   return (
     command.type === "nodeHost.config" ||
     command.type === "operator.channelPolicy" ||
-    command.type === "tts.prefsPath"
+    command.type === "tts.prefsPath" ||
+    command.type === "voicewake.triggers" ||
+    command.type === "voicewake.routing"
   );
 }
 

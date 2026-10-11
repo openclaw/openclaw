@@ -359,32 +359,9 @@ export function readUserModelAuthProfileInDatabase(
   db: DatabaseSync,
   authProfileId: string,
 ): UserModelAuthProfile | undefined {
-  const locator = parseUserModelAuthProfileId(authProfileId);
-  if (!locator || !tableExists(db, "user_profiles") || !tableExists(db, "secret_store_entries")) {
-    return undefined;
-  }
-  const row = selectResolvedUserProfile(db, locator.ownerProfileId, (ownerId) =>
-    getNodeSqliteKysely<UserProfilesDatabase & Pick<DB, "secret_store_entries">>(db)
-      .selectFrom("user_profiles")
-      .leftJoin("secret_store_entries", (join) =>
-        join
-          .onRef("secret_store_entries.scope_id", "=", "user_profiles.id")
-          .on("secret_store_entries.scope_kind", "=", "identity")
-          .on("secret_store_entries.name", "=", `model-account:${authProfileId}`)
-          .on("secret_store_entries.deleted_at_ms", "is", null),
-      )
-      .select([
-        "user_profiles.merged_into",
-        "secret_store_entries.name as record_name",
-        "secret_store_entries.value",
-        "secret_store_entries.kind",
-        "secret_store_entries.allowed_hosts",
-      ])
-      .where("user_profiles.id", "=", ownerId),
-  );
-  return !row || row.merged_into || row.record_name === null
-    ? undefined
-    : parseProfileRecord(accountRecordValue(row));
+  return readPersonalCatalogProfilesInDatabase(db, { profileId: authProfileId }).profiles[
+    authProfileId
+  ];
 }
 
 /** The catalog reads only explicit pins or linked credentials from its admitted reader. */
@@ -399,13 +376,66 @@ export function readPersonalCatalogProfilesInDatabase(
   const profileIds =
     "profileId" in selection ? [selection.profileId] : links.map((link) => link.authProfileId);
   const profiles: PersonalCatalogProfiles["profiles"] = {};
-  for (const profileId of new Set(profileIds)) {
-    if (!isUserModelAuthProfileId(profileId)) {
-      continue;
-    }
-    const profile = readUserModelAuthProfileInDatabase(db, profileId);
+  const selected = [...new Set(profileIds)].flatMap((id) => {
+    const locator = parseUserModelAuthProfileId(id);
+    return locator ? [{ id, owner: locator.ownerProfileId }] : [];
+  });
+  if (
+    selected.length === 0 ||
+    !tableExists(db, "user_profiles") ||
+    !tableExists(db, "secret_store_entries")
+  ) {
+    return { links, profiles };
+  }
+  const rows = executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<UserProfilesDatabase & Pick<DB, "secret_store_entries">>(db)
+      .selectFrom("user_profiles as source")
+      .leftJoin("user_profiles as target", "target.id", "source.merged_into")
+      .innerJoin("secret_store_entries", (join) =>
+        join.on((eb) =>
+          eb(
+            "secret_store_entries.scope_id",
+            "=",
+            eb
+              .case()
+              .when(
+                eb.or([eb("source.merged_into", "is", null), eb("source.merged_into", "=", "")]),
+              )
+              .then(eb.ref("source.id"))
+              .else(eb.ref("target.id"))
+              .end(),
+          ),
+        ),
+      )
+      .select(["name", "value", "kind", "allowed_hosts"])
+      .where("scope_kind", "=", "identity")
+      .where("deleted_at_ms", "is", null)
+      // The one-hop owner must be live; orphaned tombstones never yield secrets.
+      .where((eb) =>
+        eb.or([
+          eb("source.merged_into", "is", null),
+          eb("source.merged_into", "=", ""),
+          eb.and([
+            eb("target.id", "is not", null),
+            eb.or([eb("target.merged_into", "is", null), eb("target.merged_into", "=", "")]),
+          ]),
+        ]),
+      )
+      .where((eb) =>
+        eb.or(
+          selected.map(({ id, owner }) =>
+            eb.and([eb("source.id", "=", owner), eb("name", "=", `model-account:${id}`)]),
+          ),
+        ),
+      ),
+  ).rows;
+  const records = new Map(rows.map((row) => [row.name, row]));
+  for (const { id } of selected) {
+    const row = records.get(`model-account:${id}`);
+    const profile = row && parseProfileRecord(accountRecordValue(row));
     if (profile) {
-      profiles[profileId] = profile;
+      profiles[id] = profile;
     }
   }
   return { links, profiles };

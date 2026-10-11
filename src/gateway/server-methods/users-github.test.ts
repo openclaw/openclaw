@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import type { UsersGitHubAuthorizeStartResult } from "../../../packages/gateway-protocol/src/schema/users.js";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   listGitHubDeviceAuthorizationRecords,
   listGitHubOAuthRecords,
@@ -34,6 +36,7 @@ import {
   updateUserGitHubConnection,
 } from "../../state/user-github-connections.js";
 import { getUserProfileListItem } from "../../state/user-profile-list-item.test-support.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
@@ -45,6 +48,7 @@ import { GitHubCliUnavailableError } from "../github-cli-preflight.js";
 import { createGitHubOAuthLifecycle } from "../github-oauth-lifecycle.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { preparePersonalGitHubAction } from "./github-personal-authorization.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const network = vi.hoisted(() => ({
@@ -83,6 +87,7 @@ let clients: Set<GatewayClient>;
 let context: GatewayRequestContext;
 let alice: GatewayClient;
 let bob: GatewayClient;
+let profileCatalog: Awaited<ReturnType<typeof prepareUserProfileCatalog>>;
 
 function user(email: string, scopes = ["operator.read"]): GatewayClient {
   const profile = ensureProfileForEmail(email);
@@ -184,6 +189,7 @@ beforeEach(async () => {
   clients = new Set();
   alice = user("alice@example.test");
   bob = user("bob@example.test");
+  profileCatalog = await prepareUserProfileCatalog();
   network.assertCli.mockReset();
   network.start.mockReset().mockResolvedValue({
     deviceCode: "d".repeat(40),
@@ -251,11 +257,32 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await lifecycle.stop();
+  profileCatalog.release();
   await state.cleanup();
   vi.unstubAllGlobals();
 });
 
 describe("personal GitHub through authenticated Gateway RPC", () => {
+  it("uses committed profile authority at the effect without host reads", () => {
+    const action = preparePersonalGitHubAction({ client: alice, context });
+    const reads = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      action.assertCurrent();
+      expect(reads.queries).toEqual([]);
+
+      linkEmail("alice@example.test", owner(bob));
+      reads.queries.length = 0;
+      expect(() => action.assertCurrent()).toThrow("My GitHub owner changed");
+      expect(reads.queries).toEqual([]);
+
+      clients.delete(alice);
+      expect(() => action.assertCurrent()).toThrow("current authenticated human");
+      expect(reads.queries).toEqual([]);
+    } finally {
+      reads.restore();
+    }
+  });
+
   it.each(["users.github.status", "tools.github.status"])(
     "%s reports execution authentication instead of a resolved preview credential",
     async (method) => {
@@ -816,17 +843,21 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
 
   it("does not adopt credentials stranded on an alias by an older profile merge", async () => {
     await connect();
+    profileCatalog.release();
     openOpenClawStateDatabase()
       .db.prepare("UPDATE user_profiles SET merged_into = ? WHERE id = ?")
       .run(owner(bob), owner());
+    profileCatalog = await prepareUserProfileCatalog();
     expect((await rpc(alice, "users.github.status")).mock.calls[0]?.[1]).toMatchObject({
       personal: { state: "disconnected", account: null },
     });
     await lifecycle.personal.maintain();
     expect(readUserGitHubConnection(owner(bob))).toBeUndefined();
+    profileCatalog.release();
     openOpenClawStateDatabase()
       .db.prepare("DELETE FROM user_profiles WHERE id = ?")
       .run(owner(bob));
+    profileCatalog = await prepareUserProfileCatalog();
     expect((await rpc(alice, "users.github.authorize.start")).mock.calls[0]?.[0]).toBe(false);
   });
 

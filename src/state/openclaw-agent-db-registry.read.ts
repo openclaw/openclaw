@@ -27,10 +27,19 @@ const migratedSchemas = new WeakSet<SqliteSchemaFacts>();
 /** Read durable registrations from an already opened live or captured database. */
 export function readOpenClawAgentDatabaseRegistryRows(database: DatabaseSync, pathname: string) {
   const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database);
-  const registryTable = executeSqliteQueryTakeFirstSync(
-    database,
-    db.selectFrom("sqlite_master").select("type").where("name", "=", "agent_databases"),
-  );
+  const schema = getAdmittedSqliteSchemaFacts(database);
+  const registryTable = schema
+    ? schema.tables.has("agent_databases")
+      ? { type: "table" }
+      : schema.views.has("agent_databases") ||
+          schema.indexes.has("agent_databases") ||
+          schema.triggers.has("agent_databases")
+        ? { type: "invalid" }
+        : undefined
+    : executeSqliteQueryTakeFirstSync(
+        database,
+        db.selectFrom("sqlite_master").select("type").where("name", "=", "agent_databases"),
+      );
   if (!registryTable) {
     return [];
   }

@@ -81,7 +81,7 @@ function applyComparedEntry(
   params: PluginStatePreparedComparison & PluginStateComparisonLimits,
   now: number,
   row: PluginStateReadRow | undefined,
-): { status: "applied" | "unchanged" } | undefined {
+): { status: "applied" | "unchanged" } {
   if (params.action === "keep") {
     if (params.operation === "update") {
       deleteExpiredPluginStateEntries(store.db, now, params);
@@ -97,7 +97,7 @@ function applyComparedEntry(
     return { status: "applied" };
   }
   const kysely = getPluginStateKysely(store.db);
-  // Compare storage bytes and metadata, not caller JSON serialization.
+  // The caller compared this row under the same write transaction.
   if (params.action === "delete") {
     const result = executeSqliteQuerySync(
       store.db,
@@ -106,14 +106,8 @@ function applyComparedEntry(
         .where("plugin_id", "=", params.pluginId)
         .where("namespace", "=", params.namespace)
         .where("entry_key", "=", params.key)
-        .where("value_json", "=", row.value_json)
-        .where("created_at", "=", row.created_at)
-        .where("expires_at", row.expires_at === null ? "is" : "=", row.expires_at)
         .returning(["plugin_id", "namespace", "entry_key"]),
     );
-    if (result.rows.length === 0) {
-      return undefined;
-    }
     pluginStatePublication.stageDeletions(store.db, result.rows);
     return { status: "applied" };
   }
@@ -132,14 +126,8 @@ function applyComparedEntry(
       .where("plugin_id", "=", params.pluginId)
       .where("namespace", "=", params.namespace)
       .where("entry_key", "=", params.key)
-      .where("value_json", "=", row.value_json)
-      .where("created_at", "=", row.created_at)
-      .where("expires_at", row.expires_at === null ? "is" : "=", row.expires_at)
       .returningAll(),
   );
-  if (result.rows.length === 0) {
-    return undefined;
-  }
   for (const current of result.rows) {
     pluginStatePublication.stagePostimage(store.db, current);
   }
@@ -190,17 +178,5 @@ export function compareAndApplyPluginStateEntry(
       return { status: "conflict", current };
     }
   }
-  const result = applyComparedEntry(store, params, now, row);
-  if (result) {
-    return result;
-  }
-  return {
-    status: "conflict",
-    current: createPluginStateObservation(
-      store.path,
-      scope,
-      selectPluginStateEntry(store.db, { ...params, now }),
-      params.operation === "update" ? "lookup" : "delete",
-    ),
-  };
+  return applyComparedEntry(store, params, now, row);
 }

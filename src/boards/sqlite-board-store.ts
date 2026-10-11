@@ -8,7 +8,6 @@ import type {
   BoardWidgetMaterializedPutParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import { captureSessionEntryNativeMutationWitness } from "../config/sessions/session-entry-read-ordered.js";
 import type { IncognitoSessionActor } from "../config/sessions/session-incognito-actor.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import { releaseSessionSourceAuthorities } from "../config/sessions/session-source-authority.js";
@@ -533,11 +532,9 @@ export class SqliteBoardStore implements BoardStore {
           captured,
           async () => {
             this.assertTargetCurrent(capturedTarget, resolved);
-            const assertNativeCurrent = captureSessionEntryNativeMutationWitness([captured]);
             const value = await worker(reader, captured.sessionKey, env, identity);
             assertExistingDatabaseIdentity(captured.path, identity.key, identity.birthtime);
             reader.assertCurrent();
-            assertNativeCurrent();
             return accept(value);
           },
           true,

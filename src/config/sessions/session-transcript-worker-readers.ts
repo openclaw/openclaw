@@ -89,6 +89,7 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    readTrajectoryEvents: reader("trajectory-events", "trajectory events", (value) => value.events),
     readTrajectoryRetention: (input, options) => {
       const captured = {
         ...input,

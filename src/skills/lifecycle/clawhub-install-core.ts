@@ -497,7 +497,7 @@ export async function performClawHubSkillInstall(
         verification,
       });
       if (!params.clawManaged) {
-        markClawPackageIndependentlyOwned({
+        await markClawPackageIndependentlyOwned({
           kind: "skill",
           source: "clawhub",
           ref: formatClawHubSkillRef(params),

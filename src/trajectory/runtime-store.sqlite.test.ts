@@ -1,9 +1,12 @@
 // SQLite trajectory runtime tests cover session-scoped event row storage.
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeSqliteReadSql,
+  trackSqliteStatementExecutions,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -72,6 +75,31 @@ describe("SQLite trajectory runtime store", () => {
         .orderBy("seq", "asc"),
     ).rows;
     expect(rows).toEqual(events.map((_, seq) => ({ run_id: "run-1", seq })));
+  });
+
+  it("reads committed runtime events in its worker after an in-process append", async () => {
+    const scope = { sessionId: "session-1", storePath };
+    const first = createTrajectoryEvent({ type: "first" });
+    const second = createTrajectoryEvent({ type: "second" });
+    appendSqliteTrajectoryRuntimeEvents(scope, [first]);
+    const reads = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      await expect(loadSqliteTrajectoryRuntimeEvents(scope)).resolves.toEqual([first]);
+      reads.restore();
+      appendSqliteTrajectoryRuntimeEvents(scope, [second]);
+      const nextReads = observeSqliteReadSql(StatementSync.prototype);
+      try {
+        await expect(loadSqliteTrajectoryRuntimeEvents(scope)).resolves.toEqual([first, second]);
+        expect(nextReads.queries.filter((sql) => /trajectory_runtime_events/i.test(sql))).toEqual(
+          [],
+        );
+      } finally {
+        nextReads.restore();
+      }
+      expect(reads.queries.filter((sql) => /trajectory_runtime_events/i.test(sql))).toEqual([]);
+    } finally {
+      reads.restore();
+    }
   });
 
   it("rolls back a later batch failure and retries without losing or duplicating events", async () => {
