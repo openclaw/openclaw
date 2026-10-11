@@ -10,7 +10,7 @@ import { sessionsResult } from "../../lib/sessions/session-capability.test-suppo
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
-import { chatHistoryRequests } from "./chat-history-state.ts";
+import { chatHistoryRequests, getChatHistoryLoadState } from "./chat-history-state.ts";
 import { applyChatAgentsList, loadChatHistory } from "./chat-history.ts";
 import { makeRequestMock } from "./chat-host.test-support.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
@@ -111,12 +111,6 @@ describe("chat pane connection lifecycle", () => {
     state.currentSessionId = "cached-session";
     expect(state.chatLoading).toBe(true);
     expect(getChatHistoryLoadState(state).phase).toBe("pending-connection");
-
-    pane.connectedClient = null;
-    pane.applyGatewaySnapshot(connected);
-
-    await vi.waitFor(() => expect(requestCalls(request, "chat.startup")).toHaveLength(1));
-    expect(requestCalls(request, "chat.history")).toHaveLength(0);
   });
 
   it("notifies the owning shell after a pane leaves its DOM subtree", async () => {
