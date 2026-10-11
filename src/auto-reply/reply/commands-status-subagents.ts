@@ -3,6 +3,7 @@ import type { ControlledSubagentRunsReadContext } from "../../agents/subagents/r
 // Formats subagent status rows for the status command response.
 import type { SubagentExecutionObservation } from "../../agents/subagents/registry/subagent-execution-observation.js";
 import { hasSubagentRunEnded } from "../../agents/subagents/registry/subagent-run-liveness.js";
+import { resolveSubagentSessionStatus } from "../../agents/subagents/registry/subagent-session-metrics.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.ts";
 import { formatRunLabel } from "./subagents-utils.js";
 
@@ -43,14 +44,55 @@ export function buildSubagentsStatusLine(params: {
   const now = params.now ?? Date.now();
   const activeRuns = new Set(context.list.view.active);
   const active = activeRuns.size;
-  const done = context.runs.filter(
-    (entry) =>
-      !activeRuns.has(entry) &&
-      hasSubagentRunEnded(entry) &&
-      (context.list.pendingDescendants.get(entry.childSessionKey) ?? 0) === 0,
-  ).length;
+  const endedCounts = {
+    done: 0,
+    failed: 0,
+    "timed out": 0,
+    cancelled: 0,
+    interrupted: 0,
+    ended: 0,
+    "delivery pending": 0,
+    "delivery blocked": 0,
+  };
+  for (const entry of context.runs) {
+    const pendingDescendants = context.list.pendingDescendants.get(entry.childSessionKey) ?? 0;
+    if (!activeRuns.has(entry) && hasSubagentRunEnded(entry) && pendingDescendants === 0) {
+      // Steer replacement is an internal restart, not user cancellation.
+      const status = resolveSubagentSessionStatus(
+        entry.suppressAnnounceReason === "steer-restart"
+          ? { ...entry, endedReason: undefined }
+          : entry,
+      );
+      if (status === "killed") {
+        endedCounts.cancelled += 1;
+      } else if (status === "interrupted") {
+        endedCounts.interrupted += 1;
+      } else if (status === "failed") {
+        endedCounts.failed += 1;
+      } else if (status === "timeout") {
+        endedCounts["timed out"] += 1;
+      } else if (status === "done" && entry.execution.outcome?.status === "ok") {
+        endedCounts.done += 1;
+      } else {
+        endedCounts.ended += 1;
+      }
+
+      const deliveryStatus = entry.delivery?.status;
+      if (deliveryStatus === "pending" || deliveryStatus === "in_progress") {
+        endedCounts["delivery pending"] += 1;
+      } else if (deliveryStatus === "failed" || deliveryStatus === "suspended") {
+        endedCounts["delivery blocked"] += 1;
+      }
+    }
+  }
+  const endedParts = Object.entries(endedCounts)
+    .filter(([, count]) => count > 0)
+    .map(([label, count]) => `${count} ${label}`);
+
   if (active === 0) {
-    return verboseEnabled && done > 0 ? `🤖 Subagents: 0 active · ${done} done` : undefined;
+    return verboseEnabled && endedParts.length > 0
+      ? `🤖 Subagents: 0 active · ${endedParts.join(" · ")}`
+      : undefined;
   }
   const detailLines = [...activeRuns].slice(0, 3).map((entry) => {
     const pendingDescendants = context.list.pendingDescendants.get(entry.childSessionKey) ?? 0;
@@ -70,6 +112,6 @@ export function buildSubagentsStatusLine(params: {
     return `  • ${label} · ${duration} · ${executionText}${descendantText}`;
   });
 
-  const summary = `🤖 Subagents: ${active} active${done > 0 ? ` · ${done} done` : ""}`;
+  const summary = `🤖 Subagents: ${active} active${endedParts.length > 0 ? ` · ${endedParts.join(" · ")}` : ""}`;
   return [summary, ...detailLines].join("\n");
 }
