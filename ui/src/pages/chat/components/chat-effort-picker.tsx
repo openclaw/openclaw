@@ -222,7 +222,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
               "chat-controls__effort-picker--reserved": props.reserved,
             },
           ]}
-          aria-hidden={String(props.reserved === true)}
+          aria-hidden={props.reserved === true ? "true" : "false"}
           inert={props.reserved === true}
           onToggle={(event: Event) => {
             // SAFETY: This toggle handler belongs to the surrounding native details.
@@ -353,7 +353,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
                         min="0"
                         max={view().sliderStops.length - 1}
                         step="1"
-                        prop:value={String(view().sliderIndex)}
+                        value={String(view().sliderIndex)}
                         style={{
                           "--reasoning-fill": `${sliderFillPercent(view().sliderIndex, view().sliderStops.length)}%`,
                         }}
@@ -446,8 +446,8 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
                           role="radio"
                           class="chat-controls__speed-option"
                           data-chat-speed-option={option().value}
-                          aria-checked={String(option().value === view().selectedSpeed)}
-                          tabIndex={index() === view().tabbableSpeedIndex ? 0 : -1}
+                          aria-checked={option().value === view().selectedSpeed ? "true" : "false"}
+                          tabindex={index() === view().tabbableSpeedIndex ? 0 : -1}
                           disabled={props.fastMode.disabled || option().disabled}
                           onClick={(event: MouseEvent) => {
                             event.stopPropagation();

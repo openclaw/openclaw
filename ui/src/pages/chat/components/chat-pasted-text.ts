@@ -33,7 +33,7 @@ export function isSentPastedTextAttachment(item: AssistantAttachmentItem): item 
   );
 }
 
-class ChatPastedText extends OpenClawLightDomContentsElement {
+export class ChatPastedText extends OpenClawLightDomContentsElement {
   @property() src?: string;
   @property({ attribute: false }) sizeBytes?: number;
   @property({ attribute: false }) scope = "";

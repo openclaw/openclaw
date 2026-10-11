@@ -50,7 +50,7 @@ function PrivateComposerRecoveryDialog(
           <>
             <label class="field">
               <span>{t("chat.privateDraftReload.text")}</span>
-              <textarea readOnly rows="6" prop:value={props.text} />
+              <textarea readonly rows="6" value={props.text} />
             </label>
             <button type="button" class="btn" onClick={() => void copyText()}>
               {copied() ? t("common.copied") : t("chat.privateDraftReload.copy")}

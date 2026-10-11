@@ -62,7 +62,7 @@ export function renderCapabilityToggleRow(options: {
           slot="details"
           class="agent-chat__capability-menu-switch"
           size="s"
-          tabIndex="-1"
+          tabindex="-1"
           inert
           aria-hidden="true"
           prop:checked={options.checked}

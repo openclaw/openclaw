@@ -137,7 +137,7 @@ function internalLink(href: string, label: string): JSX.Element {
     <a
       class="agent-chat__capability-menu-link"
       href={href}
-      tabIndex="-1"
+      tabindex="-1"
       onClick={(event: MouseEvent) => event.preventDefault()}
     >
       {label}

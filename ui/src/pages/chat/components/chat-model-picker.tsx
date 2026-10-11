@@ -296,7 +296,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
             type="button"
             data-chat-model-group-toggle
             data-chat-model-provider-toggle
-            aria-expanded={String(props.provider === state().activeProvider)}
+            aria-expanded={props.provider === state().activeProvider ? "true" : "false"}
             aria-label={`${groupLabel()} (${options().length})`}
             aria-description={routeDetail()}
             disabled={params.disabled}

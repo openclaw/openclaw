@@ -15,7 +15,7 @@ it("retains the input through prop updates and retires each disconnected Solid o
     return (
       <label>
         {props.label}
-        <textarea prop:value={props.value} />
+        <textarea value={props.value} />
       </label>
     );
   }

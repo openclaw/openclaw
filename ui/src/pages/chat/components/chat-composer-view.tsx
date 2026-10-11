@@ -257,26 +257,30 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           ? { text: offlineText(), tone: "info" as const, icon: <Icon name="inbox" /> }
           : null,
   );
-  const composerStatus = createMemo(() =>
-    showComposerInput() && primaryComposerStatus() ? (
+  const composerStatus = createMemo(() => {
+    if (!showComposerInput()) {
+      return undefined;
+    }
+    const status = primaryComposerStatus();
+    return status ? (
       <>
-        <div class="agent-chat__composer-status" data-tone={primaryComposerStatus().tone}>
+        <div class="agent-chat__composer-status" data-tone={status.tone}>
           <div
             id={props.disabledReason ? disabledReasonId() : undefined}
             class="agent-chat__composer-status-band"
-            role={primaryComposerStatus().tone === "danger" ? "alert" : "status"}
+            role={status.tone === "danger" ? "alert" : "status"}
             aria-live="polite"
             aria-busy={props.disabledReasonBusy ? "true" : "false"}
           >
             <span class="agent-chat__composer-status-icon" aria-hidden="true">
-              {primaryComposerStatus().icon}
+              {status.icon}
             </span>
-            <span class="agent-chat__composer-status-text">{primaryComposerStatus().text}</span>
+            <span class="agent-chat__composer-status-text">{status.text}</span>
           </div>
         </div>
       </>
-    ) : undefined,
-  );
+    ) : undefined;
+  });
   const fallbackStatus = createMemo(() => renderFallbackIndicatorSolid(props.fallbackStatus));
   return (
     <>
@@ -429,7 +433,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                           mirrorCameraPreview() ? "agent-chat__video-preview-mirrored" : undefined
                         }
                         autoplay
-                        prop:muted={true}
+                        muted={true}
                         playsinline
                         aria-label={t("chat.composer.cameraPreview")}
                         prop:srcObject={props.realtimeTalkVideoStream}

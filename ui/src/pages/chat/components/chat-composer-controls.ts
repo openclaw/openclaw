@@ -56,6 +56,8 @@ function createProjectedProps<P extends object>(read: Accessor<P>): P {
   return current;
 }
 
+type MountContent = (read: Accessor<object>, element: HTMLElement) => () => void;
+
 // The unported callers own Lit parts; each adapter owns only its own contents.
 class SolidTemplateDirective extends AsyncDirective {
   private element?: HTMLSpanElement;
@@ -65,7 +67,7 @@ class SolidTemplateDirective extends AsyncDirective {
   private updateProps?: (props: object) => void;
   private mount?: () => void;
 
-  render<P extends object>(component: Component<P>, props: P) {
+  render(component: unknown, props: object, mountContent: MountContent) {
     this.element ??= document.createElement("span");
     this.element.style.display = "contents";
     if (this.component !== component) {
@@ -75,14 +77,9 @@ class SolidTemplateDirective extends AsyncDirective {
     }
     this.latestProps = props;
     this.mount = () => {
-      // SAFETY: render() pairs this snapshot with the component's P before every mount.
-      const [read, write] = createSignal(this.latestProps as P, { equals: false });
-      // SAFETY: Only render<P>() passes the matching component's props to this callback.
-      this.updateProps = (next) => write(() => next as P);
-      this.dispose = renderSolid(
-        () => createComponent(component, createProjectedProps(read)),
-        this.element!,
-      );
+      const [read, write] = createSignal<object>(() => this.latestProps, { equals: false });
+      this.updateProps = (next) => write(() => next);
+      this.dispose = mountContent(read, this.element!);
     };
     if (this.isConnected) {
       if (!this.dispose) {
@@ -94,13 +91,13 @@ class SolidTemplateDirective extends AsyncDirective {
     return this.element;
   }
 
-  protected disconnected() {
+  protected override disconnected() {
     this.dispose?.();
     this.dispose = undefined;
     this.updateProps = undefined;
   }
 
-  protected reconnected() {
+  protected override reconnected() {
     this.mount?.();
     flush();
   }
@@ -109,7 +106,14 @@ class SolidTemplateDirective extends AsyncDirective {
 const solidDirective = directive(SolidTemplateDirective);
 
 export function solidTemplate<P extends object>(component: Component<P>, props: P) {
-  return html`${solidDirective(component, props)}`;
+  const mountContent: MountContent = (read, element) => {
+    const readProps = (): P => {
+      // SAFETY: This factory pairs the component with its P-typed props for every update.
+      return read() as P;
+    };
+    return renderSolid(() => createComponent(component, createProjectedProps(readProps)), element);
+  };
+  return html`${solidDirective(component, props, mountContent)}`;
 }
 
 export function renderComposerContent(value: unknown, container: HTMLElement): void {

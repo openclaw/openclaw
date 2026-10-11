@@ -172,7 +172,7 @@ export function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
         class="chat-talk-input-picker__trigger"
         aria-label={label()}
         aria-haspopup="menu"
-        aria-expanded={String(props.open)}
+        aria-expanded={props.open ? "true" : "false"}
       >
         <Icon name="chevronDown" />
       </button>
@@ -198,7 +198,7 @@ export function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
                   data-chat-talk-device
                   value={option().deviceId}
                   role="menuitemradio"
-                  aria-checked={String(selected())}
+                  aria-checked={selected() ? "true" : "false"}
                   ref={(node) => {
                     element = node;
                   }}
@@ -367,7 +367,7 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
               props.disabled ||
               (!props.readDictation && Boolean(props.submitDisabledReason)))
           }
-          aria-disabled={String(finalizing())}
+          aria-disabled={finalizing() ? "true" : "false"}
           aria-label={label()}
         >
           {active() ? (
@@ -417,7 +417,7 @@ function ComposerDictationSendAction(props: {
               type="button"
               onPointerDown={(event) => props.onPointerDown?.(event)}
               onClick={(event: MouseEvent) => void finishAndSend(event)}
-              aria-disabled={String(props.readDictation().finalizing)}
+              aria-disabled={props.readDictation().finalizing ? "true" : "false"}
               aria-label={t("chat.runControls.send")}
             >
               <Icon name="arrowUp" />
@@ -582,7 +582,7 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
               Boolean(props.submitDisabledReason)
         }
         aria-label={action.camera ? cameraLabel() : t("chat.composer.realtimeTalkCapability")}
-        aria-pressed={action.camera ? String(Boolean(props.voiceVideoEnabled)) : undefined}
+        aria-pressed={action.camera ? (props.voiceVideoEnabled ? "true" : "false") : undefined}
       >
         <Icon
           name={action.camera ? (props.voiceVideoEnabled ? "cameraOff" : "camera") : "audioLines"}

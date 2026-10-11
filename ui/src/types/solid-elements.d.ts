@@ -1,15 +1,77 @@
 // Importing the module keeps this file a module, so the block below augments it.
 import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
 import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
+import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
+import type WaSwitch from "@awesome.me/webawesome/dist/components/switch/switch.js";
+import type { McpAppCatalog } from "../components/mcp-app-catalog.ts";
+import type { McpAppContextStrip } from "../components/mcp-app-context-strip.ts";
+import type {
+  McpAppResources,
+  McpAppResourceMentionDetail,
+} from "../components/mcp-app-resources.ts";
+import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
+import type { ChatPastedText } from "../pages/chat/components/chat-pasted-text.ts";
+import type { ChatQuestionCard } from "../pages/chat/components/chat-question-card.ts";
 import "@solidjs/web";
 import "../components/tooltip.ts";
 export type { JSX } from "@solidjs/web";
 
 type Tooltip = HTMLElementTagNameMap["openclaw-tooltip"];
 
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-mcp-app-catalog": McpAppCatalog;
+    "openclaw-mcp-app-resources": McpAppResources;
+    "openclaw-mcp-app-context-strip": McpAppContextStrip;
+  }
+}
+
 declare module "@solidjs/web" {
   namespace JSX {
+    interface EventHandlersElement<T> {
+      "onWa-show"?: EventHandlerUnion<T, CustomEvent>;
+      "onWa-after-show"?: EventHandlerUnion<T, CustomEvent>;
+      "onOpenclaw-composer-dismiss-invocations"?: EventHandlerUnion<T, CustomEvent>;
+    }
     interface IntrinsicElements {
+      "wa-popup": HTMLAttributes<WaPopup> &
+        Properties<WaPopup> & {
+          active?: boolean;
+          placement?: WaPopup["placement"];
+          strategy?: WaPopup["strategy"];
+          "onWa-reposition"?: EventHandlerUnion<WaPopup, CustomEvent>;
+        };
+      "wa-switch": HTMLAttributes<WaSwitch> &
+        Properties<WaSwitch> & {
+          size?: WaSwitch["size"];
+          checked?: boolean;
+          disabled?: boolean;
+        };
+      "openclaw-modal-dialog": HTMLAttributes<OpenClawModalDialog> &
+        Properties<OpenClawModalDialog> & {
+          label?: string;
+          description?: string;
+          open?: boolean;
+          manual?: boolean;
+          "onModal-cancel"?: EventHandlerUnion<OpenClawModalDialog, CustomEvent>;
+        };
+      "openclaw-chat-pasted-text": HTMLAttributes<ChatPastedText> & Properties<ChatPastedText>;
+      "openclaw-chat-question-card": HTMLAttributes<ChatQuestionCard> &
+        Properties<ChatQuestionCard>;
+      "openclaw-mcp-app-catalog": HTMLAttributes<McpAppCatalog> &
+        Properties<McpAppCatalog> & {
+          surface?: McpAppCatalog["surface"];
+        };
+      "openclaw-mcp-app-resources": HTMLAttributes<McpAppResources> &
+        Properties<McpAppResources> & {
+          "onOpenclaw-mcp-app-resource-mention"?: EventHandlerUnion<
+            McpAppResources,
+            CustomEvent<McpAppResourceMentionDetail>
+          >;
+        };
+      "openclaw-mcp-app-context-strip": HTMLAttributes<McpAppContextStrip> &
+        Properties<McpAppContextStrip>;
+
       "openclaw-tooltip": HTMLAttributes<Tooltip> & {
         "prop:content"?: Tooltip["content"];
         "prop:contentTemplate"?: Tooltip["contentTemplate"];

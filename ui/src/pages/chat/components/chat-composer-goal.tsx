@@ -200,7 +200,7 @@ function GoalCard(props: Omit<ChatGoalProps, "goal"> & { goal: SessionGoal }) {
           <button
             class="agent-chat__goal-action agent-chat__goal-expand"
             type="button"
-            aria-expanded={String(props.expanded)}
+            aria-expanded={props.expanded ? "true" : "false"}
             aria-label={t(props.expanded ? "chat.goals.hideDetails" : "chat.goals.showDetails")}
             onClick={() => props.onExpandedChange(!props.expanded)}
           >
@@ -211,14 +211,14 @@ function GoalCard(props: Omit<ChatGoalProps, "goal"> & { goal: SessionGoal }) {
       <div
         class="agent-chat__goal-detail"
         data-expanded={String(props.expanded)}
-        aria-hidden={String(!props.expanded)}
+        aria-hidden={props.expanded ? "false" : "true"}
         inert={!props.expanded}
       >
         <div class="agent-chat__goal-detail-content">
           <div
             class="agent-chat__goal-detail-objective"
             ref={createGoalScrollRef(() => props.goal.objective)}
-            prop:textContent={props.goal.objective}
+            textContent={props.goal.objective}
           />
           {props.goal.lastStatusNote ? (
             <div class="agent-chat__goal-detail-note">{props.goal.lastStatusNote}</div>
