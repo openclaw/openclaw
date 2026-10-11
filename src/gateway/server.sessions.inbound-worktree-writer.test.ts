@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
@@ -15,9 +16,9 @@ import { setupGatewaySessionsWorktreeTestHarness } from "./test/server-sessions.
 
 const { createArchiveWorktreeFixture } = setupGatewaySessionsWorktreeTestHarness();
 
-test.each([false, true])(
+test.for([false, true])(
   "inbound restore releases unrelated session writes while allocation waits (checkout already restored=%s)",
-  async (alreadyRestored) => {
+  async (alreadyRestored, { signal }) => {
     const fixture = await createArchiveWorktreeFixture();
     const { key, sessionId, storePath, worktree, workspace } = fixture;
     const peer = await directSessionReq<{ key: string }>("sessions.create", { agentId: "main" });
@@ -98,7 +99,6 @@ test.each([false, true])(
     let admission: ReturnType<typeof coordinator.ensureDispatchReplyOperation> | undefined;
     let independent: ReturnType<typeof directSessionReq> | undefined;
     let admissionDone = false;
-    let independentDone = false;
     let blockedIndependent: Error | undefined;
     try {
       await Promise.race([entered.promise, allocation]);
@@ -117,16 +117,11 @@ test.each([false, true])(
       independent = directSessionReq("sessions.patch", {
         key: peerKey,
         label: "Independent inbound peer",
-      }).then((result) => {
-        independentDone = true;
-        return result;
       });
-      // Release the real allocation lease even when the pre-fix writer blocks this assertion.
-      await vi
-        .waitFor(() => expect(independentDone).toBe(true))
-        .catch((error: unknown) => {
-          blockedIndependent = error instanceof Error ? error : new Error(String(error));
-        });
+      // The peer must finish before releasing allocation; runner speed is not the contract.
+      await withinTest(independent, signal).catch((error: unknown) => {
+        blockedIndependent = error instanceof Error ? error : new Error(String(error));
+      });
       if (!alreadyRestored) {
         expect(admissionDone).toBe(false);
         expect(isSessionLifecycleMutationActive(storePath, [key, sessionId])).toBe(true);
