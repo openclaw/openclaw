@@ -7,6 +7,7 @@ import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-sto
 export type MainSessionRecoverySkipReason =
   | "stopped"
   | "not_main_session"
+  | "archived"
   | "work_start_blocked"
   | "work_start_pending"
   | "dispatch_target_unavailable"
@@ -45,6 +46,8 @@ export function skippedMainSessionRecoveryDecision(
       return { decision: "deferred", reason, nextOwner: "session-preparation" };
     case "pending_delivery":
       return { decision: "deferred", reason, nextOwner: "outbound-delivery" };
+    case "archived":
+      return { decision: "deferred", reason, nextOwner: "none" };
     case "live_owner":
     case "blocked":
     case "already_handled":
