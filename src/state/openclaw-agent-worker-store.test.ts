@@ -40,6 +40,7 @@ import type { OpenClawAgentDatabaseExecution } from "./openclaw-agent-execution-
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import {
   openOpenClawAgentSqliteWorkerStore,
+  openOpenClawAgentSqliteWorkerStoreV2,
   type OpenClawAgentSqliteWorkerStore,
 } from "./openclaw-agent-worker-store.js";
 import { agentWorkerStoreFixtureEntrypoint } from "./openclaw-agent-worker-store.runtime.test-support.js";
@@ -47,6 +48,7 @@ import type {
   AgentWorkerFixtureOperations,
   bindSqliteWorkerBackend,
 } from "./openclaw-agent-worker-store.test-support.js";
+import { waitForFixtureEntry } from "./openclaw-agent-worker-store.wait.test-support.js";
 import { readOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { retainOpenClawStateDatabaseForIdle } from "./openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
@@ -105,22 +107,63 @@ async function setup(input?: Parameters<typeof bindSqliteWorkerBackend>[0]) {
   workers.add(worker);
   return { db, worker };
 }
-async function waitForFixtureEntry(marker: string, work: Promise<unknown>, signal: AbortSignal) {
-  // Worker replies and broadcast receipts are unordered; the durable marker is written first.
-  const settled = work.then(
-    () => {
-      if (!fs.existsSync(marker)) {
-        throw new Error("Worker settled before entering the fixture barrier");
-      }
+
+it("V2 preserves absence until explicit worker preparation and rejects retained calls after close", async () => {
+  const worker = await openOpenClawAgentSqliteWorkerStoreV2<AgentWorkerFixtureOperations>(
+    options,
+    { version: 2, assertCurrent() {} },
+    { moduleUrl: resolveRuntimeWorkerUrl(agentWorkerStoreFixtureEntrypoint), input: undefined },
+  );
+  workers.add(worker);
+  expect(
+    await worker.executeExisting({ type: "inspect", input: undefined }, () => {}),
+  ).toBeUndefined();
+  expect(fs.existsSync(options.path)).toBe(false);
+  await worker.prepare();
+  expect(fs.existsSync(options.path)).toBe(true);
+  const { db } = openOpenClawAgentDatabase(options);
+  db.exec("CREATE TABLE worker_proof (value TEXT NOT NULL)");
+  expect(
+    await worker.execute({ type: "append", input: { value: "worker-owned" } }, () => {}),
+  ).toBeGreaterThan(0);
+  expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([{ value: "worker-owned" }]);
+  await worker.close();
+  await expect(worker.prepare()).rejects.toThrow("closed");
+  await expect(worker.execute({ type: "inspect", input: undefined }, () => {})).rejects.toThrow(
+    "closed",
+  );
+});
+
+it("V2 retains owner authority through commit even when the operation guard remains current", async () => {
+  const { db } = openOpenClawAgentDatabase(options);
+  db.exec("CREATE TABLE worker_proof (value TEXT NOT NULL)");
+  let current = true;
+  const worker = await openOpenClawAgentSqliteWorkerStoreV2<AgentWorkerFixtureOperations>(
+    options,
+    {
+      version: 2,
+      assertCurrent() {
+        if (!current) {
+          throw new Error("V2 owner revoked");
+        }
+      },
     },
-    (error: unknown) => {
-      if (!fs.existsSync(marker)) {
-        throw error;
-      }
+    {
+      moduleUrl: resolveRuntimeWorkerUrl(agentWorkerStoreFixtureEntrypoint),
+      input: undefined,
+      onAdmitted(request) {
+        if (request.stage === "transaction") {
+          current = false;
+        }
+      },
     },
   );
-  await withinTest(Promise.race([receipts.waitFor(marker, "entered"), settled]), signal);
-}
+  workers.add(worker);
+  await expect(
+    worker.execute({ type: "append", input: { value: "refused" } }, () => {}),
+  ).rejects.toThrow("V2 owner revoked");
+  expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([]);
+});
 
 it("retains an idle agent executor for thirty minutes and renews the window after reborrowing", async () => {
   const { db, worker } = await setup();
@@ -424,11 +467,11 @@ describe.each(["borrowed", "captured"] as const)(
               : worker.run((scope) => scope.execute(command), assertCurrent);
           void work.catch(() => undefined);
           try {
-            await waitForFixtureEntry(preparation.codeMarker, work, signal);
+            await waitForFixtureEntry(receipts, preparation.codeMarker, work, signal);
             expect(fs.existsSync(preparation.commandMarker)).toBe(false);
             expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([]);
             fs.writeFileSync(preparation.codeGate, "release code loading");
-            await waitForFixtureEntry(preparation.commandMarker, work, signal);
+            await waitForFixtureEntry(receipts, preparation.commandMarker, work, signal);
             expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([]);
             current = outcome === "success";
             fs.writeFileSync(preparation.commandGate, "release command preparation");
@@ -474,7 +517,7 @@ describe.each(["borrowed", "captured"] as const)(
           () => undefined,
         );
         try {
-          await waitForFixtureEntry(transactionMarker, native, signal);
+          await waitForFixtureEntry(receipts, transactionMarker, native, signal);
           const observed: string[] = [];
           const writes = ["first", "second"].map((value) =>
             withOpenClawAgentDatabaseWrite(
@@ -521,7 +564,7 @@ describe.each(["borrowed", "captured"] as const)(
           },
         );
         void work.catch(() => undefined);
-        await waitForFixtureEntry(transactionMarker, work, signal);
+        await waitForFixtureEntry(receipts, transactionMarker, work, signal);
         current = false;
         await expect(work).rejects.toThrow("fixture authority revoked");
         expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([]);
@@ -547,7 +590,7 @@ describe.each(["borrowed", "captured"] as const)(
                   (scope) => scope.execute(command),
                   () => undefined,
                 );
-          await waitForFixtureEntry(commitMarker, work, signal);
+          await waitForFixtureEntry(receipts, commitMarker, work, signal);
           let closed = false;
           const close = worker.close().then(() => {
             closed = true;
@@ -957,7 +1000,7 @@ describe.each(["borrowed", "captured"] as const)(
             }),
           () => undefined,
         );
-        await waitForFixtureEntry(transactionMarker, work, signal);
+        await waitForFixtureEntry(receipts, transactionMarker, work, signal);
         const started = performance.now();
         const maintenance = Promise.resolve(tick());
         expect(performance.now() - started).toBeLessThan(100);

@@ -365,6 +365,72 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       ((input.command.type === "githubPublication.knownPullRequestUrls" ||
         input.command.type === "githubRepository.knownPullRequestUrls") &&
         isRecord(input.command.input)) ||
+      (input.command.type === "githubPublications.sharedRead" &&
+        isRecord(input.command.input) &&
+        ("requestId" in input.command.input
+          ? typeof input.command.input.requestId === "string"
+          : typeof input.command.input.sessionId === "string" &&
+            typeof input.command.input.idempotencyKey === "string")) ||
+      (input.command.type === "githubPublications.sharedList" &&
+        isRecord(input.command.input) &&
+        (input.command.input.pending === undefined ||
+          typeof input.command.input.pending === "boolean") &&
+        (input.command.input.status === undefined ||
+          (typeof input.command.input.status === "string" &&
+            ["requested", "publishing", "published", "failed"].includes(
+              input.command.input.status,
+            ))) &&
+        (input.command.input.claimNull === undefined ||
+          typeof input.command.input.claimNull === "boolean") &&
+        (input.command.input.sessionId === undefined ||
+          typeof input.command.input.sessionId === "string") &&
+        (input.command.input.unreported === undefined ||
+          typeof input.command.input.unreported === "boolean")) ||
+      (input.command.type === "githubPublications.claimRequests" &&
+        isRecord(input.command.input) &&
+        isRecord(input.command.input.claim) &&
+        typeof input.command.input.claim.sessionId === "string" &&
+        typeof input.command.input.claim.claimId === "string" &&
+        typeof input.command.input.claim.runId === "string" &&
+        (input.command.input.pendingOnly === undefined ||
+          typeof input.command.input.pendingOnly === "boolean")) ||
+      (input.command.type === "githubPublications.personalRead" &&
+        isRecord(input.command.input) &&
+        typeof input.command.input.owner === "string" &&
+        isRecord(input.command.input.request) &&
+        ("requestId" in input.command.input.request
+          ? typeof input.command.input.request.requestId === "string"
+          : "sessionId" in input.command.input.request
+            ? typeof input.command.input.request.sessionId === "string" &&
+              typeof input.command.input.request.idempotencyKey === "string"
+            : typeof input.command.input.request.sessionKey === "string" &&
+              typeof input.command.input.request.agentId === "string")) ||
+      (input.command.type === "githubPublications.unreported" &&
+        input.command.input === undefined) ||
+      (input.command.type === "githubPublications.repositoryList" &&
+        isRecord(input.command.input) &&
+        (input.command.input.sessionId === undefined ||
+          typeof input.command.input.sessionId === "string") &&
+        (input.command.input.sessionKey === undefined ||
+          typeof input.command.input.sessionKey === "string") &&
+        (input.command.input.agentId === undefined ||
+          typeof input.command.input.agentId === "string") &&
+        (input.command.input.workspaceId === undefined ||
+          typeof input.command.input.workspaceId === "string") &&
+        (input.command.input.ownerProfileId === undefined ||
+          input.command.input.ownerProfileId === null ||
+          typeof input.command.input.ownerProfileId === "string") &&
+        (input.command.input.idempotencyKey === undefined ||
+          typeof input.command.input.idempotencyKey === "string") &&
+        (input.command.input.pending === undefined ||
+          typeof input.command.input.pending === "boolean") &&
+        (input.command.input.unreported === undefined ||
+          typeof input.command.input.unreported === "boolean")) ||
+      (input.command.type === "githubPublications.branch" &&
+        isRecord(input.command.input) &&
+        typeof input.command.input.workspaceId === "string" &&
+        typeof input.command.input.branch === "string" &&
+        typeof input.command.input.pushRepository === "string") ||
       ((input.command.type === "userProfiles.reconcile" ||
         input.command.type === "userProfiles.avatar.inspect") &&
         typeof input.command.profileId === "string") ||
@@ -460,6 +526,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       isTuiLastSessionReadCommand(input.command) ||
       input.command.type === "nodeHost.config" ||
       input.command.type === "tts.prefsPath" ||
+      input.command.type === "voicewake.triggers" ||
+      input.command.type === "voicewake.routing" ||
       input.command.type === "operator.channelPolicy" ||
       input.command.type === "preparedPoolPresence.read" ||
       (input.command.type === "onboardingRecommendations.read" &&

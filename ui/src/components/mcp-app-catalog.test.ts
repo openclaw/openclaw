@@ -6,10 +6,10 @@ import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import "../pages/apps/apps-page.ts";
-import "./mcp-app-catalog.ts";
+import "./mcp-app-catalog.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "./mcp-app-launch.ts";
-import "./mcp-app-resources.ts";
+import "./mcp-app-resources.tsx";
 
 afterEach(() => {
   document.body.replaceChildren();

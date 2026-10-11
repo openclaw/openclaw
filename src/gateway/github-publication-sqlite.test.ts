@@ -6,11 +6,9 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { digestGitHubPublicationRequest } from "./github-publication-receipt.js";
 import { readSharedGitHubPublicationRequestInDatabase } from "./github-publication-shared-read.kernel.js";
-import {
-  deferGitHubPublicationRequests,
-  digestGitHubPublicationRequest,
-} from "./github-publication-store.js";
+import { deferGitHubPublicationRequests } from "./github-publication-store.js";
 import {
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,

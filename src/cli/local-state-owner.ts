@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { statSync } from "node:fs";
 import path from "node:path";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import {
@@ -56,7 +55,6 @@ export async function runWithLocalStateOwner<T>(params: {
   const selectedEnv = { ...process.env };
   const selectedStateDir = resolveStateDir(selectedEnv);
   const stateDir = resolveIdentityPathViaExistingAncestorSync(selectedStateDir);
-  const rootIdentity = statSync(stateDir, { bigint: true, throwIfNoEntry: false });
   const env = {
     ...selectedEnv,
     OPENCLAW_STATE_DIR: stateDir,
@@ -68,7 +66,6 @@ export async function runWithLocalStateOwner<T>(params: {
     {
       acquireGatewayLock,
       isGatewayLifecycleContentionError,
-      isSameGatewayLockIdentity,
       readActiveGatewayLockIdentity,
       readLockPayloadSync,
       resolveGatewayLockPaths,
@@ -87,24 +84,6 @@ export async function runWithLocalStateOwner<T>(params: {
   const releaseExitGate = registerSignalExitGate(finished.promise, () => controller.abort());
   const assertTargetCurrent = () => {
     controller.signal.throwIfAborted();
-    const ambientPaths = resolveGatewayLockPaths(process.env);
-    const currentRoot = rootIdentity
-      ? statSync(stateDir, { bigint: true, throwIfNoEntry: false })
-      : undefined;
-    if (
-      paths.stateDir !== stateDir ||
-      ambientPaths.ownerLockPath !== paths.ownerLockPath ||
-      ambientPaths.configPath !== paths.configPath ||
-      resolveIdentityPathViaExistingAncestorSync(selectedStateDir) !== stateDir ||
-      (rootIdentity &&
-        (currentRoot?.dev !== rootIdentity.dev || currentRoot?.ino !== rootIdentity.ino)) ||
-      resolveGatewayLockPaths(selectedEnv).ownerLockPath !== paths.ownerLockPath
-    ) {
-      throw new LocalStateOwnerError(
-        "OWNER_UNAVAILABLE",
-        "Selected state root changed; rerun the command.",
-      );
-    }
     params.assertTargetCurrent?.();
   };
   const guidance = `Update the Gateway or fix authentication and retry. To run offline, stop the Gateway through its service owner, wait for ownership to release, then rerun this exact command.`;
@@ -199,16 +178,6 @@ export async function runWithLocalStateOwner<T>(params: {
         scopes,
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
-        prepareDispatchCurrent: async () => {
-          const current = await discover();
-          if (
-            !current ||
-            current.port === undefined ||
-            !isSameGatewayLockIdentity({ ...owner, port }, { ...current, port: current.port })
-          ) {
-            refuse(new Error("Gateway owner changed before dispatch"));
-          }
-        },
         assertDispatchCurrent: () => {
           assertTargetCurrent();
           const current = readLockPayloadSync(paths.ownerLockPath, true);

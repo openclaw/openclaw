@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import type { WorkerProfile, WorkerProvider } from "../../plugins/types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
@@ -248,20 +247,9 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     const isGenerationCurrent = (generation: NonNullable<ReturnType<typeof eligible.get>>) => {
       current();
       if (generation.presenceOwned && !generation.activationEligible) {
-        if (!activePresenceDemand || !presence.matchesCurrentPolicy(activePresenceDemand)) {
-          return false;
-        }
         if (!presenceAdmitted || !presence.isPresent()) {
           throw new Error("Authenticated human presence is unavailable for preparation");
         }
-      }
-      if (
-        !isDeepStrictEqual(
-          store.get(generation.source.environmentId)?.profileSnapshot,
-          generation.source.profileSnapshot,
-        )
-      ) {
-        return false;
       }
       if (!generation.retention?.isCurrent()) {
         return false;
@@ -273,61 +261,28 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     };
     const reconcile = async (record: WorkerEnvironmentRecord) => {
       current();
-      let retirementReason: "expired" | "invalidated" | undefined;
-      let retirement: ReturnType<typeof retire>;
+      const key = groupKey(record);
+      const generation = key ? eligible.get(key) : undefined;
+      const limits = policy(record);
       const beforeReconcile = () => {
         current();
-        const owned = store.get(record.environmentId);
-        if (
-          !owned ||
-          owned.preparation?.consumedAtMs !== null ||
-          owned.destroyRequestedAtMs !== null
-        ) {
-          return;
-        }
-        const key = groupKey(owned);
-        const generation = key ? eligible.get(key) : undefined;
-        if (owned.preparation.expiresAtMs <= now()) {
-          retirementReason = "expired";
-        } else if (
-          !generation ||
-          generation.preparationKey !== owned.preparation.key ||
-          !store.isPreparedIntentWithinCapacity({
-            environmentId: owned.environmentId,
-            ...policy(owned),
-          })
-        ) {
-          retirementReason = "invalidated";
-        } else if (generation.deferred) {
-          throw new Error("Prepared worker maintenance is deferred");
-        } else {
-          try {
-            if (!isGenerationCurrent(generation)) {
-              retirementReason = "invalidated";
-            }
-          } catch (error) {
-            current();
-            defer(generation, error);
-            throw error;
+        if (record.destroyRequestedAtMs === null && generation) {
+          if (generation.deferred) {
+            throw new Error("Prepared worker maintenance is deferred");
+          }
+          if (!isGenerationCurrent(generation)) {
+            throw new Error("Prepared worker contents changed before allocation");
+          }
+          if (
+            !store.isPreparedIntentWithinCapacity({
+              environmentId: record.environmentId,
+              ...limits,
+            })
+          ) {
+            throw new Error("Prepared worker no longer satisfies its maintenance policy");
           }
         }
-        if (retirementReason) {
-          retirement ??= retire(owned, retirementReason);
-          // Queue before lifecycle cleanup writes; the operation is joined on unwind below.
-          void retirement?.catch(() => {});
-          throw new Error("Prepared worker no longer satisfies its maintenance policy");
-        }
       };
-      try {
-        beforeReconcile();
-      } catch (error) {
-        if (!retirementReason) {
-          throw error;
-        }
-        await retirement;
-        retirement = undefined;
-        retirementReason = undefined;
-      }
       const latest = store.get(record.environmentId);
       if (latest?.preparation?.consumedAtMs === null) {
         const controller = new AbortController();
@@ -338,17 +293,8 @@ export function createPreparedWorkerPool(options: PoolOptions) {
             AbortSignal.any([signal, controller.signal]),
             beforeReconcile,
           );
-        } catch (error) {
-          if (retirement) {
-            const retiring = await retirement;
-            if (retiring) {
-              await options.reconcile(retiring, signal, current);
-            }
-          }
-          throw error;
         } finally {
           preparations.delete(record.environmentId);
-          await retirement;
         }
       }
     };
@@ -387,7 +333,9 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         const generation = key ? eligible.get(key) : undefined;
         const limits = policy(record);
         const count = key ? (kept.get(key) ?? 0) : 0;
-        const expired = (generation?.expiresAtMs ?? record.preparation.expiresAtMs) <= now();
+        const expired =
+          record.preparation.expiresAtMs <= now() ||
+          (generation !== undefined && generation.expiresAtMs <= now());
         const valid =
           !isSupersededPresenceReserve(record, activePresenceDemand) &&
           !expired &&
@@ -435,7 +383,6 @@ export function createPreparedWorkerPool(options: PoolOptions) {
         defer(generation, error);
       }
     }
-    await reconcileAll((await retain(true)).cleanup);
     let plannedTotal = 0;
     for (const [key, generation] of eligible) {
       current();
@@ -527,9 +474,6 @@ export function createPreparedWorkerPool(options: PoolOptions) {
           assertCurrent: () => {
             if (!isGenerationCurrent(generation)) {
               throw new Error("Prepared worker contents changed before allocation");
-            }
-            if (!isDeepStrictEqual(policy(source), limits)) {
-              throw new Error("Prepared worker admission policy changed");
             }
           },
         });
