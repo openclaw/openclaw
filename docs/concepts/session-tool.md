@@ -81,8 +81,12 @@ Durably admitted inputs from `sessions_send` or the Gateway `agent` method
 appear separately in `pendingInputs`, not in transcript `messages`. Each row
 records `queued`, `cancelled`, or `interrupted`.
 Cancelled and interrupted inputs are retained for inspection and never run
-automatically. Use `pendingBefore` with the page's `nextBefore` to read older
-inputs; `limit` bounds both pages. Pending previews share a 4 KB budget within
+automatically. Built-in and CLI agent turns also receive bounded text previews of recent
+visible interrupted inputs as historical context, even when session-history tools
+are unavailable. These previews do not consume input, restore old permissions, or
+resume work without a current request. Queued, cancelled, hidden, and
+context-excluded inputs are not included. Use `pendingBefore` with the page's
+`nextBefore` to read older inputs; `limit` bounds both pages. Pending previews share a 4 KB budget within
 the overall 80 KB response budget, so use a smaller `limit` for richer previews.
 
 `pendingInputs.total` counts retained, unconsumed inputs in the current physical
@@ -116,7 +120,7 @@ The `sessions` tool exposes bounded self-service surfaces. Gateway owners retain
 
 Explicit tool denies still remove the tool. Standalone HTTP/RPC tool invocation and session-bound MCP attach grants retain their owner gate and do not gain agent identity. Assignment without affirmative owner authority requires a live admitted agent turn, rechecked at the owner write. Tool discovery never grants access to another session; revoked authority and replaced session generations cannot be reused.
 
-- `action: "patch"` changes the current session by default, or another visible session selected by `sessionKey`. It can set the label, persistent sidebar `icon`, custom sidebar `group`, pin/archive state, model, and thinking level. Root sessions and ordinary Home-linked dashboard sessions can be pinned; spawned, subagent, and nested-child sessions reject pin requests. Subagent runs appear in session transcripts, outside sidebar navigation. Pass `null` or an empty string to clear `group`; assigning a new name creates the group on first use. The icon accepts one emoji grapheme, one of the named icons `braces`, `book`, `monitor`, `bot`, `kanban`, and `coins`, or custom SVG markup/an SVG data URL; pass an empty string to clear it. SVGs must be self-contained, at most 16 KiB decoded, with no scripts, embedded documents, or external references. Include `xmlns="http://www.w3.org/2000/svg"` and a `viewBox`; SVG data URLs may use percent encoding or base64. The Gateway stores a canonical SVG data URL and the Control UI renders it as an image. The Control UI custom-icon picker accepts the same inputs and shows the macOS (Control-Command-Space) or Windows (Windows-period) system emoji picker shortcut. Archiving or restoring another session requires its `sessions_list` `sessionId` as `expectedSessionId`.
+- `action: "patch"` changes the current session by default, or another visible session selected by `sessionKey`. It can set the label, persistent sidebar `icon`, custom sidebar `group`, pin/archive state, model, and thinking level. Root sessions, ordinary Home-linked dashboard sessions, and persistent children explicitly moved to the top level in the Control UI can be pinned; hidden subagent runs and still-nested child sessions reject pin requests. Subagent runs appear in session transcripts, outside sidebar navigation. Pass `null` or an empty string to clear `group`; assigning a new name creates the group on first use. The icon accepts one emoji grapheme, one of the named icons `braces`, `book`, `monitor`, `bot`, `kanban`, and `coins`, or custom SVG markup/an SVG data URL; pass an empty string to clear it. SVGs must be self-contained, at most 16 KiB decoded, with no scripts, embedded documents, or external references. Include `xmlns="http://www.w3.org/2000/svg"` and a `viewBox`; SVG data URLs may use percent encoding or base64. The Gateway stores a canonical SVG data URL and the Control UI renders it as an image. The Control UI custom-icon picker accepts the same inputs and shows the macOS (Control-Command-Space) or Windows (Windows-period) system emoji picker shortcut. Archiving or restoring another session requires its `sessions_list` `sessionId` as `expectedSessionId`.
 - `action: "reset"` resets another visible session selected by `sessionKey`.
 - `action: "stop"` stops another authorized session without archiving or deleting it. Include `expectedSessionId` from session discovery to reject a replacement, and optionally `runId` to stop only that exact run. Session-wide stop clears queued follow-ups by default; pass `clearQueued: false` to retain them. Exact-run stop cannot clear unrelated queued follow-ups. To stop the calling session, finish its current reply instead. Non-interactive Swarm collectors do not receive Stop; their existing archive and other session operations are unchanged.
 - `action: "delete"` first archives and then deletes the exact same generation of another visible session selected by `sessionKey`. By default its transcript is retained as a deleted archive; pass `deleteTranscript: false` to leave the transcript state untouched. Resetting or deleting the session currently running the tool is rejected.
@@ -170,6 +174,26 @@ Use the shared `message` tool when you already have an explicit raw channel targ
 In Code Mode, the conversation tools reuse their exact Gateway output contracts. A single `exec` cell can list addresses, select a returned `conversationRef`, and call `conversations_send` or `conversations_turn`; normal tool policy and approvals still apply to the nested calls.
 
 ## Sending cross-session messages
+
+### Communication preferences
+
+Open **Advanced** in the session menu to choose **Always**, **Ask**, or
+**Never** for **Send messages** and **Receive messages**. Ask presents a pending
+question to an authorized human in the Control UI before new peer input is admitted.
+A refused or expired request does not start work. Requested replies and
+authorized delegated-task guidance and results retain their existing authority.
+
+The session creator or a Gateway administrator can change these preferences.
+Agents cannot change them through session tools. **Reset** clears the overrides
+and follows [`session.communication`](/gateway/config-agents/sessions#communication-defaults).
+Changing a default affects inheriting sessions, not explicit overrides.
+
+Both directions default to Always to preserve existing behavior. These preferences
+never grant access beyond tool policy, sharing, sandbox, or agent-to-agent restrictions.
+They do not hide chat history, control external channel delivery, or block human input.
+Permission is checked again after approval and before the input is dispatched.
+Changing these preferences blocks new admissions; already accepted messages and
+work retain their delivery and completion obligations. Use Stop to cancel running work.
 
 Supply the message body in the required `message` argument. Hidden aliases such as `SendMessage`, `content`, and `text` are not accepted.
 
@@ -253,6 +277,9 @@ An accepted result keeps target admission separate from reply delivery.
 `delivery.status` describes only the later reply delivery as `pending` or `skipped`.
 An inline reply has `delivery.status: "skipped"` and starts no additional requester turn.
 Neither field is a target-completion receipt.
+New turns sent to a busy chat session wait for its active reply and delivery to
+finish. They keep their order behind other agent commands; cancellation or the
+receiver's execution deadline can withdraw a waiting turn before it runs.
 Default zero-wait sends to your own running child acknowledge queue admission,
 like `mode: "steer"`; they do not confirm transcript persistence or model consumption
 and are not restart-durable. They produce no separate completion turn. Use

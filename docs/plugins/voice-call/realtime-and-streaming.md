@@ -32,7 +32,7 @@ Runtime behavior:
 - `realtime.consultPolicy` optionally adds guidance for when the realtime model should call `openclaw_agent_consult`.
 - `realtime.idleHangupMs` optionally ends an active call after neither side has produced speech for the configured positive number of milliseconds. The timer pauses while an agent consult is running and is disabled when unset.
 - On hosts with the shared context resolver, Voice Call always tells the realtime model that it speaks for an OpenClaw agent that may have other sessions and work. `realtime.agentContext.enabled` is default-off and controls the additional configured identity and profile-file context. Supported older hosts retain the [legacy context behavior](/plugins/voice-call/realtime-and-streaming#agent-voice-context).
-- `realtime.fastContext.enabled` is default-off. When enabled, Voice Call first searches indexed memory/session context for the consult question and returns authorized snippets to the realtime model within `realtime.fastContext.timeoutMs` before falling back to the full consult agent only if `realtime.fastContext.fallbackToConsult` is true. The active memory plugin authorizes session-transcript hits; plugins without that capability fail closed for session hits while ordinary memory hits remain available.
+- `realtime.fastContext.enabled` is default-off. When enabled, Voice Call first searches indexed memory/session context for the consult question and returns authorized snippets to the realtime model within `realtime.fastContext.timeoutMs` before falling back to the full consult agent only if `realtime.fastContext.fallbackToConsult` is true. The active memory plugin authorizes session-transcript hits; plugins without that capability cannot return session hits while ordinary memory hits remain available.
 - If `realtime.provider` points at an unregistered provider, or no realtime voice provider is registered at all, Voice Call logs a warning and skips realtime media instead of failing the whole plugin.
 - `inboundPolicy` must not be `"disabled"` when `realtime.enabled` is true; `validateProviderConfig` rejects that combination.
 - Consult session keys reuse the stored call session when available, then fall back to the configured `sessionScope` (`per-phone` by default, `per-call` for isolated calls, or `main` for the configured agent's main session).
@@ -240,6 +240,19 @@ with GPT-Live:
 | `auto`        | Keep the default prompt and let the provider decide when to call the consult tool.              |
 | `substantive` | Answer simple conversational glue directly and consult before facts, memory, tools, or context. |
 | `always`      | Consult before every substantive answer.                                                        |
+
+Only one native consult runs at a time per call. Replaying the same provider
+invocation within the active voice session shares its pending result. A new
+invocation receives a busy error with `started: false` and `retryable: true`,
+even when its arguments match. The realtime model should wait for the active
+consult's result before retrying, rather than polling while it runs. A native
+request also receives busy while an unrelated host-forced consult runs; only a
+matching forced question (after trimming whitespace) can share that result.
+Similar wording alone does not identify the same request.
+
+An overlapping invocation cannot replace the pending consult's caller context.
+Completing the active consult consumes only the speech it used; rejected caller
+speech remains available for retry within the existing transcript window.
 
 When a host tool run reports cancellation, the realtime model receives a
 cancelled result and the phone call stays open. Timeouts and other tool failures

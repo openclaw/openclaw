@@ -93,27 +93,33 @@ async function fixture(state: OpenClawTestState, owner: Owner = "shared") {
   const kind: "agent" | "shared-state" = owner === "agent" ? "agent" : "shared-state";
   const credentials = readAuthProfileJsonCellText(database.db, "store", kind);
   const controller = createEmbeddedRunFailoverRetryController({
-    runParams: {
-      runId: "shared-usage-run",
-      sessionId: "shared-usage-session",
-      sessionFile: state.path("synthetic-session.jsonl"),
-      workspaceDir: state.workspaceDir,
-      prompt: "synthetic shared-account failure",
-      timeoutMs: 60_000,
-      config,
+    runInput: {
+      runParams: {
+        runId: "shared-usage-run",
+        sessionId: "shared-usage-session",
+        sessionFile: state.path("synthetic-session.jsonl"),
+        workspaceDir: state.workspaceDir,
+        prompt: "synthetic shared-account failure",
+        timeoutMs: 60_000,
+        config,
+      },
+      globalLane: "shared-usage-test",
+      agentDir,
+      fallbackConfigured: false,
     },
-    provider,
-    modelId: "synthetic-model",
-    globalLane: "shared-usage-test",
-    agentDir,
-    fallbackConfigured: false,
-    profileFailureStore: store,
-    getLastProfileId: () => profileId,
+    preparedRuntime: {
+      provider,
+      modelId: "synthetic-model",
+      profileFailureStore: store,
+      snapshot: () => ({
+        lastProfileId: profileId,
+        pluginHarnessOwnsTransport: false,
+        agentHarness: { id: "embedded" },
+      }),
+      getApiKeyInfo: () => null,
+      advanceAttemptAuthProfile: async () => false,
+    },
     getSessionId: () => "shared-usage-session",
-    harnessOwnsTransport: () => false,
-    getRuntimeAuthOwnerId: () => "embedded",
-    getApiKeyInfo: () => null,
-    advanceAuthProfile: async () => false,
   });
   return {
     store,

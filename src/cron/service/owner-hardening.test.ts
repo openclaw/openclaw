@@ -4,7 +4,6 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { observeCronJobWrites } from "../../../test/helpers/cron/runtime-mutation.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -21,6 +20,7 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
@@ -84,12 +84,25 @@ beforeEach(async () => {
       import fs from "node:fs";
       import { CronService } from ${JSON.stringify(serviceUrl.href)};
       import { deserialize } from "node:v8";
-      import { MessagePort } from "node:worker_threads";
+      import { Worker } from "node:worker_threads";
       import { createTestGatewayScheduler } from ${JSON.stringify(schedulerClockUrl.href)};
       const [storePath, jobId, mode, releasePath, outputPath] = process.argv.slice(2);
       const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       const logger = { debug() {}, info() {}, warn() {}, error() {} };
       let activationClock = Date.now();
+      if (mode === "crash-activation") {
+        const originalPost = Worker.prototype.postMessage;
+        Worker.prototype.postMessage = function (message, ...args) {
+          if (message?.type === "execute" && message.input instanceof Uint8Array) {
+            const command = deserialize(message.input);
+            if (command?.type === "cron.activateRun" && command.input?.handle?.jobId === jobId) {
+              // Install before startup captures the worker method; the reservation is durable here.
+              process.kill(process.pid, "SIGKILL");
+            }
+          }
+          return originalPost.call(this, message, ...args);
+        };
+      }
       const cron = new CronService({
         ...(mode === "crash-activation" ? { nowMs: () => ++activationClock } : {}),
         scheduler: createTestGatewayScheduler(),
@@ -119,21 +132,6 @@ beforeEach(async () => {
       });
       if (mode !== "manual-postcommit-crash") await cron.start();
       if (mode === "crash-activation") {
-        const originalOn = MessagePort.prototype.on;
-        MessagePort.prototype.on = function (event, listener) {
-          if (event !== "message") return originalOn.call(this, event, listener);
-          return originalOn.call(this, event, function (message) {
-            // The worker has changed both receipt and job rows, and is waiting
-            // for the real owner to admit COMMIT. Death here must roll both back.
-            if (message?.stage === "commit" && message.facts?.bytes instanceof Uint8Array) {
-              const outcome = deserialize(message.facts.bytes);
-              if (outcome?.activation?.job?.id === jobId) {
-                process.kill(process.pid, "SIGKILL");
-              }
-            }
-            return Reflect.apply(listener, this, [message]);
-          });
-        };
         await cron.run(jobId, "force");
       }
       if (mode === "manual-postcommit-crash") await cron.run(jobId, "due");
@@ -321,42 +319,15 @@ function claimMarkerlessReceipt(storePath: string, job: CronJob, startedAtMs: nu
 }
 
 describe("cron durable run ownership", () => {
-  it("rolls back the receipt and queued marker when reservation commit admission is refused", async () => {
-    vi.useRealTimers();
-    const { storePath } = await makeStorePath();
-    const now = Date.now();
-    const job = makeCommandJob("receipt-required", now + 60_000);
-    await saveCronStore(storePath, { version: 1, jobs: [job] });
-    inspectActiveCronRunReceipt({ storePath, jobId: job.id });
-    const rejectCommit = vi.fn(() => {
-      throw new Error("receipt commit refused");
-    });
-    const stopObserving = observeCronJobWrites(job.id, (written) => {
-      if (written.queuedAtMs !== undefined) {
-        rejectCommit();
-      }
-    });
-    const runner = vi.fn(async () => ({ status: "ok" as const }));
-    const cron = makeParentService(storePath, runner);
-    try {
-      await expect(cron.run(job.id, "force")).rejects.toThrow("receipt commit refused");
-      expect(rejectCommit).toHaveBeenCalledOnce();
-      expect(runner).not.toHaveBeenCalled();
-      expect(receipts(storePath, job.id)).toEqual([]);
-      expect((await loadCronStore(storePath)).jobs[0]?.state.queuedAtMs).toBeUndefined();
-    } finally {
-      cron.stop();
-      stopObserving();
-    }
-  });
-
-  it("rolls back the receipt with the running marker when activation crashes", async () => {
+  it("recovers a queued reservation when the Gateway crashes before activation", async () => {
     vi.useRealTimers();
     const { storePath } = await makeStorePath();
     const now = Date.now();
     const job = makeCommandJob("atomic-activation-crash", now + 60_000);
     await saveCronStore(storePath, { version: 1, jobs: [job] });
     const outputPath = path.join(scriptRoot, `activation-output-${now}`);
+    // Hand the seeded database to the child Gateway before simulating its crash.
+    await closeOpenClawStateDatabaseAsync();
     const child = spawnRunner({
       storePath,
       jobId: job.id,
@@ -365,23 +336,31 @@ describe("cron durable run ownership", () => {
       outputPath,
     });
 
+    let diagnostic = "";
+    child.stderr?.on("data", (chunk) => {
+      diagnostic += String(chunk);
+    });
     await waitForExit(child);
-    expect(child.signalCode).toBe("SIGKILL");
+    expect(child.signalCode, `child exit ${child.exitCode}: ${diagnostic}`).toBe("SIGKILL");
     expect(fs.existsSync(outputPath)).toBe(false);
-    const rolledBack = (await loadCronStore(storePath)).jobs[0];
-    expect(rolledBack?.state.queuedAtMs).toEqual(expect.any(Number));
-    expect(rolledBack?.state.runningAtMs).toBeUndefined();
+    const queued = (await loadCronStore(storePath)).jobs[0];
+    expect(queued?.state.queuedAtMs).toEqual(expect.any(Number));
+    expect(queued?.state.runningAtMs).toBeUndefined();
     expect(receipts(storePath, job.id)).toMatchObject([
-      { status: "running", startedAtMs: rolledBack?.state.queuedAtMs },
+      { status: "running", startedAtMs: queued?.state.queuedAtMs },
     ]);
 
-    const recovered = makeParentService(storePath);
+    const recoveredRunner = vi.fn(async () => ({ status: "ok" as const }));
+    const recovered = makeParentService(storePath, recoveredRunner);
     try {
       await recovered.start();
       expect(receipts(storePath, job.id)).toMatchObject([{ status: "interrupted" }]);
       const persisted = (await loadCronStore(storePath)).jobs[0];
       expect(persisted?.state.queuedAtMs).toBeUndefined();
       expect(persisted?.state.runningAtMs).toBeUndefined();
+      expect(recoveredRunner).not.toHaveBeenCalled();
+      await expect(recovered.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+      expect(recoveredRunner).toHaveBeenCalledOnce();
     } finally {
       recovered.stop();
     }

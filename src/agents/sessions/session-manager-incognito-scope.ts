@@ -8,21 +8,19 @@ import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { isActiveStoreWriter } from "../../shared/store-writer-queue.js";
 import { IncognitoSessionSyncAccessError } from "../../state/incognito-session-error.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
 import { warnSessionPersistenceDeprecation } from "./session-persistence-deprecation.js";
-
-export type SessionManagerIncognitoBinding = IncognitoSessionBinding;
 
 const managerBindings = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionManagerIncognitoBindings"),
-  () => new WeakMap<object, SessionManagerIncognitoBinding>(),
+  () => new WeakMap<object, IncognitoSessionBinding>(),
 );
 
 export function captureSessionManagerIncognitoBinding(
   target: SessionTranscriptRuntimeTarget | undefined,
   manager?: object,
   retarget = false,
-): SessionManagerIncognitoBinding | undefined {
+): IncognitoSessionBinding | undefined {
   const retained = manager ? managerBindings.get(manager) : undefined;
   if (!target) {
     return undefined;
@@ -41,7 +39,7 @@ export function captureSessionManagerIncognitoBinding(
 /** Publish the binding captured by preparation; failed hydration never changes its owner. */
 export function installSessionManagerIncognitoBinding(
   manager: object,
-  binding: SessionManagerIncognitoBinding | undefined,
+  binding: IncognitoSessionBinding | undefined,
 ): void {
   if (binding) {
     binding.actor.assertCurrent();
@@ -60,7 +58,7 @@ export function withRetainedSessionManagerIncognitoActor<T>(
 }
 
 export function captureSessionManagerIncognitoAdmissionAssertion(
-  binding: SessionManagerIncognitoBinding,
+  binding: IncognitoSessionBinding,
 ): () => void {
   // Accepted writes retain their hydration and settlement after new admission closes.
   const acceptedWriter = isActiveStoreWriter(SQLITE_SESSION_WRITER_QUEUES, binding.actor.path);
@@ -76,12 +74,6 @@ export function captureSessionManagerIncognitoAdmissionAssertion(
       }
     }
   };
-}
-
-export function assertSessionManagerIncognitoAdmission(
-  binding: SessionManagerIncognitoBinding,
-): void {
-  captureSessionManagerIncognitoAdmissionAssertion(binding)();
 }
 
 /** Preflight the synchronous SDK entry before warnings, local mutation, or native SQLite. */

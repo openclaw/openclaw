@@ -22,6 +22,7 @@ import {
   getRequestInputText,
   getRequestInputTextAt,
   makeThreadBootstrapBinding,
+  requestMethodsExcludingSkillDiscovery,
   requireRecord,
   runCodexAppServerAttempt,
   writeCodexAppServerBinding,
@@ -237,7 +238,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
                   });
                 }),
               ]);
-              expect(harness.requests.map((request) => request.method)).toEqual([
+              expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
                 "config/read",
                 "configRequirements/read",
                 "thread/read",
@@ -435,7 +436,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
       threadId: "thread-old",
       replaySafe: true,
     });
-    expect(harness.requests.map((request) => request.method)).toEqual([
+    expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
       "config/read",
       "configRequirements/read",
       "thread/read",
@@ -486,7 +487,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
     );
 
     expect(compact).not.toHaveBeenCalled();
-    expect(harness.requests.map((request) => request.method)).toEqual([
+    expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
       "config/read",
       "configRequirements/read",
       "thread/read",
@@ -526,7 +527,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
 
     expect(compact).not.toHaveBeenCalled();
     expect(assemble).toHaveBeenCalledTimes(1);
-    expect(harness.requests.map((request) => request.method)).toEqual([
+    expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
       "config/read",
       "configRequirements/read",
       "thread/start",
@@ -566,7 +567,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
 
     expect(compact).not.toHaveBeenCalled();
     expect(assemble).toHaveBeenCalledTimes(1);
-    expect(harness.requests.map((request) => request.method)).toEqual([
+    expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
       "config/read",
       "configRequirements/read",
       "thread/start",

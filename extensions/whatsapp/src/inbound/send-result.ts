@@ -25,10 +25,7 @@ export type WhatsAppSendKind =
   | "sticker"
   | "text";
 
-type WhatsAppSendKey = Omit<
-  Pick<WAMessageKey, "fromMe" | "id" | "participant" | "remoteJid">,
-  "id"
-> & {
+type WhatsAppSendKey = Pick<WAMessageKey, "fromMe" | "participant" | "remoteJid"> & {
   id: string;
 };
 
@@ -286,6 +283,30 @@ export function rememberWhatsAppAcceptedSend(params: {
   return accepted;
 }
 
+function appendUnrecordedPartialReceipt(params: {
+  delivery?: { receipt?: MessageReceipt; messageIds?: string[] };
+  recordedIds: ReadonlySet<string>;
+  sources: Array<MessageReceiptSourceResult & { receipt?: MessageReceipt }>;
+}): string[] {
+  const receipt = params.delivery?.receipt;
+  const receiptIds = receipt ? listMessageReceiptPlatformIds(receipt) : [];
+  const acceptedIds = uniqueStrings([
+    ...receiptIds,
+    ...normalizeStringEntries(params.delivery?.messageIds ?? []),
+  ]).filter((id) => id !== "unknown" && !params.recordedIds.has(id));
+  const messageId = acceptedIds[0];
+  if (receipt && messageId) {
+    params.sources.push({ channel: "whatsapp", messageId, receipt });
+  }
+  const includedIds = new Set(receiptIds);
+  for (const acceptedId of acceptedIds) {
+    if (!includedIds.has(acceptedId)) {
+      params.sources.push({ channel: "whatsapp", messageId: acceptedId });
+    }
+  }
+  return acceptedIds;
+}
+
 /** Nested owners already attempted activity accounting before exposing accepted delivery. */
 export function rememberWhatsAppPartialSend(params: {
   error: unknown;
@@ -295,28 +316,15 @@ export function rememberWhatsAppPartialSend(params: {
   if (!isChannelPartialDeliveryError(params.error)) {
     return false;
   }
-  const delivery = params.error.deliveryResult;
-  const messageIds = uniqueStrings([
-    ...(delivery.receipt ? listMessageReceiptPlatformIds(delivery.receipt) : []),
-    ...normalizeStringEntries(delivery.messageIds ?? []),
-  ]).filter((messageId) => messageId !== "unknown");
-  const existingIds = new Set(params.results.flatMap(listWhatsAppSendResultMessageIds));
-  const acceptedIds = messageIds.filter((messageId) => !existingIds.has(messageId));
+  const receiptSources: Array<MessageReceiptSourceResult & { receipt?: MessageReceipt }> = [];
+  const acceptedIds = appendUnrecordedPartialReceipt({
+    delivery: params.error.deliveryResult,
+    recordedIds: new Set(params.results.flatMap(listWhatsAppSendResultMessageIds)),
+    sources: receiptSources,
+  });
   const messageId = acceptedIds[0];
   if (!messageId) {
     return false;
-  }
-  const receiptSources: Array<MessageReceiptSourceResult & { receipt?: MessageReceipt }> = [];
-  if (delivery.receipt) {
-    receiptSources.push({ channel: "whatsapp", messageId, receipt: delivery.receipt });
-  }
-  const receiptIds = new Set(
-    delivery.receipt ? listMessageReceiptPlatformIds(delivery.receipt) : [],
-  );
-  for (const acceptedId of acceptedIds) {
-    if (!receiptIds.has(acceptedId)) {
-      receiptSources.push({ channel: "whatsapp", messageId: acceptedId });
-    }
   }
   const receipt = createMessageReceiptFromOutboundResults({
     kind: resolveWhatsAppReceiptKind(params.kind),
@@ -359,27 +367,7 @@ export function mergeWhatsAppAcceptedSendError(params: {
       recordedIds.add(messageId);
     }
   }
-  const nestedIds = uniqueStrings([
-    ...(nested?.receipt ? listMessageReceiptPlatformIds(nested.receipt) : []),
-    ...normalizeStringEntries(nested?.messageIds ?? []),
-  ]).filter((messageId) => messageId !== "unknown");
-  const unrecordedNestedIds = nestedIds.filter((messageId) => !recordedIds.has(messageId));
-  const nestedMessageId = unrecordedNestedIds[0];
-  if (nested?.receipt && nestedMessageId) {
-    receiptSources.push({
-      channel: "whatsapp",
-      messageId: nestedMessageId,
-      receipt: nested.receipt,
-    });
-    for (const messageId of listMessageReceiptPlatformIds(nested.receipt)) {
-      recordedIds.add(messageId);
-    }
-  }
-  for (const messageId of unrecordedNestedIds) {
-    if (!recordedIds.has(messageId)) {
-      receiptSources.push({ channel: "whatsapp", messageId });
-    }
-  }
+  appendUnrecordedPartialReceipt({ delivery: nested, recordedIds, sources: receiptSources });
   const receipt = enrichWhatsAppDeliveryReceipt({
     receipt: createMessageReceiptFromOutboundResults({
       kind: resolveWhatsAppReceiptKind(params.kind),

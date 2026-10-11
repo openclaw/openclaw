@@ -10,7 +10,10 @@ import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { hasPendingSessionTranscriptArchives } from "./session-accessor.sqlite-archive-store-kernel.js";
 import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-descendant-basis.js";
-import { readSessionEntryStore } from "./session-accessor.sqlite-entry-store.js";
+import {
+  readSessionEntryCount,
+  readSessionEntryStore,
+} from "./session-accessor.sqlite-entry-store.js";
 import { collectLifecycleIdentityChanges } from "./session-accessor.sqlite-identity.js";
 import {
   finishProjectedLifecycleRemovalPlans,
@@ -90,6 +93,7 @@ type LifecycleProjectionPreparation = {
 };
 
 export type SessionLifecyclePlanningOperations = {
+  count: { input: undefined; output: number };
   prepare: {
     input: LifecycleRemovalProjectionInput & { upsertSessionKeys: string[] };
     output: LifecycleProjectionPreparation;
@@ -126,7 +130,10 @@ export function bindSqliteWorkerBackend(
   return {
     execute(command) {
       assertOpen();
-      return runSqliteDeferredTransactionSync(database.db, () => {
+      if (command.type === "count") {
+        return readSessionEntryCount(database);
+      }
+      const prepare = () => {
         if (command.type === "prepare") {
           const input = command.input;
           const store = readSessionEntryStore(database, {
@@ -151,21 +158,19 @@ export function bindSqliteWorkerBackend(
           };
         }
         const input = command.input;
-        return input.selected.projectedRemovals.length
-          ? finishProjectedLifecycleRemovalPlans(
-              database,
-              input.archiveDirectory,
-              input.store,
-              input.selected,
-              input.upsertedEntries,
-            )
-          : {
-              deletePlans: [],
-              removals: [],
-              upsertedEntries: input.upsertedEntries,
-              archiveRecovery: input.archiveRecovery,
-            };
-      });
+        return finishProjectedLifecycleRemovalPlans(
+          database,
+          input.archiveDirectory,
+          input.store,
+          input.selected,
+          input.upsertedEntries,
+        );
+      };
+      // Without removals the inventory is one statement. Archive recovery is an
+      // independent scheduling hint, already carried across asynchronous builders.
+      return command.type === "prepare" && command.input.removals.length === 0
+        ? prepare()
+        : runSqliteDeferredTransactionSync(database.db, prepare);
     },
     assertSettled() {
       assertOpen();

@@ -17,10 +17,10 @@ import {
 import {
   loadSessionEntryReadOnly,
   loadTranscriptEvents,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { enqueueGitRefMutation } from "../infra/git-exec.js";
@@ -64,7 +64,7 @@ vi.mock("../agents/worktrees/service.js", async (importOriginal) => {
   return {
     ...actual,
     managedWorktrees: {
-      findLiveByOwner: (_kind: string, ownerId: string) => ({
+      findLiveByOwner: async (_kind: string, ownerId: string) => ({
         id: "recovery-worktree",
         ownerId,
         path: boundary.worktreePath,

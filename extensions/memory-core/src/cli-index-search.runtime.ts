@@ -1,41 +1,33 @@
 import path from "node:path";
-import { resolveMemorySearchStaleness } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   defaultRuntime,
   formatErrorMessage,
   setVerbose,
   shortenHomeInString,
-  shortenHomePath,
   theme,
-  withProgressTotals,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import {
-  resolveMemoryDreamingConfig,
-  resolveMemoryDeepDreamingConfig,
-} from "openclaw/plugin-sdk/memory-core-host-status";
-import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolveForeignMemorySlotOwner } from "./cli-memory-slot.js";
 import {
   emitMemoryCoreSidecarNotice,
   formatExtraPaths,
   formatMemoryIndexOutcome,
   resolveMemoryAgent,
-  resolveMemoryPluginConfig,
   scanMemoryManagerSources,
+  syncMemoryWithProgress,
   withMemoryCommand,
 } from "./cli-runtime-common.js";
+import { renderMemorySearch } from "./cli-search-output.js";
 import type {
   MemoryCommandOptions,
   MemoryForgetCommandOptions,
   MemorySearchCommandOptions,
 } from "./cli.types.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
-import { captureMemoryRebuildNotice } from "./memory-rebuild-notice.js";
+import { searchMemoryForCli } from "./memory-search-operation.js";
 import { formatMemoryVectorDegradedWriteReason } from "./memory/manager-vector-warning.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
-import { recordShortTermRecalls } from "./short-term-promotion.js";
-const { accent, heading, info, muted, success, warn } = theme;
+const { heading, info, muted, warn } = theme;
 function formatSourceLabel(source: string, workspaceDir: string): string {
   if (source === "memory") {
     return shortenHomeInString(
@@ -54,7 +46,7 @@ export async function runMemoryIndex(
   setVerbose(Boolean(opts.verbose));
   await withMemoryCommand({
     commandName: "memory index",
-    agent: opts.agent,
+    options: { agent: opts.agent },
     allAgents: true,
     purpose: "cli",
     inspectSources: true,
@@ -88,63 +80,11 @@ export async function runMemoryIndex(
           defaultRuntime.log(lines.join("\n"));
           defaultRuntime.log("");
         }
-        const startedAt = Date.now();
-        let lastLabel = "Indexing memory…";
-        let lastCompleted = 0;
-        let lastTotal = 0;
-        const formatDuration = (elapsedMs: number) => {
-          const seconds = Math.floor(elapsedMs / 1000);
-          return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
-        };
-        const buildLabel = () => {
-          const elapsedMs = Math.max(1, Date.now() - startedAt);
-          const elapsed = formatDuration(elapsedMs);
-          if (lastTotal <= 0 || lastCompleted <= 0) {
-            return `${lastLabel} · elapsed ${elapsed}`;
-          }
-          const remainingMs = Math.max(
-            0,
-            ((lastTotal - lastCompleted) * elapsedMs) / lastCompleted,
-          );
-          return `${lastLabel} · elapsed ${elapsed} · eta ${formatDuration(remainingMs)}`;
-        };
         if (!syncFn) {
           defaultRuntime.log("Memory backend does not support manual reindex.");
           return;
         }
-        await withProgressTotals(
-          {
-            label: "Indexing memory…",
-            total: 0,
-            fallback: opts.verbose ? "line" : undefined,
-          },
-          async (update, progress) => {
-            const interval = setInterval(() => {
-              progress.setLabel(buildLabel());
-            }, 1000);
-            try {
-              await syncFn({
-                reason: "cli",
-                force: Boolean(opts.force),
-                progress: (syncUpdate) => {
-                  if (syncUpdate.label) {
-                    lastLabel = syncUpdate.label;
-                  }
-                  lastCompleted = syncUpdate.completed;
-                  lastTotal = syncUpdate.total;
-                  update({
-                    completed: syncUpdate.completed,
-                    total: syncUpdate.total,
-                    label: buildLabel(),
-                  });
-                  progress.setLabel(buildLabel());
-                },
-              });
-            } finally {
-              clearInterval(interval);
-            }
-          },
-        );
+        await syncMemoryWithProgress({ sync: syncFn, options: opts, elapsed: true });
         let postIndexStatus = manager.status();
         const scan = await scanMemoryManagerSources(postIndexStatus);
         const outcome = formatMemoryIndexOutcome(postIndexStatus, scan, agentId);
@@ -193,82 +133,21 @@ export async function runMemorySearch(
 ) {
   await withMemoryCommand({
     commandName: "memory search",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
-    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
+    options: opts,
     requiresMemorySlot: true,
     purpose: "cli",
     inspectSources: true,
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
-      const memoryPluginConfig = resolveMemoryPluginConfig(cfg);
-      const dreamingEnabled = resolveMemoryDreamingConfig({
-        pluginConfig: memoryPluginConfig,
+      const result = await searchMemoryForCli({
+        manager,
         cfg,
-      }).enabled;
-      const dreaming = resolveMemoryDeepDreamingConfig({
-        pluginConfig: memoryPluginConfig,
-        cfg,
-      });
-      const sessionKey = buildAgentSessionKey({
         agentId,
-        channel: "cli",
-        peer: { kind: "direct", id: "memory-search" },
-        dmScope: "per-channel-peer",
+        query,
+        maxResults: opts.maxResults,
+        minScore: opts.minScore,
       });
-      let readRebuildWarning: () => string | undefined = () => undefined;
-      let results: Awaited<ReturnType<typeof manager.search>>;
-      try {
-        readRebuildWarning = captureMemoryRebuildNotice(manager.status());
-        results = await manager.search(query, {
-          maxResults: opts.maxResults,
-          minScore: opts.minScore,
-          sessionKey,
-        });
-      } catch (err) {
-        const message = formatErrorMessage(err);
-        throw new Error(
-          [`Memory search failed: ${message}`, readRebuildWarning()].filter(Boolean).join(" "),
-          { cause: err },
-        );
-      }
-      const status = manager.status();
-      const staleness = resolveMemorySearchStaleness(status, agentId);
-      const warning = [staleness?.warning, readRebuildWarning()]
-        .filter((message): message is string => typeof message === "string")
-        .join(" ");
-      const workspaceDir = status.workspaceDir;
-      if (dreamingEnabled) {
-        await recordShortTermRecalls({
-          workspaceDir,
-          query,
-          results,
-          timezone: dreaming.timezone,
-        }).catch(() => {
-          // Persistence is best-effort, but the short-lived CLI must await it
-          // so process exit cannot discard an in-flight recall write.
-        });
-      }
-      if (opts.json) {
-        defaultRuntime.writeJson({ results, ...staleness, ...(warning ? { warning } : {}) });
-        return;
-      }
-      if (warning) {
-        defaultRuntime.error([warning, staleness?.action].filter(Boolean).join(" "));
-      }
-      if (results.length === 0) {
-        defaultRuntime.log("No matches.");
-        return;
-      }
-      const lines: string[] = [];
-      for (const result of results) {
-        lines.push(
-          `${success(result.score.toFixed(3))} ${accent(`${shortenHomePath(result.path)}:${result.startLine}-${result.endLine}`)}`,
-        );
-        lines.push(muted(result.snippet));
-        lines.push("");
-      }
-      defaultRuntime.log(lines.join("\n").trim());
+      renderMemorySearch(result, opts.json);
     },
   });
 }

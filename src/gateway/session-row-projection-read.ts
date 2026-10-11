@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
 import { resolveSharedAuthStoreOwnershipAsync } from "../agents/auth-profiles/path-resolve.js";
+import { readSessionRuntimeOwnershipAsync } from "../agents/harness/session-runtime-ownership.js";
 import { listSubagentSessionListRunsForControllers } from "../agents/subagents/registry/subagent-registry-read.js";
 import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -19,6 +19,7 @@ import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-tr
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import { capturePluginStateReadDependencies } from "../plugin-state/plugin-state-publication.js";
 import {
   isIncognitoSessionKey,
   normalizeAgentId,
@@ -41,12 +42,16 @@ import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-w
 import { findSessionRepositoryWorkspaces } from "../state/session-repository-workspaces.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import {
+  canRetainSessionRowRuntimeOwnership,
   createIncognitoSessionRow,
   identity,
   isCurrentGeneration,
+  isPreparedSessionRowDatabaseFacts,
+  type RetainedSessionRowDatabaseFacts,
   type PreparedSessionRowDatabaseFacts,
   type Row,
 } from "./session-row-projection-record.js";
+import { prepareSessionRowSharedFacts } from "./session-row-projection-shared-facts.js";
 import { withGatewaySessionStoreTarget } from "./session-utils-store-lookup.js";
 
 /** Retain each selected store until its prepared facts have entered the resident row owner. */
@@ -56,8 +61,8 @@ export async function withSessionRowDatabaseFacts(
     dirty: ReadonlySet<string>;
     revision: () => number | undefined;
     prepareRegistryFacts: () => Promise<void> | undefined;
-    env: NodeJS.ProcessEnv;
     cfg: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
     selected?: ReadonlySet<string>;
   },
   consume: {
@@ -83,7 +88,11 @@ export async function withSessionRowDatabaseFacts(
   const retained = new Map<string, PreparedSessionRowDatabaseFacts>();
   for (const id of ids) {
     const facts = owner.rows.get(id)?.retainedDatabaseFacts;
-    if (facts) {
+    if (
+      facts &&
+      isPreparedSessionRowDatabaseFacts(facts) &&
+      canRetainSessionRowRuntimeOwnership(facts)
+    ) {
       retained.set(id, facts);
     }
   }
@@ -95,6 +104,10 @@ export async function withSessionRowDatabaseFacts(
   const rows = ids.flatMap((id) => owner.rows.get(id) ?? []);
   const rowRevisions = new Map(rows.map((row) => [identity(row), row.databaseFactsRevision]));
   const env = owner.env;
+  const shared = captureOpenClawStateReadWorkerContext({
+    env,
+    path: resolveOpenClawStateSqlitePath(env),
+  });
   const groups = new Map<
     string,
     {
@@ -121,9 +134,12 @@ export async function withSessionRowDatabaseFacts(
       };
       groups.set(key, group);
     }
-    group.rows.push(row);
+    if (!row.retainedDatabaseFacts) {
+      group.rows.push(row);
+    }
   }
   const selected = [...groups.values()];
+  const readGroups = selected.filter((group) => group.rows.length > 0);
   const native = retainOpenClawAgentDatabaseReadCandidates(
     selected.flatMap(({ candidate }) => [
       candidate,
@@ -144,6 +160,10 @@ export async function withSessionRowDatabaseFacts(
       continuation.owner.assertCurrent();
     }
   };
+  const ownershipReads = new Map<
+    string,
+    Awaited<ReturnType<typeof capturePluginStateReadDependencies>>
+  >();
   try {
     for (const database of native.databases) {
       const continuation = captureCanonicalSessionReaderContinuation(database);
@@ -157,11 +177,27 @@ export async function withSessionRowDatabaseFacts(
     }
     assertCurrent();
     await withSessionHistoryWorkerDatabases(
-      selected.map(({ database }) => database),
+      readGroups.map(({ database }) => database),
       async (owners) => {
-        const facts = new Map<string, PreparedSessionRowDatabaseFacts>();
+        const facts = new Map<string, RetainedSessionRowDatabaseFacts>(
+          rows.flatMap((row) => {
+            const previous = row.retainedDatabaseFacts;
+            if (!previous) {
+              return [];
+            }
+            const prepared = { ...previous };
+            if (
+              isPreparedSessionRowDatabaseFacts(previous) &&
+              !canRetainSessionRowRuntimeOwnership(previous)
+            ) {
+              prepared.runtimeOwnership = undefined;
+              prepared.runtimeOwnershipDependencies = undefined;
+            }
+            return [[identity(row), prepared]];
+          }),
+        );
         // Finish each accepted read before releasing any captured database owner on failure.
-        for (const [index, group] of selected.entries()) {
+        for (const [index, group] of readGroups.entries()) {
           const databaseOwner = expectDefined(owners[index], "captured session row database");
           const continuation = continuations.find(
             (item) => item.agentId === group.database.agentId && item.path === group.database.path,
@@ -176,47 +212,37 @@ export async function withSessionRowDatabaseFacts(
           for (const row of group.rows) {
             const prepared = byKey.get(row.key);
             if (prepared) {
-              facts.set(identity(row), {
-                ...prepared,
-                acpMeta: null,
-                repositoryWorkspace: null,
-              });
+              facts.set(identity(row), { ...prepared });
             }
           }
         }
-        const acpRows = rows.flatMap((row) => {
+        const sharedRead = prepareSessionRowSharedFacts({ rows, facts, env, shared });
+        if (sharedRead) {
+          sharedRead.accept(await sharedRead.reply);
+        }
+        for (const row of rows) {
           const prepared = facts.get(identity(row));
-          return prepared?.entry ? [{ row, prepared, entry: prepared.entry }] : [];
-        });
-        const acpMetadata = acpRows.length
-          ? await readAcpSessionMetaForEntries({
-              env,
-              cfg: owner.cfg,
-              entries: acpRows.map(({ row, entry }) => ({
+          if (prepared && prepared.runtimeOwnership === undefined) {
+            const ownership = await capturePluginStateReadDependencies(() =>
+              readSessionRuntimeOwnershipAsync({
+                config: owner.cfg,
                 agentId: row.agentId,
                 sessionKey: row.key,
-                entry,
-              })),
-            })
-          : [];
-        for (const [index, { prepared }] of acpRows.entries()) {
-          prepared.acpMeta = acpMetadata[index] ?? null;
+                storePath: row.storeTarget.storePath,
+                sessionEntry: prepared.entry,
+                readPreparedPreviousSessionId: () => prepared.entry?.previousSessionId,
+                assertCurrent,
+              }),
+            );
+            ownershipReads.set(identity(row), ownership);
+            prepared.runtimeOwnership = ownership.value ?? null;
+            prepared.runtimeOwnershipDependencies = ownership.dependencies;
+          }
         }
-        const repositoryRows = rows.flatMap((row) => {
-          const prepared = facts.get(identity(row));
-          return prepared?.entry?.repositoryWorkspaceId ? [{ row, prepared }] : [];
-        });
-        if (repositoryRows.length) {
-          const workspaces = await findSessionRepositoryWorkspaces(
-            repositoryRows.map(({ row }) => ({ agentId: row.agentId, sessionKey: row.key })),
-            { path: resolveOpenClawStateSqlitePath(env), env },
-          );
-          const byWorkspace = new Map(
-            workspaces.map((workspace) => [workspace.workspaceId, workspace]),
-          );
-          for (const { prepared } of repositoryRows) {
-            prepared.repositoryWorkspace =
-              byWorkspace.get(prepared.entry!.repositoryWorkspaceId!) ?? null;
+        const preparedFacts = new Map<string, PreparedSessionRowDatabaseFacts>();
+        for (const [id, row] of facts) {
+          if (isPreparedSessionRowDatabaseFacts(row)) {
+            preparedFacts.set(id, row);
           }
         }
         // Registry renewal changes presentation, not the captured SQLite facts.
@@ -231,6 +257,7 @@ export async function withSessionRowDatabaseFacts(
         for (const databaseOwner of owners) {
           databaseOwner.assertCurrent();
         }
+        sharedRead?.assertCurrent();
         assertCurrent();
         if (revision !== undefined && owner.revision() === revision) {
           const currentIds = rows
@@ -241,16 +268,20 @@ export async function withSessionRowDatabaseFacts(
                     isColdArchivedSessionRow(owner.rows.get(identity(row)) ?? row))) &&
                 isCurrentGeneration(row, owner.rows.get(identity(row))) &&
                 owner.rows.get(identity(row))?.databaseFactsRevision ===
-                  rowRevisions.get(identity(row)),
+                  rowRevisions.get(identity(row)) &&
+                (ownershipReads.get(identity(row))?.isCurrent() ?? true),
             )
             .map(identity);
-          consume.accept(currentIds, facts);
+          consume.accept(currentIds, preparedFacts);
           assertCurrent();
         }
       },
       projectionLane,
     );
   } finally {
+    for (const ownership of ownershipReads.values()) {
+      ownership.release();
+    }
     for (const continuation of continuations.toReversed()) {
       continuation.owner.release();
     }
@@ -345,11 +376,29 @@ async function withRetainedIncognitoSessionRow<T>(
       try {
         assertions.push(acp.assertCurrent);
         assertCurrent();
+        const runtimeOwnership = await capturePluginStateReadDependencies(() =>
+          readSessionRuntimeOwnershipAsync({
+            config: cfg,
+            agentId: actor.agentId,
+            sessionKey: key,
+            storePath: actor.path,
+            sessionEntry: value.row.entry,
+            readPreparedPreviousSessionId: () => value.row.entry.previousSessionId,
+            assertCurrent,
+          }),
+        );
+        retained.releases.push(runtimeOwnership.release);
+        assertions.push(runtimeOwnership.assertCurrent);
+        retained.assertions.push(runtimeOwnership.assertCurrent);
+        assertCurrent();
         const facts: PreparedSessionRowDatabaseFacts = {
           ...value.row,
           acpMeta: acp.session?.acp ?? null,
+          runtimeOwnership: runtimeOwnership.value ?? null,
+          runtimeOwnershipDependencies: runtimeOwnership.dependencies,
           repositoryWorkspace: null,
         };
+        assertCurrent();
         if (facts.entry.repositoryWorkspaceId) {
           const workspaces = await findSessionRepositoryWorkspaces(
             [{ agentId: actor.agentId, sessionKey: key }],

@@ -384,7 +384,6 @@ export class ComposerDictationController {
   private pointerBounds: DOMRect | null = null;
   private holdTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private session: ComposerDictationSession | null = null;
-  private suppressClick = false;
   private suppressedPointerId: number | null = null;
   private suppressClickTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private pendingCommitSession: ComposerDictationSession | null = null;
@@ -465,8 +464,7 @@ export class ComposerDictationController {
     this.pointerTarget = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
     this.pointerBounds = this.pointerTarget?.getBoundingClientRect() ?? null;
     this.pointerTarget?.setPointerCapture?.(event.pointerId);
-    this.pointerTarget?.addEventListener("lostpointercapture", this.handleLostPointerCapture);
-    this.suppressClick = true;
+    this.pointerTarget?.addEventListener("lostpointercapture", this.handleDocumentPointerCancel);
     this.suppressedPointerId = event.pointerId;
     this.setPhase("pressing");
     // A normal click gets a quiet grace period. Only a sustained press enters
@@ -487,7 +485,7 @@ export class ComposerDictationController {
   }
 
   handleClick(event: MouseEvent): void {
-    if (this.suppressClick) {
+    if (this.suppressedPointerId !== null) {
       this.clearClickSuppression();
       event.preventDefault();
       return;
@@ -570,16 +568,9 @@ export class ComposerDictationController {
     void this.stop({ commit: false });
   };
 
-  private readonly handleLostPointerCapture = (event: Event): void => {
-    if ((event as PointerEvent).pointerId === this.pointerId) {
-      void this.stop({ commit: false });
-    }
-  };
-
   private readonly handleVisibilityChange = (): void => {
     if (document.visibilityState === "hidden") {
-      this.clearClickSuppression();
-      void this.stop({ commit: false });
+      this.handleWindowBlur();
     }
   };
 
@@ -714,7 +705,10 @@ export class ComposerDictationController {
       this.holdTimer = null;
     }
     if (this.pointerId !== null) {
-      this.pointerTarget?.removeEventListener("lostpointercapture", this.handleLostPointerCapture);
+      this.pointerTarget?.removeEventListener(
+        "lostpointercapture",
+        this.handleDocumentPointerCancel,
+      );
       try {
         this.pointerTarget?.releasePointerCapture?.(this.pointerId);
       } catch {
@@ -730,7 +724,7 @@ export class ComposerDictationController {
   }
 
   private expireClickSuppression(): void {
-    if (!this.suppressClick || this.suppressClickTimer !== null) {
+    if (this.suppressedPointerId === null || this.suppressClickTimer !== null) {
       return;
     }
     this.suppressClickTimer = globalThis.setTimeout(() => this.clearClickSuppression(), 0);
@@ -744,7 +738,6 @@ export class ComposerDictationController {
     document.removeEventListener("pointerup", this.handleSuppressedPointerRelease);
     document.removeEventListener("pointercancel", this.handleSuppressedPointerRelease);
     this.suppressedPointerId = null;
-    this.suppressClick = false;
   }
 
   private setPhase(phase: DictationPhase): void {

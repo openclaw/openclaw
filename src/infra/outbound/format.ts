@@ -6,36 +6,21 @@ import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
 import type { OutboundDeliveryResult } from "./deliver.js";
 
-const resolveChannelLabel = (channel: string) => {
-  const pluginLabel = getChannelPlugin(channel as ChannelId)?.meta.label;
-  if (pluginLabel) {
-    return pluginLabel;
-  }
-  // Some legacy chat channels are not plugins; keep their human labels for CLI output.
-  const normalized = normalizeChatChannelId(channel);
-  if (normalized) {
-    return findChatChannelMeta(normalized)?.label ?? channel;
-  }
-  return channel;
-};
-
 export function formatOutboundDeliverySummary(
   channel: string,
   result?: OutboundDeliveryResult,
   opts?: { action?: string },
 ): string {
   const action = opts?.action ?? "Sent";
-  if (!result) {
-    return `✅ ${action} via ${resolveChannelLabel(channel)}. Message ID: unknown`;
+  const resultChannel = result ? result.channel : channel;
+  let label = getChannelPlugin(resultChannel as ChannelId)?.meta.label;
+  if (!label) {
+    // Some legacy chat channels are not plugins; keep their human labels for CLI output.
+    const normalized = normalizeChatChannelId(resultChannel);
+    label = normalized ? (findChatChannelMeta(normalized)?.label ?? resultChannel) : resultChannel;
   }
-
-  const label = resolveChannelLabel(result.channel);
-  const base = `✅ ${action} via ${label}. Message ID: ${result.messageId}`;
-
-  if (result.target) {
-    return `${base} (${result.target.kind} ${result.target.id})`;
-  }
-  return base;
+  const base = `✅ ${action} via ${label}. Message ID: ${result ? result.messageId : "unknown"}`;
+  return result?.target ? `${base} (${result.target.kind} ${result.target.id})` : base;
 }
 
 export function formatGatewaySummary(params: {

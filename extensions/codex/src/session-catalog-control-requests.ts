@@ -6,8 +6,7 @@ import type {
   CodexAppServerRequestResult,
 } from "./app-server/protocol.js";
 import type { CodexControlRequestObservation } from "./app-server/request-observation.js";
-import { withTimeout } from "./app-server/timeout.js";
-import { CodexCatalogLoadingError } from "./session-catalog-availability.js";
+import { withCodexCatalogLoadingTimeout } from "./session-catalog-availability.js";
 import { requireEligibleCodexThread } from "./session-catalog-eligibility.js";
 import type { CodexCatalogIndex } from "./session-catalog-index.js";
 import {
@@ -127,11 +126,9 @@ export function createCodexSessionCatalogControlFromRequests(params: {
         // Release foreground admission while index-owned hydration continues.
         const timeoutMs = Math.min(requests.requestTimeoutMs, 5_000);
         const deadline = request.constrainDeadline(performance.now() + timeoutMs);
-        const index = await withTimeout(
+        const index = await withCodexCatalogLoadingTimeout(
           requests.index(),
           request.remaining(timeoutMs),
-          "Codex session catalog is still loading",
-          () => new CodexCatalogLoadingError(),
         );
         return await index.list(query, deadline);
       });

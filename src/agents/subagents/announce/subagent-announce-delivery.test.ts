@@ -612,7 +612,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     });
   }
 
-  it("loads a custom main alias through its canonical requester key", () => {
+  it("loads a custom main alias through its canonical requester key", async () => {
     const loadSessionEntry = vi.fn(() => ({ sessionId: "research-main", updatedAt: 1 }));
     testing.setDepsForTest({
       getRuntimeConfig: () => ({
@@ -621,7 +621,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       }),
       loadSessionEntry,
     });
-    expect(loadRequesterSessionEntry("work", "research")).toMatchObject({
+    expect(await loadRequesterSessionEntry("work", "research")).toMatchObject({
       canonicalKey: "agent:research:work",
       entry: { sessionId: "research-main" },
     });
@@ -2816,6 +2816,14 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       "keeps exhausted typed adapter-resolution failures retryable",
       adapterUnavailable,
       4,
+      "retryable",
+    ],
+    [
+      "leaves a parent restart admission race retryable for the lifecycle owner",
+      new Error(
+        'Session "agent:main:main" changed while starting work. Retry. | SESSION_WORK_START_CHANGED',
+      ),
+      1,
       "retryable",
     ],
     [

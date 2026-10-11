@@ -13,7 +13,7 @@ import type { MatrixVerificationSummary } from "../sdk/verification-manager.js";
 import type { createDirectRoomTracker } from "./direct.js";
 import type { createMatrixRoomInfoResolver } from "./room-info.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
-import { resolveMatrixInboundRoute } from "./route.js";
+import { resolveMatrixInboundRouteAsync } from "./route.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
 import { createMatrixVerificationEventRouter } from "./verification-events.js";
@@ -120,15 +120,12 @@ function createMatrixPostHealthySyncDecryptFailureTracker(params: {
       }
 
       warningEmitted = true;
-      const rooms = uniqueStrings(observations.map((entry) => entry.roomId)).slice(
-        0,
-        MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_SAMPLE_LIMIT,
-      );
+      const rooms = uniqueStrings(observations.map((entry) => entry.roomId));
       const senders = uniqueStrings(
         observations
           .map((entry) => entry.sender)
           .filter((sender): sender is string => Boolean(sender)),
-      ).slice(0, MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_SAMPLE_LIMIT);
+      );
       const eventIds = observations
         .slice(-MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_SAMPLE_LIMIT)
         .map((entry) => entry.eventId);
@@ -137,10 +134,10 @@ function createMatrixPostHealthySyncDecryptFailureTracker(params: {
         freshAfterHealthySync: true,
         failureCount,
         warning: {
-          rooms,
-          roomCount: new Set(observations.map((entry) => entry.roomId)).size,
-          senders,
-          senderCount: new Set(observations.map((entry) => entry.sender).filter(Boolean)).size,
+          rooms: rooms.slice(0, MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_SAMPLE_LIMIT),
+          roomCount: rooms.length,
+          senders: senders.slice(0, MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_SAMPLE_LIMIT),
+          senderCount: senders.length,
           eventIds,
           latestError,
           windowMs: MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_WINDOW_MS,
@@ -242,16 +239,17 @@ export function registerMatrixMonitorEvents(params: {
       });
   };
 
+  const dispatchRoomMessage = (label: string, roomId: string, event: MatrixRawEvent) => {
+    void runMonitorTask(`${label} room=${roomId} id=${event.event_id ?? "unknown"}`, async () => {
+      await onRoomMessage(roomId, event);
+    });
+  };
+
   const onRoomMessageEvent = (roomId: string, event: MatrixRawEvent) => {
     if (routeVerificationEvent(roomId, event)) {
       return;
     }
-    void runMonitorTask(
-      `room message handler room=${roomId} id=${event.event_id ?? "unknown"}`,
-      async () => {
-        await onRoomMessage(roomId, event);
-      },
-    );
+    dispatchRoomMessage("room message handler", roomId, event);
   };
 
   const onEncryptedEvent = (roomId: string, event: MatrixRawEvent) => {
@@ -270,12 +268,7 @@ export function registerMatrixMonitorEvents(params: {
     if (eventType !== EventType.RoomMessage) {
       return;
     }
-    void runMonitorTask(
-      `decrypted room message handler room=${roomId} id=${event.event_id ?? "unknown"}`,
-      async () => {
-        await onRoomMessage(roomId, event);
-      },
-    );
+    dispatchRoomMessage("decrypted room message handler", roomId, event);
   };
 
   const onFailedDecryption = (roomId: string, event: MatrixRawEvent, error: Error) => {
@@ -402,14 +395,16 @@ export function registerMatrixMonitorEvents(params: {
         accountId: auth.accountId,
         conversationId: roomId,
         deliverTo: `room:${roomId}`,
-        route: resolveMatrixInboundRoute({
-          cfg,
-          accountId: auth.accountId,
-          roomId,
-          senderId: auth.userId,
-          isDirectMessage: false,
-          resolveAgentRoute,
-        }).route,
+        route: (
+          await resolveMatrixInboundRouteAsync({
+            cfg,
+            accountId: auth.accountId,
+            roomId,
+            senderId: auth.userId,
+            isDirectMessage: false,
+            resolveAgentRoute,
+          })
+        ).route,
         roomAllowed,
         resolveRoomContext: async ({ messageLimit }) => {
           const info = await getMatrixRoomInfo(roomId, options);
@@ -468,12 +463,7 @@ export function registerMatrixMonitorEvents(params: {
       );
     }
     if (eventType === EventType.Reaction) {
-      void runMonitorTask(
-        `reaction handler room=${roomId} id=${event.event_id ?? "unknown"}`,
-        async () => {
-          await onRoomMessage(roomId, event);
-        },
-      );
+      dispatchRoomMessage("reaction handler", roomId, event);
       return;
     }
 

@@ -1,15 +1,12 @@
 import { asFiniteNumber as readFiniteNumberValue } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecordValue } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { stripOpenClawMcpToolPrefix } from "../../agents/cli-runner/tool-policy.js";
 import type { EmbeddedAgentEvent } from "../../agents/embedded-agent-subscribe.shared-types.js";
 import { inferToolMetaFromArgsCore, isShellToolDisplayName } from "../../agents/tool-display.js";
 import type { GetReplyOptions } from "../types.js";
 
-/**
- * CLI backends report a tool result as its raw content: a string, or the text
- * blocks the harness streamed. Structured runners send a record instead, so the
- * command projection has to read both or every CLI command result is dropped.
- */
+/** CLI outcomes use raw strings/text blocks; structured runners supply records. */
 function readToolResultText(value: unknown): string | undefined {
   const direct = readStringValue(value);
   if (direct !== undefined) {
@@ -74,7 +71,9 @@ export function buildCommandOutputFromToolResultEvent(
   const args = evt.data.args;
   const title =
     evt.data.title ??
-    (args ? inferToolMetaFromArgsCore(name, args, { detailMode: "explain" }) : undefined);
+    (args
+      ? inferToolMetaFromArgsCore(stripOpenClawMcpToolPrefix(name), args, { detailMode: "explain" })
+      : undefined);
   return {
     itemId: evt.data.itemId,
     phase: "end",

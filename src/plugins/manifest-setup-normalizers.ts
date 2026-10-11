@@ -18,6 +18,7 @@ import {
   normalizeManifestObjectList,
   normalizeNamedMetadataRecord,
   omitUndefinedManifestFields,
+  optionalManifestFields,
 } from "./manifest-capability-normalizers.js";
 import { normalizeManifestPlatforms } from "./manifest-platforms.js";
 import type {
@@ -29,7 +30,6 @@ import type {
   PluginManifestControlUi,
   PluginManifestDashboard,
   PluginManifestDashboardActionVerb,
-  PluginManifestDashboardDataBinding,
   PluginManifestOnboardingScope,
   PluginManifestProviderAuthChoice,
   PluginManifestQaRunner,
@@ -172,40 +172,22 @@ export function normalizeManifestSetup(value: unknown): PluginManifestSetup | un
   if (!isRecord(value)) {
     return undefined;
   }
-  const providers = normalizeManifestSetupProviders(value.providers);
-  const cliBackends = normalizeTrimmedStringList(value.cliBackends);
-  const configMigrations = normalizeTrimmedStringList(value.configMigrations);
   const nativeSessionCatalog = isRecord(value.nativeSessionCatalog)
-    ? {
+    ? omitUndefinedManifestFields({
         label: normalizeOptionalString(value.nativeSessionCatalog.label) ?? "",
+        legacyDefaultEnabled:
+          value.nativeSessionCatalog.legacyDefaultEnabled === true ? true : undefined,
+        nodeCommands: normalizeOptionalTrimmedStringList(value.nativeSessionCatalog.nodeCommands),
         description: normalizeOptionalString(value.nativeSessionCatalog.description),
-        nodeCommands: normalizeTrimmedStringList(value.nativeSessionCatalog.nodeCommands),
-        legacyDefaultEnabled: value.nativeSessionCatalog.legacyDefaultEnabled === true,
-      }
+      })
     : undefined;
-  const requiresRuntime =
-    typeof value.requiresRuntime === "boolean" ? value.requiresRuntime : undefined;
-  const setup = {
-    ...(providers ? { providers } : {}),
-    ...(cliBackends.length > 0 ? { cliBackends } : {}),
-    ...(configMigrations.length > 0 ? { configMigrations } : {}),
-    ...(nativeSessionCatalog?.label
-      ? {
-          nativeSessionCatalog: {
-            label: nativeSessionCatalog.label,
-            ...(nativeSessionCatalog.legacyDefaultEnabled ? { legacyDefaultEnabled: true } : {}),
-            ...(nativeSessionCatalog.nodeCommands.length > 0
-              ? { nodeCommands: nativeSessionCatalog.nodeCommands }
-              : {}),
-            ...(nativeSessionCatalog.description
-              ? { description: nativeSessionCatalog.description }
-              : {}),
-          },
-        }
-      : {}),
-    ...(requiresRuntime !== undefined ? { requiresRuntime } : {}),
-  } satisfies PluginManifestSetup;
-  return Object.keys(setup).length > 0 ? setup : undefined;
+  return optionalManifestFields({
+    providers: normalizeManifestSetupProviders(value.providers),
+    cliBackends: normalizeOptionalTrimmedStringList(value.cliBackends),
+    configMigrations: normalizeOptionalTrimmedStringList(value.configMigrations),
+    nativeSessionCatalog: nativeSessionCatalog?.label ? nativeSessionCatalog : undefined,
+    requiresRuntime: typeof value.requiresRuntime === "boolean" ? value.requiresRuntime : undefined,
+  });
 }
 
 export function normalizeManifestQaRunners(value: unknown): PluginManifestQaRunner[] | undefined {
@@ -255,51 +237,42 @@ export function normalizeManifestDashboard(value: unknown): DashboardManifestRes
   if (!isRecord(value)) {
     return { ok: false, error: "dashboard must be an object" };
   }
-  if (value.dataBindings !== undefined && !Array.isArray(value.dataBindings)) {
-    return { ok: false, error: "dashboard.dataBindings must be an array" };
-  }
-  if (value.actionVerbs !== undefined && !Array.isArray(value.actionVerbs)) {
-    return { ok: false, error: "dashboard.actionVerbs must be an array" };
-  }
-
-  const dataBindings: PluginManifestDashboardDataBinding[] = [];
-  for (const [index, entry] of (value.dataBindings ?? []).entries()) {
-    const normalized = normalizeDashboardCapabilityBase(entry, "dashboard.dataBindings", index);
-    if (typeof normalized === "string") {
-      return { ok: false, error: normalized };
+  const groups: Array<{ field: keyof PluginManifestDashboard; entries: unknown[] }> = [];
+  // Validate both containers before entries to retain manifest error precedence.
+  for (const field of ["dataBindings", "actionVerbs"] as const) {
+    const entries = value[field];
+    if (entries !== undefined && !Array.isArray(entries)) {
+      return { ok: false, error: `dashboard.${field} must be an array` };
     }
-    dataBindings.push(normalized);
+    groups.push({ field, entries: entries ?? [] });
   }
-
-  const actionVerbs: PluginManifestDashboardActionVerb[] = [];
-  for (const [index, entry] of (value.actionVerbs ?? []).entries()) {
-    const normalized = normalizeDashboardCapabilityBase(entry, "dashboard.actionVerbs", index);
-    if (typeof normalized === "string") {
-      return { ok: false, error: normalized };
+  const dashboard: PluginManifestDashboard = {};
+  for (const group of groups) {
+    const { field } = group;
+    const entries: PluginManifestDashboardActionVerb[] = [];
+    for (const [index, entry] of group.entries.entries()) {
+      const normalized = normalizeDashboardCapabilityBase(entry, `dashboard.${field}`, index);
+      if (typeof normalized === "string") {
+        return { ok: false, error: normalized };
+      }
+      const rawParamShape =
+        field === "actionVerbs" && isRecord(entry) ? entry.paramShape : undefined;
+      if (rawParamShape !== undefined && !isRecord(rawParamShape)) {
+        return {
+          ok: false,
+          error: `dashboard.actionVerbs[${index}].paramShape must be a JSON Schema object`,
+        };
+      }
+      entries.push({
+        ...normalized,
+        ...(rawParamShape ? { paramShape: rawParamShape as JsonSchemaObject } : {}),
+      });
     }
-    const rawParamShape = isRecord(entry) ? entry.paramShape : undefined;
-    if (rawParamShape !== undefined && !isRecord(rawParamShape)) {
-      return {
-        ok: false,
-        error: `dashboard.actionVerbs[${index}].paramShape must be a JSON Schema object`,
-      };
+    if (entries.length > 0) {
+      dashboard[field] = entries;
     }
-    actionVerbs.push({
-      ...normalized,
-      ...(rawParamShape ? { paramShape: rawParamShape as JsonSchemaObject } : {}),
-    });
   }
-
-  if (dataBindings.length === 0 && actionVerbs.length === 0) {
-    return { ok: true };
-  }
-  return {
-    ok: true,
-    dashboard: {
-      ...(dataBindings.length > 0 ? { dataBindings } : {}),
-      ...(actionVerbs.length > 0 ? { actionVerbs } : {}),
-    },
-  };
+  return Object.keys(dashboard).length > 0 ? { ok: true, dashboard } : { ok: true };
 }
 
 export function normalizeManifestControlUi(
@@ -443,24 +416,18 @@ export function normalizeChannelConfigs(
     if (!schema) {
       return undefined;
     }
-    const uiHints = normalizeConfigUiHints(rawEntry.uiHints);
-    const runtime =
-      isRecord(rawEntry.runtime) && typeof rawEntry.runtime.safeParse === "function"
-        ? (rawEntry.runtime as ChannelConfigRuntimeSchema)
-        : undefined;
-    const label = normalizeOptionalString(rawEntry.label) ?? "";
-    const description = normalizeOptionalString(rawEntry.description) ?? "";
-    const preferOver = normalizeTrimmedStringList(rawEntry.preferOver);
-    const commandDefaults = normalizeManifestChannelCommandDefaults(rawEntry.commands);
-    return {
+    return omitUndefinedManifestFields({
       schema,
-      ...(uiHints ? { uiHints } : {}),
-      ...(runtime ? { runtime } : {}),
-      ...(label ? { label } : {}),
-      ...(description ? { description } : {}),
-      ...(preferOver.length > 0 ? { preferOver } : {}),
-      ...(commandDefaults ? { commands: commandDefaults } : {}),
-    };
+      uiHints: normalizeConfigUiHints(rawEntry.uiHints),
+      runtime:
+        isRecord(rawEntry.runtime) && typeof rawEntry.runtime.safeParse === "function"
+          ? (rawEntry.runtime as ChannelConfigRuntimeSchema)
+          : undefined,
+      label: normalizeOptionalString(rawEntry.label),
+      description: normalizeOptionalString(rawEntry.description),
+      preferOver: normalizeOptionalTrimmedStringList(rawEntry.preferOver),
+      commands: normalizeManifestChannelCommandDefaults(rawEntry.commands),
+    });
   });
 }
 

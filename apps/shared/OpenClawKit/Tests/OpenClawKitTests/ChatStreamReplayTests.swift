@@ -503,11 +503,123 @@ struct ChatStreamReplayTests {
         expectRendered(["z = 3"])
     }
 
+    @Test(arguments: [false, true], [false, true])
+    @MainActor func `hosted reply is not repeated when the same text is recorded`(
+        narration: Bool,
+        recordedFirst: Bool) async throws
+    {
+        _ = NSApplication.shared
+        let harness = try await StreamReplayHarness.bootstrapped()
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 960, height: 680),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: OpenClawChatView(
+            viewModel: harness.vm,
+            displayOptions: [],
+            showsAssistantAvatars: false,
+            showsComposer: false))
+        window.contentView = host
+        defer {
+            harness.vm.detachTransport()
+            harness.transport.finish()
+            window.contentView = nil
+            window.close()
+        }
+        let runId = try await harness.send("Show the equation")
+        let now = Int(Date().timeIntervalSince1970 * 1000)
+        let text = "$$x = 1$$"
+        let recorded = narration
+            ? replayNarrationEvent(runId: runId, itemId: "equation", text: text, seq: 2, timestamp: now + 100)
+            : replaySessionMessageEvent(
+                text: text, timestamp: Double(now + 100), runId: runId, messageId: "equation")
+        let streamed = replayAssistantDeltaEvent(runId: runId, cumulativeText: text, seq: 1)
+        for event in recordedFirst ? [recorded, streamed] : [streamed, recorded] {
+            harness.transport.emit(event)
+        }
+        // Wait for the inputs, not the expected absence: a duplicate must fail an assertion, not hang.
+        try await harness.converge("both sources received") { vm in
+            vm.streamingAssistantText == text &&
+                vm.transcriptMessages.contains { ChatMessageVisibleText.visibleText(in: $0) == text }
+        }
+        host.layoutSubtreeIfNeeded()
+        let labels = Self.mathLabels(in: host)
+        #expect(labels.map(\.latex) == ["x = 1"])
+        #expect(labels.allSatisfy { $0.error == nil && $0.frame.width > 0 && $0.frame.height > 0 })
+
+        // A repeated delta cannot resurrect the second bubble; different text remains visible.
+        harness.transport.emit(replayAssistantDeltaEvent(runId: runId, cumulativeText: text, seq: 3))
+        harness.transport.emit(.agent(OpenClawAgentEventPayload(
+            runId: runId, seq: 4, stream: "tool", ts: now + 200,
+            data: ["phase": AnyCodable("start"), "name": AnyCodable("read"), "toolCallId": AnyCodable("read-1")])))
+        try await harness.converge("repeat delta consumed before tool start") { $0.pendingToolCalls.count == 1 }
+        host.layoutSubtreeIfNeeded()
+        #expect(Self.mathLabels(in: host).map(\.latex) == ["x = 1"])
+        harness.transport.emit(replayAssistantDeltaEvent(runId: runId, cumulativeText: "$$y = 2$$", seq: 5))
+        try await harness.converge("different live text received") { $0.streamingAssistantText == "$$y = 2$$" }
+        host.layoutSubtreeIfNeeded()
+        #expect(Self.mathLabels(in: host).map(\.latex).sorted() == ["x = 1", "y = 2"])
+    }
+
     @MainActor private static func mathLabels(in view: NSView) -> [MTMathUILabel] {
         if let label = view as? MTMathUILabel { return [label] }
         return view.subviews.flatMap { Self.mathLabels(in: $0) }
     }
     #endif
+
+    @Test @MainActor func `live text suppression is exact and limited to the current turn`() {
+        let transport = ScriptedChatTransport(history: replayHistory())
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer {
+            vm.detachTransport()
+            transport.finish()
+        }
+        let user = replayDurableMessage(role: "USER", text: "Again", timestamp: 100)
+        let reply = replayDurableMessage(role: "ASSISTANT", text: " **Ready** ", timestamp: 200)
+        vm.updateStreamingAssistantText("**Ready**")
+
+        // Prior turns and non-assistant rows must not suppress a new reply.
+        vm.replaceMessages([reply, user])
+        #expect(vm.liveAssistantText == "**Ready**")
+        let tool = replayDurableMessage(role: "toolResult", text: "**Ready**", timestamp: 300)
+        vm.replaceMessages([user, tool])
+        #expect(vm.liveAssistantText == "**Ready**")
+        vm.replaceMessages([user, reply, tool])
+        #expect(vm.liveAssistantText == nil)
+        #expect(vm.streamingAssistantText == "**Ready**")
+
+        // Compare raw Markdown, not parsed visible words; dropping the matching row restores live text.
+        vm.updateStreamingAssistantText("Ready")
+        #expect(vm.liveAssistantText == "Ready")
+        vm.updateStreamingAssistantText("**Ready**")
+        vm.replaceMessages([user])
+        #expect(vm.liveAssistantText == "**Ready**")
+        vm.updateStreamingAssistantText(nil)
+        #expect(vm.liveAssistantText == nil)
+    }
+
+    @Test @MainActor func `live text comparison preserves supported text types and block boundaries`() {
+        let transport = ScriptedChatTransport(history: replayHistory())
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer {
+            vm.detachTransport()
+            transport.finish()
+        }
+        for type in [nil, "text", " input_text ", "OUTPUT_TEXT"] as [String?] {
+            let message = OpenClawChatMessage(role: "assistant", content: [
+                .init(type: type, text: "a"),
+                .init(type: "thinking", text: "private"),
+                .init(type: type, text: "b"),
+            ], timestamp: nil)
+            vm.replaceMessages([message])
+            vm.updateStreamingAssistantText("ab")
+            #expect(vm.liveAssistantText == "ab")
+            vm.updateStreamingAssistantText("a\nb")
+            #expect(vm.liveAssistantText == nil)
+        }
+    }
 
     @Test @MainActor func `settled history retires unsaved narration without erasing live or lagging work`() async throws {
         let harness = try await StreamReplayHarness.bootstrapped()

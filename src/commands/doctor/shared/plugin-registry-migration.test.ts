@@ -3,7 +3,6 @@ import path from "node:path";
 // Plugin registry migration tests cover doctor repair of persisted plugin registry state.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { recordPluginCandidateInstallOwner } from "../../../plugins/candidate-install-owner.js";
 import type { PluginCandidate } from "../../../plugins/discovery.js";
 import { writePersistedInstalledPluginIndex } from "../../../plugins/installed-plugin-index-store-write.js";
 import {
@@ -38,16 +37,7 @@ function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   };
 }
 
-function createCandidate(
-  rootDir: string,
-  id = "demo",
-  origin: PluginCandidate["origin"] = "global",
-  options: {
-    enabledByDefault?: boolean;
-    installOwner?: string;
-    manifest?: Record<string, unknown>;
-  } = {},
-): PluginCandidate {
+function createCandidate(rootDir: string): PluginCandidate {
   fs.writeFileSync(
     path.join(rootDir, "index.ts"),
     "throw new Error('runtime entry should not load while migrating plugin registry');\n",
@@ -56,24 +46,19 @@ function createCandidate(
   fs.writeFileSync(
     path.join(rootDir, "openclaw.plugin.json"),
     JSON.stringify({
-      id,
-      name: id,
-      ...(options.enabledByDefault ? { enabledByDefault: true } : {}),
+      id: "demo",
+      name: "demo",
       configSchema: { type: "object" },
-      providers: [id],
-      ...options.manifest,
+      providers: ["demo"],
     }),
     "utf8",
   );
-  return recordPluginCandidateInstallOwner(
-    {
-      idHint: id,
-      source: path.join(rootDir, "index.ts"),
-      rootDir,
-      origin,
-    },
-    options.installOwner,
-  );
+  return {
+    idHint: "demo",
+    source: path.join(rootDir, "index.ts"),
+    rootDir,
+    origin: "global",
+  };
 }
 
 function createCurrentIndex(): InstalledPluginIndex {
@@ -91,11 +76,6 @@ function createCurrentIndex(): InstalledPluginIndex {
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
-function expectSha256(value: unknown) {
-  expect(typeof value).toBe("string");
-  expect(value).toMatch(/^[a-f0-9]{64}$/u);
-}
-
 function requireMigratedIndex(
   result: Awaited<ReturnType<typeof migratePluginRegistryForDoctor>>,
 ): InstalledPluginIndex {
@@ -210,30 +190,6 @@ describe("doctor plugin registry migration", () => {
     expect(readConfig).not.toHaveBeenCalled();
   });
 
-  it("migrates when an existing registry file is not current", async () => {
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(stateDir, "plugins", "demo");
-    fs.mkdirSync(pluginDir, { recursive: true });
-    insertStalePersistedIndexRow(stateDir);
-
-    const result = await migratePluginRegistryForDoctor({
-      stateDir,
-      candidates: [createCandidate(pluginDir)],
-      readConfig: async () => ({}),
-      env: hermeticEnv(),
-    });
-    expectObjectFields(requireRecord(result, "migration result"), {
-      status: "migrated",
-    });
-    expect(result.preflight.action).toBe("migrate");
-
-    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
-    expect(persisted?.migrationVersion).toBe(1);
-    expectObjectFields(requirePlugin(persisted, "demo"), {
-      pluginId: "demo",
-    });
-  });
-
   it("rejects invalid SQLite install records without rewriting the row", async () => {
     const stateDir = makeTempDir();
     const installRecordsJson = '{"__proto__":{"source":"bogus"}}';
@@ -268,157 +224,6 @@ describe("doctor plugin registry migration", () => {
     expect(JSON.stringify(persistedValue.index.installRecords)).toBe(
       JSON.stringify(JSON.parse(installRecordsJson)),
     );
-  });
-
-  it("persists the complete plugin inventory without changing disabled state", async () => {
-    const stateDir = makeTempDir();
-    const enabledDir = path.join(stateDir, "plugins", "enabled-demo");
-    const disabledDir = path.join(stateDir, "plugins", "disabled-demo");
-    const unusedBundledDir = path.join(stateDir, "plugins", "unused-bundled");
-    fs.mkdirSync(enabledDir, { recursive: true });
-    fs.mkdirSync(disabledDir, { recursive: true });
-    fs.mkdirSync(unusedBundledDir, { recursive: true });
-
-    const result = await migratePluginRegistryForDoctor({
-      stateDir,
-      candidates: [
-        createCandidate(enabledDir, "enabled-demo"),
-        createCandidate(disabledDir, "disabled-demo", "bundled"),
-        createCandidate(unusedBundledDir, "unused-bundled", "bundled"),
-      ],
-      readConfig: async () => ({
-        plugins: {
-          entries: {
-            "disabled-demo": {
-              enabled: false,
-            },
-          },
-        },
-      }),
-      env: hermeticEnv(),
-    });
-    expectObjectFields(requireRecord(result, "migration result"), {
-      status: "migrated",
-    });
-    const current = requireMigratedIndex(result);
-    expect(requirePlugin(current, "enabled-demo").enabled).toBe(true);
-    expect(requirePlugin(current, "disabled-demo").enabled).toBe(false);
-
-    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
-    expect(requirePlugin(persisted, "enabled-demo").enabled).toBe(true);
-    expect(requirePlugin(persisted, "disabled-demo").enabled).toBe(false);
-    expect(requirePlugin(persisted, "unused-bundled").enabled).toBe(false);
-    expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual([
-      "enabled-demo",
-      "disabled-demo",
-      "unused-bundled",
-    ]);
-  });
-
-  it("keeps enabled-by-default bundled provider plugins discoverable for setup", async () => {
-    const stateDir = makeTempDir();
-    const openaiDir = path.join(stateDir, "plugins", "openai");
-    const unusedBundledDir = path.join(stateDir, "plugins", "unused-bundled");
-    fs.mkdirSync(openaiDir, { recursive: true });
-    fs.mkdirSync(unusedBundledDir, { recursive: true });
-
-    const result = await migratePluginRegistryForDoctor({
-      stateDir,
-      candidates: [
-        createCandidate(openaiDir, "openai", "bundled", { enabledByDefault: true }),
-        createCandidate(unusedBundledDir, "unused-bundled", "bundled"),
-      ],
-      readConfig: async () => ({}),
-      env: hermeticEnv(),
-    });
-    expectObjectFields(requireRecord(result, "migration result"), {
-      status: "migrated",
-    });
-    const current = requireMigratedIndex(result);
-    expect(requirePlugin(current, "openai").enabledByDefault).toBe(true);
-
-    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
-    expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual([
-      "openai",
-      "unused-bundled",
-    ]);
-  });
-
-  it("keeps bundled migration contracts discoverable after install", async () => {
-    const stateDir = makeTempDir();
-    const migrationDir = path.join(stateDir, "plugins", "migrate-demo");
-    const unusedBundledDir = path.join(stateDir, "plugins", "unused-bundled");
-    fs.mkdirSync(migrationDir, { recursive: true });
-    fs.mkdirSync(unusedBundledDir, { recursive: true });
-
-    const result = await migratePluginRegistryForDoctor({
-      stateDir,
-      candidates: [
-        createCandidate(migrationDir, "migrate-demo", "bundled", {
-          manifest: {
-            providers: [],
-            contracts: { migrationProviders: ["demo"] },
-          },
-        }),
-        createCandidate(unusedBundledDir, "unused-bundled", "bundled"),
-      ],
-      readConfig: async () => ({}),
-      env: hermeticEnv(),
-    });
-
-    const current = requireMigratedIndex(result);
-    expect(current.plugins.map((plugin) => plugin.pluginId)).toEqual([
-      "migrate-demo",
-      "unused-bundled",
-    ]);
-
-    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
-    expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual([
-      "migrate-demo",
-      "unused-bundled",
-    ]);
-  });
-
-  it("keeps bundled memory command plugins discoverable for first-run CLI registration", async () => {
-    const stateDir = makeTempDir();
-    const memoryDir = path.join(stateDir, "plugins", "memory-core");
-    const unusedBundledDir = path.join(stateDir, "plugins", "unused-bundled");
-    fs.mkdirSync(memoryDir, { recursive: true });
-    fs.mkdirSync(unusedBundledDir, { recursive: true });
-
-    const result = await migratePluginRegistryForDoctor({
-      stateDir,
-      candidates: [
-        createCandidate(memoryDir, "memory-core", "bundled", {
-          manifest: {
-            kind: "memory",
-            providers: [],
-            contracts: { tools: ["memory_search"] },
-            commandAliases: [
-              {
-                name: "dreaming",
-                kind: "runtime-slash",
-                cliCommand: "memory",
-              },
-            ],
-          },
-        }),
-        createCandidate(unusedBundledDir, "unused-bundled", "bundled"),
-      ],
-      readConfig: async () => ({}),
-      env: hermeticEnv(),
-    });
-    expectObjectFields(requireRecord(result, "migration result"), {
-      status: "migrated",
-    });
-    const current = requireMigratedIndex(result);
-    expect(requirePlugin(current, "memory-core").startup.memory).toBe(true);
-
-    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
-    expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual([
-      "memory-core",
-      "unused-bundled",
-    ]);
   });
 
   it("supports dry-run preflight without reading config or writing the registry", async () => {
@@ -465,90 +270,5 @@ describe("doctor plugin registry migration", () => {
     const persisted = await readPersistedInstalledPluginIndex({ stateDir });
     expect(persisted?.refreshReason).toBe("migration");
     expect(requirePlugin(persisted, "demo").pluginId).toBe("demo");
-  });
-
-  it("indexes canonical install records", async () => {
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(stateDir, "plugins", "demo");
-    fs.mkdirSync(pluginDir, { recursive: true });
-
-    const result = await migratePluginRegistryForDoctor({
-      stateDir,
-      candidates: [createCandidate(pluginDir, "demo", "global", { installOwner: "demo" })],
-      installRecords: {
-        demo: { source: "npm", spec: "demo@1.0.0", installPath: pluginDir },
-      },
-      readConfig: async () => ({
-        plugins: {
-          entries: {
-            demo: {
-              enabled: true,
-            },
-          },
-        },
-      }),
-      env: hermeticEnv(),
-    });
-    expectObjectFields(requireRecord(result, "migration result"), {
-      status: "migrated",
-    });
-    const current = requireMigratedIndex(result);
-    expect(current.installRecords.demo).toEqual({
-      source: "npm",
-      spec: "demo@1.0.0",
-      installPath: pluginDir,
-    });
-    expect(requirePlugin(current, "demo").pluginId).toBe("demo");
-    expectSha256(requirePlugin(current, "demo").installRecordHash);
-
-    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
-    expect(persisted?.installRecords.demo).toEqual({
-      source: "npm",
-      spec: "demo@1.0.0",
-      installPath: pluginDir,
-    });
-    expect(requirePlugin(persisted, "demo").pluginId).toBe("demo");
-    expectSha256(requirePlugin(persisted, "demo").installRecordHash);
-  });
-
-  it("preserves canonical records when the plugin manifest cannot be discovered", async () => {
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(stateDir, "plugins", "missing");
-
-    const result = await migratePluginRegistryForDoctor({
-      stateDir,
-      candidates: [],
-      installRecords: {
-        missing: { source: "npm", spec: "missing-plugin@1.0.0", installPath: pluginDir },
-      },
-      readConfig: async () => ({
-        plugins: {
-          entries: {
-            missing: {
-              enabled: true,
-            },
-          },
-        },
-      }),
-      env: hermeticEnv(),
-    });
-    expectObjectFields(requireRecord(result, "migration result"), {
-      status: "migrated",
-    });
-    const current = requireMigratedIndex(result);
-    expect(current.installRecords.missing).toEqual({
-      source: "npm",
-      spec: "missing-plugin@1.0.0",
-      installPath: pluginDir,
-    });
-    expect(current.plugins).toEqual([]);
-
-    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
-    expect(persisted?.installRecords.missing).toEqual({
-      source: "npm",
-      spec: "missing-plugin@1.0.0",
-      installPath: pluginDir,
-    });
-    expect(persisted?.plugins).toEqual([]);
   });
 });

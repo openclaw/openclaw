@@ -226,6 +226,8 @@ it.each(["open", "another board", "hidden"] as const)(
     document.body.append(container);
     const mounted = page.mount(container, createViewContext(host, { boardId: "ops" }));
     try {
+      await vi.dynamicImportSettled();
+      mounted?.update?.(createViewContext(host, { boardId: "ops" }));
       await vi.advanceTimersByTimeAsync(0);
       const previousBoards = boards;
       if (presentation === "open") {
@@ -374,6 +376,8 @@ it("disambiguates a created board and its sibling before pinning through a stale
   const page = registrations.get("page/workboard") as ControlUiPage;
   const mounted = page.mount(container, createViewContext(host, {}));
   try {
+    await vi.dynamicImportSettled();
+    mounted?.update?.(createViewContext(host, {}));
     await vi.advanceTimersByTimeAsync(0);
     expect(registrations.get("navigation/board-sessions")).toMatchObject({ label: "Created" });
     expectDefined(
@@ -428,6 +432,7 @@ it("disambiguates a created board and its sibling before pinning through a stale
 
 it("keeps accessories on the same recovered snapshot and retires pending activation reads", async () => {
   const fixture = workboardTestHost();
+  const hostListeners = fixture.listeners.size;
   const { host, connection, registrations } = fixture;
   connection.connected = true;
   const session = createGatewaySession();
@@ -474,7 +479,7 @@ it("keeps accessories on the same recovered snapshot and retires pending activat
     expect(vi.mocked(host.ui.invalidate).mock.calls.length).toBe(invalidations);
     expect(container.childElementCount).toBe(0);
     expect(fixture.events.get("plugin.workboard.changed")?.size).toBe(0);
-    expect(fixture.listeners.size).toBe(0);
+    expect(fixture.listeners.size).toBe(hostListeners);
   } finally {
     if (!disposed) {
       mounted?.dispose?.();

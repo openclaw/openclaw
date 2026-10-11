@@ -1,7 +1,11 @@
 import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { collectUpdateDoctorFailureFacts } from "../../infra/update-doctor-result.js";
+import { resolveManagedServiceUpdateFailureExitCode } from "../../infra/update-control-plane-sentinel.js";
+import {
+  collectUpdateDoctorFailureFacts,
+  DoctorMaintenanceRefusalError,
+} from "../../infra/update-doctor-result.js";
 import { normalizeControlPlaneUpdateResult } from "../../infra/update-restart-sentinel-payload.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
@@ -97,36 +101,33 @@ export async function withUpdateProgressSettlement(
   }
 }
 
-function updateFinalizationFailureOptions(
-  options: ErrorOptions | undefined,
-  progressFailure: { cause: unknown } | undefined,
-): ErrorOptions | undefined {
-  if (
-    !progressFailure ||
-    collectNestedErrorCandidates(options?.cause).includes(progressFailure.cause)
-  ) {
-    return options;
-  }
-  return {
-    cause:
-      options && "cause" in options
-        ? new AggregateError(
-            [options.cause, progressFailure.cause],
-            "Update and progress reporting failed",
-          )
-        : progressFailure.cause,
-  };
-}
-
 export function bindUpdateFinalizationFailure(
   params: FinishUpdateParams,
   progressFailure: { cause: unknown } | undefined,
   readTriage: () => { triageAllowed: boolean; gateway: TriageFailureContext["gateway"] },
 ) {
-  return (result: UpdateRunResult, exitCode = 1, detail?: string, options?: ErrorOptions) => {
+  return (
+    result: UpdateRunResult,
+    detail?: string,
+    options?: ErrorOptions,
+    exitCode = resolveManagedServiceUpdateFailureExitCode(result),
+  ) => {
     const { triageAllowed, gateway } = readTriage();
+    const failureOptions =
+      progressFailure &&
+      !collectNestedErrorCandidates(options?.cause).includes(progressFailure.cause)
+        ? {
+            cause:
+              options && "cause" in options
+                ? new AggregateError(
+                    [options.cause, progressFailure.cause],
+                    "Update and progress reporting failed",
+                  )
+                : progressFailure.cause,
+          }
+        : options;
     return new UpdateCommandFailure(result, exitCode, detail, {
-      ...updateFinalizationFailureOptions(options, progressFailure),
+      ...failureOptions,
       automaticTriage: triageAllowed
         ? resolveAutomaticUpdateTriage(result, detail, { ...params, gateway })
         : undefined,
@@ -223,12 +224,24 @@ export function createPostUpdateFailureResult(
 ): { result: UpdateRunResult; message: string } {
   const message = formatErrorMessage(error);
   const failureFacts = collectUpdateDoctorFailureFacts(error);
+  const dataAtRisk = collectNestedErrorCandidates(error).some(
+    (cause) =>
+      cause instanceof DoctorMaintenanceRefusalError && cause.refusal.kind === "data-at-risk",
+  );
   return {
     message,
     result: {
       ...params.result,
       status: "error",
       reason: "post-update-failed",
+      ...(dataAtRisk
+        ? {
+            recovery: {
+              serviceRestartSafe: false as const,
+              reason: "runtime-verification-failed" as const,
+            },
+          }
+        : {}),
       steps: [
         ...params.result.steps,
         {

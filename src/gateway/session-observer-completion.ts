@@ -65,6 +65,7 @@ export function createSessionObserverCompletion(params: {
           }
           const result = await params.completeModel({
             ...prepared,
+            purpose: "session-observer",
             config: params.getConfig(),
             systemPrompt: SESSION_OBSERVER_SYSTEM_PROMPT,
             prompt: buildSessionObserverPrompt(state, notes),

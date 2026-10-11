@@ -11,6 +11,8 @@ use tauri::{path::BaseDirectory, AppHandle, Manager};
 const MANIFEST: &str = include_str!(concat!(env!("OUT_DIR"), "/desktop-runtime.json"));
 const LINUX_RESOURCE_PREFIX: &[u8] = b"OPENCLAW-BUN-RUNTIME-V1\n";
 
+type RuntimeResult<T> = Result<T, Box<dyn std::error::Error>>;
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Manifest {
@@ -46,7 +48,7 @@ pub(crate) fn seed(app: &AppHandle) -> Result<BundledRuntime, String> {
         .resolve("desktop-runtime", BaseDirectory::Resource)
         .map_err(|error| format!("Embedded runtime resources are unavailable: {error}"))?;
     let prefix = crate::cli::openclaw_home().map_err(|error| error.to_string())?;
-    seed_at(&source, &prefix, MANIFEST, &verify_revision)
+    seed_at(&source, &prefix, MANIFEST, &verify_revision).map_err(|error| error.to_string())
 }
 
 fn seed_at(
@@ -54,7 +56,7 @@ fn seed_at(
     prefix: &Path,
     manifest_bytes: &str,
     probe: &dyn Fn(&Path, &Manifest) -> Result<(), String>,
-) -> Result<BundledRuntime, String> {
+) -> RuntimeResult<BundledRuntime> {
     if !prefix.is_absolute()
         || prefix
             .components()
@@ -74,8 +76,8 @@ fn seed_at(
         verify_payload(&destination, manifest_bytes, &manifest, false)?;
     } else {
         let staging = store.join(format!(".stage-{}", uuid::Uuid::new_v4()));
-        fs::create_dir(&staging).map_err(|error| error.to_string())?;
-        let result = (|| {
+        fs::create_dir(&staging)?;
+        let result: RuntimeResult<()> = (|| {
             for file in manifest.files.keys() {
                 let output = staging.join(file);
                 ensure_directory(output.parent().expect("runtime file parent"))?;
@@ -83,26 +85,21 @@ fn seed_at(
                 let mut output_file = fs::OpenOptions::new()
                     .write(true)
                     .create_new(true)
-                    .open(&output)
-                    .map_err(|error| error.to_string())?;
-                std::io::copy(&mut input, &mut output_file).map_err(|error| error.to_string())?;
-                output_file.sync_all().map_err(|error| error.to_string())?;
+                    .open(&output)?;
+                std::io::copy(&mut input, &mut output_file)?;
+                output_file.sync_all()?;
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
-                    fs::set_permissions(output, fs::Permissions::from_mode(0o555))
-                        .map_err(|error| error.to_string())?;
+                    fs::set_permissions(output, fs::Permissions::from_mode(0o555))?;
                 }
             }
             let mut output = fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
-                .open(staging.join("manifest.json"))
-                .map_err(|error| error.to_string())?;
-            output
-                .write_all(manifest_bytes.as_bytes())
-                .map_err(|error| error.to_string())?;
-            output.sync_all().map_err(|error| error.to_string())?;
+                .open(staging.join("manifest.json"))?;
+            output.write_all(manifest_bytes.as_bytes())?;
+            output.sync_all()?;
             verify_payload(&staging, manifest_bytes, &manifest, false)?;
             probe(&staging.join("bin/bun"), &manifest)?;
             for directory in [
@@ -116,21 +113,17 @@ fn seed_at(
             .into_iter()
             .flatten()
             {
-                fs::File::open(directory)
-                    .and_then(|directory| directory.sync_all())
-                    .map_err(|error| error.to_string())?;
+                fs::File::open(directory).and_then(|directory| directory.sync_all())?;
             }
             // Never repair or overwrite a previously published runtime in place:
             // a service or CLI launcher may still reference those exact bytes.
             if fs::symlink_metadata(&destination).is_ok() {
                 verify_payload(&destination, manifest_bytes, &manifest, false)?;
             } else {
-                fs::rename(&staging, &destination).map_err(|error| error.to_string())?;
-                fs::File::open(&store)
-                    .and_then(|directory| directory.sync_all())
-                    .map_err(|error| error.to_string())?;
+                fs::rename(&staging, &destination)?;
+                fs::File::open(&store).and_then(|directory| directory.sync_all())?;
             }
-            Ok::<_, String>(())
+            Ok(())
         })();
         if staging.exists() {
             let _ = fs::remove_dir_all(&staging);
@@ -185,19 +178,20 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
     Ok(())
 }
 
-fn ensure_directory(path: &Path) -> Result<(), String> {
+fn ensure_directory(path: &Path) -> RuntimeResult<()> {
     if let Some(parent) = path.parent().filter(|parent| *parent != path) {
         ensure_directory(parent)?;
     }
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_dir() => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir(path).map_err(|error| error.to_string())
+            fs::create_dir(path).map_err(Into::into)
         }
         _ => Err(format!(
             "Runtime directory is unavailable or redirected: {}",
             path.display()
-        )),
+        )
+        .into()),
     }
 }
 
@@ -206,8 +200,8 @@ fn verify_payload(
     bytes: &str,
     manifest: &Manifest,
     bundled: bool,
-) -> Result<(), String> {
-    let metadata = fs::symlink_metadata(root).map_err(|error| error.to_string())?;
+) -> RuntimeResult<()> {
+    let metadata = fs::symlink_metadata(root)?;
     if !metadata.is_dir() {
         return Err("Embedded runtime directory is redirected.".into());
     }
@@ -221,10 +215,7 @@ fn verify_payload(
     collect_files(root, Path::new(""), &mut observed)?;
     expected.sort();
     observed.sort();
-    if observed != expected
-        || fs::read(root.join("manifest.json")).map_err(|error| error.to_string())?
-            != bytes.as_bytes()
-    {
+    if observed != expected || fs::read(root.join("manifest.json"))? != bytes.as_bytes() {
         return Err("Embedded runtime manifest or file set changed; reinstall the app.".into());
     }
     for (file, expected_hash) in &manifest.files {
@@ -232,7 +223,7 @@ fn verify_payload(
         let mut digest = Sha256::new();
         let mut buffer = [0; 64 * 1024];
         loop {
-            let count = input.read(&mut buffer).map_err(|error| error.to_string())?;
+            let count = input.read(&mut buffer)?;
             if count == 0 {
                 break;
             }
@@ -244,16 +235,16 @@ fn verify_payload(
             .map(|byte| format!("{byte:02x}"))
             .collect();
         if actual != *expected_hash {
-            return Err(format!(
-                "Embedded runtime checksum changed: {file}; reinstall the app."
-            ));
+            return Err(
+                format!("Embedded runtime checksum changed: {file}; reinstall the app.").into(),
+            );
         }
     }
     Ok(())
 }
 
-fn open_payload(path: &Path, enveloped: bool) -> Result<fs::File, String> {
-    let mut input = fs::File::open(path).map_err(|error| error.to_string())?;
+fn open_payload(path: &Path, enveloped: bool) -> RuntimeResult<fs::File> {
+    let mut input = fs::File::open(path)?;
     if enveloped {
         // The Linux bundle is data so linuxdeploy cannot rewrite its ELF bytes.
         // Installed executables have no envelope and retain the admitted hash.
@@ -265,10 +256,10 @@ fn open_payload(path: &Path, enveloped: bool) -> Result<fs::File, String> {
     Ok(input)
 }
 
-fn collect_files(root: &Path, relative: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
-    for entry in fs::read_dir(root.join(relative)).map_err(|error| error.to_string())? {
-        let entry = entry.map_err(|error| error.to_string())?;
-        let kind = entry.file_type().map_err(|error| error.to_string())?;
+fn collect_files(root: &Path, relative: &Path, files: &mut Vec<PathBuf>) -> RuntimeResult<()> {
+    for entry in fs::read_dir(root.join(relative))? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
         let file = relative.join(entry.file_name());
         if kind.is_file() {
             files.push(file);
@@ -354,6 +345,7 @@ mod tests {
 
         fn seed(&self) -> Result<BundledRuntime, String> {
             seed_at(&self.source, &self.prefix, &self.manifest, &|_, _| Ok(()))
+                .map_err(|error| error.to_string())
         }
     }
 
@@ -471,6 +463,7 @@ mod tests {
         assert!(
             seed_at(&fixture.source, &fixture.prefix, "{}", &|_, _| Ok(()))
                 .unwrap_err()
+                .to_string()
                 .contains("no embedded runtime")
         );
         fs::write(fixture.source.join("extra"), "unexpected").unwrap();

@@ -1,29 +1,32 @@
 import { isMainThread } from "node:worker_threads";
+import { isSessionActorCommand } from "../config/sessions/session-actor-command.js";
+import { assertCanonicalSessionKeyWrite } from "../config/sessions/session-canonical-key.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
-import type {
-  SqliteWorkerEphemeralTarget,
-  SqliteWorkerPreparedBackend,
-} from "../infra/sqlite-worker-contract.js";
 import {
-  requestSqliteWorkerOperationAdmission,
   SqliteWorkerOpenRefusedError,
-} from "../infra/sqlite-worker-operation-admission.js";
+  type SqliteWorkerEphemeralTarget,
+  type SqliteWorkerPreparedBackend,
+} from "../infra/sqlite-worker-contract.js";
+import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   retainAgentDatabase,
 } from "./openclaw-agent-db-lifecycle.js";
-import { getOpenClawAgentDatabaseIfOpen, openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
+import {
+  getOpenClawAgentDatabaseIfOpen,
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "./openclaw-agent-db.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
-import type {
-  AgentDatabaseIncognitoOpen,
-  AgentDatabaseIncognitoOperations,
-} from "./openclaw-agent-execution-contract.js";
+import type { AgentDatabaseIncognitoOpen } from "./openclaw-agent-execution-contract.js";
+import type { IncognitoAgentDatabaseOperations } from "./openclaw-agent-execution-incognito-contract.js";
 
 /** The ephemeral arm retains one native owner for every admitted operation. */
 export function createIncognitoAgentDatabaseBackend(
   input: AgentDatabaseIncognitoOpen,
   opening: { databasePath: string; target?: SqliteWorkerEphemeralTarget },
-): SqliteWorkerPreparedBackend<AgentDatabaseIncognitoOperations> {
+): SqliteWorkerPreparedBackend<IncognitoAgentDatabaseOperations> {
   const options = { agentId: input.agentId, path: input.databasePath, env: input.environment };
   if (
     isMainThread ||
@@ -82,16 +85,57 @@ export function createIncognitoAgentDatabaseBackend(
         typeof import("../config/sessions/session-incognito.worker.js").createIncognitoSessionWorker
       >
     | undefined;
+  let actor:
+    | ReturnType<
+        typeof import("../config/sessions/session-actor.worker.js").createSessionActorWorker
+      >
+    | undefined;
   return {
     async prepare(command) {
-      if (command.type !== "database.incognito.memory" && !sessions) {
+      if (isSessionActorCommand(command)) {
+        if (!actor) {
+          const { createSessionActorWorker } =
+            await import("../config/sessions/session-actor.worker.js");
+          actor = createSessionActorWorker(
+            {
+              options,
+              open() {
+                assertCurrent();
+                return database;
+              },
+              admit(stage, publication) {
+                assertCurrent();
+                requestSqliteWorkerOperationAdmission({
+                  stage,
+                  facts: { identity: input.identity, publication },
+                });
+              },
+              writeTransaction(operationLabel, _owner, write) {
+                assertCurrent();
+                return runOpenClawAgentWriteTransaction(
+                  (current) => {
+                    if (current !== database) {
+                      throw new Error("Incognito session actor lost its native writer");
+                    }
+                    return write(database);
+                  },
+                  options,
+                  { operationLabel },
+                );
+              },
+            },
+            () => input.identity,
+          );
+        }
+        await actor.prepare(command);
+        return;
+      }
+      if (!sessions) {
         const { createIncognitoSessionWorker } =
           await import("../config/sessions/session-incognito.worker.js");
         sessions = createIncognitoSessionWorker(database, input.identity, input.environment);
       }
-      if (command.type !== "database.incognito.memory") {
-        await sessions?.prepare(command);
-      }
+      await sessions.prepare(command);
     },
     execute(command) {
       assertCurrent();
@@ -99,20 +143,29 @@ export function createIncognitoAgentDatabaseBackend(
         stage: "prepare",
         facts: { identity: input.identity },
       });
-      if (command.type !== "database.incognito.memory") {
-        if (!sessions) {
-          throw new Error("Incognito session operation was not prepared");
+      if (isSessionActorCommand(command)) {
+        const { sessionKey } = command.input.target;
+        assertCanonicalSessionKeyWrite(sessionKey, database.agentId);
+        if (!isIncognitoSessionKey(sessionKey)) {
+          throw new Error("Incognito actor requires an incognito session key");
         }
-        return sessions.execute(command);
+        if (!actor) {
+          throw new Error("Incognito session actor operation was not prepared");
+        }
+        const result = actor.execute(command);
+        if (
+          command.type !== "session.actor.read" &&
+          "kind" in result &&
+          result.kind !== "rolled-back"
+        ) {
+          sessions?.recordExternalWrite(sessionKey);
+        }
+        return result;
       }
-      // sqlite-allow-raw -- Connection diagnostics have no Kysely table representation.
-      const pageCount = database.db.prepare("PRAGMA page_count").get()?.page_count;
-      // sqlite-allow-raw -- SQLite supplies the native allocation unit for this gauge.
-      const pageSize = database.db.prepare("PRAGMA page_size").get()?.page_size;
-      if (typeof pageCount !== "number" || typeof pageSize !== "number") {
-        throw new Error("Incognito memory diagnostics are unavailable");
+      if (!sessions) {
+        throw new Error("Incognito session operation was not prepared");
       }
-      return { agentId: input.agentId, pageCount, pageSize, databaseBytes: pageCount * pageSize };
+      return sessions.execute(command);
     },
     assertSettled() {
       assertCurrent();
@@ -122,6 +175,7 @@ export function createIncognitoAgentDatabaseBackend(
       }
     },
     close() {
+      actor?.close();
       sessions?.close();
       close();
     },

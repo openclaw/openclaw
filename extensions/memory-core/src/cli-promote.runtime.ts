@@ -100,15 +100,16 @@ function formatPromotionExclusionLines(params: {
   return lines;
 }
 
-export async function runMemoryPromote(
+async function runMemoryPromotion(
   opts: MemoryPromoteCommandOptions,
-  hostOptions?: MemoryCoreRuntimeHost,
+  hostOptions: MemoryCoreRuntimeHost | undefined,
+  selector?: string,
 ) {
+  const explain = selector !== undefined;
+  const command = explain ? "promote-explain" : "promote";
   await withMemoryCommand({
-    commandName: "memory promote",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
-    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
+    commandName: `memory ${command}`,
+    options: opts,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
@@ -119,27 +120,106 @@ export async function runMemoryPromote(
         cfg,
       });
       if (!workspaceDir) {
-        throw new Error("Memory promote requires a resolvable workspace directory.");
+        throw new Error(`Memory ${command} requires a resolvable workspace directory.`);
       }
       let ranking: RankShortTermPromotionResult;
       try {
-        const gatherAllForApply = Boolean(opts.apply);
+        const gatherAllForApply = !explain && Boolean(opts.apply);
+        const unrestricted = explain || gatherAllForApply;
         ranking = await rankShortTermPromotionCandidates({
           workspaceDir,
-          limit: gatherAllForApply ? undefined : opts.limit,
-          minScore: gatherAllForApply ? 0 : (opts.minScore ?? dreaming.minScore),
-          minRecallCount: gatherAllForApply ? 0 : (opts.minRecallCount ?? dreaming.minRecallCount),
-          minUniqueQueries: gatherAllForApply
-            ? 0
-            : (opts.minUniqueQueries ?? dreaming.minUniqueQueries),
+          limit: unrestricted ? undefined : opts.limit,
+          minScore: unrestricted ? 0 : (opts.minScore ?? dreaming.minScore),
+          minRecallCount: unrestricted ? 0 : (opts.minRecallCount ?? dreaming.minRecallCount),
+          minUniqueQueries: unrestricted ? 0 : (opts.minUniqueQueries ?? dreaming.minUniqueQueries),
           recencyHalfLifeDays: dreaming.recencyHalfLifeDays,
           maxAgeDays: gatherAllForApply ? undefined : dreaming.maxAgeDays,
           includePromoted: Boolean(opts.includePromoted),
         });
       } catch (err) {
-        throw new Error(`Memory promote ranking failed: ${formatErrorMessage(err)}`, {
-          cause: err,
-        });
+        throw new Error(
+          `${explain ? "Memory promote-explain" : "Memory promote ranking"} failed: ${formatErrorMessage(err)}`,
+          {
+            cause: err,
+          },
+        );
+      }
+      if (selector !== undefined) {
+        const thresholds = {
+          minScore: dreaming.minScore,
+          minRecallCount: dreaming.minRecallCount,
+          minUniqueQueries: dreaming.minUniqueQueries,
+          maxAgeDays: dreaming.maxAgeDays ?? null,
+        };
+        // Keys can prefix one another, so an exact key (as printed by `promote`) wins over substrings.
+        const key = selector.trim();
+        const exactExcluded = ranking.exclusions.find((entry) => entry.key === key);
+        const candidate = exactExcluded
+          ? undefined
+          : (ranking.candidates.find((entry) => entry.key === key) ??
+            ranking.candidates.find((entry) => matchesPromotionSelector(entry, selector)));
+        if (!candidate) {
+          const excluded =
+            exactExcluded ??
+            ranking.exclusions.find((entry) => matchesPromotionSelector(entry, selector));
+          if (!excluded) {
+            throw new Error(`No promotion candidate matched "${selector}".`);
+          }
+          if (opts.json) {
+            defaultRuntime.writeJson({ workspaceDir, thresholds, excluded });
+            return;
+          }
+          defaultRuntime.log(
+            [
+              `${heading("Promotion Explain")} ${muted("(" + agentId + ")")}`,
+              accent(excluded.key),
+              muted(shortenHomePath(excluded.path)),
+              excluded.snippet,
+              warn(
+                `Excluded by ${excluded.reason}${excluded.detail ? ` (${excluded.detail})` : ""}: ${describePromotionExclusion(excluded.reason, thresholds)}`,
+              ),
+            ].join("\n"),
+          );
+          return;
+        }
+        if (opts.json) {
+          defaultRuntime.writeJson({
+            workspaceDir,
+            thresholds,
+            candidate,
+            passes: {
+              score: candidate.score >= thresholds.minScore,
+              // Engine gate is aggregate signalCount vs minRecallCount (config name unchanged).
+              recallCount: candidate.signalCount >= thresholds.minRecallCount,
+              uniqueQueries: candidate.uniqueQueries >= thresholds.minUniqueQueries,
+              maxAge:
+                thresholds.maxAgeDays === null ? true : candidate.ageDays <= thresholds.maxAgeDays,
+            },
+          });
+          return;
+        }
+        const lines = [
+          `${heading("Promotion Explain")} ${muted("(" + agentId + ")")}`,
+          accent(candidate.key),
+          muted(
+            `${shortenHomePath(candidate.path)}:${String(candidate.startLine)}-${String(candidate.endLine)}`,
+          ),
+          candidate.snippet,
+          muted(
+            `score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} uniqueQueries=${candidate.uniqueQueries} ageDays=${candidate.ageDays.toFixed(1)}`,
+          ),
+          muted(
+            `components: frequency=${candidate.components.frequency.toFixed(2)} relevance=${candidate.components.relevance.toFixed(2)} diversity=${candidate.components.diversity.toFixed(2)} recency=${candidate.components.recency.toFixed(2)} consolidation=${candidate.components.consolidation.toFixed(2)} conceptual=${candidate.components.conceptual.toFixed(2)}`,
+          ),
+          muted(
+            `thresholds: minScore=${thresholds.minScore} minRecallCount=${thresholds.minRecallCount} minUniqueQueries=${thresholds.minUniqueQueries} maxAgeDays=${thresholds.maxAgeDays ?? "none"}`,
+          ),
+        ];
+        if (candidate.conceptTags.length > 0) {
+          lines.push(muted(`concepts=${candidate.conceptTags.join(", ")}`));
+        }
+        defaultRuntime.log(lines.join("\n"));
+        return;
       }
       const { candidates } = ranking;
       let applyResult: Awaited<ReturnType<typeof applyShortTermPromotions>> | undefined;
@@ -337,118 +417,17 @@ export async function runMemoryPromote(
     },
   });
 }
+export async function runMemoryPromote(
+  opts: MemoryPromoteCommandOptions,
+  hostOptions?: MemoryCoreRuntimeHost,
+) {
+  await runMemoryPromotion(opts, hostOptions);
+}
+
 export async function runMemoryPromoteExplain(
   selector: string,
   opts: MemoryPromoteExplainOptions,
   hostOptions?: MemoryCoreRuntimeHost,
 ) {
-  await withMemoryCommand({
-    commandName: "memory promote-explain",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
-    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
-    purpose: "status",
-    ...hostOptions,
-    run: async ({ manager, cfg, agentId }) => {
-      const status = manager.status();
-      const workspaceDir = status.workspaceDir?.trim();
-      const dreaming = resolveMemoryDeepDreamingConfig({
-        pluginConfig: resolveMemoryPluginConfig(cfg),
-        cfg,
-      });
-      if (!workspaceDir) {
-        throw new Error("Memory promote-explain requires a resolvable workspace directory.");
-      }
-      let ranking: RankShortTermPromotionResult;
-      try {
-        ranking = await rankShortTermPromotionCandidates({
-          workspaceDir,
-          minScore: 0,
-          minRecallCount: 0,
-          minUniqueQueries: 0,
-          includePromoted: Boolean(opts.includePromoted),
-          recencyHalfLifeDays: dreaming.recencyHalfLifeDays,
-          maxAgeDays: dreaming.maxAgeDays,
-        });
-      } catch (err) {
-        throw new Error(`Memory promote-explain failed: ${formatErrorMessage(err)}`, {
-          cause: err,
-        });
-      }
-      const thresholds = {
-        minScore: dreaming.minScore,
-        minRecallCount: dreaming.minRecallCount,
-        minUniqueQueries: dreaming.minUniqueQueries,
-        maxAgeDays: dreaming.maxAgeDays ?? null,
-      };
-      // Keys can prefix one another, so an exact key (as printed by `promote`) wins over substrings.
-      const key = selector.trim();
-      const exactExcluded = ranking.exclusions.find((entry) => entry.key === key);
-      const candidate = exactExcluded
-        ? undefined
-        : (ranking.candidates.find((entry) => entry.key === key) ??
-          ranking.candidates.find((entry) => matchesPromotionSelector(entry, selector)));
-      if (!candidate) {
-        const excluded =
-          exactExcluded ??
-          ranking.exclusions.find((entry) => matchesPromotionSelector(entry, selector));
-        if (!excluded) {
-          throw new Error(`No promotion candidate matched "${selector}".`);
-        }
-        if (opts.json) {
-          defaultRuntime.writeJson({ workspaceDir, thresholds, excluded });
-          return;
-        }
-        defaultRuntime.log(
-          [
-            `${heading("Promotion Explain")} ${muted("(" + agentId + ")")}`,
-            accent(excluded.key),
-            muted(shortenHomePath(excluded.path)),
-            excluded.snippet,
-            warn(
-              `Excluded by ${excluded.reason}${excluded.detail ? ` (${excluded.detail})` : ""}: ${describePromotionExclusion(excluded.reason, thresholds)}`,
-            ),
-          ].join("\n"),
-        );
-        return;
-      }
-      if (opts.json) {
-        defaultRuntime.writeJson({
-          workspaceDir,
-          thresholds,
-          candidate,
-          passes: {
-            score: candidate.score >= thresholds.minScore,
-            // Engine gate is aggregate signalCount vs minRecallCount (config name unchanged).
-            recallCount: candidate.signalCount >= thresholds.minRecallCount,
-            uniqueQueries: candidate.uniqueQueries >= thresholds.minUniqueQueries,
-            maxAge:
-              thresholds.maxAgeDays === null ? true : candidate.ageDays <= thresholds.maxAgeDays,
-          },
-        });
-        return;
-      }
-      const lines = [
-        `${heading("Promotion Explain")} ${muted("(" + agentId + ")")}`,
-        accent(candidate.key),
-        muted(
-          `${shortenHomePath(candidate.path)}:${String(candidate.startLine)}-${String(candidate.endLine)}`,
-        ),
-        candidate.snippet,
-        muted(
-          `score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} uniqueQueries=${candidate.uniqueQueries} ageDays=${candidate.ageDays.toFixed(1)}`,
-        ),
-        muted(
-          `components: frequency=${candidate.components.frequency.toFixed(2)} relevance=${candidate.components.relevance.toFixed(2)} diversity=${candidate.components.diversity.toFixed(2)} recency=${candidate.components.recency.toFixed(2)} consolidation=${candidate.components.consolidation.toFixed(2)} conceptual=${candidate.components.conceptual.toFixed(2)}`,
-        ),
-        muted(
-          `thresholds: minScore=${thresholds.minScore} minRecallCount=${thresholds.minRecallCount} minUniqueQueries=${thresholds.minUniqueQueries} maxAgeDays=${thresholds.maxAgeDays ?? "none"}`,
-        ),
-      ];
-      if (candidate.conceptTags.length > 0) {
-        lines.push(muted(`concepts=${candidate.conceptTags.join(", ")}`));
-      }
-      defaultRuntime.log(lines.join("\n"));
-    },
-  });
+  await runMemoryPromotion(opts, hostOptions, selector);
 }

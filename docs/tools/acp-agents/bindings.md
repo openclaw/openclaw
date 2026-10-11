@@ -244,7 +244,7 @@ its current reasoning effort or conversation.
 
 ### Behavior
 
-- OpenClaw ensures the configured ACP session exists after channel-specific admission and before use.
+- OpenClaw creates the configured ACP session if needed after channel-specific admission and before use.
 - Messages in that channel, topic, or chat route to the configured ACP session.
 - Configured ACP bindings own their session route. Channel broadcast fan-out does not replace the configured ACP session for a matched binding.
 - In bound conversations, `/new` and `/reset` reset the same ACP session key in place.

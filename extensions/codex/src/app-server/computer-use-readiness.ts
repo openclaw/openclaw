@@ -79,7 +79,7 @@ export type CodexComputerUseLiveTestStatus = {
 };
 
 const COMPUTER_USE_LIVE_TEST_RETRY_COUNT = 1;
-const COMPUTER_USE_LIVE_TEST_THREAD_NAME = "OpenClaw Computer Use readiness probe";
+const COMPUTER_USE_LIVE_TEST_THREAD_NAME = "OpenClaw Computer Use readiness check";
 const COMPUTER_USE_LIST_APPS_TOOL = "list_apps";
 const COMPUTER_USE_UNIFIED_JS_TOOL = "js";
 const COMPUTER_USE_UNIFIED_JS_PROBE = "await cua.listApps();";
@@ -116,9 +116,7 @@ export async function runCodexComputerUseLiveTest(params: {
   });
   for (let attempt = 0; attempt <= COMPUTER_USE_LIVE_TEST_RETRY_COUNT; attempt += 1) {
     let threadId: string | undefined;
-    let outcome:
-      | { ok: true; liveTest: CodexComputerUseLiveTestStatus }
-      | { ok: false; error: unknown };
+    let outcome: { liveTest: CodexComputerUseLiveTestStatus } | { error: unknown };
     try {
       const thread = await params.request<CodexThreadStartResponse>(
         "thread/start",
@@ -149,12 +147,9 @@ export async function runCodexComputerUseLiveTest(params: {
           `Computer Use readiness tool ${params.config.mcpServerName}.${probe.tool} returned an error result`,
         );
       }
-      outcome = {
-        ok: true,
-        liveTest: liveTestStatus(attempt + 1),
-      };
+      outcome = { liveTest: liveTestStatus(attempt + 1) };
     } catch (error) {
-      outcome = { ok: false, error };
+      outcome = { error };
     }
     let cleanupError: Error | undefined;
     if (threadId) {
@@ -165,7 +160,7 @@ export async function runCodexComputerUseLiveTest(params: {
       }
     }
     if (
-      !outcome.ok &&
+      "error" in outcome &&
       (params.signal?.aborted || isCodexAppServerStartSelectionChangedError(outcome.error))
     ) {
       throw toErrorObject(outcome.error, "Computer Use live test failed");
@@ -173,7 +168,7 @@ export async function runCodexComputerUseLiveTest(params: {
     if (cleanupError) {
       throw cleanupError;
     }
-    if (outcome.ok) {
+    if ("liveTest" in outcome) {
       return { liveTest: outcome.liveTest, ...(repair ? { repair } : {}) };
     }
     lastError = outcome.error;

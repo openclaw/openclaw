@@ -6,7 +6,9 @@ import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subag
 import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/subagent-registry-state.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { seedCanonicalSessionValidation } from "../config/sessions/session-canonical-validation.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -302,21 +304,29 @@ describe("session resolution metadata", () => {
           return target.store[target.canonicalKey];
         };
         expect(read(scope.sessionKey)?.sessionId).toBe(entry.sessionId);
-        const database = openOpenClawAgentDatabase(scope).db;
+        const owner = openOpenClawAgentDatabase(scope);
+        const database = owner.db;
+        runSqliteImmediateTransactionSync(database, () => seedCanonicalSessionValidation(owner));
         if (kind === "malformed" || kind === "nul") {
           database
-            .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+            .prepare(
+              "UPDATE session_nodes SET entry_json = ?, entry_valid = 0 WHERE session_key = ?",
+            )
             .run(
               kind === "malformed" ? "{" : JSON.stringify(entry) + "\0trailing",
               scope.sessionKey,
             );
         } else if (kind === "mismatched-time") {
           database
-            .prepare("UPDATE session_nodes SET updated_at = ? WHERE session_key = ?")
+            .prepare(
+              "UPDATE session_nodes SET updated_at = ?, entry_valid = 0 WHERE session_key = ?",
+            )
             .run(2, scope.sessionKey);
         } else {
           database
-            .prepare("UPDATE session_nodes SET current_session_id = ? WHERE session_key = ?")
+            .prepare(
+              "UPDATE session_nodes SET current_session_id = ?, entry_valid = 0 WHERE session_key = ?",
+            )
             .run("different", scope.sessionKey);
         }
         expect(read(scope.sessionKey)?.sessionId).toBe(

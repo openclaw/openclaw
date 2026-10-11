@@ -562,15 +562,16 @@ describe("runDaemonRestart health checks", () => {
 
   it("blocks non-interactive stop without force before managed service access", async () => {
     isTerminalInteractive.mockReturnValue(false);
-    const { defaultRuntime } = await import("../../runtime.js");
+    const { defaultRuntime, ExitError } = await import("../../runtime.js");
     const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
 
-    await expect(runDaemonStop({ json: true })).rejects.toThrow(
-      'process.exit unexpectedly called with "1"',
-    );
+    const stopping = runDaemonStop({ json: true });
+    await expect(stopping).rejects.toBeInstanceOf(ExitError);
+    await expect(stopping).rejects.toMatchObject({ code: 1 });
 
-    expect(writeJson).toHaveBeenCalledWith(
+    expect(writeJson).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
+        action: "stop",
         ok: false,
         error: expect.stringContaining("openclaw gateway run --dev"),
       }),

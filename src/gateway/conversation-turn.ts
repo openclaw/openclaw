@@ -4,6 +4,7 @@ import {
   beginConversationDeliveryOperation,
   ConversationDeliveryInputError,
   getConversationDeliveryOperation,
+  type ConversationDeliveryRecord,
 } from "../config/sessions/conversation-delivery-store.js";
 import {
   readConversation,
@@ -29,7 +30,8 @@ import {
   ConversationOperationConflictError,
 } from "./conversation-errors.js";
 import {
-  assertConversationDeliveryAttemptAuthorized,
+  withAuthorizedConversationDelivery,
+  assertConversationDeliveryRouteAuthorized,
   assertConversationRouteEligibleForAgent,
 } from "./conversation-route-ownership.js";
 
@@ -44,8 +46,16 @@ function hasConversationSessionBinding(
   return Boolean(conversation.sessionId && conversation.sessionKey);
 }
 
+const COMPLETED_TURN_MESSAGES = {
+  sent: "Message was already sent; no process-local reply waiter remains.",
+  queued: "Delivery is queued; a later reply will start an ordinary inbound turn.",
+  suppressed: "Delivery was suppressed before a message was sent.",
+  unknown: "Delivery could not be confirmed and will not be retried automatically.",
+  replied: "A reply was recorded, but its durable reply payload is incomplete.",
+} satisfies Record<Exclude<ConversationDeliveryRecord["status"], "created" | "rejected">, string>;
+
 function resultForCompletedOperation(
-  operation: Awaited<ReturnType<typeof beginConversationDeliveryOperation>>["record"],
+  operation: ConversationDeliveryRecord,
 ): ConversationTurnResult | undefined {
   const messageId = operation.platformMessageId ?? operation.preparedMessageId;
   if (operation.status === "replied" && operation.reply && messageId) {
@@ -73,48 +83,20 @@ function resultForCompletedOperation(
     channel: operation.channel,
     ...(messageId ? { messageId } : {}),
   };
-  switch (operation.status) {
-    case "sent":
-      return {
-        ...base,
-        status: "sent",
-        correlationPersisted: true,
-        error: "Message was already sent; no process-local reply waiter remains.",
-      };
-    case "queued":
-      return {
-        ...base,
-        status: "queued",
-        correlationPersisted: true,
-        error: "Delivery is queued; a later reply will start an ordinary inbound turn.",
-      };
-    case "suppressed":
-      return {
-        ...base,
-        status: "suppressed",
-        correlationPersisted: false,
-        error: "Delivery was suppressed before a message was sent.",
-      };
-    case "rejected":
-      throw new ConversationInputError(
-        operation.rejectionError ?? "Conversation delivery was permanently rejected",
-      );
-    case "unknown":
-      return {
-        ...base,
-        status: "unknown",
-        correlationPersisted: false,
-        error: "Delivery could not be confirmed and will not be retried automatically.",
-      };
-    case "replied":
-      return {
-        ...base,
-        status: "sent",
-        correlationPersisted: true,
-        error: "A reply was recorded, but its durable reply payload is incomplete.",
-      };
+  if (operation.status === "rejected") {
+    throw new ConversationInputError(
+      operation.rejectionError ?? "Conversation delivery was permanently rejected",
+    );
   }
-  return operation.status satisfies never;
+  return {
+    ...base,
+    status: operation.status === "replied" ? "sent" : operation.status,
+    correlationPersisted:
+      operation.status === "sent" ||
+      operation.status === "queued" ||
+      operation.status === "replied",
+    error: COMPLETED_TURN_MESSAGES[operation.status],
+  };
 }
 
 /** Owns correlation, delivery, and waiting inside the Gateway process that receives ingress. */
@@ -233,14 +215,20 @@ export async function runGatewayConversationTurn(params: {
         route,
         sourceSessionKey: params.sourceSessionKey,
         // Replay authority after plugin route resolution at the session-binding commit.
-        assertCommitAllowed: () => {
-          assertConversationDeliveryAttemptAuthorized({
-            config: readCurrentConfig(),
-            agentId: params.agentId,
+        workerGuard: {
+          conversation: {
             conversationRef: discoveredConversation.conversationRef,
             expectedRouteFingerprint: discoveredRouteFingerprint,
-            scope,
-          });
+          },
+          assertCurrent: () => {
+            assertConversationDeliveryRouteAuthorized({
+              config: readCurrentConfig(),
+              agentId: params.agentId,
+              conversationRef: discoveredConversation.conversationRef,
+              expectedRouteFingerprint: discoveredRouteFingerprint,
+              conversation: discoveredConversation,
+            });
+          },
         },
       },
       preparedBinding,
@@ -260,15 +248,18 @@ export async function runGatewayConversationTurn(params: {
     conversation,
   });
   const routeFingerprint = resolveConversationRouteFingerprint(conversation);
+  const authority = {
+    conversationRef: conversation.conversationRef,
+    expectedRouteFingerprint: routeFingerprint,
+    expectedSessionId: conversation.sessionId,
+    expectedSessionKey: conversation.sessionKey,
+  };
   const assertCurrent = () => {
-    assertConversationDeliveryAttemptAuthorized({
+    assertConversationDeliveryRouteAuthorized({
+      ...authority,
       config: readCurrentConfig(),
       agentId: params.agentId,
-      conversationRef: conversation.conversationRef,
-      expectedRouteFingerprint: routeFingerprint,
-      expectedSessionId: conversation.sessionId,
-      expectedSessionKey: conversation.sessionKey,
-      scope,
+      conversation,
     });
   };
   if (!begun) {
@@ -281,6 +272,7 @@ export async function runGatewayConversationTurn(params: {
           conversationRef: conversation.conversationRef,
           ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
           message: params.message,
+          authority,
           preparedMessageId: candidatePreparedMessageId,
         },
         assertCurrent,
@@ -333,7 +325,19 @@ export async function runGatewayConversationTurn(params: {
       operation: begun.record,
       preparedMessageId,
       routeFingerprint,
+      authority,
       assertCurrent,
+      withDirectAdapterHandoff: (initiate) =>
+        withAuthorizedConversationDelivery(
+          {
+            ...authority,
+            config: authorizedConfig,
+            readCurrentConfig,
+            agentId: params.agentId,
+            scope,
+          },
+          initiate,
+        ),
     });
     if (sent.deliveryStatus !== "sent") {
       pending.cancel();

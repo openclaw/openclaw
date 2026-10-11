@@ -9,10 +9,8 @@ import { parseUpdateRecoveryBackupManifest } from "../commands/backup-verify-man
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import * as durability from "./directory-durability.js";
 import * as diskSpace from "./disk-space.js";
 import * as fileDescriptor from "./file-descriptor.js";
-import { FsSafeError } from "./fs-safe.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 import * as inspection from "./update-candidate-state.inspection.js";
@@ -264,16 +262,13 @@ async function originalCaptureFixture(externalAgents = false) {
       { path: plugin, kind: "directory" },
       { path: missingFile, kind: "file" },
       { path: missingDatabase, kind: "sqlite" },
+      { path: workshop, kind: "directory" },
+      { path: missingDirectory, kind: "directory" },
     ],
     deferredPluginIds: new Set(),
     notices: [],
     assertCurrent: () => {},
   });
-  const workshopOwner = await import("../commands/doctor-update-rehearsal-workshop.js");
-  vi.spyOn(workshopOwner, "collectDoctorSkillWorkshopBackupResources").mockResolvedValue([
-    { path: workshop, kind: "directory" },
-    { path: missingDirectory, kind: "directory" },
-  ]);
   const { captureUpdateRecoveryBaseline } = await import("./update-recovery-baseline-capture.js");
   const env = {
     ...process.env,
@@ -312,7 +307,7 @@ async function originalCaptureFixture(externalAgents = false) {
   };
 }
 
-it("seals equivalent original bytes with native rename and unsupported RENAME_NOREPLACE under maintenance", async () => {
+it("seals equivalent original bytes under isolated and maintenance-owned capture", async () => {
   const f = await originalCaptureFixture(true);
   const externalBytes = await Promise.all(f.external.map((source) => fs.readFile(source)));
   const result = await f.captureOriginal("original");
@@ -382,15 +377,6 @@ it("seals equivalent original bytes with native rename and unsupported RENAME_NO
     schemaMaintenance: true,
     assertOwnerCurrent: () => {},
     assertDatabaseAccess: () => {},
-  });
-  const publish = durability.publishFileExclusive;
-  vi.spyOn(durability, "publishFileExclusive").mockImplementation(async (params) => {
-    if (params.strategy === "rename-noreplace") {
-      throw new FsSafeError("helper-unavailable", "renameat2 RENAME_NOREPLACE: EINVAL", {
-        details: { capability: "rename-noreplace" },
-      });
-    }
-    return publish(params);
   });
   try {
     const maintained = await scope.run(() =>
@@ -561,6 +547,20 @@ it("retires only expired sealed standalone Doctor captures and preserves incompl
     const linkedTarget = await sealed(linkedId, 31, state.path("linked-capture"));
     const linked = path.join(store, linkedId);
     await fs.symlink(linkedTarget, linked, "dir");
+    const interrupted: string[] = [];
+    for (const kind of ["linked", "copied", "conflicting"]) {
+      const retained = await sealed(`doctor-${randomUUID()}`, 31);
+      const finalPath = path.join(retained, "manifest.json");
+      const partialPath = `${finalPath}.partial`;
+      if (kind === "linked") {
+        await fs.link(finalPath, partialPath);
+      } else if (kind === "copied") {
+        await fs.copyFile(finalPath, partialPath);
+      } else {
+        await fs.writeFile(partialPath, "different, unverified bytes");
+      }
+      interrupted.push(retained);
+    }
     const assertCurrent = vi.fn();
 
     const result = await retireExpiredStandaloneDoctorCaptures({
@@ -573,7 +573,7 @@ it("retires only expired sealed standalone Doctor captures and preserves incompl
     expect(result).toEqual({ retired: [expired], warnings: [] });
     expect(assertCurrent).toHaveBeenCalled();
     await expect(fs.lstat(expired)).rejects.toMatchObject({ code: "ENOENT" });
-    for (const retained of [recent, incomplete, update, linkedTarget]) {
+    for (const retained of [recent, incomplete, update, linkedTarget, ...interrupted]) {
       expect((await fs.lstat(retained)).isDirectory()).toBe(true);
     }
     expect((await fs.lstat(linked)).isSymbolicLink()).toBe(true);

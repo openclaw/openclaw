@@ -48,7 +48,7 @@ function stripRetiredAgentConfig(raw: Record<string, unknown>, changes: string[]
   }
   if (removedContextLimits) {
     changes.push(
-      "Removed contextLimits.memoryGetDefaultLines/toolResultMaxChars overrides; canonical memory and context-window caps now apply.",
+      "Removed contextLimits.memoryGetDefaultLines/toolResultMaxChars overrides; built-in memory and context-window caps now apply.",
     );
   }
 }
@@ -138,10 +138,4 @@ export function migrateConfigTranche(raw: Record<string, unknown>, changes: stri
   }
   stripRetiredAgentConfig(raw, changes);
   migrateWhatsAppDebounce(raw, changes);
-}
-
-export function hasConfigTrancheLegacyKeys(root: Record<string, unknown>): boolean {
-  const changes: string[] = [];
-  migrateConfigTranche(structuredClone(root), changes);
-  return changes.length > 0;
 }

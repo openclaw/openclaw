@@ -20,17 +20,18 @@ import {
   type MemorySyncParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import { listMemorySessionTombstones } from "../memory-entry-origins.js";
-import { runInMemoryBackgroundContext } from "./background-context.js";
+import { findForgottenMemorySessionIds } from "../memory-entry-origins.js";
 import { readMemoryTranscriptStatsInWorker } from "./manager-cpu-worker-runtime.js";
-import { shouldSyncSessionsForReindex } from "./manager-session-reindex.js";
 import {
   isMemorySessionIndexable,
   resolveMemorySessionStartupState,
   type MemorySessionStartupFileState,
 } from "./manager-session-sync-state.js";
 import { inspectMemorySourceState } from "./manager-source-state.js";
-import { memorySessionSyncTargetKey } from "./manager-sync-control.js";
+import {
+  hasTargetedSessionSyncParams,
+  memorySessionSyncTargetKey,
+} from "./manager-sync-control.js";
 import { MemoryManagerWatchOps } from "./manager-watch-ops.js";
 
 const SESSION_DIRTY_DEBOUNCE_MS = 5000;
@@ -69,28 +70,40 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     }
   }
 
-  protected async listSessionCorpusEntries(): Promise<SessionTranscriptCorpusEntry[]> {
-    const readOnly = this.database.readOnly;
-    const entries = await listSessionTranscriptCorpusEntriesForAgent(this.agentId, {
+  protected async listSessionCorpusEntries(
+    targets?: Pick<MemorySyncParams, "sessions" | "archiveFiles">,
+  ): Promise<SessionTranscriptCorpusEntry[]> {
+    let entries = await listSessionTranscriptCorpusEntriesForAgent(this.agentId, {
       includeContentRevision: false,
-      readOnly,
+      readOnly: this.database.readOnly,
     });
-    const forgottenSessions = new Set(
-      (
-        await listMemorySessionTombstones({
-          agentId: this.agentId,
-          sessionIds: entries.map((entry) => entry.sessionId),
-        })
-      ).map((entry) => entry.sessionId),
-    );
-    return entries.filter((entry) => {
+    entries = entries.filter((entry) => {
       const archivedSessionKey =
         entry.artifactKind === "archive-artifact" ? entry.sessionKey : undefined;
-      return (
-        !forgottenSessions.has(entry.sessionId) &&
-        isMemorySessionIndexable(entry, archivedSessionKey)
-      );
+      return isMemorySessionIndexable(entry, archivedSessionKey);
     });
+    if (targets) {
+      const files = new Set([
+        ...(this.normalizeTargetArchiveFiles(targets.archiveFiles, entries) ?? []),
+        ...this.resolveArchiveFilesForSyncTargets(targets.sessions, entries),
+      ]);
+      const sessionIds = new Set(
+        entries
+          .filter(
+            (entry) =>
+              files.has(entry.sessionFile) ||
+              (entry.transcriptSource !== "sqlite" && files.has(path.resolve(entry.sessionFile))),
+          )
+          .map((entry) => entry.sessionId),
+      );
+      // Archive cleanup needs active counterparts from the same discovery snapshot.
+      entries = entries.filter((entry) => sessionIds.has(entry.sessionId));
+    }
+    const forgottenSessions = await findForgottenMemorySessionIds({
+      agentId: this.agentId,
+      sessionIds: entries.map((entry) => entry.sessionId),
+    });
+    return entries.filter((entry) => !forgottenSessions.has(entry.sessionId));
   }
 
   protected sessionPathForCorpusEntry(entry: SessionTranscriptCorpusEntry): string {
@@ -124,8 +137,8 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     if (!this.sources.has("sessions") || this.sessionUnsubscribe) {
       return;
     }
-    this.sessionUnsubscribe = this.subscribeSessionTranscriptUpdates((update) =>
-      runInMemoryBackgroundContext(() => {
+    this.sessionUnsubscribe = this.subscribeSessionTranscriptUpdates((update) => {
+      this.runInBackgroundContext(() => {
         if (this.closing || this.closed) {
           return;
         }
@@ -136,14 +149,14 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
         }
         if (update.sessionFile) {
           const sessionFile = update.sessionFile;
-          void this.withManagerOperation(() =>
-            this.scheduleCorpusSessionFileDirty(sessionFile),
+          void this.runInBackgroundContext(() =>
+            this.withManagerOperation(() => this.scheduleCorpusSessionFileDirty(sessionFile)),
           ).catch((err: unknown) => {
             log.warn(`memory session corpus update failed: ${String(err)}`);
           });
         }
-      }),
-    );
+      });
+    });
   }
 
   protected subscribeSessionTranscriptUpdates(
@@ -154,34 +167,32 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
 
   private async scheduleCorpusSessionFileDirty(sessionFile: string): Promise<void> {
     const resolvedSessionFile = path.resolve(sessionFile);
-    const corpusEntries = await this.listSessionCorpusEntries();
-    if (
-      corpusEntries.some(
-        (entry) =>
-          entry.transcriptSource !== "sqlite" &&
-          path.resolve(entry.sessionFile) === resolvedSessionFile,
-      )
-    ) {
+    const corpusEntries = await this.listSessionCorpusEntries({
+      archiveFiles: [resolvedSessionFile],
+    });
+    if (corpusEntries.length > 0) {
       this.scheduleSessionDirty(resolvedSessionFile);
     }
   }
 
-  protected ensureSessionStartupCatchup(): void {
+  protected async ensureSessionStartupCatchup(): Promise<void> {
     if (!this.sources.has("sessions") || this.closing || this.closed) {
       return;
     }
     // Discovery can reopen the agent store after filesystem awaits; close must drain it.
-    void this.withManagerOperation(() => this.runSessionStartupCatchup()).catch((err: unknown) => {
-      log.warn("memory session startup catch-up failed: " + String(err));
-    });
+    await this.withManagerOperation(() => this.runSessionStartupCatchup());
   }
 
-  protected async markSessionStartupCatchupDirtyFiles(inspectSources = false): Promise<string[]> {
-    if (!this.sources.has("sessions") || this.closed) {
+  protected async markSessionStartupCatchupDirtyFiles(
+    inspectSources = false,
+    // Accepted discovery finishes while closing; startup catch-up yields to close instead.
+    stopped = () => this.closed,
+  ): Promise<string[]> {
+    if (!this.sources.has("sessions") || stopped()) {
       return [];
     }
     const corpusEntries = await this.listSessionCorpusEntries();
-    if (this.closed) {
+    if (stopped()) {
       return [];
     }
     const existingRows = await this.database.readSourceState({
@@ -199,7 +210,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
         ...(entry.storePath ? { storePath: entry.storePath } : {}),
       })),
     );
-    if (this.closed) {
+    if (stopped()) {
       return [];
     }
     const statsByEntry = new Map(
@@ -209,6 +220,9 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       await runWithConcurrency(
         corpusEntries.map(
           (corpusEntry) => async (): Promise<MemorySessionStartupFileState | null> => {
+            if (stopped()) {
+              return null;
+            }
             // Missing rows can be intentional: parsing applies provenance admission
             // that corpus metadata cannot express. Recheck on every catch-up so a
             // later user turn can make a previously excluded session eligible.
@@ -264,7 +278,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
         issues: fileStates.length === 0 ? ["no eligible session transcripts found"] : [],
       });
     }
-    if (this.closed) {
+    if (stopped()) {
       return dirtyFiles;
     }
     if (hasStaleIndexedPaths) {
@@ -281,13 +295,11 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
   }
 
   protected async runSessionStartupCatchup(): Promise<string[]> {
-    const dirtyFiles = await this.markSessionStartupCatchupDirtyFiles();
+    const dirtyFiles = await this.markSessionStartupCatchupDirtyFiles(false, () => this.closing);
     if (!this.sessionsDirty || this.closing || this.closed) {
       return dirtyFiles;
     }
-    void this.sync({ reason: "session-startup-catchup" }).catch((err: unknown) => {
-      log.warn("memory sync failed (session-startup-catchup): " + String(err));
-    });
+    this.syncInBackground({ reason: "session-startup-catchup" });
     return dirtyFiles;
   }
 
@@ -308,11 +320,16 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       if (this.closing || this.closed) {
         return;
       }
-      void this.withManagerOperation(() => this.processSessionUpdateBatch()).catch(
-        (err: unknown) => {
-          log.warn(`memory session update failed: ${String(err)}`);
-        },
-      );
+      const failed = (err: unknown) => {
+        log.warn(`memory session update failed: ${String(err)}`);
+      };
+      try {
+        void this.runInBackgroundContext(() =>
+          this.withManagerOperation(() => this.processSessionUpdateBatch()),
+        ).catch(failed);
+      } catch (err) {
+        failed(err);
+      }
     }, SESSION_DIRTY_DEBOUNCE_MS);
   }
 
@@ -324,7 +341,10 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     const pendingTargets = Array.from(this.sessionPendingTargets.values());
     this.sessionPendingFiles.clear();
     this.sessionPendingTargets.clear();
-    pending.push(...Array.from(await this.resolveArchiveFilesForSyncTargets(pendingTargets)));
+    if (pendingTargets.length > 0) {
+      const plan = await this.resolveTargetSessionSyncPlan({ sessions: pendingTargets });
+      pending.push(...(plan?.targetArchiveFiles ?? []));
+    }
     for (const sessionFile of pending) {
       this.sessionsDirtyFiles.add(sessionFile);
     }
@@ -332,13 +352,10 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       this.sessionsDirty = true;
       // Keep both identity and file keys so every transcript backend enters the
       // targeted queue instead of letting an active sync clear this newer event.
-      void this.sync({
-        reason: "session-delta",
-        sessions: pendingTargets,
-        archiveFiles: pending,
-      }).catch((err: unknown) => {
-        log.warn(`memory sync failed (session update): ${String(err)}`);
-      });
+      this.syncInBackground(
+        { reason: "session-delta", sessions: pendingTargets, archiveFiles: pending },
+        "session update",
+      );
     }
   }
 
@@ -391,16 +408,12 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     return normalized.size > 0 ? normalized : null;
   }
 
-  private async resolveArchiveFilesForSyncTargets(
-    sessions?: Iterable<MemorySessionSyncTarget> | null,
-    knownCorpusEntries?: readonly SessionTranscriptCorpusEntry[],
-  ): Promise<Set<string>> {
+  private resolveArchiveFilesForSyncTargets(
+    sessions: Iterable<MemorySessionSyncTarget> | undefined,
+    corpusEntries: readonly SessionTranscriptCorpusEntry[],
+  ): Set<string> {
     const files = new Set<string>();
     const targets = Array.from(sessions ?? []);
-    if (targets.length === 0) {
-      return files;
-    }
-    const corpusEntries = knownCorpusEntries ?? (await this.listSessionCorpusEntries());
     const normalizedAgentId = normalizeAgentId(this.agentId);
     let entriesBySessionId: Map<string, SessionTranscriptCorpusEntry[]> | undefined;
     if (targets.length > 1) {
@@ -444,21 +457,26 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     sessions?: MemorySessionSyncTarget[];
     archiveFiles?: string[];
   }) {
-    const corpusEntries = await this.listSessionCorpusEntries();
+    const corpusEntries = await this.listSessionCorpusEntries(params);
     const files = new Set([
       ...(this.normalizeTargetArchiveFiles(params.archiveFiles, corpusEntries) ?? []),
-      ...(await this.resolveArchiveFilesForSyncTargets(params.sessions, corpusEntries)),
+      ...this.resolveArchiveFilesForSyncTargets(params.sessions, corpusEntries),
     ]);
     return files.size > 0 ? { corpusEntries, targetArchiveFiles: files } : null;
   }
 
   protected shouldSyncSessions(params?: MemorySyncParams, needsFullReindex = false) {
-    return shouldSyncSessionsForReindex({
-      hasSessionSource: this.sources.has("sessions"),
-      sessionsDirty: this.sessionsDirty,
-      sessionsFullRetryDirty: this.sessionsFullRetryDirty,
-      sync: params,
-      needsFullReindex,
-    });
+    if (!this.sources.has("sessions")) {
+      return false;
+    }
+    if (
+      hasTargetedSessionSyncParams(params) ||
+      params?.force ||
+      needsFullReindex ||
+      this.sessionsFullRetryDirty
+    ) {
+      return true;
+    }
+    return params?.reason !== "session-start" && params?.reason !== "watch" && this.sessionsDirty;
   }
 }

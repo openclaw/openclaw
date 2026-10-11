@@ -69,25 +69,20 @@ type ExplicitFinalSourceReplyEvidence = {
   messagingToolSourceReplyPayloads?: unknown;
 };
 
-function collectSourceReplyFinalMarkers(value: unknown): boolean[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.flatMap((entry) => {
-    const marker = asOptionalRecord(entry)?.sourceReplyFinal;
-    return typeof marker === "boolean" ? [marker] : [];
-  });
-}
-
 /** Resolve explicit progress/final evidence, or undefined for legacy runtimes. */
 export function resolveExplicitFinalSourceReplyDeliveryEvidence(
   result: ExplicitFinalSourceReplyEvidence,
 ): boolean | undefined {
-  const markers = [
-    ...collectSourceReplyFinalMarkers(result.messagingToolSentTargets),
-    ...collectSourceReplyFinalMarkers(result.messagingToolSourceReplyPayloads),
-  ];
-  return markers.length > 0 ? markers.some(Boolean) : undefined;
+  let final: boolean | undefined;
+  for (const value of [result.messagingToolSentTargets, result.messagingToolSourceReplyPayloads]) {
+    for (const entry of Array.isArray(value) ? value : []) {
+      const marker = asOptionalRecord(entry)?.sourceReplyFinal;
+      if (typeof marker === "boolean") {
+        final = final || marker;
+      }
+    }
+  }
+  return final;
 }
 
 /** Preserve legacy completion semantics unless the runtime emitted progress/final markers. */
@@ -266,28 +261,22 @@ export function hasCompleteAutomaticMediaDeliveryOutcomeEvidence(
   if (payloads.length === 0 || outcomes.length === 0) {
     return false;
   }
-  const classifiedIndexes = new Set<number>();
-  for (const outcome of outcomes) {
-    const record = asOptionalRecord(outcome);
-    if (!record) {
-      continue;
-    }
-    const index =
-      typeof record.index === "number" &&
-      Number.isInteger(record.index) &&
-      record.index >= 0 &&
-      record.index < payloads.length
-        ? record.index
-        : undefined;
-    const status = normalizeEvidenceStatus(record.status);
-    const classified =
-      status === "sent" ||
-      status === "suppressed" ||
-      (status === "failed" && typeof record.sentBeforeError === "boolean");
-    if (index !== undefined && classified) {
-      classifiedIndexes.add(index);
-    }
-  }
+  const classifiedIndexes = new Set(
+    outcomes.flatMap((outcome) => {
+      const record = asOptionalRecord(outcome);
+      const index = record?.index;
+      const status = normalizeEvidenceStatus(record?.status);
+      return typeof index === "number" &&
+        Number.isInteger(index) &&
+        index >= 0 &&
+        index < payloads.length &&
+        (status === "sent" ||
+          status === "suppressed" ||
+          (status === "failed" && typeof record?.sentBeforeError === "boolean"))
+        ? [index]
+        : [];
+    }),
+  );
   const expected = new Set(expectedMediaUrls.map(normalizeMediaReferenceForComparison));
   return payloads.every((payload, index) => {
     const containsExpectedMedia = collectPayloadMediaUrls([payload]).some((url) =>

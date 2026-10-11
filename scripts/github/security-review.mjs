@@ -11,6 +11,7 @@ import {
 } from "./guard-review.mjs";
 import {
   GitHubDiffDataError,
+  GitHubNoticePublicationError,
   GitHubRateLimitError,
   GitHubReadTimeoutError,
   GitHubStatusPublicationError,
@@ -126,7 +127,7 @@ async function ciState(review) {
     : "failure";
 }
 
-let diffRecoveryReview;
+let recoveryReview;
 let currentReview;
 
 async function main() {
@@ -134,7 +135,7 @@ async function main() {
   if (!["detect", "autoscrub", "enforce"].includes(mode)) {
     throw new Error(`Unknown security review mode: ${mode}`);
   }
-  const review = await readGuardReview(diffRecoveryReview);
+  const review = await readGuardReview(recoveryReview);
   currentReview = review;
   if (!review) {
     return;
@@ -161,6 +162,7 @@ async function main() {
           if (
             error instanceof GitHubRateLimitError ||
             ((error instanceof GitHubStatusPublicationError ||
+              error instanceof GitHubNoticePublicationError ||
               error instanceof GitHubReadTimeoutError ||
               error instanceof GitHubDiffDataError ||
               error instanceof ObsoleteReviewError) &&
@@ -227,12 +229,13 @@ async function main() {
     await assertGuardUnchanged(review);
     await publishGuardStatus(review, "success", securityReviewContracts.combined.success);
   } catch (error) {
-    if (error instanceof GitHubDiffDataError) {
-      diffRecoveryReview = review;
+    if (error instanceof GitHubDiffDataError || error instanceof GitHubNoticePublicationError) {
+      recoveryReview = review;
     }
     if (
       error instanceof GitHubRateLimitError ||
       error instanceof GitHubStatusPublicationError ||
+      error instanceof GitHubNoticePublicationError ||
       error instanceof GitHubReadTimeoutError ||
       error instanceof ObsoleteReviewError
     ) {

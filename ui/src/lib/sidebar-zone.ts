@@ -5,81 +5,37 @@ import {
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
 
-type SidebarPinnedSession = { key: string };
-
-/**
- * Reconcile the persisted zone order against the sessions we can actually see.
- * `entries` is the render list; `sidebarEntries` is the canonical list callers
- * may persist after a mutation. Session entries outside `knownUnpinnedKeys`
- * whose rows are not loaded (other agents, still-loading caches) are preserved
- * in place: pruning them here would corrupt the synced prefs of every session
- * the current view cannot vouch for.
- */
+/** Personal references are the only pin authority. Catalogs resolve display, never membership. */
 export function reconcileSidebarZone(
   sidebarEntries: readonly string[],
-  pinnedSessions: readonly SidebarPinnedSession[],
+  availableSessions: readonly { key: string }[],
   validRoutes: readonly SidebarNavRoute[],
-  knownUnpinnedKeys: ReadonlySet<string> = new Set(),
   pluginNavigationKeys: ReadonlySet<string> = new Set(),
-  defaultPluginNavigationKeys: ReadonlySet<string> = new Set(),
 ): { entries: SidebarZoneEntry[]; sidebarEntries: string[] } {
-  const pinnedKeys = new Set(pinnedSessions.map((session) => session.key));
-  const validRouteSet = new Set(validRoutes);
-  const seen = new Set<string>();
+  const sessionKeys = new Set(availableSessions.map(({ key }) => key));
+  const routes = new Set(validRoutes);
+  const canonical = new Set<string>();
   const entries: SidebarZoneEntry[] = [];
-  const canonical: string[] = [];
-
   for (const serialized of sidebarEntries) {
     const entry = parseSidebarEntry(serialized);
     if (!entry) {
       continue;
     }
-    const canonicalKey = serializeSidebarEntry(entry);
-    if (seen.has(canonicalKey)) {
+    const key = serializeSidebarEntry(entry);
+    if (canonical.has(key)) {
       continue;
     }
-    if (entry.type === "route" && !validRouteSet.has(entry.route)) {
-      continue;
-    }
+    canonical.add(key);
+    // Preserve unresolved references without persisting private labels or treating
+    // a missing paginated row, offline person, or unloaded plugin as an unpin.
     if (
-      entry.type === "session" &&
-      !pinnedKeys.has(entry.key) &&
-      knownUnpinnedKeys.has(entry.key)
-    ) {
-      continue;
-    }
-    // Unavailable plugins and unknown sessions retain their saved position without rendering.
-    seen.add(canonicalKey);
-    canonical.push(canonicalKey);
-    if (
-      entry.type === "route" ||
-      (entry.type === "plugin" ? pluginNavigationKeys.has(entry.key) : pinnedKeys.has(entry.key))
+      entry.type === "person" ||
+      (entry.type === "route" && routes.has(entry.route)) ||
+      (entry.type === "session" && sessionKeys.has(entry.key)) ||
+      (entry.type === "plugin" && pluginNavigationKeys.has(entry.key))
     ) {
       entries.push(entry);
     }
   }
-
-  for (const session of pinnedSessions) {
-    const entry = { type: "session", key: session.key } as const;
-    const serialized = serializeSidebarEntry(entry);
-    if (!seen.has(serialized)) {
-      seen.add(serialized);
-      entries.push(entry);
-      canonical.push(serialized);
-    }
-  }
-
-  // Plugin defaults join the same ordered zone as explicit pins. Rendering and
-  // drag writes must see the same complete order, including newly loaded plugins.
-  for (const key of defaultPluginNavigationKeys) {
-    const entry = { type: "plugin", key } as const;
-    const serialized = serializeSidebarEntry(entry);
-    if (pluginNavigationKeys.has(key) && !seen.has(serialized)) {
-      seen.add(serialized);
-      entries.push(entry);
-      canonical.push(serialized);
-    }
-  }
-
-  return { entries, sidebarEntries: canonical };
+  return { entries, sidebarEntries: [...canonical] };
 }

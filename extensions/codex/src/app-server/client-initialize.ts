@@ -124,9 +124,7 @@ export function buildCodexAppServerRuntimeIdentity(
 }
 
 class CodexAppServerVersionError extends Error {
-  readonly detectedVersion?: string;
-
-  constructor(detectedVersion: string | undefined) {
+  constructor(readonly detectedVersion?: string) {
     const detected = detectedVersion
       ? `detected ${detectedVersion}`
       : "OpenClaw could not determine the running Codex version";
@@ -134,7 +132,6 @@ class CodexAppServerVersionError extends Error {
       `Codex app-server ${MIN_SUPPORTED_CODEX_APP_SERVER_VERSION} or newer is required, but ${detected}. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
     );
     this.name = "CodexAppServerVersionError";
-    this.detectedVersion = detectedVersion;
   }
 }
 
@@ -159,7 +156,8 @@ export function assertSupportedCodexAppServerVersion(response: CodexInitializeRe
   return detectedVersion;
 }
 
-function readCodexVersionFromUserAgent(userAgent: string | undefined): string | undefined {
+/** Reads the Codex version from an initialize `userAgent` such as `openclaw/0.160.0 (...)`. */
+export function readCodexVersionFromUserAgent(userAgent: string | undefined): string | undefined {
   // Codex returns `<originator>/<codex-version> ...`; the originator can be
   // OpenClaw, Codex Desktop, or an env override, so only the slash-delimited
   // version in the leading product field is stable.

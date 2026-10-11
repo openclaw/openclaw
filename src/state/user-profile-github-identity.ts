@@ -71,23 +71,6 @@ function readGitHubColumns(db: DatabaseSync) {
   return columns;
 }
 
-function parseStoredGitHubIdentity(row: {
-  subject: string | null | undefined;
-  canonical_login: string | null | undefined;
-}): StoredGitHubIdentity | null {
-  const accountId = Number(row.subject);
-  const login = row.canonical_login ? normalizeGitHubLogin(row.canonical_login) : undefined;
-  return login && Number.isSafeInteger(accountId) && accountId > 0 ? { accountId, login } : null;
-}
-
-function toPublicGitHubIdentity(identity: StoredGitHubIdentity): UserProfileGitHubIdentity {
-  return {
-    login: identity.login,
-    profileUrl: `https://github.com/${identity.login}`,
-    avatarUrl: `https://avatars.githubusercontent.com/u/${identity.accountId}?v=4`,
-  };
-}
-
 export function selectStoredGitHubIdentities(
   db: DatabaseSync,
   profileIds?: readonly string[],
@@ -127,15 +110,16 @@ export function selectStoredGitHubIdentities(
     { accounts: StoredGitHubIdentity[]; primaryId: number | null }
   >();
   for (const row of rows) {
-    const identity = parseStoredGitHubIdentity(row);
-    if (!identity) {
+    const accountId = Number(row.subject);
+    const login = row.canonical_login ? normalizeGitHubLogin(row.canonical_login) : undefined;
+    if (!login || !Number.isSafeInteger(accountId) || accountId <= 0) {
       continue;
     }
     const profile = profiles.get(row.profile_id) ?? {
       accounts: [],
       primaryId: row.primary_github_account_id ?? null,
     };
-    profile.accounts.push(identity);
+    profile.accounts.push({ accountId, login });
     profiles.set(row.profile_id, profile);
   }
   return new Map(
@@ -232,11 +216,17 @@ export function selectUserProfileGitHubIdentities(
   db: DatabaseSync,
   profileIds?: readonly string[],
 ): Map<string, UserProfileGitHubIdentity> {
-  return new Map(
-    [...selectStoredGitHubIdentities(db, profileIds)].flatMap(([profileId, { primary }]) =>
-      primary ? [[profileId, toPublicGitHubIdentity(primary)] as const] : [],
-    ),
-  );
+  const identities = new Map<string, UserProfileGitHubIdentity>();
+  for (const [profileId, { primary }] of selectStoredGitHubIdentities(db, profileIds)) {
+    if (primary) {
+      identities.set(profileId, {
+        login: primary.login,
+        profileUrl: `https://github.com/${primary.login}`,
+        avatarUrl: `https://avatars.githubusercontent.com/u/${primary.accountId}?v=4`,
+      });
+    }
+  }
+  return identities;
 }
 
 /** Resolves current verified identities and public-credit preferences without initializing storage. */
@@ -247,18 +237,7 @@ export async function resolveUserProfileGitHubAttribution(
   if (profileIds.length === 0) {
     return new Map();
   }
-  const reply = await executeExistingOpenClawStateRead(
-    options,
-    { type: "userProfiles.githubAttribution.resolve", profileIds },
-    { current: true },
-  );
-  if (!reply) {
-    return new Map();
-  }
-  if (!reply.ok || reply.type !== "userProfiles.githubAttribution.resolve") {
-    throw new Error("GitHub attribution reader returned an unexpected result");
-  }
-  return reply.identities;
+  return (await prepareUserProfileGitHubAttribution(profileIds, options)).identities;
 }
 
 function resolveUserProfileGitHubAttributionInDatabase(
@@ -299,13 +278,26 @@ function resolveUserProfileGitHubAttributionInDatabase(
   };
 }
 
+type PreparedGitHubAttribution = {
+  identities: UserProfileGitHubAttribution;
+  isCurrent: () => boolean;
+};
+
+const preparedGitHubAttributions = new Map<string, PreparedGitHubAttribution>();
+
 /** Bind public credit to its live profile owner before any later publication awaits. */
 export async function prepareUserProfileGitHubAttribution(
   profileIds: readonly string[],
   options: OpenClawStateDatabaseOptions = {},
-): Promise<{ identities: UserProfileGitHubAttribution; isCurrent: () => boolean }> {
+): Promise<PreparedGitHubAttribution> {
   const selectedProfileIds = [...profileIds];
   const context = captureOpenClawStateWorkerContext(options);
+  const key = JSON.stringify([context.admission.identity.key, selectedProfileIds]);
+  const cached = preparedGitHubAttributions.get(key);
+  if (cached?.isCurrent()) {
+    return { identities: structuredClone(cached.identities), isCurrent: cached.isCurrent };
+  }
+  preparedGitHubAttributions.delete(key);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const authority = await captureUserProfileAuthorityRead(context.admission);
     const reply = await executeExistingOpenClawStateRead(
@@ -322,7 +314,18 @@ export async function prepareUserProfileGitHubAttribution(
       ...(reply?.canonicalProfileIds ?? []),
     ]);
     if (isCurrent) {
-      return { identities: reply?.identities ?? new Map(), isCurrent };
+      const identities: UserProfileGitHubAttribution = reply?.identities ?? new Map();
+      // Absent profiles have no owner publication to invalidate a later first creation.
+      if (selectedProfileIds.every((profileId) => identities.has(profileId))) {
+        preparedGitHubAttributions.set(key, {
+          identities: structuredClone(identities),
+          isCurrent,
+        });
+        while (preparedGitHubAttributions.size > 64) {
+          preparedGitHubAttributions.delete(preparedGitHubAttributions.keys().next().value!);
+        }
+      }
+      return { identities, isCurrent };
     }
   }
   throw new Error("Git co-author credit changed while preparing attribution");

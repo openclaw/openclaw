@@ -29,7 +29,6 @@ export function resolveTelegramCustomCommands(params: {
   issues: TelegramCustomCommandIssue[];
 } {
   const entries = Array.isArray(params.commands) ? params.commands : [];
-  const reserved = params.reservedCommands ?? new Set<string>();
   const checkReserved = params.checkReserved !== false;
   const checkDuplicates = params.checkDuplicates !== false;
   const seen = new Set<string>();
@@ -43,7 +42,7 @@ export function resolveTelegramCustomCommands(params: {
       ? "Telegram custom command is missing a command name."
       : !TELEGRAM_COMMAND_NAME_PATTERN.test(normalized)
         ? `Telegram custom command "/${normalized}" is invalid (use a-z, 0-9, underscore; max 32 chars).`
-        : checkReserved && reserved.has(normalized)
+        : checkReserved && params.reservedCommands?.has(normalized)
           ? `Telegram custom command "/${normalized}" conflicts with a native command.`
           : checkDuplicates && seen.has(normalized)
             ? `Telegram custom command "/${normalized}" is duplicated.`

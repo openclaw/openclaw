@@ -90,9 +90,16 @@ export type LegacyCronRepairResult = {
   codexRuntimePolicyTargets?: CronCodexRuntimePolicyTarget[];
 };
 
-function readLegacyCronStorePath(cfg: OpenClawConfig): string | undefined {
+export function readLegacyCronStorePath(cfg: OpenClawConfig): string | undefined {
   return (cfg.cron as (NonNullable<OpenClawConfig["cron"]> & { store?: string }) | undefined)
     ?.store;
+}
+
+export function rethrowLegacyCronStoreError(error: unknown): void {
+  if (error instanceof RetiredStateFormatError) {
+    throw error;
+  }
+  rethrowSqliteSchemaVersionError(error);
 }
 
 function projectCronOwner(
@@ -446,7 +453,7 @@ export async function applyLegacyCronStoreRepair(params: {
   }
   if (normalized.legacyTriggerScriptJobs.length > 0) {
     changes.push(
-      `Rewrote ${pluralize(normalized.legacyTriggerScriptJobs.length, "legacy cron trigger script")} to canonical direct tool calls: ${normalized.legacyTriggerScriptJobs.join(", ")}.`,
+      `Rewrote ${pluralize(normalized.legacyTriggerScriptJobs.length, "legacy cron trigger script")} to direct tool calls: ${normalized.legacyTriggerScriptJobs.join(", ")}.`,
     );
   }
 
@@ -472,10 +479,7 @@ export async function repairLegacyCronStoreWithoutPrompt(params: {
       onlyIfLegacyDetected: true,
     });
   } catch (err) {
-    if (err instanceof RetiredStateFormatError) {
-      throw err;
-    }
-    rethrowSqliteSchemaVersionError(err);
+    rethrowLegacyCronStoreError(err);
     return {
       changes: [],
       warnings: [
@@ -503,10 +507,7 @@ export async function collectCronCodexRuntimePolicyTargetsReadOnly(params: {
       warnings: [],
     };
   } catch (err) {
-    if (err instanceof RetiredStateFormatError) {
-      throw err;
-    }
-    rethrowSqliteSchemaVersionError(err);
+    rethrowLegacyCronStoreError(err);
     return {
       targets: [],
       warnings: [
@@ -567,10 +568,7 @@ export async function repairCronCodexModelRefsAfterConfigWrite(params: {
       ? await applyLegacyCronStoreRepair({ ...params, state })
       : { changes: [], warnings: [] };
   } catch (err) {
-    if (err instanceof RetiredStateFormatError) {
-      throw err;
-    }
-    rethrowSqliteSchemaVersionError(err);
+    rethrowLegacyCronStoreError(err);
     return {
       changes: [],
       warnings: [

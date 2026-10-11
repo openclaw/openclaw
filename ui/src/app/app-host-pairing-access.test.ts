@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import { visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import { createApplicationRouter } from "../app-routes.ts";
+import type { SessionDataController } from "../components/session-data-controller.ts";
 import { createStoredChatOutboxReader } from "../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
 import {
@@ -16,31 +17,27 @@ import "../components/app-sidebar.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
+import type { ShellViewHost } from "./app-shell-view.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
 import { loadSettings } from "./settings.ts";
 import "./app-host.ts";
 import type { UpdateProgress } from "./update-confirmation.ts";
 
-type PairingShell = HTMLElement & {
-  runtime?: ApplicationRuntime;
-  render: () => TemplateResult;
-  routeState: {
-    routeId?: string;
-    location?: { pathname: string; search: string; hash: string };
+type PairingShell = HTMLElement &
+  Pick<ShellViewHost, "devicePairSetup" | "settingsSidebar"> & {
+    runtime?: ApplicationRuntime;
+    render: () => TemplateResult;
+    routeState: {
+      routeId?: string;
+      location?: { pathname: string; search: string; hash: string };
+    };
+    outboxStoreRuntime: OutboxStoreRuntime | null;
+    openNewSession: (agentId: string) => void;
   };
-  devicePairSetupRenderer: unknown;
-  devicePairSetupLoadFailed: boolean;
-  loadDevicePairSetupRenderer: () => void;
-  settingsSidebarRenderer: unknown;
-  settingsSidebarLoadFailed: boolean;
-  loadSettingsSidebarRenderer: () => void;
-  retrySettingsSidebarRenderer: () => void;
-  outboxStoreRuntime: OutboxStoreRuntime | null;
-  openNewSession: (agentId: string) => void;
-};
 
 type PairingSidebar = LitElement & {
+  sessionData: SessionDataController;
   render: () => TemplateResult;
   canPairDevice: boolean;
   onPairMobile?: () => void;
@@ -249,15 +246,19 @@ describe("application shell pairing access", () => {
     "does not rerender navigation chrome for unrelated shell updates (outbox runtime: %s)",
     async (withOutboxes) => {
       vi.useFakeTimers();
-      const { shell, renderSidebar, container, overlaySnapshot } = createPairingShell({
+      const { shell, context, renderSidebar, container, overlaySnapshot } = createPairingShell({
         auth: { role: "operator", scopes: ["operator.admin"] },
       });
+      // This render-isolation case observes an ordinary conversation in the All list,
+      // not the compact Home control, which no longer has a row endcap.
+      const sessionKey = "agent:main:queued";
+      Object.assign(context.navigation.snapshot, { navigationScope: "all" });
       let storedOutboxes = {
         total: 1,
         sessions: [
           {
             agentId: "main",
-            sessionKey: "agent:main:main",
+            sessionKey,
             hasComposerDraft: true,
             outboxAttentionCount: 1,
           },
@@ -280,6 +281,27 @@ describe("application shell pairing access", () => {
       await settleLitElements([sidebar, topbar]);
       await vi.dynamicImportSettled();
       await settleLitElements([sidebar, topbar]);
+      sidebar.sessionData.sessionsResult = {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: { model: null, modelProvider: null, contextTokens: null },
+        sessions: [{ key: sessionKey, agentId: "main", kind: "direct", updatedAt: 1 }],
+      };
+      sidebar.sessionData.sessionsAgentId = "main";
+      sidebar.requestUpdate();
+      await settleLitElements([sidebar, topbar]);
+      const conversation = () =>
+        sidebar.querySelector<HTMLElement>(
+          `.sidebar-recent-session[data-session-key="${sessionKey}"]`,
+        );
+      expect(conversation()).not.toBeNull();
+      if (withOutboxes) {
+        expect(
+          conversation()?.querySelector(".session-row-badge--attention")?.textContent,
+        ).toContain("1");
+        expect(conversation()?.querySelector(".session-row-badge--draft")).not.toBeNull();
+      }
       expect(sidebar.isUpdatePending).toBe(false);
       const sidebarText = sidebar.textContent;
       const topbarText = topbar.textContent;
@@ -294,19 +316,17 @@ describe("application shell pairing access", () => {
       expect(renderTopbarChild).not.toHaveBeenCalled();
       expect(sidebar.textContent).toBe(sidebarText);
       expect(topbar.textContent).toBe(topbarText);
-      expect(sidebar.storedOutboxes?.attentionCountForSession("agent:main:main") ?? 0).toBe(
+      expect(sidebar.storedOutboxes?.attentionCountForSession(sessionKey) ?? 0).toBe(
         withOutboxes ? 1 : 0,
       );
-      expect(sidebar.storedOutboxes?.hasSessionDraft("agent:main:main") ?? false).toBe(
-        withOutboxes,
-      );
+      expect(sidebar.storedOutboxes?.hasSessionDraft(sessionKey) ?? false).toBe(withOutboxes);
       if (withOutboxes) {
         storedOutboxes = {
           total: 2,
           sessions: [
             {
               agentId: "main",
-              sessionKey: "agent:main:main",
+              sessionKey,
               hasComposerDraft: false,
               outboxAttentionCount: 2,
             },
@@ -317,8 +337,10 @@ describe("application shell pairing access", () => {
         render(shell.render(), container);
         await settleLitElements([sidebar, topbar]);
         expect(renderSidebarChild).toHaveBeenCalledOnce();
-        expect(sidebar.querySelector(".session-row-badge--attention")?.textContent).toContain("2");
-        expect(sidebar.querySelector(".session-row-badge--draft")).toBeNull();
+        expect(
+          conversation()?.querySelector(".session-row-badge--attention")?.textContent,
+        ).toContain("2");
+        expect(conversation()?.querySelector(".session-row-badge--draft")).toBeNull();
       }
     },
   );
@@ -454,10 +476,10 @@ describe("application shell pairing access", () => {
     if (failed) {
       renderSidebar();
     } else {
-      shell.loadDevicePairSetupRenderer = loadRenderer;
+      shell.devicePairSetup.load = loadRenderer;
     }
-    shell.devicePairSetupRenderer = null;
-    shell.devicePairSetupLoadFailed = failed;
+    shell.devicePairSetup.renderer = null;
+    shell.devicePairSetup.failed = failed;
     renderSidebar();
     const dialog = container.querySelector<HTMLElement>(".device-pair-setup");
     if (failed) {
@@ -467,7 +489,7 @@ describe("application shell pairing access", () => {
       ];
       expect(actions.map((button) => button.textContent?.trim())).toEqual(["Retry", "Close"]);
       actions[0]?.click();
-      expect(shell.devicePairSetupLoadFailed).toBe(false);
+      expect(shell.devicePairSetup.failed).toBe(false);
     } else {
       expect(dialog?.getAttribute("aria-busy")).toBe("true");
       expect(dialog?.textContent).toContain("Loading…");
@@ -482,12 +504,12 @@ describe("application shell pairing access", () => {
       routeId: "profile",
       location: { pathname: "/settings/profile", search: "", hash: "" },
     };
-    shell.settingsSidebarRenderer = null;
-    shell.settingsSidebarLoadFailed = failed;
+    shell.settingsSidebar.renderer = null;
+    shell.settingsSidebar.failed = failed;
     if (failed) {
-      shell.retrySettingsSidebarRenderer = loadRenderer;
+      shell.settingsSidebar.retry = loadRenderer;
     } else {
-      shell.loadSettingsSidebarRenderer = loadRenderer;
+      shell.settingsSidebar.load = loadRenderer;
     }
     render(shell.render(), container);
     const sidebar = container.querySelector<HTMLElement>(".settings-sidebar");

@@ -36,7 +36,7 @@ import { createSlackAgentViewState } from "./agent-view-state.js";
 import { normalizeSlackSlug } from "./allow-list.js";
 import { createSlackAssistantThreadContextStore } from "./assistant-thread-context.js";
 import { resolveSlackChannelConfig, type SlackChannelConfigEntries } from "./channel-config.js";
-import { normalizeSlackChannelType } from "./channel-type.js";
+import { normalizeSlackChannelType, parseSlackChannelType } from "./channel-type.js";
 import type { SlackIdentityHealth, SlackInstallationIdentity } from "./enterprise-install.js";
 import type { SlackEventScope } from "./event-scope.js";
 import { readLruMapEntry, writeLruMapEntry } from "./lru-map-cache.js";
@@ -220,14 +220,8 @@ function createSlackMonitorContextFields(
     eventScope?: SlackEventScope,
   ) => {
     const id = normalizeOptionalString(channelId);
-    const normalizedType = normalizeOptionalString(channelType)?.toLowerCase();
-    if (
-      !id ||
-      (normalizedType !== "im" &&
-        normalizedType !== "mpim" &&
-        normalizedType !== "channel" &&
-        normalizedType !== "group")
-    ) {
+    const normalizedType = parseSlackChannelType(channelType);
+    if (!id || !normalizedType) {
       return;
     }
     const cacheKey = scopedKey(id, eventScope);

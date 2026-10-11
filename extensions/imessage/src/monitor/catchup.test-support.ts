@@ -21,7 +21,7 @@ import {
 } from "./catchup.js";
 
 function openCatchupCursorStore() {
-  return getIMessageRuntime().state.openKeyedStore<IMessageCatchupCursor>({
+  return getIMessageRuntime().state.openKeyedStoreV2<IMessageCatchupCursor>({
     namespace: IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
     maxEntries: IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
   });
@@ -580,14 +580,11 @@ describe("iMessage catchup cursor comparisons", () => {
 
   function interceptCursorStore() {
     const state = getIMessageRuntime().state;
-    const store = state.openKeyedStore<unknown>({
+    const store = state.openKeyedStoreV2<unknown>({
       namespace: IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
       maxEntries: IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
     });
-    vi.spyOn(state, "openKeyedStore").mockReturnValue(store);
-    if (!store.compareAndApply) {
-      throw new Error("Test runtime requires plugin-state comparison support.");
-    }
+    vi.spyOn(state, "openKeyedStoreV2").mockReturnValue(store);
     return { store, compareAndApply: store.compareAndApply.bind(store) };
   }
 

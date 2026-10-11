@@ -6,11 +6,18 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../version.js";
+import { waitForCliSignalExit } from "./signal-exit-barrier.js";
 import {
   expectNoSideEffects,
   freshRestartCalls,
@@ -70,6 +77,10 @@ import * as runtimeRecovery from "./update-cli/update-command-runtime-recovery.t
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
+const { preflightOpenClawDatabaseSchemas } = await vi.importActual<
+  typeof import("../state/openclaw-database-preflight.js")
+>("../state/openclaw-database-preflight.js");
+
 describe("update-cli", () => {
   const nodeExecutable = resolveTestNodeExecPath();
   const {
@@ -94,6 +105,40 @@ describe("update-cli", () => {
     setupNpmUpdatedRootRefresh,
     setupUpdatedRootRefresh,
   } = createUpdateCliFixture();
+
+  it("refuses a v2026.7.1-2 target and names every current-schema agent store", async () => {
+    await useFileBackedConfig();
+    await mockPackageInstallAtCaseDir("schema-published-downgrade");
+    const env = process.env;
+    const configured = openOpenClawAgentDatabase({ agentId: "main", env }).path;
+    const retired = openOpenClawAgentDatabase({ agentId: "retired", env }).path;
+    const custom = openOpenClawAgentDatabase({
+      agentId: "registered-custom",
+      env,
+      path: path.join(createCaseDir("custom-agent-store"), "openclaw-agent.sqlite"),
+    }).path;
+    closeOpenClawAgentDatabasesForTest();
+    unregisterOpenClawAgentDatabase({ agentId: "retired", env, path: retired });
+    await closeOpenClawStateDatabaseAsync();
+    databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockImplementation(
+      preflightOpenClawDatabaseSchemas,
+    );
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+      packageTargetStatus({ version: "2026.7.1-2", schemaVersions: { state: 1, agent: 1 } }),
+    );
+
+    await expect(updateCommand({ tag: "2026.7.1-2", yes: true })).rejects.toEqual(new ExitError(1));
+
+    const output = [getLogOutput(), getErrorOutput()].join("\n");
+    for (const agentPath of [configured, retired, custom]) {
+      expect(output).toContain(
+        `${agentPath} has schema ${OPENCLAW_AGENT_SCHEMA_VERSION}; target supports 1`,
+      );
+    }
+    expect(listUpdateRuns({ limit: 1 })[0]?.reason).toBe("database-schema-preflight");
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expectNoSideEffects(serviceStop, serviceStart, serviceRestart, replaceConfigFile);
+  });
 
   it.each(["git", "package-to-git", "package-preview"] as const)(
     "refuses a service-only incompatible %s target before any mutable preparation",
@@ -379,10 +424,8 @@ describe("update-cli", () => {
     const root = await mockPackageInstallAtCaseDir("openclaw-early-signal");
     const packageBefore = await fs.readFile(path.join(root, "package.json"), "utf8");
     const processOnSpy = vi.spyOn(process, "on");
-    const exitCalled = createDeferred();
     const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
-      exitCalled.resolve();
-      return undefined as never;
+      throw new Error("update must settle without a forced native exit");
     });
     let entered!: () => void;
     let release!: () => void;
@@ -414,7 +457,7 @@ describe("update-cli", () => {
       for (const listener of listeners) {
         listener();
       }
-      await exitCalled.promise;
+      expect(await waitForCliSignalExit()).toBe(143);
       // Inspect while preflight remains blocked: ordinary unwind cannot settle this row.
       expect(listUpdateRuns({ limit: 1 })[0]).toMatchObject({
         runId: before.runId,
@@ -423,7 +466,8 @@ describe("update-cli", () => {
         reason: "interrupted",
         finishedAtMs: expect.any(Number),
       });
-      expect(processExitSpy).toHaveBeenCalledWith(143);
+      expect(process.exitCode).toBe(143);
+      expect(processExitSpy).not.toHaveBeenCalled();
       expect(await fs.readFile(path.join(root, "package.json"), "utf8")).toBe(packageBefore);
       expect(packageInstallCommandCall()).toBeUndefined();
       expect(serviceStop).not.toHaveBeenCalled();
@@ -450,7 +494,11 @@ describe("update-cli", () => {
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
     expect(listUpdateRuns({ limit: 1 })[0]?.reason).toBe("node-runtime-preflight");
     expect(defaultRuntime.log).toHaveBeenCalledWith(
-      `openclaw@9999.0.0 requires Node >=999.0.0; selected runtime is Node ${process.versions.node}.\n${runtimeRecovery.expectedPlainRecovery("9999.0.0", "999.0.0", "absent", undefined, root)}`,
+      `Failing check node-runtime (node-runtime-preflight); key engines.node: Required: openclaw@9999.0.0 Node >=999.0.0; detected: Node ${process.versions.node} at ${process.execPath}
+Failing check node-runtime (node-runtime-preflight); key engines.node: Update install root: ${await fs.realpath(root)}
+Failing check node-runtime (node-runtime-preflight); key engines.node: Update binary: ${path.join(root, "openclaw.mjs")}
+Failing check node-runtime (node-runtime-preflight); key engines.node: Gateway install root: unresolved
+Failing check node-runtime (node-runtime-preflight); key engines.node: ${runtimeRecovery.expectedPlainRecovery("9999.0.0", "999.0.0", "absent", undefined, root)}`,
     );
     expect(fetchNpmPackageTargetStatus).toHaveBeenCalledOnce();
   });

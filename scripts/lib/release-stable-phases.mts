@@ -7,6 +7,7 @@ import {
   pollRelease,
   probeCapabilities,
   ReleaseRefusal,
+  requireReleaseValue as requireValue,
   shellCommand,
   type ReleaseContext,
 } from "./release-stable-state.mts";
@@ -25,13 +26,6 @@ export { validate } from "./release-stable-validation.mts";
 
 const DRY_SHA = "a".repeat(40);
 const HOUR = 60 * 60 * 1_000;
-
-function requireValue(value: string | undefined, name: string): string {
-  if (!value) {
-    throw new Error(`Missing ${name}; complete the preceding release phase.`);
-  }
-  return value;
-}
 
 export async function fetchReleaseMain(ctx: ReleaseContext): Promise<void> {
   const result = await ctx.run("git", ["fetch", "origin", "main:refs/remotes/origin/main"], {

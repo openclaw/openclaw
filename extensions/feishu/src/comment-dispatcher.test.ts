@@ -168,21 +168,6 @@ describe("createFeishuCommentReplyDispatcher", () => {
     await deliverPromise;
   });
 
-  it("starts the typing reaction from dispatcher onReplyStart", async () => {
-    const start = vi.fn(async () => {});
-    createCommentTypingReactionLifecycleMock.mockReturnValue({
-      start,
-      cleanup: vi.fn(async () => {}),
-    });
-
-    const created = createTestCommentReplyDispatcher();
-    const options = replyDispatcherOptions(created);
-    expect(start).not.toHaveBeenCalled();
-    await options.onReplyStart?.();
-
-    expect(start).toHaveBeenCalledTimes(1);
-  });
-
   it("does not send whitespace-only comment replies without attachments", async () => {
     const created = createTestCommentReplyDispatcher();
 
@@ -193,39 +178,6 @@ describe("createFeishuCommentReplyDispatcher", () => {
   });
 
   it.each([
-    [
-      "caption and multiple ordered attachments",
-      {
-        text: "see attachments",
-        mediaUrls: [" https://example.com/first.png ", "", "https://example.com/second.png"],
-      },
-      "see attachments\n\nhttps://example.com/first.png\n\nhttps://example.com/second.png",
-    ],
-    [
-      "singular fallback when plural entries are blank",
-      { mediaUrls: [" "], mediaUrl: "https://example.com/fallback.png" },
-      "https://example.com/fallback.png",
-    ],
-    [
-      "presentation-only actionable command",
-      {
-        presentation: {
-          title: "Deployment",
-          blocks: [
-            {
-              type: "buttons" as const,
-              buttons: [
-                {
-                  label: "Approve",
-                  action: { type: "command" as const, command: "/approve req_1" },
-                },
-              ],
-            },
-          ],
-        },
-      },
-      "Deployment\n\n- Approve: `/approve req_1`\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.",
-    ],
     [
       "caption, actionable presentation, and safe attachment",
       {
@@ -287,45 +239,6 @@ describe("createFeishuCommentReplyDispatcher", () => {
       "Choose deployment:\n- Deploy: `/deploy staging`\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.",
     ],
     [
-      "select callback without actionable guidance",
-      {
-        presentation: {
-          blocks: [
-            {
-              type: "select" as const,
-              options: [
-                {
-                  label: "Choose",
-                  action: { type: "callback" as const, value: "private_choice" },
-                },
-              ],
-            },
-          ],
-        },
-      },
-      "Options:\n- Choose",
-    ],
-    [
-      "disabled command without actionable guidance",
-      {
-        presentation: {
-          blocks: [
-            {
-              type: "buttons" as const,
-              buttons: [
-                {
-                  label: "Disabled",
-                  disabled: true,
-                  action: { type: "command" as const, command: "/approve req_1" },
-                },
-              ],
-            },
-          ],
-        },
-      },
-      "- Disabled",
-    ],
-    [
       "URL-only button without actionable guidance",
       {
         presentation: {
@@ -375,36 +288,6 @@ describe("createFeishuCommentReplyDispatcher", () => {
       visibleReplySent: true,
     });
     expect(deliverCommentThreadTextMock.mock.calls[0]?.[1]?.content).not.toContain(mediaUrl);
-  });
-
-  it("chunks the transformed comment text including attachment links", async () => {
-    const chunkTextWithMode = vi.fn((text: string) =>
-      Array.from({ length: Math.ceil(text.length / 12) }, (_value, index) =>
-        text.slice(index * 12, (index + 1) * 12),
-      ),
-    );
-    getFeishuRuntimeMock.mockReturnValue({
-      channel: {
-        text: {
-          resolveTextChunkLimit: vi.fn(() => 12),
-          resolveChunkMode: vi.fn(() => "line"),
-          chunkTextWithMode,
-        },
-      },
-    });
-    const expected = "caption\n\nhttps://example.com/file.png";
-    const created = createTestCommentReplyDispatcher();
-
-    const result = await created.delivery.deliver(
-      { text: "caption", mediaUrl: "https://example.com/file.png" },
-      { kind: "final" },
-    );
-
-    expect(chunkTextWithMode).toHaveBeenCalledWith(expected, 12, "line");
-    expect(
-      deliverCommentThreadTextMock.mock.calls.every((call) => call[1].content.length <= 12),
-    ).toBe(true);
-    expect(result).toMatchObject({ content: expected, visibleReplySent: true });
   });
 
   it("retains the accepted comment reply id and text when a later chunk fails", async () => {

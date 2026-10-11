@@ -126,7 +126,10 @@ export async function projectContextEngineAssemblyForCodex(params: {
       (message) => message.role !== "custom" || isCodexDurableCustomMessage(message),
     ),
     {
-      maxTextPartChars: resolveTextPartMaxChars(maxRenderedContextChars),
+      maxTextPartChars: Math.min(
+        MAX_TEXT_PART_CHARS,
+        Math.max(DEFAULT_TEXT_PART_CHARS, Math.floor(maxRenderedContextChars / 4)),
+      ),
       toolPayloadMode: params.toolPayloadMode ?? "elide",
       maxRenderedContextChars,
       prepareFileContext: params.prepareFileContext,
@@ -196,16 +199,10 @@ type CodexContinuityCalibration = {
   inputTokens: number;
 };
 
-export function buildCodexContinuityCalibration(params: {
-  promptChars: number;
-  inputTokens: number;
-}): CodexContinuityCalibration | undefined {
-  if (
-    !Number.isFinite(params.promptChars) ||
-    !Number.isFinite(params.inputTokens) ||
-    params.promptChars < CONTINUITY_CALIBRATION_MIN_PROMPT_CHARS ||
-    params.inputTokens <= 0
-  ) {
+export function buildCodexContinuityCalibration(
+  params: CodexContinuityCalibration,
+): CodexContinuityCalibration | undefined {
+  if (resolveContinuityCharsPerToken(params) === undefined) {
     return undefined;
   }
   return {
@@ -216,7 +213,7 @@ export function buildCodexContinuityCalibration(params: {
 
 function resolveContinuityCharsPerToken(
   calibration: CodexContinuityCalibration | undefined,
-): number {
+): number | undefined {
   if (
     !calibration ||
     !Number.isFinite(calibration.promptChars) ||
@@ -224,7 +221,7 @@ function resolveContinuityCharsPerToken(
     calibration.promptChars < CONTINUITY_CALIBRATION_MIN_PROMPT_CHARS ||
     calibration.inputTokens <= 0
   ) {
-    return CONTINUITY_EMPIRICAL_CHARS_PER_TOKEN;
+    return undefined;
   }
   return Math.min(
     CONTINUITY_MAX_CHARS_PER_TOKEN,
@@ -248,7 +245,8 @@ export function resolveCodexContinuityProjectionMaxChars(params: {
     ),
   });
   return normalizeRenderedContextMaxChars(
-    continuityBudgetTokens * resolveContinuityCharsPerToken(params.calibration),
+    continuityBudgetTokens *
+      (resolveContinuityCharsPerToken(params.calibration) ?? CONTINUITY_EMPIRICAL_CHARS_PER_TOKEN),
   );
 }
 
@@ -494,14 +492,13 @@ async function renderMessagesForCodexContext(
   };
 }
 
-function renderMessageBody(
-  message: AgentMessage,
-  options: {
-    maxTextPartChars: number;
-    toolPayloadMode: "elide" | "preserve";
-    mediaPrepared?: boolean;
-  },
-): string {
+type MessageRenderOptions = {
+  maxTextPartChars: number;
+  toolPayloadMode: "elide" | "preserve";
+  mediaPrepared?: boolean;
+};
+
+function renderMessageBody(message: AgentMessage, options: MessageRenderOptions): string {
   // Canonical summaries carry `summary`, not `content`; keep them in the quoted history.
   if (message.role === "compactionSummary" || message.role === "branchSummary") {
     return message.summary.trim();
@@ -535,11 +532,7 @@ function renderMessageBody(
 
 function renderMessagePart(
   part: unknown,
-  options: {
-    maxTextPartChars: number;
-    toolPayloadMode: "elide" | "preserve";
-    mediaPrepared?: boolean;
-  },
+  options: MessageRenderOptions,
   toolResultBody: boolean,
 ): string {
   if (!part || typeof part !== "object") {
@@ -554,26 +547,19 @@ function renderMessagePart(
   if (type === "image") {
     return options.mediaPrepared ? "" : "[image omitted]";
   }
-  if (type === "toolCall" || type === "tool_use") {
-    const label = `tool call${typeof record.name === "string" ? `: ${record.name}` : ""}`;
-    if (options.toolPayloadMode === "preserve") {
-      return truncateText(
-        `${label}\n${stableJson(renderToolCallPayload(record))}`,
-        options.maxTextPartChars,
-      );
+  const toolCall = type === "toolCall" || type === "tool_use";
+  if (toolCall || type === "toolResult" || type === "tool_result") {
+    const label = toolCall
+      ? `tool call${typeof record.name === "string" ? `: ${record.name}` : ""}`
+      : typeof record.toolUseId === "string"
+        ? `tool result: ${record.toolUseId}`
+        : "tool result";
+    if (options.toolPayloadMode !== "preserve") {
+      return `${label} [${toolCall ? "input" : "content"} omitted]`;
     }
-    return `${label} [input omitted]`;
-  }
-  if (type === "toolResult" || type === "tool_result") {
-    const label =
-      typeof record.toolUseId === "string" ? `tool result: ${record.toolUseId}` : "tool result";
-    if (options.toolPayloadMode === "preserve") {
-      return truncateText(
-        `${toolResultBody ? "" : `${label}\n`}${stableJson(renderToolResultPayload(record))}`,
-        options.maxTextPartChars,
-      );
-    }
-    return `${label} [content omitted]`;
+    const renderPayload = toolCall ? renderToolCallPayload : renderToolResultPayload;
+    const prefix = !toolCall && toolResultBody ? "" : `${label}\n`;
+    return truncateText(`${prefix}${stableJson(renderPayload(record))}`, options.maxTextPartChars);
   }
   return `[${type ?? "non-text"} content omitted]`;
 }
@@ -668,13 +654,6 @@ function normalizeRenderedContextMaxChars(value: unknown): number {
     return DEFAULT_RENDERED_CONTEXT_CHARS;
   }
   return Math.min(MAX_RENDERED_CONTEXT_CHARS, Math.max(1, Math.floor(value)));
-}
-
-function resolveTextPartMaxChars(maxRenderedContextChars: number): number {
-  return Math.min(
-    MAX_TEXT_PART_CHARS,
-    Math.max(DEFAULT_TEXT_PART_CHARS, Math.floor(maxRenderedContextChars / 4)),
-  );
 }
 
 function truncateText(text: string, maxChars: number): string {

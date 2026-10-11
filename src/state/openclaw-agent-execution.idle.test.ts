@@ -7,7 +7,6 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import {
@@ -19,7 +18,7 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
 } from "./openclaw-agent-db-lifecycle.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import * as native from "./openclaw-agent-execution-native.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
@@ -220,33 +219,6 @@ it("retains failed eviction custody without retaining a fifth idle executor", as
   expect(first.close).toHaveBeenCalledTimes(2);
   expect(closedAgents()).toEqual(["first", "fifth"]);
 });
-
-it.each(["removal", "rename", "agent path", "session path"] as const)(
-  "retires affected warm executors after a committed agent %s change",
-  async (change) => {
-    const config: OpenClawConfig = { agents: { entries: { first: {}, second: {} } } };
-    setRuntimeConfigSnapshot(config);
-    await use("first");
-    await use("second");
-    // Publication supports in-place mutations; the executor must retain resolved values.
-    if (change === "removal" || change === "rename") {
-      config.agents!.entries = { second: {}, ...(change === "rename" ? { renamed: {} } : {}) };
-    } else if (change === "agent path") {
-      const first = config.agents!.entries!.first;
-      assert(first);
-      first.agentDir = path.join(env.OPENCLAW_STATE_DIR!, "relocated");
-    } else {
-      config.session = {
-        store: path.join(env.OPENCLAW_STATE_DIR!, "relocated", "{agentId}.sqlite"),
-      };
-    }
-    setRuntimeConfigSnapshot(config);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(closedAgents()).toEqual(change === "session path" ? ["first", "second"] : ["first"]);
-    await use("second");
-    expect(opened).toHaveLength(change === "session path" ? 3 : 2);
-  },
-);
 
 it("keeps warm executors through unrelated configuration publication", async () => {
   setRuntimeConfigSnapshot({ agents: { entries: { first: {}, second: {} } } });

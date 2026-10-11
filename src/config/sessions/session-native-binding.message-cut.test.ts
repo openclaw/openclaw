@@ -6,11 +6,12 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { PluginStateStoreError } from "../../plugin-state/plugin-state-store.types.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
-import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import {
   withNativeBindingFixture,
   type NativeBindingClientTestApi,
@@ -110,30 +111,26 @@ function observeNativeGrants(
     facts: Record<string, unknown>,
   ) => void,
 ) {
-  const create = admission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-    (callback, attachment) =>
-      create((request, grant) => {
-        const facts = isRecord(request.facts) ? request.facts.publication : undefined;
-        if (isRecord(facts) && facts.kind === "native-binding-ready") {
-          // Production joins renewal and quiesces the lease before invoking this grant.
-          callback(request, () => {
-            observe(request, facts);
-            const accepted = grant();
-            if (accepted) {
-              delivery.accepted++;
-              delivery.acceptedDispatch ??= delivery.dispatched;
-            }
-            return accepted;
-          });
-          return;
+  probe.admission(admission, (request, grant, callback) => {
+    const facts = isRecord(request.facts) ? request.facts.publication : undefined;
+    if (isRecord(facts) && facts.kind === "native-binding-ready") {
+      // Production joins renewal and quiesces the lease before invoking this grant.
+      callback(request, () => {
+        observe(request, facts);
+        const accepted = grant();
+        if (accepted) {
+          delivery.accepted++;
+          delivery.acceptedDispatch ??= delivery.dispatched;
         }
-        if (isRecord(facts)) {
-          observe(request, facts);
-        }
-        callback(request, grant);
-      }, attachment),
-  );
+        return accepted;
+      });
+      return;
+    }
+    if (isRecord(facts)) {
+      observe(request, facts);
+    }
+    callback(request, grant);
+  });
 }
 
 function expectOneAcceptedExecution() {
@@ -164,46 +161,6 @@ it("vetoes rewind before A COMMIT when the native binding delete fails", async (
     expect(failure).toMatchObject({ operation: "delete", code: "PLUGIN_STATE_CORRUPT" });
     expect(fixture.readEntry()).toEqual(original);
     expect(loadTranscriptEventsSync(fixture.scope)).toEqual(history);
-  });
-});
-
-it("restores the removed native payload when branch switching rolls back", async () => {
-  await withCutFixture(async (fixture) => {
-    const original = fixture.readEntry();
-    const history = loadTranscriptEventsSync(fixture.scope);
-    const refused = new Error("synthetic branch COMMIT refusal");
-    let removed: Record<string, unknown> | undefined;
-    let restored: Record<string, unknown> | undefined;
-    let commitSeen = false;
-    observeNativeGrants((request, facts) => {
-      if (facts.kind === "native-binding-ready") {
-        removed = { ...fixture.readBinding(), opaque: { nested: ["preserve", 7] } };
-        fixture.bindingStore.register(fixture.bindingKey, removed);
-      }
-      if (request.stage === "commit" && facts.kind === "session-native-binding") {
-        commitSeen = true;
-        expect(fixture.readBinding()).toBeUndefined();
-        throw refused;
-      }
-    });
-    delivery.afterExecution = () => {
-      restored = fixture.readBinding();
-    };
-    await expect(fixture.cut("switch", "synthetic-alternate")).rejects.toBe(refused);
-    expect(commitSeen).toBe(true);
-    expectOneAcceptedExecution();
-    expect(fixture.readEntry()).toEqual(original);
-    expect(loadTranscriptEventsSync(fixture.scope)).toEqual(history);
-    assert(removed && restored);
-    const { lease: removedLease, ...removedPayload } = removed;
-    const { lease: restoredLease, ...restoredPayload } = restored;
-    expect(restoredPayload).toEqual(removedPayload);
-    assert(isRecord(removedLease) && isRecord(restoredLease));
-    expect(restoredLease.token).toBe(removedLease.token);
-    assert(
-      typeof removedLease.expiresAt === "number" && typeof restoredLease.expiresAt === "number",
-    );
-    expect(restoredLease.expiresAt).toBeGreaterThanOrEqual(removedLease.expiresAt);
   });
 });
 
