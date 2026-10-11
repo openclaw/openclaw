@@ -822,6 +822,7 @@ suite.define(() => {
     const sessionKey = "agent:main:session-a";
     const session = {
       key: sessionKey,
+      sessionId: `session:${sessionKey}`,
       kind: "direct",
       label: "Session A",
       model: "gpt-5.6-sol",
@@ -881,6 +882,10 @@ suite.define(() => {
         chatSessionListResponse([{ ...session, thinkingLevel: "ultra" }]),
       );
       await gateway.resolveDeferred("sessions.patch");
+      expect(await gateway.getSessionRow(sessionKey)).toMatchObject({
+        sessionId: session.sessionId,
+        thinkingLevel: "ultra",
+      });
       await expect.poll(() => effortPicker.getAttribute("data-chat-thinking-value")).toBe("ultra");
       await expect.poll(() => effortPicker.textContent()).toContain("Ultra");
       await page.keyboard.press("Escape");

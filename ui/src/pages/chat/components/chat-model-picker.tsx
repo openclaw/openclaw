@@ -197,6 +197,10 @@ function ModelList(props: { label: string; more?: boolean; children: JSX.Element
 
 export function ChatModelPicker(params: ChatModelPickerParams) {
   const state = createMemo(() => prepareChatModelPicker(params));
+  const contextWindowContent = createMemo(() => {
+    const control = params.contextWindow;
+    return control ? renderContextWindowControl(control, params.sessionKey) : undefined;
+  });
   let details: HTMLDetailsElement | undefined;
   createEffect(
     () => [
@@ -604,11 +608,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
                   >
                     {t("chat.modelControls.noMatchingModels")}
                   </div>
-                  {params.contextWindow ? (
-                    <LitContent
-                      value={renderContextWindowControl(params.contextWindow, params.sessionKey)}
-                    />
-                  ) : undefined}
+                  <LitContent value={contextWindowContent()} />
                 </>
               ) : undefined}
             </>
