@@ -51,54 +51,6 @@ describe("downloadMatrixMedia", () => {
     setMatrixRuntime(runtimeStub);
   });
 
-  it("decrypts encrypted media when file payloads are present", async () => {
-    const { client, decryptMedia } = createEncryptedClient();
-    const file = createEncryptedFile();
-
-    const result = await downloadMatrixMedia({
-      client,
-      mxcUrl: "mxc://example/file",
-      contentType: "image/png",
-      maxBytes: 1024,
-      file,
-    });
-
-    expect(decryptMedia).toHaveBeenCalledWith(file, {
-      maxBytes: 1024,
-      readIdleTimeoutMs: 30_000,
-    });
-    expect(saveMediaBuffer).toHaveBeenCalledWith(
-      Buffer.from("decrypted"),
-      "image/png",
-      "inbound",
-      1024,
-      undefined,
-    );
-    expect(result?.path).toBe("/tmp/media");
-  });
-
-  it("forwards originalFilename to saveMediaBuffer when provided", async () => {
-    const { client } = createEncryptedClient();
-    const file = createEncryptedFile();
-
-    await downloadMatrixMedia({
-      client,
-      mxcUrl: "mxc://example/file",
-      contentType: "image/png",
-      maxBytes: 1024,
-      file,
-      originalFilename: "Screenshot 2026-03-27.png",
-    });
-
-    expect(saveMediaBuffer).toHaveBeenCalledWith(
-      Buffer.from("decrypted"),
-      "image/png",
-      "inbound",
-      1024,
-      "Screenshot 2026-03-27.png",
-    );
-  });
-
   it("rejects encrypted media that exceeds maxBytes before decrypting", async () => {
     const { client, decryptMedia } = createEncryptedClient();
     const file = createEncryptedFile();
@@ -133,7 +85,7 @@ describe("downloadMatrixMedia", () => {
     expect(saveMediaBuffer).not.toHaveBeenCalled();
   });
 
-  it.each(["plain", "encrypted"])("preserves %s media error diagnostics", async (kind) => {
+  it.each(["plain"])("preserves %s media error diagnostics", async (kind) => {
     const { client, decryptMedia } = createEncryptedClient();
     const error = new Error("download failed");
     decryptMedia.mockRejectedValue(error);

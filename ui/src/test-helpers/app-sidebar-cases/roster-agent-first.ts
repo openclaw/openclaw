@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { patchSettings } from "../../app/settings.ts";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
+import { selectSidebarView } from "../app-sidebar-setup.ts";
 import "../../pages/agents-home/agents-home-page.ts";
 import {
   agentIds,
@@ -472,7 +473,7 @@ describe("AppSidebar agent roster", () => {
     },
   );
 
-  it("starts Online collapsed in team mode and keeps it expandable", async () => {
+  it("keeps Online separate from team sessions and opens it from the fixed rail", async () => {
     const { sidebar, gatewayHarness } = await mountRoster();
     sidebar.sidebarAgentsMode = "roster";
     gatewayHarness.publishEvent("presence", {
@@ -483,21 +484,14 @@ describe("AppSidebar agent roster", () => {
         },
       ],
     });
-    await vi.waitFor(() =>
-      expect(sidebar.querySelector('.sidebar-online button[aria-label="Online"]')).not.toBeNull(),
-    );
-    const toggle = sidebar.querySelector<HTMLButtonElement>(
-      '.sidebar-online button[aria-label="Online"]',
-    )!;
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(sidebar.querySelector(".sidebar-online__list")).toBeNull();
-    toggle.click();
     await sidebar.updateComplete;
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(sidebar.querySelector(".sidebar-online__list")).toBeNull();
+    await selectSidebarView(sidebar, "online");
     expect(sidebar.querySelector('[data-online-user-id="viewer"]')).not.toBeNull();
-    toggle.click();
-    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-session-content")).toBeNull();
+    await selectSidebarView(sidebar, "sessions");
     expect(sidebar.querySelector(".sidebar-online__list")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-session-content")).not.toBeNull();
   });
 
   it("suspends all mounted sidebar consumers while hidden, retaining a visible Agents home", async () => {

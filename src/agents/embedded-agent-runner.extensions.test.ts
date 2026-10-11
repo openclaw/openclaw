@@ -54,6 +54,7 @@ type FactoryOverrides = Partial<Parameters<typeof buildEmbeddedExtensionFactorie
 function createFactory(overrides: FactoryOverrides = {}) {
   return buildEmbeddedExtensionFactories({
     cfg: undefined,
+    workspaceDir: "/workspace",
     sessionManager: overrides.sessionManager ?? SessionManager.inMemory(),
     model: undefined,
     ...overrides,

@@ -157,6 +157,9 @@ async function fixture(
           provenance: standalone ? "standalone" : "configured",
         })
       : getPreparedModelRuntimeSnapshot(input)!;
+  if (!standalone && !cold) {
+    await owner.loadFullModelCatalog!();
+  }
   return { input, owner, a, b, loadA, loadB };
 }
 
@@ -858,7 +861,7 @@ it("renews native observations without retaining harness-only host projections",
   try {
     await refreshPreparedModelRuntimeSnapshots(input.config, options);
     const renewed = await prepareModelRuntimeSnapshot(input);
-    discovery = renewed.loadFullModelCatalog!({ changedOnly: true });
+    discovery = renewed.loadNativeModelCatalog!();
     await started.promise;
     const pending = renewed.readFullModelCatalog!()!;
     expect(pending.entries).toEqual(

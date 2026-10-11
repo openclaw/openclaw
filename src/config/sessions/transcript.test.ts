@@ -23,11 +23,11 @@ import {
   persistSessionTranscriptTurn,
   readLatestTranscriptAssistantText,
   replaceSessionEntry,
-  replaceTranscriptEvents,
   updateSessionEntry,
 } from "./session-accessor.js";
 import * as activeTranscriptEvents from "./session-accessor.sqlite-active-events.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { useTempSessionsFixture } from "./test-helpers.js";

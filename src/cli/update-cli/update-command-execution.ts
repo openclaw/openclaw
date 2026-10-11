@@ -6,8 +6,9 @@ import type { UpdateStateSchemaVersion } from "../../infra/update-candidate-stat
 import type { UpdateDoctorConfigChange } from "../../infra/update-doctor-config.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
-import { isUpdatePostInstallVerificationDeferred } from "../../infra/update-run-step.js";
+import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import {
   parsePackageOpenClawSchemaVersions,
@@ -27,14 +28,12 @@ import {
   preflightUpdateCandidatePlugins,
   validateUpdateCandidateWithProgress,
 } from "./update-command-candidate-validation.js";
-import {
-  captureUpdateDatabases,
-  restoreFailedUpdateDatabases,
-} from "./update-command-database-backup.js";
+import { captureUpdateDatabases } from "./update-command-database-backup.js";
 import {
   inspectUpdateDatabaseContexts,
   revalidateUpdateDatabaseContexts,
 } from "./update-command-database-context.js";
+import { settleMutableUpdateResult } from "./update-command-execution-settlement.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import {
   admitSourceUpdateArtifacts,
@@ -51,10 +50,7 @@ import {
   readUpdateCandidateSource,
   type OwnedManagedUpdateContext,
 } from "./update-command-managed-context.js";
-import {
-  recordMutableUpdateInterruption,
-  withMutableUpdateForwardScope,
-} from "./update-command-mutable-signals.js";
+import { withMutableUpdateForwardScope } from "./update-command-mutable-signals.js";
 import { observeOriginalManagedServiceRuntime } from "./update-command-original-service.js";
 import { createPackageUpdateActivationOptions } from "./update-command-package-activation.js";
 import {
@@ -432,6 +428,8 @@ export async function executeMutableUpdate(
     return validation.steps;
   };
   let servicePrepared = false;
+  // Activation-window timing the install runners cannot observe.
+  const activationSteps: UpdateStepResult[] = [];
   let refreshCandidate: ReturnType<typeof createUpdateCandidateConfigRefresh> | undefined;
   const beforeActivate = async (roots: readonly string[] = [params.root]) => {
     assertExecutionCurrent();
@@ -536,6 +534,7 @@ export async function executeMutableUpdate(
         // Preparation can hold Windows recovery custody without stopping a process.
         servicePrepared = true;
       }
+      const postStopStartedAt = Date.now();
       await recheckSchemas(admittedTargetSchemaVersions);
       assertExecutionCurrent();
       await assertManagedGatewayArtifactPublication({
@@ -543,7 +542,17 @@ export async function executeMutableUpdate(
         selected: preManagedServiceStop,
       });
       // Post-stop awaits can observe another save. Rebuild the activation facts before mutation.
-      if (!(await refreshCandidate())) {
+      const refreshed = await refreshCandidate();
+      const postStopStep: UpdateStepResult = {
+        name: "post-stop-checks",
+        command: "recheck schemas, published artifacts and candidate configuration",
+        cwd: params.root,
+        durationMs: Date.now() - postStopStartedAt,
+        exitCode: 0,
+      };
+      activationSteps.push(postStopStep);
+      await reportUpdateStepCompletion(params.progress, { ...postStopStep, index: 0, total: 0 });
+      if (!refreshed) {
         continue;
       }
       // Both install paths enter mutation only after the post-stop schema/authority fence.
@@ -649,7 +658,9 @@ export async function executeMutableUpdate(
         },
         jsonMode: Boolean(opts.json),
         validateCandidate: async (candidateRoot) => {
-          assertUpdateCandidateSteps(await validateCandidate(candidateRoot));
+          const steps = await validateCandidate(candidateRoot);
+          assertUpdateCandidateSteps(steps);
+          return steps;
         },
         beforeGitMutation: async (target) => {
           assertReadableGitMetadata(target.metadataUnreadable);
@@ -674,32 +685,19 @@ export async function executeMutableUpdate(
     }));
   }
 
-  result = recordMutableUpdateInterruption(opts, result);
-  if (
-    result.status === "ok" &&
-    opts.restart === false &&
-    result.steps.some(isUpdatePostInstallVerificationDeferred)
-  ) {
-    result = { ...result, status: "skipped", reason: "gateway-readiness-unverified" };
-  }
-  if (candidateFailureReason && result.status === "error") {
-    result.reason = candidateFailureReason;
-  }
-  result.steps = databaseCapture ? [databaseCapture.step, ...result.steps] : result.steps;
-  const doctorSettled = doctorEntered && !hasCommandProcessCleanupError(failure?.cause);
-  if (databaseCapture?.backup && originalRun && result.status === "error" && doctorSettled) {
-    // Execution has not entered finalization or admitted any candidate Gateway.
-    // Restore before schema inspection can hand an incompatible ledger to the candidate.
-    await restoreFailedUpdateDatabases({
-      backup: databaseCapture.backup,
-      result,
-      runId: originalRun.runId,
-      env: ownedManagedUpdateContext?.env ?? originalRun.env,
-      assertCurrent: () => assertExecutionCurrent("restore"),
-      assertRollbackSafe: packageTransaction?.assertRollbackSafe,
-      progress: params.progress,
-    });
-  }
+  result = await settleMutableUpdateResult(params, {
+    result,
+    failure,
+    candidateFailureReason,
+    databaseBackup: databaseCapture?.backup,
+    databaseCaptureStep: databaseCapture?.step,
+    activationSteps,
+    doctorEntered,
+    packageTransaction,
+    originalRun,
+    env: ownedManagedUpdateContext?.env,
+    assertCurrent: () => assertExecutionCurrent("restore"),
+  });
   return {
     result,
     failure,

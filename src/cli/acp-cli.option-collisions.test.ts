@@ -1,6 +1,7 @@
 // ACP CLI option collision tests cover ACP command flag registration boundaries.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ExitError } from "../runtime.js";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
 import { withTempSecretFiles } from "../test-utils/secret-file-fixture.js";
@@ -17,7 +18,7 @@ type AcpGatewayOptions = {
 };
 
 const mocks = vi.hoisted(() => ({
-  runAcpClientInteractive: vi.fn(async (_opts: AcpClientOptions) => {}),
+  runAcpClientInteractive: vi.fn(async (_opts: AcpClientOptions) => 0),
   serveAcpGateway: vi.fn(async (_opts: AcpGatewayOptions) => {}),
   defaultRuntime: {
     log: vi.fn(),
@@ -38,9 +39,10 @@ vi.mock("../acp/server.js", () => ({
   serveAcpGateway: (opts: AcpGatewayOptions) => mocks.serveAcpGateway(opts),
 }));
 
-vi.mock("../runtime.js", () => ({
-  defaultRuntime: mocks.defaultRuntime,
-}));
+vi.mock("../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime.js")>();
+  return { ...actual, defaultRuntime: mocks.defaultRuntime };
+});
 
 describe("acp cli option collisions", () => {
   function createAcpProgram() {
@@ -68,7 +70,7 @@ describe("acp cli option collisions", () => {
     defaultRuntime.error.mockClear();
     defaultRuntime.writeStdout.mockClear();
     defaultRuntime.writeJson.mockClear();
-    defaultRuntime.exit.mockClear();
+    defaultRuntime.exit.mockReset();
   });
 
   it("forwards --verbose to `acp client` when parent and child option names collide", async () => {
@@ -81,6 +83,26 @@ describe("acp cli option collisions", () => {
     const clientOptions = mockCall(runAcpClientInteractive)[0] as { verbose?: boolean };
     expect(clientOptions?.verbose).toBe(true);
   });
+
+  it.each([0, 7, 130])(
+    "preserves client exit code %i without logging it as failure",
+    async (code) => {
+      runAcpClientInteractive.mockResolvedValueOnce(code);
+      defaultRuntime.exit.mockImplementation((exitCode: number) => {
+        throw new ExitError(exitCode);
+      });
+
+      const command = parseAcp(["client"]);
+      if (code === 0) {
+        await expect(command).resolves.toBeUndefined();
+        expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      } else {
+        await expect(command).rejects.toEqual(new ExitError(code));
+        expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(code);
+      }
+      expect(defaultRuntime.error).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {

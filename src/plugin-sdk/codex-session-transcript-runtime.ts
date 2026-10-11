@@ -16,6 +16,7 @@ import type {
   SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.types.js";
 import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
+import { prepareIncognitoSessionHistoryRead } from "../config/sessions/session-incognito-history-read.js";
 import type { SessionTranscriptContextProjectionSource } from "../config/sessions/session-transcript-context-read.js";
 import type { SessionTranscriptContextReader } from "../config/sessions/session-transcript-context-reader.js";
 import {
@@ -91,12 +92,15 @@ export function captureCodexSessionContextReader(
       const { bindIncognitoSessionComputeReader } =
         await import("../config/sessions/session-incognito-compute-read.js");
       assertCurrent();
-      return bindIncognitoSessionComputeReader({
-        actor,
-        authority: { assertCurrent },
-        target: input,
+      const prepared = prepareIncognitoSessionHistoryRead(
+        { actor, authority: { assertCurrent }, target: input },
+        { ...readTarget, env: target.env },
         signal,
-      }).nativeContext(readTarget, read);
+      );
+      return bindIncognitoSessionComputeReader({ ...prepared, signal }).nativeContext(
+        { ...readTarget, storePath: actor.path },
+        read,
+      );
     });
     assertCurrent();
     actor.assertReadable();

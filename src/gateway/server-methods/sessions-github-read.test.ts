@@ -50,6 +50,43 @@ afterEach(() => {
 });
 
 describe("publication receipt reads", () => {
+  it.each([
+    { httpStatus: 401, reason: "unavailable" },
+    { httpStatus: 429, reason: "rate_limited" },
+    { httpStatus: 503, reason: "unverified" },
+  ])(
+    "reports $reason without discarding personal account options",
+    async ({ httpStatus, reason }) => {
+      vi.mocked(
+        publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity,
+      ).mockRestore();
+      vi.stubEnv("GH_TOKEN", undefined);
+      vi.stubEnv("GITHUB_TOKEN", undefined);
+      mocks.runCommandBuffered.mockReset().mockResolvedValue({
+        stdout: Buffer.from(`synthetic-options-${reason}`),
+        stderr: Buffer.alloc(0),
+        code: 0,
+        termination: "exit",
+      });
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: httpStatus }));
+      await withReadFixture(
+        async (fixture) => {
+          const respond = await fixture.invoke("sessions.github.options", { sessionKey });
+          expect(respond).toHaveBeenCalledWith(true, {
+            personal: expect.objectContaining({ state: "disconnected" }),
+            shared: null,
+            sharedUnavailableReason: reason,
+            pendingPersonal: null,
+            latestShared: receipt,
+          });
+          expect(fixture.personalConnectionStatus).toHaveBeenCalledOnce();
+          expect(fixture.requestForSession).not.toHaveBeenCalled();
+        },
+        { personal: true },
+      );
+    },
+  );
+
   it("reuses native authentication for consecutive options requests and refreshes after invalidation", async () => {
     vi.mocked(publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity).mockRestore();
     vi.stubEnv("GH_TOKEN", undefined);

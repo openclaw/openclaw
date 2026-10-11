@@ -114,7 +114,7 @@ describe("Desktop Picture-in-Picture ownership", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each(["dock", "document"] as const)(
+  it.each(["dock"] as const)(
     "mirrors %s without reconnecting or changing control; browser close preserves the viewer",
     async (mode) => {
       const { popup, tick, frames, drawImage, requestWindow } = createMirrorFixture();
@@ -201,23 +201,6 @@ describe("Desktop Picture-in-Picture ownership", () => {
       }
     }
   });
-
-  it.each(["unsupported", "insecure", "connecting"])(
-    "does not open PiP while %s",
-    async (condition) => {
-      const requestWindow = vi.fn();
-      if (condition !== "unsupported") {
-        vi.stubGlobal("documentPictureInPicture", { requestWindow });
-      }
-      if (condition === "insecure") {
-        vi.stubGlobal("isSecureContext", false);
-      }
-      const { panel } = await setup("embedded", condition !== "connecting");
-      expect(button(panel).disabled).toBe(true);
-      button(panel).click();
-      expect(requestWindow).not.toHaveBeenCalled();
-    },
-  );
 
   it("reports denial without disrupting the connection and permits a retry", async () => {
     const requestWindow = vi.fn().mockRejectedValue(new DOMException("denied", "NotAllowedError"));

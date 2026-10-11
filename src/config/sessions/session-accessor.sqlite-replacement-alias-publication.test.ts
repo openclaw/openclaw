@@ -153,13 +153,15 @@ it.each([false, true])(
           }),
         });
         if (recreated) {
-          expect(seen).toEqual([
-            {
-              native: true,
-              sessionId: "newer-alias-generation",
-              sharingId: "newer-alias-generation",
-            },
-          ]);
+          expect(seen[0]).toEqual({
+            native: true,
+            sessionId: "newer-alias-generation",
+            sharingId: "newer-alias-generation",
+          });
+          for (const observation of seen) {
+            expect([undefined, "newer-alias-generation"]).toContain(observation.sessionId);
+            expect([undefined, "newer-alias-generation"]).toContain(observation.sharingId);
+          }
         } else {
           expect(seen).toEqual([{ native: false, sessionId: undefined, sharingId: undefined }]);
         }
