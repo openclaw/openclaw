@@ -31,8 +31,10 @@ import type {
   TranscriptEntryAnchor,
 } from "../config/sessions/transcript-entry-anchor.js";
 import { captureSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
-import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
-import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
+import {
+  captureOwnedTranscriptWriteAssertion,
+  withSessionTranscriptWriteAssertion,
+} from "../config/sessions/transcript-write-context.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
