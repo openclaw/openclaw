@@ -20,8 +20,11 @@ import {
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
-// Prepared runtime eligibility is covered by the native choice owner tests.
-vi.mock("../agents/model-runtime-choice.js", () => ({
+// Prepared runtime eligibility is covered by the native choice owner tests. The
+// rest of the module stays real: the visible-spawn cases below resolve their
+// model through the real `prepareModelChoice`.
+vi.mock("../agents/model-runtime-choice.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/model-runtime-choice.js")>()),
   preparePublishedModelRuntimeChoice: vi.fn<typeof preparePublishedModelRuntimeChoice>(
     async ({ runtimeId, preferredRuntimeId }) => ({
       kind: "ready",
@@ -380,9 +383,11 @@ test.each([
   expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ agentId: "work" });
   if (!scenario.created) {
     expect.soft(result.ok).toBe(false);
+    // The suggested-level list also carries harness-owned modes (Ultra), so pin
+    // the rejection itself rather than that list.
     expect.soft(result.error).toMatchObject({
       code: "INVALID_REQUEST",
-      message: `thinkingLevel "high" is not supported for ${offOnlyRef} (use off)`,
+      message: expect.stringContaining(`thinkingLevel "high" is not supported for ${offOnlyRef}`),
     });
     expect(loadSessionEntry(access)).toBeUndefined();
     return;
@@ -417,9 +422,12 @@ type VisibleSpawnBoundaryCase = {
   /** Rows the prepared catalog publishes as route variants for that model. */
   routeVariants?: { id: string; provider: string; [key: string]: unknown }[];
   agentRuntime?: string;
-  inherited: string;
+  /** Caller's live thinking level; omitted when the case relies on saved config. */
+  inherited?: string;
+  /** Saved `agents.defaults.subagents.thinking`, which outranks the caller's level. */
+  savedSubagentThinking?: string;
   expectedLevel: string;
-  /** Creation must reject the unclamped inherited level for this catalog. */
+  /** Creation must reject the unclamped candidate level for this catalog. */
   rejectsUnclamped?: boolean;
 };
 
@@ -430,6 +438,18 @@ const visibleSpawnBoundaryCases: VisibleSpawnBoundaryCase[] = [
     ref: offOnlyRef,
     inherited: "high",
     expectedLevel: "off",
+  },
+  // Upgrade compatibility: a saved subagent default the child cannot honor must
+  // be clamped like an inherited level. The shipped visible path omitted the
+  // field and created the child; forwarding the saved `high` verbatim makes
+  // `sessions.create` return INVALID_REQUEST instead.
+  {
+    label: "an off-only child under a saved subagent thinking default",
+    model: offOnlyModel,
+    ref: offOnlyRef,
+    savedSubagentThinking: "high",
+    expectedLevel: "off",
+    rejectsUnclamped: true,
   },
   {
     label: "a reasoning-capable child",
@@ -499,7 +519,12 @@ test.each(visibleSpawnBoundaryCases)(
         },
       });
     }
-    testState.agentConfig = { model: { primary: scenario.ref } };
+    testState.agentConfig = {
+      model: { primary: scenario.ref },
+      ...(scenario.savedSubagentThinking
+        ? { subagents: { thinking: scenario.savedSubagentThinking } }
+        : {}),
+    };
     testState.agentsConfig = {
       list: [
         { id: "main", default: true },
@@ -547,7 +572,7 @@ test.each(visibleSpawnBoundaryCases)(
       options: {
         config: getRuntimeConfig(),
         agentSessionKey: parentKey,
-        requesterThinkingLevel: scenario.inherited as never,
+        ...(scenario.inherited ? { requesterThinkingLevel: scenario.inherited as never } : {}),
         loadModelCatalog: loadGatewayModelCatalogSnapshot as never,
         registerRun: registerRun as never,
         countActiveRuns: () => 0,
@@ -567,23 +592,25 @@ test.each(visibleSpawnBoundaryCases)(
     });
 
     if (scenario.rejectsUnclamped) {
-      // Same handler, same catalog: the level a logical-row-only clamp would
-      // have forwarded is refused, so the clamp below is load-bearing rather
-      // than cosmetic.
+      // Same handler, same catalog: the level an unclamped (or logical-row-only)
+      // spawn would have forwarded is refused, so the clamp below is
+      // load-bearing rather than cosmetic.
+      const unclampedLevel = scenario.savedSubagentThinking ?? scenario.inherited;
       const rejected = await directSessionReq(
         "sessions.create",
         {
           key: "agent:work:dashboard:unclamped-probe",
           agentId: "work",
           model: scenario.ref,
-          thinkingLevel: scenario.inherited,
+          thinkingLevel: unclampedLevel,
           task: "inspect issue",
         },
         { context: { loadGatewayModelCatalogSnapshot } },
       );
       expect(rejected.ok).toBe(false);
+      expect(rejected.error).toMatchObject({ code: "INVALID_REQUEST" });
       expect(rejected.error?.message).toContain(
-        `thinkingLevel "${scenario.inherited}" is not supported for ${scenario.ref}`,
+        `thinkingLevel "${unclampedLevel}" is not supported for ${scenario.ref}`,
       );
     }
 
