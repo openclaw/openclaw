@@ -97,6 +97,12 @@ The aspect ratio must be between 1:3 and 3:1.
 
 ### Other Image Models
 
+`gpt-image-1.5`, `gpt-image-1`, and `gpt-image-1-mini` use the standard
+sizes `1024x1024`, `1536x1024`, and `1024x1536`. OpenClaw maps aspect-ratio
+hints to the closest standard size for both generation and edits, including
+requests through custom OpenAI-compatible endpoints. For example, `16:9`
+maps to `1536x1024`, and `9:16` maps to `1024x1536`.
+
 For a transparent-background request, call `image_generate` with
 `model: "openai/gpt-image-1.5"`, `outputFormat: "png"` or `"webp"`, and
 `background: "transparent"`; the older `openai.background` provider option is
