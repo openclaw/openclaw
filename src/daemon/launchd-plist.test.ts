@@ -56,6 +56,32 @@ describe("LaunchAgent environment round-trip", () => {
     });
   });
 
+  it("reads multi-line generated environment values without strict inspection", async () => {
+    const dir = dirs.make("openclaw-plist-multiline-");
+    const plistPath = path.join(dir, "gateway.plist");
+    const envFile = path.join(dir, "gateway.env");
+    const wrapper = path.join(dir, "gateway-env-wrapper.sh");
+    const key = "-----BEGIN KEY-----  \nabc\n-----END KEY-----";
+    await fs.writeFile(
+      envFile,
+      `export KEY='${key}'\nexport QUOTED='it'\\''s'\nexport AFTER='after'\n`,
+    );
+    await fs.writeFile(
+      plistPath,
+      buildLaunchAgentPlist({
+        label: "ai.openclaw.gateway",
+        programArguments: ["/bin/sh", wrapper, envFile, "openclaw", "gateway"],
+        stdoutPath: "/dev/null",
+        stderrPath: "/dev/null",
+      }),
+    );
+    const command = await readLaunchAgentProgramArgumentsFromFile(plistPath, {
+      expectedEnvironmentWrapperPath: wrapper,
+      expectedEnvironmentFilePath: envFile,
+    });
+    expect(command?.environment).toEqual({ KEY: key, QUOTED: "it's", AFTER: "after" });
+  });
+
   it.each(["", "--max-old-space-size=24576"])(
     "preserves explicit NODE_OPTIONS=%j while omitting other empty values",
     async (nodeOptions) => {

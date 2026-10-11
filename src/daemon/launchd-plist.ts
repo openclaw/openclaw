@@ -46,6 +46,18 @@ function parseGeneratedEnvValue(value: string): string {
   return trimmed.slice(1, -1).replaceAll("'\\''", "'");
 }
 
+function hasOpenSingleQuote(value: string): boolean {
+  let quoted = false;
+  for (let index = 0; index < value.length; index++) {
+    if (!quoted && value[index] === "\\") {
+      index++;
+    } else if (value[index] === "'") {
+      quoted = !quoted;
+    }
+  }
+  return quoted;
+}
+
 function resolveSiblingGeneratedEnvFilePath(
   envFilePath: string,
   options?: ReadLaunchAgentProgramArgumentsOptions,
@@ -154,7 +166,7 @@ async function readLaunchAgentEnvironmentFile(
   const lines = content.split("\n");
   for (let index = 0; index < lines.length; index++) {
     const rawLine = lines[index] ?? "";
-    const line = options?.requireEffective ? rawLine.trimStart() : rawLine.trim();
+    const line = rawLine.trimStart();
     if (!line.trim() || line.startsWith("#")) {
       continue;
     }
@@ -170,20 +182,17 @@ async function readLaunchAgentEnvironmentFile(
     if (!key || value === undefined) {
       continue;
     }
-    let parsedValue = parseGeneratedEnvValue(value);
-    if (options?.requireEffective) {
-      // The writer's quoted literals can span physical lines; retain their exact newline bytes.
-      while (
-        quoteLaunchAgentEnvironmentValue(parsedValue) !== value.trim() &&
-        index + 1 < lines.length
-      ) {
-        value += `\n${lines[++index]}`;
-        parsedValue = parseGeneratedEnvValue(value);
-      }
-      // Strict inspection accepts the writer's literal syntax, never shell expressions.
-      if (quoteLaunchAgentEnvironmentValue(parsedValue) !== value.trim()) {
-        throw new Error("Unsupported LaunchAgent environment value");
-      }
+    // The writer's quoted literals can span physical lines; retain their exact newline bytes.
+    while (hasOpenSingleQuote(value) && index + 1 < lines.length) {
+      value += `\n${lines[++index]}`;
+    }
+    const parsedValue = parseGeneratedEnvValue(value);
+    // Strict inspection accepts the writer's literal syntax, never shell expressions.
+    if (
+      options?.requireEffective &&
+      quoteLaunchAgentEnvironmentValue(parsedValue) !== value.trim()
+    ) {
+      throw new Error("Unsupported LaunchAgent environment value");
     }
     environment[key] = parsedValue;
   }
