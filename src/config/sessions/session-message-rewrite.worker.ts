@@ -106,7 +106,7 @@ export type SessionMessageRewriteOperations = {
     output: ReturnType<typeof prepareLockedTranscriptAppend>;
   };
   "session.transcript.lock.facts": {
-    input: LockedTranscriptTarget & { idempotencyKeys: readonly string[] };
+    input: LockedTranscriptTarget & { idempotencyKeys: readonly string[]; sourceRunId?: string };
     output: ReturnType<typeof readTranscriptMirrorFacts>;
   };
   "session.transcript.lock.commit": {
