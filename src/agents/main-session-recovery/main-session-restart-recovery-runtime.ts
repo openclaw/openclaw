@@ -95,6 +95,7 @@ export async function recoverRestartAbortedMainSessions(params: {
   cfg?: OpenClawConfig;
   agentIds?: ReadonlySet<string>;
   onExhaustedTarget?: (target: ExhaustedRestartRecoveryTarget) => void;
+  onPreparationPending?: (target: ExhaustedRestartRecoveryTarget) => void;
   stateDir?: string;
   handledSessionKeys?: Set<string>;
   activeSessionIds?: Iterable<string>;
@@ -183,6 +184,8 @@ async function recoverExpectedRestartRecovery(
     expectedTarget: ExpectedRestartRecoveryTarget;
     lifecycleGeneration?: string;
     observationOnly?: boolean;
+    onPreparationPending?: (target: ExhaustedRestartRecoveryTarget) => void;
+    onExhaustedTarget?: (target: ExhaustedRestartRecoveryTarget) => void;
     shouldContinue?: () => boolean;
     signal?: AbortSignal;
     stateDir?: string;
@@ -307,6 +310,13 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
     isAgentEventLifecycleGenerationCurrent(lifecycleGeneration);
   const startupRecoveryCutoffMs = Date.now();
   const startupCheckedStorePaths = params.startupCheckedStorePaths ?? new Set<string>();
+  // Only candidates observed by this startup can wake on later preparation commits.
+  const pendingPreparation = new Map<string, Map<string, ExhaustedRestartRecoveryTarget>>();
+  const retainPendingPreparation = (target: ExhaustedRestartRecoveryTarget) => {
+    const stores = pendingPreparation.get(target.sessionKey) ?? new Map();
+    stores.set(target.storePath, target);
+    pendingPreparation.set(target.sessionKey, stores);
+  };
   const runRecoveryAttempt = async (
     exhaustedTargets: Map<string, ExhaustedRestartRecoveryTarget>,
     agentIds?: ReadonlySet<string>,
@@ -344,6 +354,7 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
           },
           stateDir: params.stateDir,
           handledSessionKeys,
+          onPreparationPending: retainPendingPreparation,
           excludedStoreTargets: new Set(marking.failedTargets?.map(restartRecoveryStoreTargetKey)),
           lifecycleGeneration,
           shouldContinue,
@@ -442,10 +453,91 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
       .filter((refusal) => refusal.code === "agent-database-inspection-pending")
       .map((refusal) => refusal.agentId),
   );
-  let run = Promise.resolve().then(() => runRecovery());
+  const recoverPreparation = async (target: ExhaustedRestartRecoveryTarget) => {
+    let exhausted = false;
+    const recover = (observationOnly = false) =>
+      runWithGatewayIndependentRootWorkAdmission(
+        () =>
+          recoverExpectedRestartRecovery({
+            ...target,
+            expectedTarget: target,
+            cfg: params.getConfig(),
+            stateDir: params.stateDir,
+            gatewayRuntime: params.gatewayRuntime,
+            lifecycleGeneration,
+            shouldContinue,
+            observationOnly,
+            signal: abortController.signal,
+            onPreparationPending: retainPendingPreparation,
+            onExhaustedTarget: () => {
+              exhausted = true;
+            },
+          }),
+        "main-session:preparation-recovery",
+        abortController.signal,
+      );
+    await runRecoveryRetries({
+      initialDelayMs: 0,
+      maxRetries: Math.max(1, params.maxRetries ?? MAX_RECOVERY_RETRIES),
+      shouldContinue,
+      signal: abortController.signal,
+      attempt: async (finalAttempt) => {
+        exhausted = false;
+        let result = await recover();
+        if (finalAttempt && exhausted) {
+          result = await recover(true);
+        }
+        if (finalAttempt && result.failed > 0) {
+          mainSessionRecoveryLog.warn(
+            `main-session preparation recovery gave up for ${target.sessionKey}`,
+          );
+        }
+        return result.failed === 0;
+      },
+      onError: (error, finalAttempt) => {
+        if (finalAttempt) {
+          mainSessionRecoveryLog.warn(`main-session preparation recovery failed: ${String(error)}`);
+        }
+      },
+    });
+  };
+  let run = Promise.resolve().then(async () => {
+    await runRecovery();
+    // The scan can precede a preparation commit. Recheck its captured candidates once.
+    const pending: ExhaustedRestartRecoveryTarget[] = [];
+    for (const stores of pendingPreparation.values()) {
+      for (const target of stores.values()) {
+        pending.push(target);
+      }
+    }
+    pendingPreparation.clear();
+    for (const target of pending) {
+      await recoverPreparation(target);
+    }
+  });
   const unsubscribe = sessionChanges.subscribe(
     AsyncLocalStorage.bind((change) => {
-      if (!shouldContinue() || !isSessionStoreTopologyChange(change)) {
+      if (!shouldContinue()) {
+        return;
+      }
+      if ("sessionKey" in change) {
+        const stores = pendingPreparation.get(change.sessionKey);
+        if (!stores) {
+          return;
+        }
+        for (const [storePath, target] of stores) {
+          // Publications can use a physical SQLite path instead of the captured logical store.
+          // They only wake recovery; the exact reader and admission revalidate the target.
+          // Removing before queueing coalesces commits and avoids observing our own dispatch.
+          stores.delete(storePath);
+          run = run.then(() => recoverPreparation(target));
+        }
+        if (stores.size === 0) {
+          pendingPreparation.delete(change.sessionKey);
+        }
+        return;
+      }
+      if (!isSessionStoreTopologyChange(change)) {
         return;
       }
       const admitted = new Set<string>();
@@ -459,9 +551,6 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
           admitted.add(agentId);
         }
       }
-      if (pendingAgents.size === 0) {
-        unsubscribe();
-      }
       if (admitted.size > 0) {
         // Admission can finish after the first scan. Retain this startup's
         // cutoff and serial preparation without borrowing the publisher's scope.
@@ -469,12 +558,10 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
       }
     }),
   );
-  if (pendingAgents.size === 0) {
-    unsubscribe();
-  }
   return {
     stop: async () => {
       unsubscribe();
+      pendingPreparation.clear();
       unregisterRotation();
       // Restart recovery belongs to its startup generation; stale timers must
       // never claim a session after that gateway begins draining.
