@@ -529,15 +529,13 @@ early commit frame. They remain recorded at COMMIT and install before the operat
 completes. Nonempty and unknown-coverage receipts still publish immediately after
 COMMIT.
 
-The Gateway retains bounded plugin-state observation rows from these receipts.
-Repeated observations reuse the stored JSON image without a worker request;
-expiry still turns a row into absence, and callers receive freshly decoded values.
-Pending writes suspend cache reads, and unknown settlement drops cached facts.
-Comparisons carry the current cached image to the writer, whose conditional
-update or delete matches its stored bytes and timestamps. A changed row returns
-a conflict; insertion still checks current absence and capacity in the write
-transaction. Same-value sets retain their age and TTL refresh behavior. This
-changes no stored format, schema version, update migration, or SDK signature.
+Plugin-state observations and comparisons read the current row in the existing
+worker. Native binding deletion and compensation use compound receipts, so a
+host cache cannot cover every writer. Comparing the stored row keeps lease
+cleanup and conflict retries current after those transactions. Callers receive
+independent decoded values; same-value sets retain their age and TTL refresh
+behavior. Stored formats, schemas, update migrations, and SDK signatures are
+unchanged.
 
 Catalogue and binding receipts use the same overflow rule, including large
 expiry batches whose ordinary result is empty. Private fact subscribers only

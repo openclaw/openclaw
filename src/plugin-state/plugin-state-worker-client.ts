@@ -4,7 +4,6 @@ import type {
   SessionEntryCurrentCheck,
   SessionEntriesCurrentCheck,
 } from "../config/sessions/session-entry-current.types.js";
-import { assertStateDatabaseReadAllowed } from "../infra/gateway-state-owner.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import type {
   SqliteWorkerAdmissionFactory,
@@ -13,11 +12,6 @@ import type {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import {
-  observationFromCachedPluginState,
-  preparePluginStateObservationCacheRead,
-  readPluginStateObservationCache,
-} from "./plugin-state-observation-cache.js";
 import type {
   PluginStateOperationCommit,
   PluginStateOperationResult,
@@ -129,7 +123,6 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
   const description = pluginStateWorkerOperations[command.type];
   let dispatched = false;
   let order: PluginStateCommandOrder | undefined;
-  let installObservation: ReturnType<typeof preparePluginStateObservationCacheRead> | undefined;
   try {
     const context =
       capturedContext ?? captureOpenClawStateWorkerContext({ path: databasePath, env });
@@ -149,34 +142,6 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     if (order?.ready) {
       await order.ready;
       assertAdmission?.();
-    }
-    if (
-      command.input &&
-      "key" in command.input &&
-      (command.type === "pluginState.observe" ||
-        command.type === "pluginState.compareUpdate" ||
-        command.type === "pluginState.compareDelete")
-    ) {
-      const identity = context.admission.identity.key;
-      const current = readPluginStateObservationCache(identity, command.input);
-      if (command.type === "pluginState.observe" && !currentEntries) {
-        context.admission.assertCurrent();
-        if (current) {
-          assertStateDatabaseReadAllowed(databasePath);
-          assertAdmission?.();
-          const observation = observationFromCachedPluginState(
-            identity,
-            databasePath,
-            command.input,
-            current,
-          );
-          // SAFETY: This branch handles only the observe command's observation output.
-          return observation as PluginStateWorkerRequests[Key]["output"];
-        }
-        installObservation = preparePluginStateObservationCacheRead(identity, command.input);
-      } else if (command.type !== "pluginState.observe" && current) {
-        Object.assign(command.input, { current });
-      }
     }
     // A write-only await here would let later reads overtake it before broker admission.
     const [
@@ -203,12 +168,6 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       );
       if (!result.ok) {
         throw restorePluginStateWorkerFailure(result.error);
-      }
-      if (command.type === "pluginState.observe") {
-        const observation =
-          // SAFETY: The command discriminant fixes this worker result's private row envelope.
-          result.value as PluginStateWorkerRequests["pluginState.observe"]["output"];
-        installObservation?.(observation.row);
       }
       return result.value;
     };
@@ -338,16 +297,12 @@ export const registerPluginStateInWorker = createOperation("pluginState.register
 export const replacePluginStateInWorker = createOperation("pluginState.replace");
 export const replacePluginStateEntryInWorker = createOperation("pluginState.replaceEntry");
 
-const observePluginState = createOperation(
+export const observePluginStateInWorker = createOperation(
   "pluginState.observe",
   undefined,
   () => true,
   ({ pluginId, namespace, key }) => ({ pluginId, namespace, keys: [key] }),
 );
-export async function observePluginStateInWorker(params: Input<"pluginState.observe">) {
-  const { value, comparison } = await observePluginState(params);
-  return { value, comparison };
-}
 export const comparePluginStateUpdateInWorker = createOperation(
   "pluginState.compareUpdate",
   undefined,

@@ -350,6 +350,24 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                 }),
                 { agentId, sessionId, sessionKey },
               );
+              const finishedKey = `agent:${agentId}:finished`;
+              const finishedId = "deletion-finished-session";
+              runOpenClawAgentWriteTransaction(
+                (database) =>
+                  writeSessionEntry(
+                    database,
+                    finishedKey,
+                    { ...session, sessionId: finishedId },
+                    { previousEntry: null },
+                  ),
+                { agentId, path: databasePath, env: state.env },
+              );
+              const finishedNative = nativeApi.createNativeBindingDeletionFixture(
+                createPluginRuntimeMock({
+                  state: createPluginStateRuntimeStores("codex", () => signal.throwIfAborted()),
+                }),
+                { agentId, sessionId: finishedId, sessionKey: finishedKey },
+              );
               const nativeClient = await nativeApi.attachNativeBindingDeletionClient(
                 native.store,
                 native.key,
@@ -402,7 +420,11 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                   abort: () => aborted.resolve(),
                 });
                 setActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, agentId);
-                const deleting = client.request("agents.delete", { agentId, deleteFiles: true });
+                const deleting = client.request(
+                  "agents.delete",
+                  { agentId, deleteFiles: true },
+                  { timeoutMs: 10_000 },
+                );
                 try {
                   await withinTest(
                     awaitGateBeforeSettlement(
@@ -439,8 +461,10 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                     signal,
                   );
                 } finally {
+                  const started = performance.now();
                   clearActiveEmbeddedRun(sessionId, handle, sessionKey);
                   await deleting;
+                  expect(performance.now() - started).toBeLessThan(10_000);
                 }
                 expect(await deleting).toMatchObject({
                   ok: true,
@@ -449,6 +473,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                 });
                 expect(await deleting).not.toHaveProperty("purgeFailed");
                 expect(native.store.lookup(native.key)).toBeUndefined();
+                expect(finishedNative.store.lookup(finishedNative.key)).toBeUndefined();
                 expect(nativeClient.subscribed()).toBe(false);
                 expect(isEmbeddedAgentRunInProgress(sessionId)).toBe(false);
                 expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
@@ -607,6 +632,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                 registry.agentHarnesses.splice(registry.agentHarnesses.indexOf(registration), 1);
                 registry.plugins.splice(registry.plugins.indexOf(plugin), 1);
                 await native.harness.dispose?.();
+                await finishedNative.harness.dispose?.();
                 nativeClient.close();
                 vi.restoreAllMocks();
                 await disconnectGatewayClient(client);
