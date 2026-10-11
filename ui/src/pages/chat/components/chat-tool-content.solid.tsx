@@ -30,12 +30,6 @@ import { toolWorkspacePath, type ToolRenderOptions } from "./chat-tool-render-mo
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "wa-tab-group": HTMLAttributes<HTMLElement> & {
-        "prop:active": string;
-        activation: "auto";
-        "without-scroll-controls": boolean;
-      };
-      "wa-tab": HTMLAttributes<HTMLElement> & { panel: string; "prop:active": boolean };
       "wa-tab-panel": HTMLAttributes<HTMLElement> & { name: string; "prop:active": boolean };
     }
   }

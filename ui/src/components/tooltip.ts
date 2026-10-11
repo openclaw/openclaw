@@ -365,6 +365,11 @@ class Tooltip extends OpenClawLitElement {
       if (!popup) {
         return;
       }
+      // The tooltip's commit creates wa-popup; its inner node renders separately.
+      await popup.updateComplete;
+      if (this.webAwesomeTooltip !== tooltip || this.#triggerElement !== trigger) {
+        return;
+      }
       if (this.autoSize) {
         popup.setAttribute("auto-size", "vertical");
       } else {

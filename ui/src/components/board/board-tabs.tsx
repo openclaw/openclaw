@@ -88,14 +88,3 @@ export function BoardTabs(props: {
     </Show>
   );
 }
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "wa-tab-group": HTMLAttributes<HTMLElementTagNameMap["wa-tab-group"]> &
-        Properties<HTMLElementTagNameMap["wa-tab-group"]>;
-      "wa-tab": HTMLAttributes<HTMLElementTagNameMap["wa-tab"]> &
-        Properties<HTMLElementTagNameMap["wa-tab"]>;
-    }
-  }
-}

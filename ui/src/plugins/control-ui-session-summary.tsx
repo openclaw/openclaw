@@ -12,10 +12,9 @@ import {
 } from "solid-js";
 import type { AgentsListResult } from "../api/types.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
-import type { AgentAvatar as AgentAvatarElement } from "../components/agent-avatar.ts";
-import "../components/agent-avatar.ts";
 import { toSanitizedMarkdownHtml } from "../components/markdown.ts";
 import { renderSessionProgressCard } from "../components/session-progress-card.ts";
+import { AgentAvatar } from "../components/solid/agent-avatar.tsx";
 import { Icon } from "../components/solid/icon.tsx";
 import { SanitizedHtml } from "../components/solid/sanitized-html.tsx";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
@@ -252,13 +251,13 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
                     {message().sender ? (
                       <LitContent render={() => renderChatAuthorAvatar(message().sender)} />
                     ) : message().agentId ? (
-                      <openclaw-agent-avatar
-                        prop:option={{
+                      <AgentAvatar
+                        option={{
                           value: message().agentId!,
                           label: message().label,
                           agent: message().agent ?? { id: message().agentId! },
                         }}
-                        prop:identity={identities()?.read().get(message().agentId) ?? null}
+                        identity={identities()?.read().get(message().agentId) ?? null}
                       />
                     ) : (
                       <span class="plugin-session-summary__unknown" aria-hidden="true">
@@ -389,16 +388,5 @@ export const PluginSessionSummary = defineSolidBridge<PluginSessionSummaryProps>
 declare global {
   interface HTMLElementTagNameMap {
     "openclaw-plugin-session-summary": SolidBridgeElement<PluginSessionSummaryProps>;
-  }
-}
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-agent-avatar": HTMLAttributes<AgentAvatarElement> & {
-        "prop:option"?: AgentAvatarElement["option"];
-        "prop:identity"?: AgentAvatarElement["identity"];
-      };
-    }
   }
 }

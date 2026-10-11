@@ -585,14 +585,6 @@ declare global {
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-sparkline": HTMLAttributes<HTMLElement> & {
-        "prop:label"?: string;
-        "prop:sub"?: string;
-        "prop:samples"?: readonly SparklineSample[];
-        "prop:format"?: (value: number) => string;
-        "prop:floorMax"?: number;
-        "prop:autorange"?: boolean;
-      };
       "openclaw-desktop-panel": HTMLAttributes<HTMLElementTagNameMap["openclaw-desktop-panel"]> & {
         embedded?: boolean;
         "prop:client"?: HTMLElementTagNameMap["openclaw-desktop-panel"]["client"];
