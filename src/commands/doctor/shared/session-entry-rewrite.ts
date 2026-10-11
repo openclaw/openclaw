@@ -278,8 +278,9 @@ export function rewriteDoctorSessionEntries(
               .set({
                 entry_json: entryJson,
                 ...predicateColumns,
-                // kysely-allow-raw: bind exact SQLite int64 values; generated INTEGER read types are numbers.
-                session_started_at: sql<number | null>`${predicateColumns.session_started_at}`,
+                session_started_at: /* kysely-allow-raw: exact int64 bind; generated INTEGER reads are numbers. */ sql<
+                  number | null
+                >`${predicateColumns.session_started_at}`,
                 entry_valid: entryValid,
                 ...(runProjection ? { status: runProjection.status } : {}),
               })
