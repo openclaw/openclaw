@@ -120,6 +120,9 @@ struct ApplicationRelocatorTests {
         #expect(!ApplicationRelocator.shouldStopRelocationRelaunch(
             recommendation: .handOff(destination),
             arguments: []))
+        #expect(AppTranslocationSupport.isRunningUnderAppTranslocation(
+            executablePath: markedArguments[0],
+            bundlePath: "/private/var/folders/x/AppTranslocation/y/d/OpenClaw.app"))
     }
 
     @Test
