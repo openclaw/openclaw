@@ -17,6 +17,7 @@ import "./modal-dialog.ts";
 
 class KeyboardShortcutsDialog extends OpenClawLitElement {
   @property({ attribute: false }) sendShortcut: ChatSendShortcut = "enter";
+  @property({ attribute: false }) archiveShortcutEnabled = true;
   @property({ attribute: false }) newSessionHost?: ShellNewSessionHost;
   @state() private open = false;
 
@@ -207,7 +208,9 @@ class KeyboardShortcutsDialog extends OpenClawLitElement {
             </button>
           </header>
           <div class="body">
-            ${resolveKeyboardShortcutSections(this.sendShortcut).map(
+            ${resolveKeyboardShortcutSections(this.sendShortcut, {
+              archiveShortcutEnabled: this.archiveShortcutEnabled,
+            }).map(
               (section) => html`
                 <section>
                   <h3>${t(section.label)}</h3>

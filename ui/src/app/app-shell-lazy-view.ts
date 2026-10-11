@@ -78,6 +78,7 @@ export function renderShellLazyOverlays(
       !nativeEmbed && isOptionalElementDefined(KEYBOARD_SHORTCUTS_ELEMENT)
         ? html`<openclaw-keyboard-shortcuts-dialog
             .sendShortcut=${normalizeChatSendShortcut(uiSettings?.chatSendShortcut)}
+            .archiveShortcutEnabled=${uiSettings?.archiveShortcutEnabled !== false}
             .newSessionHost=${host}
           ></openclaw-keyboard-shortcuts-dialog>`
         : nothing

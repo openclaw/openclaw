@@ -177,6 +177,14 @@ export interface ConfigProps extends TabIconViewProps, AppearancePreferences {
   sessionObserverDisabled?: boolean;
   setSessionObserverEnabled?: (enabled: boolean) => void;
   setSessionObserverUtilityModel?: (selection: SessionObserverModelSelection) => void;
+
+  // Only the setters are optional so tests don't break when omitting them
+  setLobsterPetVisits?: (enabled: boolean) => void;
+  setSessionDeleteConfirm?: (enabled: boolean) => void;
+  setLobsterPetSounds?: (enabled: boolean) => void;
+
+  archiveShortcutEnabled?: boolean;
+  setArchiveShortcutEnabled?: (enabled: boolean) => void;
   lobsterdexHref?: string;
   onOpenLobsterdex?: () => void;
   chatSendShortcutOverridden: boolean;

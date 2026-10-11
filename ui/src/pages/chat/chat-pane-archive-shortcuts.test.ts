@@ -175,6 +175,35 @@ describe("direct session archive shortcuts", () => {
     },
   );
 
+  it("ignores repeated archive keydowns", async () => {
+    const { pane, patch } = fixture();
+    expect(press(pane, { repeat: true }).defaultPrevented).toBe(false);
+    await vi.dynamicImportSettled();
+    expect(patch).not.toHaveBeenCalled();
+  });
+
+  it("leaves the chord to the browser when this browser disabled direct Archive", async () => {
+    const { pane, state, patch, sessions, row } = fixture();
+    state.settings.archiveShortcutEnabled = false;
+    vi.mocked(showToast).mockClear();
+    const event = press(pane);
+    // Not consumed: the page must not steal Ctrl/⌘+Shift+A from the browser, so
+    // the unhandled event reaches the browser's own shortcut.
+    expect(event.defaultPrevented).toBe(false);
+    await vi.dynamicImportSettled();
+    expect(patch).not.toHaveBeenCalled();
+    expect(sessions.archiveVisibility(row.key)).toBeUndefined();
+    expect(showToast).not.toHaveBeenCalled();
+  });
+
+  it("keeps archiving from the keyboard while the preference is unset (default on)", async () => {
+    const { pane, state, row } = fixture();
+    expect(state.settings.archiveShortcutEnabled).toBeUndefined();
+    const headerAction = vi.spyOn(pane, "handleHeaderSessionAction");
+    expect(press(pane).defaultPrevented).toBe(true);
+    expect(headerAction).toHaveBeenCalledExactlyOnceWith({ kind: "toggle-archived" }, row);
+  });
+
   it("keeps the draft and reports archive failure without navigating or offering Undo", async () => {
     const { pane, state, patch, sessions, row } = fixture();
     vi.mocked(showToast).mockClear();

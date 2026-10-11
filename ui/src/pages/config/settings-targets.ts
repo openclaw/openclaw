@@ -392,6 +392,8 @@ export const SETTINGS_SEARCH_TARGETS = {
       "chat.sendShortcut",
       "chat.sendShortcutEnter",
       "chat.sendShortcutModifierEnter",
+      "chat.archiveShortcut",
+      "chat.archiveShortcutHint",
       "chat.followUpMode",
       "chat.followUpModeSteer",
       "chat.followUpModeQueue",
@@ -410,7 +412,7 @@ export const SETTINGS_SEARCH_TARGETS = {
       "chat.composer.holdToRecordSettingDescription",
     ],
     aliases:
-      "keyboard enter follow-up followup steer queue microphone voice audio input codex claude terminal viewer camera dictation dictate width task progress checklist collapse expand",
+      "keyboard enter follow-up followup steer queue microphone voice audio input codex claude terminal viewer camera dictation dictate width task progress checklist collapse expand archive shortcut disable browser collision",
   },
   appearanceConnection: {
     ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.connection),
