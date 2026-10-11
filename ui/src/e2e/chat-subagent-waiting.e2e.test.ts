@@ -149,9 +149,20 @@ suite.define(() => {
         // Its launch row reads as the subagent: its name, not its assignment, and its state.
         const activityRow = activePane.locator(`[data-subagent-session-key="${child.key}"]`);
         await activityRow.getByText("Backend implementation", { exact: true }).waitFor();
+        const panel = activePane.locator("openclaw-chat-subagents-panel");
+        const panelRow = panel.locator(`[data-session-key="${child.key}"]`);
+        const closePanel = async () => {
+          await activePane.getByRole("button", { name: "Close Subagents", exact: true }).click();
+          await panel.waitFor({ state: "hidden" });
+        };
         const childHistoryReads = () =>
           gateway.getRequests("chat.history", { sessionKey: child.key });
-        expect(await childHistoryReads()).toHaveLength(0);
+        // The auto-opened panel loads child metrics. Once closed, inline observer
+        // updates must render from the roster without fetching another transcript.
+        await panelRow.waitFor();
+        await gateway.waitForRequest("chat.history", { match: { sessionKey: child.key } });
+        await closePanel();
+        const childReadsAfterClose = (await childHistoryReads()).length;
         await gateway.emitGatewayEvent("session.observer", {
           sessionKey: child.key,
           agentId: "main",
@@ -163,7 +174,7 @@ suite.define(() => {
           headline: "Verifying the API response",
         });
         await activityRow.getByText("Verifying the API response", { exact: true }).waitFor();
-        expect(await childHistoryReads()).toHaveLength(0);
+        expect(await childHistoryReads()).toHaveLength(childReadsAfterClose);
         const launchRow = activePane.locator(".chat-tool-row--subagent");
         const launchName = launchRow.locator(".chat-tool-row__subagent-link");
         const launchState = launchRow.locator(".chat-tool-row__subagent-state");
@@ -175,19 +186,12 @@ suite.define(() => {
           name: "1 subagent running",
           exact: true,
         });
-        const panel = activePane.locator("openclaw-chat-subagents-panel");
-        const panelRow = panel.locator(`[data-session-key="${child.key}"]`);
-        const closePanel = async () => {
-          await activePane.getByRole("button", { name: "Close Subagents", exact: true }).click();
-          await panel.waitFor({ state: "hidden" });
-        };
         const panelTabHasFocus = () =>
           activePane
             .locator('[data-region-header="side"] wa-tab[active]')
             .first()
             .evaluate((element) => element.matches(":focus"));
         const countHasFocus = () => runningCount.evaluate((element) => element.matches(":focus"));
-        await closePanel();
         // Measure the phone layout itself, not the frame before the shell collapses.
         await page.setViewportSize({ width: 390, height: 900 });
         await page.locator(".shell--mobile-nav").waitFor();
@@ -430,9 +434,9 @@ suite.define(() => {
           updatedAt: now + 64_500,
           snapshotAt: now + 64_500,
         };
-        const childReads = (await gateway.getRequests("sessions.list", { spawnedBy: parent.key }))
-          .length;
+        const childReads = (await gateway.getRequests("sessions.list", childRosterQuery)).length;
         await gateway.setSessionsListResponse(sessionsListResponse([waitingAgain, restartedChild]));
+        await gateway.deferNext("sessions.list", childRosterQuery);
         await gateway.emitGatewayEvent("sessions.changed", {
           sessionKey: child.key,
           reason: "run-start",
@@ -440,11 +444,15 @@ suite.define(() => {
           session: restartedChild,
           ancestorSessions: [waitingAgain],
         });
+        // The next batch reopens its panel, but the parent reflects the event
+        // while that panel's independent roster hydration is still pending.
         await activityRow.waitFor();
         expect(await indicator.count()).toBe(0);
-        expect(await gateway.getRequests("sessions.list", { spawnedBy: parent.key })).toHaveLength(
-          childReads,
-        );
+        await gateway.waitForRequest("sessions.list", {
+          after: childReads,
+          match: childRosterQuery,
+        });
+        await gateway.resolveDeferred("sessions.list", sessionsListResponse([restartedChild]));
         const resumedParent: GatewaySessionRow = {
           ...waitingAgain,
           hasActiveRun: true,
