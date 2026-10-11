@@ -10,6 +10,7 @@ import {
   createModalDialogTestFixture,
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   activePlacementSession,
   offlineDeviceSession,
@@ -101,6 +102,7 @@ async function selectRepositoryWorker() {
   });
   expect(document.body.querySelector('[data-value="gateway"]')).toBeNull();
   document.body.querySelector<HTMLButtonElement>('[data-value="device:runner"]')?.click();
+  flush();
 }
 
 function answerWorkerPicker(label: "Continue on worker" | "Cancel") {
@@ -243,6 +245,7 @@ describe("chat pane placement", () => {
     expect(document.body.textContent).toContain("Device unavailable");
     expect(document.body.textContent).toContain("Session hosting is disabled");
     document.body.querySelector<HTMLButtonElement>('[data-value="device:runner"]')?.click();
+    flush();
     const moveButton = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => button.textContent?.trim() === "Move session",
     );
@@ -351,7 +354,9 @@ describe("chat pane placement", () => {
       const multiMode = document.body.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]');
       expect(multiMode?.disabled).toBe(false);
       multiMode?.click();
+      flush();
       document.body.querySelector<HTMLButtonElement>('[data-value="machine:beast"]')?.click();
+      flush();
       [...document.body.querySelectorAll<HTMLButtonElement>("button")]
         .find((button) => button.textContent?.trim() === "Move session")
         ?.click();
@@ -570,6 +575,7 @@ describe("chat pane placement", () => {
         expect(document.body.querySelector('[data-value="device:build-mac"]')).not.toBeNull();
       });
       document.body.querySelector<HTMLButtonElement>('[data-value="device:build-mac"]')?.click();
+      flush();
       [...document.body.querySelectorAll<HTMLButtonElement>("button")]
         .find((button) => button.textContent?.trim() === "Move session")
         ?.click();

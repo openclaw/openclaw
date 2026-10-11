@@ -186,6 +186,9 @@ export function readSessionEntryCohort(
               sessionId: entry.sessionId,
             },
             { ...transcript, entryIds: [...new Set(transcript.entryIds)] },
+            undefined,
+            undefined,
+            entry,
           )
         : { anchors: [] };
     const authProfileSource = includeAuthProfileSource
