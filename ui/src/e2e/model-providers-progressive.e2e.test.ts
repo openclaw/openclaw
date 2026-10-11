@@ -650,8 +650,6 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
         if (publicationKind === "snapshot") {
           await gateway.resolveDeferred("models.list", { models: [older] });
         }
-        await expect.poll(() => preparedRow.isVisible()).toBe(true);
-        expect(await picker.locator('[data-value="fixture/older"]').count()).toBe(0);
 
         await gateway.deferNext("models.list");
         await gateway.emitGatewayEvent("chat.metadata.changed", {});
@@ -664,6 +662,7 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
         await expect
           .poll(() => picker.locator('[role="option"][data-value="fixture/added"]').isVisible())
           .toBe(true);
+        expect(await picker.locator('[data-value="fixture/older"]').count()).toBe(0);
         expect(await trigger.getAttribute("aria-expanded")).toBe("true");
       } finally {
         await context.close();

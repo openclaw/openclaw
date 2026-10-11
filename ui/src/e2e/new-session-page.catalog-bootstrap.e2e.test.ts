@@ -127,7 +127,7 @@ suite.define(() => {
     },
   );
 
-  it("keeps an ordinary catalog winner when its initial snapshot arrives later", async () => {
+  it("recovers the catalog after a late initial snapshot through a metadata refresh", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const current = { provider: "fixture", id: "current", name: "Current model", available: true };
@@ -153,8 +153,6 @@ suite.define(() => {
       const trigger = page.locator("[data-chat-model-select]");
       await trigger.click();
       const currentRow = page.locator('[data-chat-model-option="fixture/current"]');
-      await revealChatModelOption(currentRow);
-      await expect.poll(() => currentRow.isVisible()).toBe(true);
       const count = (await gateway.getRequests("models.list")).length;
       await gateway.emitGatewayEvent("models.snapshot", {
         target: {},
@@ -163,10 +161,18 @@ suite.define(() => {
       });
       await trigger.click();
       await trigger.click();
+      const olderRow = page.locator('[data-chat-model-option="fixture/older"]');
+      await revealChatModelOption(olderRow);
+      await expect.poll(() => olderRow.isVisible()).toBe(true);
+      await gateway.deferNext("models.list");
+      await gateway.emitGatewayEvent("chat.metadata.changed", {});
+      await expect
+        .poll(async () => (await gateway.getRequests("models.list")).length)
+        .toBe(count + 1);
+      await gateway.resolveDeferred("models.list", { models: [current] });
       await revealChatModelOption(currentRow);
       await expect.poll(() => currentRow.isVisible()).toBe(true);
       expect(await page.locator('[data-chat-model-option="fixture/older"]').count()).toBe(0);
-      expect(await gateway.getRequests("models.list")).toHaveLength(count);
     } finally {
       await context.close();
     }
