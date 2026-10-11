@@ -7,18 +7,10 @@ import {
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { markPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 
-// fs-safe 0.26.0 hands plain spellings to Win32, which refuses paths past the
-// 248-character directory limit; openclaw/fs-safe#924 fixes this upstream.
-// Drop this once the pinned fs-safe release includes it.
-function win32Spelling(target: string): string {
-  const resolved = path.resolve(target);
-  return resolved.length < 248 ? resolved : path.toNamespacedPath(resolved);
-}
-
 export function createPrivateWindowsDirectory(directoryPath: string): void {
   let attempted = false;
   try {
-    createDirectorySync(win32Spelling(directoryPath), {
+    createDirectorySync(path.toNamespacedPath(path.resolve(directoryPath)), {
       private: true,
       assertBeforeMutation() {
         attempted = true;
@@ -35,5 +27,6 @@ export function createPrivateWindowsDirectory(directoryPath: string): void {
 }
 
 export function createPrivateWindowsFile(filePath: string): OwnedFileDescriptorSync {
-  return createFileSync(win32Spelling(filePath), { private: true });
+  // fs-safe 0.26.0 also needs the prefix when its sibling staging path exceeds MAX_PATH.
+  return createFileSync(path.toNamespacedPath(path.resolve(filePath)), { private: true });
 }
