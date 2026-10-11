@@ -371,6 +371,11 @@ only at startup. Device pairing is not a substitute for shared Gateway
 authentication on this path. If the write outcome is unknown, inspect the Models
 page before retrying.
 
+An explicitly configured loopback Gateway with `gateway.auth.mode: "none"` also
+supports this command without a token or device identity. The CLI still uses
+the discovered local state owner; this does not enable remote or arbitrary-URL
+authentication bypasses.
+
 Use the Gateway's **Models** page for supported online sign-in flows. CLI-only
 setup options, local provider CLI imports, and partial profile-order overrides
 remain offline operations. Personal `models accounts` commands continue to use

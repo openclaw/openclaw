@@ -199,6 +199,7 @@ export async function runWithLocalStateOwner<T>(params: {
         localPortOverride: port,
         ignoreEnvUrlOverride: true,
         requireLocalBackendSharedAuth: params.requireLocalBackendSharedAuth,
+        allowLocalBackendAuthNone: params.requireLocalBackendSharedAuth,
         requiredMethods: [params.method],
         requiredCapabilities: [
           GATEWAY_SERVER_CAPS.LOCAL_STATE_OWNER_ROUTING,

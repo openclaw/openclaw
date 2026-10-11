@@ -1,14 +1,22 @@
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { CallGatewayOptions } from "../gateway/call.js";
 import { ExitError } from "../runtime.js";
 import { registerModelsCli } from "./models-cli.js";
 
 const mocks = vi.hoisted(() => ({
   domain: vi.fn(async () => undefined),
   getRuntimeConfig: vi.fn(() => ({})),
-  gateway: vi.fn(async () => ({ provider: "openai", profileId: "openai:manual" })),
+  gateway: vi.fn(async (_opts: CallGatewayOptions) => ({
+    provider: "openai",
+    profileId: "openai:manual",
+  })),
   readKey: vi.fn(async () => ({ provider: "openai", apiKey: "synthetic-api-key" })),
 }));
 
@@ -116,6 +124,7 @@ it("delegates paste-api-key to the live owner without local credential admission
       localPortOverride: 18789,
       ignoreEnvUrlOverride: true,
       requireLocalBackendSharedAuth: true,
+      allowLocalBackendAuthNone: true,
       scopes: ["operator.admin"],
       requiredCapabilities: ["local-state-owner-routing-v1", "models-auth-set-api-key-owner-v1"],
       prepareDispatchCurrent: expect.any(Function),
@@ -157,6 +166,32 @@ it("does not fall back locally when the Gateway lacks owner-bound API-key suppor
   ).rejects.toMatchObject({
     code: "OWNER_REFUSED",
     message: expect.stringContaining("Update the Gateway"),
+  });
+  expect(mocks.domain).not.toHaveBeenCalled();
+  expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
+});
+
+it("uses the real auth-none resolver for an owner-bound API-key command", async () => {
+  const { resolveGatewayCallDeviceAuth } = await import("../gateway/call-device-auth.js");
+  mocks.gateway.mockImplementationOnce(async (opts) => {
+    const resolved = await resolveGatewayCallDeviceAuth({
+      opts,
+      url: `ws://127.0.0.1:${opts.localPortOverride}`,
+      authMode: "none",
+      isImplicitLocalTarget: true,
+    });
+    expect(resolved.clientOptions).toMatchObject({
+      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      mode: GATEWAY_CLIENT_MODES.BACKEND,
+      requireLocalBackendSharedAuth: true,
+    });
+    expect(resolved.deviceIdentity).toBeNull();
+    return { provider: "openai", profileId: "openai:manual" };
+  });
+  const program = new Command().enablePositionalOptions();
+  registerModelsCli(program);
+  await program.parseAsync(["models", "auth", "paste-api-key", "--provider", "openai"], {
+    from: "user",
   });
   expect(mocks.domain).not.toHaveBeenCalled();
   expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
