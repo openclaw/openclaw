@@ -506,6 +506,30 @@ describe("runMessageAction core send routing", () => {
     expect(firstMockArg(sendText, "send text").text).toBe("[Nexus] already prefixed");
   });
 
+  it.each([
+    {
+      label: "expands escaped newlines in single-line text",
+      message: String.raw`line one\nline two`,
+      expected: "line one\nline two",
+    },
+    {
+      label: "keeps escaped newlines inside multi-line text",
+      message: 'Fix:\n```c\nprintf("%d\\n", x);\n```',
+      expected: 'Fix:\n```c\nprintf("%d\\n", x);\n```',
+    },
+  ])("$label", async ({ message, expected }) => {
+    const sendText = registerSlackTextPlugin();
+
+    await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: { channel: "slack", target: "channel:OTHER", message },
+      dryRun: false,
+    });
+
+    expect(firstMockArg(sendText, "send text").text).toBe(expected);
+  });
+
   it("leaves media-only sends without a responsePrefix", async () => {
     const sendMedia = vi.fn().mockResolvedValue({
       channel: "slack",
