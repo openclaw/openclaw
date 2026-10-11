@@ -3,7 +3,6 @@ import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/
 import type { ReplyCompletion } from "../../agents/reply-completion.js";
 import type { ReplyPayload } from "../../shared/reply-payload.types.js";
 import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
-import type { FollowupRun } from "./queue/types.js";
 import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatch-outcome.js";
 import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
@@ -75,19 +74,6 @@ export function resolveReplyOperationRunState(
   options: object | undefined,
 ): ReplyOperationRunState | undefined {
   return (options as ReplyOptionsWithOperationRunState | undefined)?.[REPLY_OPERATION_RUN_STATE];
-}
-
-export function bindReplyOperationQueueDisposition(
-  run: Pick<FollowupRun, "onQueueDisposition">,
-  state: ReplyOperationRunState | undefined,
-): void {
-  const observe = run.onQueueDisposition;
-  run.onQueueDisposition = (disposition) => {
-    observe?.(disposition);
-    if (state && (disposition !== "queue-cap-old" || state.admission?.status !== "accepted")) {
-      state.admission = { status: "skipped", reason: "queue-cap" };
-    }
-  };
 }
 
 /** Either source owner can prevent its retained background work from adding delivery. */
