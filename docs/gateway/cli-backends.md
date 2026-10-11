@@ -543,7 +543,7 @@ When bundle MCP is enabled, OpenClaw:
 The loopback bridge sends keepalive bytes while a tool response or notification
 stream is idle, so HTTP idle timeouts do not interrupt long-running tools. These
 bytes are not tool results or agent progress; client request deadlines and the
-overall agent turn timeout still apply.
+current model attempt's timeout still apply.
 
 The shared listener remains available after the turn that first started it completes.
 Later calls use their own run's permissions and caller liveness, without retaining

@@ -1,5 +1,4 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import type { JSX as SolidJSX } from "@solidjs/web";
 import { createSignal, onCleanup, Show } from "solid-js";
 import type {
   UserProfile,
@@ -30,6 +29,7 @@ import {
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { GitHubConnections } from "../../features/github-connections/github-connections.tsx";
 import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accounts.ts";
 import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -37,9 +37,8 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { assertUploadsEnabled } from "../../lib/uploads.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import "../../styles/profile.css";
-import "../../features/github-connections/github-connections.ts";
+import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
 import { IdentitySection } from "./identity-section.tsx";
 import { ModelAccounts } from "./model-accounts.tsx";
@@ -49,16 +48,6 @@ import { ProfileHero } from "./profile-hero.tsx";
 
 registerEnglishCatalog(registerModelAccountsEnglish);
 registerEnglishCatalog(registerProfileEnglish);
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-github-connections": SolidJSX.HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-github-connections"]
-      > & { "prop:context": ApplicationContext };
-    }
-  }
-}
 
 const PROFILE_DOCS_URL = "https://docs.openclaw.ai/concepts/user-model";
 
@@ -529,7 +518,7 @@ function ProfilePageContent() {
                   : null
               }
             />
-            <openclaw-github-connections prop:context={context} />
+            <GitHubConnections />
             <SettingsGroup>
               <SettingsNavRow
                 title={t("profilePage.usageStatistics")}
