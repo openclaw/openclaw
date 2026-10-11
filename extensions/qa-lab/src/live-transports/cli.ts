@@ -1,4 +1,5 @@
 import { listQaRunnerCliContributions } from "openclaw/plugin-sdk/qa-runner-runtime";
+import { qaCliAction } from "../cli-options.js";
 import { discordQaCliRegistration } from "./discord/cli.js";
 import { matrixQaCliRegistration } from "./matrix/cli.js";
 import type { LiveTransportQaCliRegistration } from "./shared/live-transport-cli.js";
@@ -17,11 +18,13 @@ function createQaRunnerCliRegistration(
     register(qa) {
       qa.command(runner.commandName)
         .description(runner.description ?? `Run the ${runner.commandName} live QA lane`)
-        .action(() => {
-          throw new Error(
-            `QA runner "${runner.commandName}" is installed but not active. Enable or allow plugin "${runner.pluginId}" in your OpenClaw config, then try again.`,
-          );
-        });
+        .action(
+          qaCliAction(() => {
+            throw new Error(
+              `QA runner "${runner.commandName}" is installed but not active. Enable or allow plugin "${runner.pluginId}" in your OpenClaw config, then try again.`,
+            );
+          }),
+        );
     },
   };
 }

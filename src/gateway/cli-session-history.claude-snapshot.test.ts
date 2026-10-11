@@ -115,7 +115,7 @@ it("projects oversized Claude messages off-thread using one worker per snapshot"
   const homeDir = tempDirs.make("openclaw-claude-snapshot-");
   const sessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07530";
   const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
-  const record = (uuid: string, content: string) =>
+  const record = (uuid: string, content: unknown) =>
     JSON.stringify({
       type: "user",
       uuid,
@@ -130,7 +130,9 @@ it("projects oversized Claude messages off-thread using one worker per snapshot"
       record("oversized-user-0", oversized),
       "!".repeat(2 * 1024 * 1024),
       record("oversized-user-1", oversized),
-      record("oversized-user-2", oversized),
+      record("oversized-tool-result", [
+        { type: "tool_result", tool_use_id: "tool-1", content: oversized },
+      ]),
       record("visible-after-oversized", "visible"),
     ].join("\n"),
     "utf8",
@@ -143,12 +145,23 @@ it("projects oversized Claude messages off-thread using one worker per snapshot"
     const messages = await readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId, homeDir });
 
     expect(messages).toHaveLength(4);
-    for (let index = 0; index < 3; index++) {
+    for (let index = 0; index < 2; index++) {
       expect(messages[index]).toMatchObject({
         __openclaw: { externalId: `oversized-user-${index}` },
         content: expect.stringContaining("exceeded 1 MiB"),
       });
     }
+    // A tool result must keep its shape, or the placeholder renders as a user turn.
+    expect(messages[2]).toMatchObject({
+      __openclaw: { externalId: "oversized-tool-result" },
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "tool-1",
+          content: expect.stringContaining("exceeded 1 MiB"),
+        },
+      ],
+    });
     expect(messages[3]).toMatchObject({
       __openclaw: { externalId: "visible-after-oversized" },
       content: "visible",

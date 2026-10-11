@@ -18,6 +18,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import * as cliExit from "../one-shot-exit.js";
 import { withCliProcessScope } from "../runtime-cleanup-scope.js";
 import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js";
 import { captureUpdateFinalizationDoctorOutput } from "./update-finalization-output.js";
@@ -241,6 +242,25 @@ it.each(["doctor", "targetConfigConvergence"] as const)(
     expect(getUpdateRun(initial.runId)?.status).toBe("succeeded");
   },
 );
+
+it("still cancels owned children when stalled-finalization diagnostics fail", async () => {
+  const stopChildren = vi.fn();
+  let onStall: (() => void) | undefined;
+  vi.spyOn(cliExit, "watchCliExitAfterOutput").mockImplementation((report) => {
+    onStall = report;
+  });
+  const lifecycle = new UpdateFinalizationLifecycle(false, undefined, stopChildren);
+  await withCliProcessScope(async () => {
+    lifecycle.complete(0);
+    lifecycle.finishRecovery();
+  });
+  expect(onStall).toBeDefined();
+  vi.spyOn(process, "getActiveResourcesInfo").mockImplementation(() => {
+    throw new Error("resource inspection failed");
+  });
+  expect(() => onStall!()).not.toThrow();
+  expect(stopChildren).toHaveBeenCalledOnce();
+});
 
 it("uses generous state and plugin budgets while preserving explicit operator budgets", () => {
   const defaults = new UpdateFinalizationLifecycle(false, undefined, () => {});
