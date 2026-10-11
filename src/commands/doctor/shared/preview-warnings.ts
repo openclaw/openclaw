@@ -577,11 +577,13 @@ export async function collectDoctorPreviewNotes(params: {
 
   const { collectStaleOAuthProfileShadowWarnings, scanStaleOAuthProfileShadows } =
     await import("./stale-oauth-profile-shadows.js");
-  const staleOAuthProfileShadows = await scanStaleOAuthProfileShadows({
-    cfg: params.cfg,
-    env,
-  });
-  appendScanWarnings(staleOAuthProfileShadows, collectStaleOAuthProfileShadowWarnings);
+  const { hits: staleOAuthProfileShadowHits, warnings: staleOAuthProfileShadowScanWarnings } =
+    await scanStaleOAuthProfileShadows({
+      cfg: params.cfg,
+      env,
+    });
+  appendScanWarnings(staleOAuthProfileShadowHits, collectStaleOAuthProfileShadowWarnings);
+  warnings.push(...staleOAuthProfileShadowScanWarnings);
 
   const { collectStaleConfiguredAuthOrderWarnings } = await import("./stale-auth-order.js");
   warnings.push(

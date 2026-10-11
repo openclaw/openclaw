@@ -21,6 +21,7 @@ import { updateAuthProfileStoreWithLock } from "../../../agents/auth-profiles/st
 import type { AuthProfileStore, OAuthCredential } from "../../../agents/auth-profiles/types.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { hasErrnoCode } from "../../../infra/errno.js";
 import { shortenHomePath } from "../../../utils.js";
 import { resolveLegacyAuthProfilesPath as resolveAuthStorePath } from "../../doctor-auth-legacy-paths.js";
 
@@ -30,13 +31,29 @@ type StaleOAuthProfileShadow = {
   profileId: string;
 };
 
-async function loadRawAuthProfileStore(authPath: string): Promise<Record<string, unknown> | null> {
+/**
+ * Raw read of the legacy JSON auth-profile store. "ok" carries the parsed
+ * record (null when the file is missing or holds no legacy data);
+ * "unreadable" means the file exists but cannot be read or parsed, so its
+ * profiles may still carry a sidecar reference the doctor must migrate, not
+ * delete.
+ */
+type RawAuthProfileStoreLoad =
+  | { status: "ok"; raw: Record<string, unknown> | null }
+  | { status: "unreadable" };
+
+async function loadRawAuthProfileStore(authPath: string): Promise<RawAuthProfileStoreLoad> {
+  let raw: unknown;
   try {
-    const raw = JSON.parse(await fs.readFile(authPath, "utf8")) as unknown;
-    return isRecord(raw) ? raw : null;
-  } catch {
-    return null;
+    raw = JSON.parse(await fs.readFile(authPath, "utf8")) as unknown;
+  } catch (error) {
+    // A missing file means there is no legacy data, so the raw store is null.
+    // An existing file that cannot be read or parsed may still carry a sidecar
+    // reference (#168959), so it is "unreadable" and the caller must skip the
+    // profile conservatively instead of treating it as "no reference".
+    return hasErrnoCode(error, "ENOENT") ? { status: "ok", raw: null } : { status: "unreadable" };
   }
+  return { status: "ok", raw: isRecord(raw) ? raw : null };
 }
 
 function hasLegacyOAuthSidecarRef(raw: Record<string, unknown> | null, profileId: string): boolean {
@@ -103,21 +120,34 @@ export async function scanStaleOAuthProfileShadows(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   now?: number;
-}): Promise<StaleOAuthProfileShadow[]> {
+}): Promise<{ hits: StaleOAuthProfileShadow[]; warnings: string[] }> {
   const env = params.env ?? process.env;
   const now = params.now ?? Date.now();
   const mainAuthPath = path.resolve(resolveAuthStorePath(resolveSharedMainAuthAgentDir(env)));
   const mainStore = loadPersistedSharedAuthProfileStore(env);
   if (!mainStore) {
-    return [];
+    return { hits: [], warnings: [] };
   }
   const hits: StaleOAuthProfileShadow[] = [];
+  const warnings: string[] = [];
   for (const agentDir of await collectCandidateAgentDirs(params.cfg, env)) {
     const authPath = path.resolve(resolveAuthStorePath(agentDir));
     if (authPath === mainAuthPath) {
       continue;
     }
     const rawLocalStore = await loadRawAuthProfileStore(authPath);
+    if (rawLocalStore.status === "unreadable") {
+      // Never treat "cannot read the legacy file" as "no legacy reference":
+      // the unreadable file may still carry a sidecar ref, so skip detection
+      // for this agent and warn instead of deleting a profile the doctor must
+      // migrate.
+      warnings.push(
+        `Cannot read the legacy auth profile store at ${shortenHomePath(authPath)}; ` +
+          `skipped stale OAuth shadow detection for this agent so no profile was removed. ` +
+          `Inspect or restore the file, then re-run doctor.`,
+      );
+      continue;
+    }
     const localStore = loadPersistedAuthProfileStore(agentDir);
     if (!localStore) {
       continue;
@@ -126,7 +156,7 @@ export async function scanStaleOAuthProfileShadows(params: {
       if (local.type !== "oauth") {
         continue;
       }
-      if (hasLegacyOAuthSidecarRef(rawLocalStore, profileId)) {
+      if (hasLegacyOAuthSidecarRef(rawLocalStore.raw, profileId)) {
         continue;
       }
       const main = mainStore.profiles[profileId];
@@ -141,7 +171,7 @@ export async function scanStaleOAuthProfileShadows(params: {
       }
     }
   }
-  return hits;
+  return { hits, warnings };
 }
 
 function removeStaleProfilesFromStore(params: {
@@ -191,8 +221,14 @@ async function repairStaleOAuthProfilesForAgent(params: {
   now: number;
 }): Promise<string[]> {
   const rawStore = await loadRawAuthProfileStore(resolveAuthStorePath(params.agentDir));
+  // Re-check the legacy store under the lock: a file that became unreadable
+  // after the scan is excluded here too, so the repair never deletes a profile
+  // it cannot prove is migration-free. (Scan already warned for persistently
+  // unreadable files; this only names the TOCTOU edge.)
   const profileIds = new Set(
-    [...params.profileIds].filter((profileId) => !hasLegacyOAuthSidecarRef(rawStore, profileId)),
+    [...params.profileIds].filter(
+      (profileId) => rawStore.status === "ok" && !hasLegacyOAuthSidecarRef(rawStore.raw, profileId),
+    ),
   );
   if (profileIds.size === 0) {
     return [];
@@ -235,9 +271,8 @@ export async function repairStaleOAuthProfileShadows(params: {
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const env = params.env ?? process.env;
   const now = params.now ?? Date.now();
-  const hits = await scanStaleOAuthProfileShadows({ ...params, env, now });
+  const { hits, warnings } = await scanStaleOAuthProfileShadows({ ...params, env, now });
   const changes: string[] = [];
-  const warnings: string[] = [];
   const byAgentDir = new Map<string, Set<string>>();
   for (const hit of hits) {
     const profileIds = byAgentDir.get(hit.agentDir) ?? new Set<string>();

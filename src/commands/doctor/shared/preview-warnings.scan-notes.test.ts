@@ -52,8 +52,13 @@ vi.mock("./bundled-plugin-load-paths.js", () => ({
 }));
 
 vi.mock("./stale-oauth-profile-shadows.js", () => ({
-  scanStaleOAuthProfileShadows: () =>
-    staleOAuthShadowState.warnings.map((warning, index) => ({ profileId: String(index), warning })),
+  scanStaleOAuthProfileShadows: () => ({
+    hits: staleOAuthShadowState.warnings.map((warning, index) => ({
+      profileId: String(index),
+      warning,
+    })),
+    warnings: [],
+  }),
   collectStaleOAuthProfileShadowWarnings: ({ hits }: { hits: Array<{ warning: string }> }) =>
     hits.map((hit) => hit.warning),
 }));
