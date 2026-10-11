@@ -1,3 +1,4 @@
+import "../styles/lobster-pet.css";
 import { dynamic } from "@solidjs/web";
 import type { LobsterPetLook, LobsterPetPaletteId } from "./lobster-pet-contract.ts";
 import { moonPhaseFraction } from "./lobster-pet-moon.ts";

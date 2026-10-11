@@ -1,4 +1,3 @@
-import "../styles/lobster-pet.css";
 import { createComponent } from "solid-js";
 import { renderSolidSnapshot } from "../lit/solid-snapshot.ts";
 import { LobsterSvg, type LobsterSvgProps } from "./lobster-pet-artwork.tsx";
