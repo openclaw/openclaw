@@ -27,6 +27,7 @@ type ApplicationConfig = {
   allowExternalEmbedUrls: boolean;
   automaticallyFetchFavicons: boolean;
   communityInvite: boolean;
+  chatBubblesEnabled?: boolean;
   /** Null until the serving Gateway publishes its bootstrap policy. */
   newSessionModelDefaults?: "last-used" | "configured" | null;
   terminalEnabled: boolean;
@@ -57,6 +58,7 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
   allowExternalEmbedUrls: false,
   automaticallyFetchFavicons: false,
   communityInvite: false,
+  chatBubblesEnabled: false,
   newSessionModelDefaults: null,
   terminalEnabled: readDocumentTerminalEnabled() ?? false,
   uploadsEnabled: true,
@@ -106,6 +108,7 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
     allowExternalEmbedUrls: Boolean(parsed.allowExternalEmbedUrls),
     automaticallyFetchFavicons: Boolean(parsed.automaticallyFetchFavicons),
     communityInvite: parsed.communityInvite === true,
+    chatBubblesEnabled: parsed.chatBubblesEnabled === true,
     newSessionModelDefaults: parsed.newSessionModelDefaults ?? "last-used",
     terminalEnabled: Boolean(parsed.terminalEnabled),
     uploadsEnabled: parsed.uploadsEnabled !== false,

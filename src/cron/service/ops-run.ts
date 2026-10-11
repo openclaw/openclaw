@@ -447,7 +447,13 @@ export async function waitForManualRun(
 /** Enqueues manual wake text through the cron wake API. */
 export function wakeNow(
   state: CronServiceState,
-  opts: { mode: CronWakeMode; text: string; sessionKey?: string; agentId?: string },
+  opts: {
+    mode: CronWakeMode;
+    text: string;
+    sessionKey?: string;
+    agentId?: string;
+    commitGuard?: () => void;
+  },
 ) {
   return wake(state, opts);
 }

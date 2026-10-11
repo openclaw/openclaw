@@ -8,15 +8,18 @@ import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
 import { createLazyXaiRealtimeTranscriptionProvider } from "./lazy-capability-provider-factories.js";
 
-const { isProviderAuthProfileConfiguredMock, resolveApiKeyForProviderMock } = vi.hoisted(() => ({
-  isProviderAuthProfileConfiguredMock: vi.fn(() => false),
-  resolveApiKeyForProviderMock: vi.fn<PluginCapabilityCatalogContext["resolveApiKeyForProvider"]>(
-    async () => ({ apiKey: undefined, source: "test", mode: "oauth" }),
-  ),
-}));
+const { isProviderAuthProfileConfiguredAsyncMock, resolveApiKeyForProviderMock } = vi.hoisted(
+  () => ({
+    isProviderAuthProfileConfiguredAsyncMock: vi.fn(async () => false),
+    resolveApiKeyForProviderMock: vi.fn<PluginCapabilityCatalogContext["resolveApiKeyForProvider"]>(
+      async () => ({ apiKey: undefined, source: "test", mode: "oauth" }),
+    ),
+  }),
+);
 
 const transcriptionHost = {
-  isProviderAuthProfileConfigured: isProviderAuthProfileConfiguredMock,
+  isProviderAuthProfileConfigured: () => false,
+  isProviderAuthProfileConfiguredAsync: isProviderAuthProfileConfiguredAsyncMock,
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
   createRealtimeTranscriptionWebSocketSession,
 };
@@ -26,8 +29,8 @@ let cleanup: (() => Promise<void>) | undefined;
 afterEach(async () => {
   await cleanup?.();
   cleanup = undefined;
-  isProviderAuthProfileConfiguredMock.mockReset();
-  isProviderAuthProfileConfiguredMock.mockReturnValue(false);
+  isProviderAuthProfileConfiguredAsyncMock.mockReset();
+  isProviderAuthProfileConfiguredAsyncMock.mockResolvedValue(false);
   resolveApiKeyForProviderMock.mockReset();
   resolveApiKeyForProviderMock.mockResolvedValue({
     apiKey: undefined,
@@ -264,23 +267,23 @@ describe("xai realtime transcription provider", () => {
     expect(error.message).toBe("Streaming ASR unavailable");
   });
 
-  it("reports configured when an xAI auth profile exists, even without env or config apiKey", () => {
+  it("reports configured when an xAI auth profile exists, even without env or config apiKey", async () => {
     delete process.env.XAI_API_KEY;
-    isProviderAuthProfileConfiguredMock.mockReturnValue(true);
+    isProviderAuthProfileConfiguredAsyncMock.mockResolvedValue(true);
     const provider = createLazyXaiRealtimeTranscriptionProvider(transcriptionHost);
-    expect(provider.isConfigured({ cfg: {}, providerConfig: {} })).toBe(true);
-    expect(isProviderAuthProfileConfiguredMock).toHaveBeenCalledWith({
+    expect(await provider.isConfiguredAsync?.({ cfg: {}, providerConfig: {} })).toBe(true);
+    expect(isProviderAuthProfileConfiguredAsyncMock).toHaveBeenCalledWith({
       provider: "xai",
       cfg: {},
     });
   });
 
-  it("does not treat a blank environment api key as configured", () => {
+  it("does not treat a blank environment api key as configured", async () => {
     vi.stubEnv("XAI_API_KEY", "   ");
-    isProviderAuthProfileConfiguredMock.mockReturnValue(false);
+    isProviderAuthProfileConfiguredAsyncMock.mockResolvedValue(false);
     const provider = createLazyXaiRealtimeTranscriptionProvider(transcriptionHost);
 
-    expect(provider.isConfigured({ cfg: {}, providerConfig: {} })).toBe(false);
+    expect(await provider.isConfiguredAsync?.({ cfg: {}, providerConfig: {} })).toBe(false);
   });
 
   it("threads cfg into the lazy WebSocket bearer resolver", async () => {

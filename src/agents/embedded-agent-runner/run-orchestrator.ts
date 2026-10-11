@@ -142,10 +142,10 @@ async function runEmbeddedAgentForSession(
   const {
     params: paramsBase,
     runSessionTarget,
-    sessionAdmission,
     contextEngineAgentId,
     queuedLifecycleGeneration,
   } = prepared;
+  let sessionAdmission = prepared.sessionAdmission;
   let lifecycleGeneration = paramsBase.lifecycleGeneration!;
   let params: RunEmbeddedAgentParamsWithSessionFile = withExecutionPhaseDiagnostics({
     ...paramsBase,
@@ -189,6 +189,12 @@ async function runEmbeddedAgentForSession(
     },
     setParams: (nextParams) => {
       params = nextParams;
+    },
+    onSessionWriterClaimed: (entry) => {
+      if (sessionAdmission) {
+        // Native preparation must consume the claim's postimage, not the pre-queue row.
+        sessionAdmission = { ...sessionAdmission, entry };
+      }
     },
   });
   const { enqueueGlobal, enqueueSession, noteLaneTaskProgress, throwIfAborted } = laneController;

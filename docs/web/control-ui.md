@@ -323,6 +323,9 @@ Agent names and avatars follow agent and identity updates. While a configured av
 the avatar keeps its tinted background with no face or text. The image appears when ready;
 an emoji or generated face appears only when no image is configured or the image fails to load.
 Repeated views reuse prepared avatar thumbnails; updating the avatar refreshes its thumbnail.
+Profiles without an advertised avatar use initials without probing an image route. Authenticated
+misses for current profile revisions, agent avatars, and resolved workspace icons can remain in
+the browser cache for up to one minute. New profile and agent image revisions use a new URL.
 This behavior is shared by the roster, agent switcher, identity chips, settings, and chat.
 
 Activity and previews on the page and sidebar roster refresh on session events

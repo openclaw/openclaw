@@ -343,7 +343,7 @@ describe("cron batch outcome finalization", () => {
     });
     const order: string[] = [];
     const deliveryContext = { channel: "discord", to: "channel-1", accountId: "default" };
-    const resolveOriginDeliveryContext = vi.fn(() => deliveryContext);
+    const resolveOriginDeliveryContext = vi.fn(async () => deliveryContext);
     const enqueueSystemEvent = vi.fn<CronServiceDeps["enqueueSystemEvent"]>(() => {
       const persisted = openOpenClawStateDatabase()
         .db.prepare("SELECT enabled FROM cron_jobs WHERE store_key = ? AND job_id = ?")

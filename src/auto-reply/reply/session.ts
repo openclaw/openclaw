@@ -4,13 +4,12 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
-import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
-import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
 import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import { conversationRouteContextFromMsgContext } from "../../config/sessions/conversation-route-context.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
@@ -21,9 +20,7 @@ import {
   isRestartRecoveryTombstone,
   resolveSessionWorkStartError,
 } from "../../config/sessions/lifecycle.js";
-import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
-import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   evaluateSessionFreshness,
   resolveChannelResetConfig,
@@ -40,8 +37,6 @@ import { sessionEntryForkedFromParent } from "../../config/sessions/session-entr
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { selectSessionModelOverride } from "../../config/sessions/session-entry-selection.js";
-import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import {
@@ -64,9 +59,9 @@ import {
 import { hasInternalHookListeners } from "../../hooks/internal-hooks.js";
 import { emitSessionAutoResetHook } from "../../hooks/session-auto-reset.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
+import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding-metadata.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import {
@@ -106,7 +101,6 @@ import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { FinalizedTemplateContext as TemplateContext } from "../templating.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
 import { readBeforeResetMessages } from "./commands-reset-hooks.js";
-import { shouldBypassAcpDispatchForCommand } from "./dispatch-acp-command-bypass.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
 import { acknowledgeReplySessionTransition } from "./reply-run-registry.state.js";
@@ -114,13 +108,11 @@ import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js"
 import {
   assertPreparedConversationBindingRouteCurrent,
   resolveSessionDefaultAccountId,
-  resolveSessionConversationBinding,
   resolveBoundAcpSessionForCommandReset,
 } from "./session-conversation-binding.js";
 import {
   maybeRetireLegacyMainDeliveryRoute,
   resolveSessionDeliveryRoute,
-  resolveSessionInputDeliveryKey,
 } from "./session-delivery.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 import {
@@ -136,6 +128,7 @@ import {
 import type { SessionInitResult } from "./session-init.types.js";
 import {
   prepareReplySessionInitialization,
+  resolveInitSessionStateAttemptContext,
   resolveInitializationSessionReader,
   type InitSessionStateParams,
   type InitSessionStateAttemptContext,
@@ -165,66 +158,6 @@ type InitSessionLifecycleMutation = {
 type InitSessionStateAttemptOutcome =
   | { kind: "complete"; result: SessionInitResult }
   | InitSessionLifecycleMutation;
-
-async function resolveInitSessionStateAttemptContext(
-  params: Pick<InitSessionStateParams, "cfg" | "ctx">,
-  mode: "preprocessing" | "initialization",
-): Promise<InitSessionStateAttemptContext> {
-  const { cfg, ctx } = params;
-  const {
-    isSystemEvent,
-    conversationBindingContext,
-    commandTargetSessionKey,
-    conversationBinding,
-  } = await resolveSessionConversationBinding({ cfg, ctx, mode });
-  // Escaped ACP commands run under the source model owner. Their handlers resolve
-  // the bound target separately; initialization must not mix that key with the source owner.
-  const boundSessionKey =
-    conversationBinding &&
-    !isPluginOwnedSessionBindingRecord(conversationBinding) &&
-    !(
-      isAcpSessionKey(conversationBinding.targetSessionKey) &&
-      shouldBypassAcpDispatchForCommand(ctx, cfg)
-    )
-      ? readConversationBindingRouteFacts(ctx)?.kind === "agent"
-        ? ctx.SessionKey
-        : conversationBinding.targetSessionKey
-      : undefined;
-  const targetSessionKey = commandTargetSessionKey ?? boundSessionKey;
-  const sessionCtxForState =
-    targetSessionKey && targetSessionKey !== ctx.SessionKey
-      ? { ...ctx, SessionKey: targetSessionKey }
-      : ctx;
-  const agentId = resolveSessionAgentId({
-    sessionKey: sessionCtxForState.SessionKey,
-    config: cfg,
-    fallbackAgentId: sessionCtxForState.AgentId,
-  });
-  return {
-    agentId,
-    inputDeliveryKey: resolveSessionInputDeliveryKey(ctx),
-    conversationBinding,
-    conversationBindingContext,
-    isSystemEvent,
-    retargetedSession: sessionCtxForState !== ctx,
-    sessionKey: canonicalizeMainSessionAlias({
-      cfg,
-      agentId,
-      sessionKey: resolveSessionKey(
-        cfg.session?.scope ?? "per-sender",
-        sessionCtxForState,
-        normalizeMainKey(cfg.session?.mainKey),
-        agentId,
-      ),
-    }),
-    sessionCtxForState,
-    storePath: resolveSessionStorePathForScope({
-      agentId,
-      sessionKey: sessionCtxForState.SessionKey,
-      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
-    }),
-  };
-}
 
 type ReplySessionPreprocessingState = {
   sessionEntry?: SessionEntry;
@@ -262,7 +195,9 @@ export async function initSessionState(params: InitSessionStateParams): Promise<
 }
 
 async function initSessionStateAttempt(params: InitSessionStateParams): Promise<SessionInitResult> {
-  const attemptContext = await resolveInitSessionStateAttemptContext(params, "initialization");
+  const attemptContext = await measureDiagnosticsTimelineSpan("reply.session.binding", () =>
+    resolveInitSessionStateAttemptContext(params, "initialization"),
+  );
   params.signal?.throwIfAborted();
   const binding = attemptContext.conversationBinding;
   if (binding) {
@@ -270,7 +205,9 @@ async function initSessionStateAttempt(params: InitSessionStateParams): Promise<
     await assertPreparedConversationBindingRouteCurrent(params.ctx);
   }
   params.signal?.throwIfAborted();
-  const parentSessionKey = await prepareReplySessionInitialization(params, attemptContext);
+  const parentSessionKey = await measureDiagnosticsTimelineSpan("reply.session.hydrate", () =>
+    prepareReplySessionInitialization(params, attemptContext),
+  );
   // Parent forks and legacy-main retirement can touch other sessions.
   const storeWriterIdentity =
     !parentSessionKey &&
@@ -283,11 +220,15 @@ async function initSessionStateAttempt(params: InitSessionStateParams): Promise<
     lifecycleMutationIdentity?: InitSessionLifecycleMutation,
     writerIdentity?: string,
   ) =>
-    runExclusiveSessionStoreWrite(
-      attemptContext.storePath,
-      async () =>
-        await initSessionStateAttemptLocked(params, attemptContext, lifecycleMutationIdentity),
-      { identities: writerIdentity ? [writerIdentity] : undefined },
+    measureDiagnosticsTimelineSpan("reply.session.writer", () =>
+      runExclusiveSessionStoreWrite(
+        attemptContext.storePath,
+        async () =>
+          await measureDiagnosticsTimelineSpan("reply.session.initialize", () =>
+            initSessionStateAttemptLocked(params, attemptContext, lifecycleMutationIdentity),
+          ),
+        { identities: writerIdentity ? [writerIdentity] : undefined },
+      ),
     );
   let rollover = await runLockedAttempt(undefined, storeWriterIdentity);
   while (rollover.kind !== "complete") {
@@ -439,13 +380,17 @@ async function initSessionStateAttemptLocked(
     ctx.CommandTargetSessionKey,
     resolveSessionParentSessionKey(sessionKey),
   ].filter((key): key is string => typeof key === "string");
-  const initializationSnapshot = await loadReplySessionInitializationSnapshot(
-    { ...sessionTarget, relatedSessionKeys },
-    {
-      reader: resolveInitializationSessionReader(params, attemptContext),
-      includeLifecycle: true,
-      assertCurrent: () => params.signal?.throwIfAborted(),
-    },
+  const initializationSnapshot = await measureDiagnosticsTimelineSpan(
+    "reply.session.snapshot",
+    () =>
+      loadReplySessionInitializationSnapshot(
+        { ...sessionTarget, relatedSessionKeys },
+        {
+          reader: resolveInitializationSessionReader(params, attemptContext),
+          includeLifecycle: true,
+          assertCurrent: () => params.signal?.throwIfAborted(),
+        },
+      ),
   );
   if (ingressTimingEnabled) {
     log.info(
@@ -793,81 +738,83 @@ async function initSessionStateAttemptLocked(
     : undefined;
   let previousSessionMemory: SessionMemoryTranscript | undefined;
   let previousSessionResetMessages: unknown[] | undefined;
-  const committed = await commitReplySessionInitialization({
-    bindCreation: params.bindSessionCreation,
-    ...sessionTarget,
-    commitGuard: !entry
-      ? () => {
-          params.signal?.throwIfAborted();
-          assertPreparedSkillLibrarySelection(ctx.SessionCreation?.skillLibrarySelections);
+  const committed = await measureDiagnosticsTimelineSpan("reply.session.commit", () =>
+    commitReplySessionInitialization({
+      bindCreation: params.bindSessionCreation,
+      ...sessionTarget,
+      commitGuard: !entry
+        ? () => {
+            params.signal?.throwIfAborted();
+            assertPreparedSkillLibrarySelection(ctx.SessionCreation?.skillLibrarySelections);
+          }
+        : undefined,
+      activeSessionKey: sessionKey,
+      expectedRevision: initializationSnapshot.revision,
+      relatedSessionKeys,
+      maintenanceConfig,
+      prepareSessionEntry: async ({ readEntry, sessionEntry: entryToCommit }) => {
+        if (params.signal?.aborted === true) {
+          throw new Error("reply session initialization aborted");
         }
-      : undefined,
-    activeSessionKey: sessionKey,
-    expectedRevision: initializationSnapshot.revision,
-    relatedSessionKeys,
-    maintenanceConfig,
-    prepareSessionEntry: async ({ readEntry, sessionEntry: entryToCommit }) => {
-      if (params.signal?.aborted === true) {
-        throw new Error("reply session initialization aborted");
-      }
-      return await prepareReplySessionParentFork({
-        ...sessionTarget,
-        alreadyForked,
-        parentSessionKey,
-        requireParentForkReplacement: restartTombstoneParentFork,
-        readEntry,
-        sessionEntry: entryToCommit,
-        warn: (message) => log.warn(message),
-      });
-    },
-    ...(resetBoundary ? { resetBoundary } : {}),
-    beforeEntryMutation: async ({ currentEntry, sessionEntry: entryToCommit }) => {
-      if (!previousSessionEntry || !currentEntry) {
-        return;
-      }
-      await resetRegisteredAgentHarnessSessions({
-        agentId,
-        sessionId: currentEntry.sessionId,
-        sessionKey,
-        sessionFile: sessionKey,
-        reason: previousSessionEndReason ?? "unknown",
-      });
-      const memoryEvent = resetTriggered ? "command" : "session";
-      const memoryAction = resetTriggered ? (previousSessionEndReason ?? "new") : "auto-reset";
-      if (hasInternalHookListeners(memoryEvent, memoryAction)) {
-        // Capture before the same-identity reset changes the visible window.
-        // Only the successful lifecycle commit publishes this bounded snapshot.
-        previousSessionMemory = await captureSessionMemoryTranscript(
-          {
+        return await prepareReplySessionParentFork({
+          ...sessionTarget,
+          alreadyForked,
+          parentSessionKey,
+          requireParentForkReplacement: restartTombstoneParentFork,
+          readEntry,
+          sessionEntry: entryToCommit,
+          warn: (message) => log.warn(message),
+        });
+      },
+      ...(resetBoundary ? { resetBoundary } : {}),
+      beforeEntryMutation: async ({ currentEntry, sessionEntry: entryToCommit }) => {
+        if (!previousSessionEntry || !currentEntry) {
+          return;
+        }
+        await resetRegisteredAgentHarnessSessions({
+          agentId,
+          sessionId: currentEntry.sessionId,
+          sessionKey,
+          sessionFile: sessionKey,
+          reason: previousSessionEndReason ?? "unknown",
+        });
+        const memoryEvent = resetTriggered ? "command" : "session";
+        const memoryAction = resetTriggered ? (previousSessionEndReason ?? "new") : "auto-reset";
+        if (hasInternalHookListeners(memoryEvent, memoryAction)) {
+          // Capture before the same-identity reset changes the visible window.
+          // Only the successful lifecycle commit publishes this bounded snapshot.
+          previousSessionMemory = await captureSessionMemoryTranscript(
+            {
+              ...sessionTarget,
+              sessionId: currentEntry.sessionId,
+            },
+            cfg,
+          );
+        }
+        if (resetTriggered && getGlobalHookRunner()?.hasHooks("before_reset")) {
+          // Plugin observers retain their full-message contract independently of
+          // the bounded memory excerpt. This preparation runs outside the commit.
+          previousSessionResetMessages = await readBeforeResetMessages({
             ...sessionTarget,
             sessionId: currentEntry.sessionId,
-          },
-          cfg,
-        );
-      }
-      if (resetTriggered && getGlobalHookRunner()?.hasHooks("before_reset")) {
-        // Plugin observers retain their full-message contract independently of
-        // the bounded memory excerpt. This preparation runs outside the commit.
-        previousSessionResetMessages = await readBeforeResetMessages({
-          ...sessionTarget,
-          sessionId: currentEntry.sessionId,
-        });
-      }
-      if (resetBoundary) {
-        clearAllCliSessions(entryToCommit);
-        entryToCommit.agentHarnessId = undefined;
-      }
-    },
-    previousEntry: previousSessionEntry,
-    ...(!isSystemEvent &&
-    sessionCtxForState.InboundAccessAuthorized === true &&
-    sessionCtxForState.ConversationRouteContextObserved === true
-      ? { routeContext: conversationRouteContextFromMsgContext(sessionCtxForState) ?? null }
-      : {}),
-    retiredEntry: retiredLegacyMainDelivery,
-    sessionEntry,
-    snapshotEntry: initializationSnapshot.currentEntry,
-  });
+          });
+        }
+        if (resetBoundary) {
+          clearAllCliSessions(entryToCommit);
+          entryToCommit.agentHarnessId = undefined;
+        }
+      },
+      previousEntry: previousSessionEntry,
+      ...(!isSystemEvent &&
+      sessionCtxForState.InboundAccessAuthorized === true &&
+      sessionCtxForState.ConversationRouteContextObserved === true
+        ? { routeContext: conversationRouteContextFromMsgContext(sessionCtxForState) ?? null }
+        : {}),
+      retiredEntry: retiredLegacyMainDelivery,
+      sessionEntry,
+      snapshotEntry: initializationSnapshot.currentEntry,
+    }),
+  );
   if (!committed.ok) {
     // The outer retry owns conflicts; never retry while holding the writer lane.
     throw new ReplySessionInitConflictError(sessionKey);

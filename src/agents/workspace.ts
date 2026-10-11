@@ -667,7 +667,9 @@ async function ensureAgentWorkspaceOwned(
   let reseedingExpiredWorkspaceState = false;
   const recentAttestation = recentWorkspaceAttestation(initialState.attestation);
   const recentSetupState = hasRecentWorkspaceSetupState(initialState);
-  assertExpiryEvidence = captureWorkspaceStateFilesystemGuard(dir);
+  // Recent attestation forbids expiry. Its content inventory cannot authorize
+  // reseeding, so retain only the directory identity on that path.
+  assertExpiryEvidence = captureWorkspaceStateFilesystemGuard(dir, !recentAttestation);
   const workspaceExists = await pathExists(dir);
 
   if (!workspaceExists) {
@@ -683,7 +685,7 @@ async function ensureAgentWorkspaceOwned(
   beforeFileMutation?.();
   await fs.mkdir(dir, { recursive: true });
   assertHost?.();
-  assertExpiryEvidence = captureWorkspaceStateFilesystemGuard(dir);
+  assertExpiryEvidence = captureWorkspaceStateFilesystemGuard(dir, !recentAttestation);
 
   const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
   if (!params?.ensureBootstrapFiles) {

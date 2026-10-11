@@ -60,9 +60,7 @@ export type AuthStoreUpdateInput = {
   peerGeneration?: { profileId: string; generation: OAuthCredential };
 };
 
-export type AuthStoreUpdatePublication = AuthProfileUsageReceipt["publication"] & {
-  oauthRefreshClaimIds: ReadonlyMap<string, string | undefined>;
-};
+export type AuthStoreUpdatePublication = AuthProfileUsageReceipt["publication"];
 
 export type AuthStoreUpdateOperations = {
   "authProfiles.update": { input: AuthStoreUpdateInput; output: boolean };
