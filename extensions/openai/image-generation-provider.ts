@@ -29,6 +29,14 @@ import {
   OPENAI_CODEX_DEFAULT_MODEL,
   OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL,
 } from "./default-models.js";
+import {
+  buildOpenAIImageGeometry,
+  isValidFlexibleOpenAIImageSize,
+  OPENAI_IMAGE_25_MODELS,
+  OPENAI_IMAGE_MODELS,
+  OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL,
+  resolveNativeOpenAIImageSizesForModel,
+} from "./image-generation-models.js";
 import { resolveModelAuthPolicy } from "./provider-policy-api.js";
 import { resolveConfiguredOpenAIBaseUrl } from "./shared.js";
 
@@ -39,21 +47,10 @@ const DEFAULT_OPENAI_CODEX_IMAGE_RESPONSES_MODEL = OPENAI_CODEX_DEFAULT_MODEL.sl
   OPENAI_MODEL_REF_PREFIX.length,
 );
 const OPENAI_CODEX_IMAGE_INSTRUCTIONS = "You are an image generation assistant.";
-const OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL = "gpt-image-1.5";
 const DEFAULT_OPENAI_IMAGE_TIMEOUT_MS = 180_000;
 const DEFAULT_AZURE_OPENAI_IMAGE_TIMEOUT_MS = 600_000;
 const DEFAULT_OUTPUT_MIME = "image/png";
 const DEFAULT_SIZE = "1024x1024";
-const OPENAI_SUPPORTED_SIZES = [
-  "1024x1024",
-  "1536x1024",
-  "1024x1536",
-  "2048x2048",
-  "2048x1152",
-  "3840x2160",
-  "2160x3840",
-] as const;
-const OPENAI_LEGACY_IMAGE_SIZES = ["1024x1024", "1536x1024", "1024x1536"] as const;
 const OPENAI_MAX_INPUT_IMAGES = 5;
 const OPENAI_MAX_IMAGE_RESULTS = 4;
 const LOG_VALUE_MAX_CHARS = 256;
@@ -61,20 +58,7 @@ const MOCK_OPENAI_PROVIDER_ID = "mock-openai";
 const OPENAI_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const OPENAI_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
 const OPENAI_QUALITIES = ["low", "medium", "high", "auto"] as const;
-const OPENAI_IMAGE_25_MODELS = ["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"] as const;
 const OPENAI_IMAGE_25_QUALITIES = ["low", "medium", "high", "xhigh", "max", "auto"] as const;
-const OPENAI_IMAGE_MODELS = [
-  DEFAULT_OPENAI_IMAGE_MODEL,
-  ...OPENAI_IMAGE_25_MODELS,
-  OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL,
-  "gpt-image-1",
-  "gpt-image-1-mini",
-] as const;
-const OPENAI_FLEXIBLE_IMAGE_MODELS = [
-  DEFAULT_OPENAI_IMAGE_MODEL,
-  ...OPENAI_IMAGE_25_MODELS,
-  "gpt-image-2-2026-04-21",
-] as const;
 
 const AZURE_HOSTNAME_SUFFIXES = [
   ".openai.azure.com",
@@ -201,43 +185,6 @@ function resolveOpenAIImageRequestModel(
     return OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL;
   }
   return model;
-}
-
-function resolveNativeOpenAIImageSizesForModel(model: string): readonly string[] {
-  switch (model) {
-    case "gpt-image-1":
-    case "gpt-image-1-mini":
-      return OPENAI_LEGACY_IMAGE_SIZES;
-    default:
-      return OPENAI_SUPPORTED_SIZES;
-  }
-}
-
-function isValidFlexibleOpenAIImageSize(model: string, size: string | undefined): size is string {
-  if (!OPENAI_FLEXIBLE_IMAGE_MODELS.some((candidate) => candidate === model)) {
-    return false;
-  }
-  if (size === "auto") {
-    return OPENAI_IMAGE_25_MODELS.some((candidate) => candidate === model);
-  }
-  const dimensions = /^(\d+)x(\d+)$/.exec(size ?? "");
-  if (!dimensions) {
-    return false;
-  }
-  const width = Number(dimensions[1]);
-  const height = Number(dimensions[2]);
-  const pixels = width * height;
-  return (
-    width > 0 &&
-    height > 0 &&
-    width % 16 === 0 &&
-    height % 16 === 0 &&
-    Math.max(width, height) <= 3840 &&
-    pixels >= 655_360 &&
-    pixels <= 8_294_400 &&
-    width <= height * 3 &&
-    height <= width * 3
-  );
 }
 
 function resolveConfiguredOpenAIImageBaseUrl(cfg: OpenClawConfig | undefined, model: string) {
@@ -690,11 +637,7 @@ export function buildOpenAIImageGenerationProvider(
         supportsAspectRatio: false,
         supportsResolution: false,
       },
-      geometry: {
-        sizes: [...OPENAI_SUPPORTED_SIZES],
-        // Empty model-specific lists stop core from snapping valid flexible dimensions.
-        sizesByModel: Object.fromEntries(OPENAI_FLEXIBLE_IMAGE_MODELS.map((model) => [model, []])),
-      },
+      geometry: buildOpenAIImageGeometry(),
       output: {
         formats: [...OPENAI_OUTPUT_FORMATS],
         qualities: [...OPENAI_QUALITIES],
