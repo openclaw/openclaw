@@ -20,6 +20,7 @@ import {
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
+import { sessionTranscriptEventsOverlapRange } from "../config/sessions/session-accessor.sqlite-event-time.js";
 import { listSessionTranscriptArchivesReadOnly } from "../config/sessions/session-accessor.sqlite-history.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
@@ -29,6 +30,10 @@ import {
 } from "../config/sessions/session-sqlite-target.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { loadTranscriptEvents } from "../config/sessions/session-transcript-events.js";
+import {
+  transcriptMetadataMayOverlapRange,
+  type SessionTranscriptEventTimeRange,
+} from "../config/sessions/transcript-event-time.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -42,9 +47,11 @@ import {
   captureUsageCostIncognitoBinding,
   type UsageCostIncognitoBinding,
 } from "./session-cost-usage-incognito.js";
+import { transcriptSourceOverlapsRange } from "./session-cost-usage-source-event-time.js";
 import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
 
 const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
+const USAGE_COST_EVENT_TIME_PREFLIGHT_CONCURRENCY = 4;
 
 export type UsageCostCollectionAccess = {
   env?: NodeJS.ProcessEnv;
@@ -53,10 +60,17 @@ export type UsageCostCollectionAccess = {
   listSqliteInstances: (
     agentId: string,
     storePath: string,
+    includeAllWindows: boolean,
   ) => Promise<Array<{ agentId: string; sessionId: string; updatedAtMs: number }>>;
   readSqliteStats: (
     markers: readonly SqliteSessionFileMarker[],
   ) => Promise<Array<SessionTranscriptStats | undefined>>;
+  preflightSqliteEventTime?: (
+    marker: SqliteSessionFileMarker,
+    range: SessionTranscriptEventTimeRange,
+    updatedAtMs: number | null | undefined,
+    file: UsageCostTranscriptFile,
+  ) => Promise<boolean | undefined>;
 };
 
 type UsageCostJsonlSource = {
@@ -98,6 +112,7 @@ async function listUsageCountedTranscriptFileSources(
   agentId: string,
   params: {
     minMtimeMs?: number;
+    eventTimeRange?: SessionTranscriptEventTimeRange;
     sessionsDir: string;
     storePath: string;
   } & UsageCostCollectionAccess,
@@ -143,9 +158,6 @@ async function listUsageCountedTranscriptFileSources(
       const filePath = path.join(sessionsDir, entry.name);
       try {
         const stats = await fs.promises.stat(filePath);
-        if (params.minMtimeMs !== undefined && stats.mtimeMs < params.minMtimeMs) {
-          return undefined;
-        }
         return {
           kind: "jsonl",
           sourcePath: filePath,
@@ -170,7 +182,35 @@ async function listUsageCountedTranscriptFileSources(
   if (hasError) {
     throw firstError;
   }
-  return results.filter((file): file is UsageCostJsonlSource => Boolean(file));
+  const candidates = results.filter((file): file is UsageCostJsonlSource => Boolean(file));
+  if (!params.eventTimeRange) {
+    return params.minMtimeMs === undefined
+      ? candidates
+      : candidates.filter((source) => source.mtimeMs >= params.minMtimeMs!);
+  }
+  const preflight = await runTasksWithConcurrency({
+    tasks: candidates.map((source) => async () => {
+      if (
+        transcriptMetadataMayOverlapRange(source.mtimeMs, params.eventTimeRange!) ||
+        // A live JSONL modified after the requested end may still have in-range events.
+        // Include it for queued refresh instead of opening its stream in a summary preflight.
+        // Old-mtime files and compressed cold archives still require content preflight.
+        (source.sourcePath.endsWith(".jsonl") &&
+          params.eventTimeRange!.endMs !== undefined &&
+          source.mtimeMs > params.eventTimeRange!.endMs)
+      ) {
+        return source;
+      }
+      return (await transcriptSourceOverlapsRange(source.sourcePath, params.eventTimeRange!))
+        ? source
+        : undefined;
+    }),
+    limit: USAGE_COST_EVENT_TIME_PREFLIGHT_CONCURRENCY,
+  });
+  if (preflight.hasError) {
+    throw preflight.firstError;
+  }
+  return preflight.results.filter((file): file is UsageCostJsonlSource => Boolean(file));
 }
 
 async function readUsageCostSqliteFiles(
@@ -205,6 +245,7 @@ export async function listUsageCountedTranscriptSources(
   agentId: string,
   params: {
     minMtimeMs?: number;
+    eventTimeRange?: SessionTranscriptEventTimeRange;
     sessionsDir?: string;
     storePath?: string;
   } & UsageCostCollectionAccess,
@@ -223,19 +264,68 @@ export async function listUsageCountedTranscriptSources(
     sessionsDir,
     storePath,
   });
-  const instances = await params.listSqliteInstances(agentId, storePath);
-  const sqliteBacked = (
-    await readUsageCostSqliteFiles(
-      instances
-        .filter(
-          (instance) =>
-            instance.agentId === logicalAgentId &&
-            (params.minMtimeMs === undefined || instance.updatedAtMs >= params.minMtimeMs),
-        )
-        .map((instance) => ({ agentId: logicalAgentId, sessionId: instance.sessionId, storePath })),
-      params,
-    )
-  ).filter((file) => file !== undefined);
+  const instances = await params.listSqliteInstances(
+    agentId,
+    storePath,
+    Boolean(params.eventTimeRange),
+  );
+  const sqliteCandidates = instances.filter(
+    (instance) =>
+      instance.agentId === logicalAgentId &&
+      (params.eventTimeRange !== undefined ||
+        params.minMtimeMs === undefined ||
+        instance.updatedAtMs >= params.minMtimeMs),
+  );
+  const candidateMarkers = sqliteCandidates.map((instance) => ({
+    agentId: logicalAgentId,
+    sessionId: instance.sessionId,
+    storePath,
+  }));
+  const candidateFiles = await readUsageCostSqliteFiles(candidateMarkers, params);
+  const sqliteMarkers = params.eventTimeRange
+    ? await runTasksWithConcurrency({
+        tasks: sqliteCandidates.map((instance, index) => async () => {
+          const marker: SqliteSessionFileMarker = {
+            agentId: logicalAgentId,
+            sessionId: instance.sessionId,
+            storePath,
+          };
+          const file = candidateFiles[index];
+          if (!file) {
+            return undefined;
+          }
+          const cachedDecision = params.preflightSqliteEventTime
+            ? await params.preflightSqliteEventTime(
+                marker,
+                params.eventTimeRange!,
+                instance.updatedAtMs,
+                file,
+              )
+            : undefined;
+          const overlapsRange =
+            cachedDecision ??
+            (await sessionTranscriptEventsOverlapRange(
+              marker,
+              params.eventTimeRange!,
+              instance.updatedAtMs,
+              params.env,
+            ));
+          return overlapsRange ? marker : undefined;
+        }),
+        limit: USAGE_COST_EVENT_TIME_PREFLIGHT_CONCURRENCY,
+      }).then((result) => {
+        if (result.hasError) {
+          throw result.firstError;
+        }
+        return result.results.filter((marker): marker is SqliteSessionFileMarker =>
+          Boolean(marker),
+        );
+      })
+    : candidateMarkers;
+  const includedIds = new Set(sqliteMarkers.map((marker) => marker.sessionId));
+  const sqliteBacked = candidateFiles.filter((file): file is UsageCostSqliteFile =>
+    Boolean(file && includedIds.has(file.sessionId ?? "")),
+  );
   const sqliteSessionIds = new Set(sqliteBacked.map((file) => file.sessionId).filter(Boolean));
   const canonicalFileBacked = fileBacked.filter(
     (file) => !file.sessionId || !sqliteSessionIds.has(file.sessionId),
@@ -247,6 +337,7 @@ export async function listUsageCountedTranscriptStats(
   agentId: string,
   params: {
     minMtimeMs?: number;
+    eventTimeRange?: SessionTranscriptEventTimeRange;
     sessionsDir?: string;
     storePath?: string;
   } & UsageCostCollectionAccess,
@@ -354,6 +445,56 @@ export async function resolveUsageCostTranscriptFiles(
     ),
     limit: USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,
   });
+  return results;
+}
+
+export async function resolveUsageCostTranscriptFilesInEventTimeRange(
+  sessionFiles: readonly string[],
+  range: SessionTranscriptEventTimeRange,
+  access: UsageCostCollectionAccess,
+): Promise<Array<UsageCostTranscriptFile | undefined>> {
+  const sources = await resolveUsageCostTranscriptSources(sessionFiles, access);
+  const { firstError, hasError, results } = await runTasksWithConcurrency({
+    tasks: sources.map((source) => async () => {
+      if (!source) {
+        return undefined;
+      }
+      if (source.kind === "jsonl") {
+        const recentMutationMayAppendInRange =
+          source.sourcePath.endsWith(".jsonl") &&
+          range.endMs !== undefined &&
+          source.mtimeMs > range.endMs;
+        if (
+          !transcriptMetadataMayOverlapRange(source.mtimeMs, range) &&
+          !recentMutationMayAppendInRange &&
+          !(await transcriptSourceOverlapsRange(source.sourcePath, range))
+        ) {
+          return undefined;
+        }
+      } else {
+        const marker = parseSqliteSessionFileMarker(source.filePath);
+        if (marker) {
+          const cachedDecision = await access.preflightSqliteEventTime?.(
+            marker,
+            range,
+            undefined,
+            source,
+          );
+          const overlapsRange =
+            cachedDecision ??
+            (await sessionTranscriptEventsOverlapRange(marker, range, undefined, access.env));
+          if (!overlapsRange) {
+            return undefined;
+          }
+        }
+      }
+      return materializeUsageCostTranscriptSourceBestEffort(source, access);
+    }),
+    limit: USAGE_COST_EVENT_TIME_PREFLIGHT_CONCURRENCY,
+  });
+  if (hasError) {
+    throw firstError;
+  }
   return results;
 }
 

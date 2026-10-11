@@ -85,6 +85,9 @@ describe("session cost usage refresh", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(refresh).toHaveBeenCalledTimes(12);
         expect(refresh.mock.calls[10]?.[0].sessionFiles).toBeUndefined();
+        expect(refresh.mock.calls.slice(0, 11).every(([request]) => request.startMs === 0)).toBe(
+          true,
+        );
         expect(refresh.mock.calls[11]?.[0].sessionFiles).toEqual([sessionFile]);
 
         await vi.advanceTimersByTimeAsync(49);

@@ -876,4 +876,35 @@ describe("session cost usage", () => {
 
     expect(logs?.map((log) => log.content)).toEqual(["third", "fourth"]);
   });
+  it("keeps old-mtime JSONL usage in a bounded cold aggregate rebuild", async () => {
+    const oldSessionFile = path.join(sessionsDir, "sess-cache-cold-sync-old.jsonl");
+    const currentSessionFile = path.join(sessionsDir, "sess-cache-cold-sync-current.jsonl");
+    await writeTranscript(
+      oldSessionFile,
+      "sess-cache-cold-sync-old",
+      transcriptEntry("2026-02-05T12:00:00.000Z", {
+        role: "assistant",
+        usage: billed(100, 100, 200, 0.2),
+      }),
+    );
+    await writeTranscript(
+      currentSessionFile,
+      "sess-cache-cold-sync-current",
+      transcriptEntry("2026-02-05T12:00:00.000Z", {
+        role: "assistant",
+        usage: billed(10, 20, 30, 0.03),
+      }),
+    );
+    const oldMtime = new Date("2025-12-05T12:00:00.000Z");
+    await fs.utimes(oldSessionFile, oldMtime, oldMtime);
+
+    const startMs = Date.UTC(2026, 1, 5);
+    const summary = await loadCostUsageSummary({
+      agentId: "main",
+      startMs,
+      endMs: startMs + 24 * 60 * 60 * 1000 - 1,
+    });
+    expect(summary.totals.totalTokens).toBe(230);
+    expect(summary.totals.totalCost).toBeCloseTo(0.23, 5);
+  });
 });

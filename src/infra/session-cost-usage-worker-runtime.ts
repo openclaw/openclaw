@@ -2,18 +2,20 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as yieldImmediate } from "node:timers/promises";
 import type { Transferable } from "node:worker_threads";
-import {
-  collectErrorGraphCandidates,
-  toErrorObject,
-} from "@openclaw/normalization-core/error-coercion";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import {
   parseSqliteSessionFileMarker,
   type SqliteSessionFileMarker,
 } from "../config/sessions/legacy-sqlite-marker.js";
 import { listSessionTranscriptInstances } from "../config/sessions/session-accessor.js";
+import {
+  readSessionTranscriptEventTimeSourceFromDatabase,
+  sessionTranscriptEventTimeSourceOverlapsRange,
+} from "../config/sessions/session-accessor.sqlite-event-time.js";
 import {
   resolveSqliteReadScope,
   toDatabaseOptions,
@@ -38,10 +40,6 @@ import {
 } from "../state/openclaw-agent-db.js";
 import type { OpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution-contract.js";
 import {
-  hydrateOpenClawStateWorkerError,
-  retainOpenClawStateWorkerErrorPayload,
-} from "../state/openclaw-state-worker-error.js";
-import {
   readSessionCostUsageRollupByteRowsInDatabase,
   readSessionCostUsageRollupBodyInDatabase,
   type SessionCostUsageRollupSnapshot,
@@ -59,15 +57,15 @@ import {
 } from "./session-cost-usage-pricing-context.js";
 import type { UsageCostResolver } from "./session-cost-usage-pricing.js";
 import { openUsageCostRefreshFailures } from "./session-cost-usage-refresh-health.js";
+import { restoreWorkerFailure } from "./session-cost-usage-worker-failure.js";
 import { withSessionCostUsageWorkerDatabases } from "./session-cost-usage-worker-scope.js";
-import {
-  UsageCostWorkerReplyError,
-  type UsageCostWorkerHostEffects,
-  type UsageCostWorkerHostReply,
-  type UsageCostWorkerHostRequest,
-  type UsageCostWorkerLocation,
-  type UsageCostWorkerOperation,
-  type UsageCostWorkerResult,
+import type {
+  UsageCostWorkerHostEffects,
+  UsageCostWorkerHostReply,
+  UsageCostWorkerHostRequest,
+  UsageCostWorkerLocation,
+  UsageCostWorkerOperation,
+  UsageCostWorkerResult,
 } from "./session-cost-usage-worker.types.js";
 import type { UsageDailyBucket } from "./session-cost-usage.types.js";
 import { withSqliteWorkerCleanupFailure } from "./sqlite-worker-broker-reply.js";
@@ -160,52 +158,6 @@ export function resolveUsageCostWorkerDayBucket(dayBucket?: UsageDailyBucket): U
   return dayBucket
     ? { ...dayBucket }
     : { mode: "time-zone", timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone };
-}
-
-function restoreWorkerFailure(error: unknown, hostErrors: Map<number, unknown>): unknown {
-  const restoredOrigins = new Set<number>();
-  let result = error;
-  for (const current of collectErrorGraphCandidates(error, (entry) =>
-    entry instanceof Error
-      ? [entry.cause, ...(entry instanceof AggregateError ? entry.errors : [])]
-      : [],
-  )) {
-    if (current instanceof UsageCostWorkerReplyError) {
-      const failure = current.failure;
-      const remote = new Error(failure.message);
-      if (failure.error) {
-        retainOpenClawStateWorkerErrorPayload(remote, failure.error);
-      }
-      let restored: unknown = hydrateOpenClawStateWorkerError(remote, { includeOrdinary: true });
-      if (failure.hostOrigin !== undefined && hostErrors.has(failure.hostOrigin)) {
-        restoredOrigins.add(failure.hostOrigin);
-        const original = hostErrors.get(failure.hostOrigin);
-        restored = failure.hostFailureOnly
-          ? original
-          : withSqliteWorkerCleanupFailure(
-              toErrorObject(original, "Usage cache host effect failed"),
-              restored,
-            );
-      }
-      result =
-        current === error
-          ? restored
-          : withSqliteWorkerCleanupFailure(
-              toErrorObject(restored, "Usage cost worker failed"),
-              result,
-            );
-    }
-  }
-  // Cancellation can retire the worker before an accepted write returns its failure.
-  for (const [origin, failure] of hostErrors) {
-    if (!restoredOrigins.has(origin)) {
-      result = withSqliteWorkerCleanupFailure(
-        toErrorObject(failure, "Usage cache host effect failed"),
-        result,
-      );
-    }
-  }
-  return result;
 }
 
 type UsageCostWorkerRequest =
@@ -521,16 +473,21 @@ async function runPreparedUsageCostWorker(
                   case "memory-instances": {
                     const binding = resolveBinding(request.input, true);
                     output = binding.database
-                      ? listSessionTranscriptInstances({
-                          ...request.input,
-                          storePath: binding.options.path,
-                          env: location.env,
-                          projection: "list",
-                        }).map(({ agentId, sessionId, updatedAtMs }) => ({
-                          agentId,
-                          sessionId,
-                          updatedAtMs,
-                        }))
+                      ? listSessionTranscriptInstances(
+                          {
+                            agentId: request.input.agentId,
+                            storePath: binding.options.path,
+                            env: location.env,
+                            projection: "list",
+                          },
+                          { includeAllWindows: request.input.includeAllWindows },
+                        )
+                          .filter((instance) => !isInternalSessionEffectsKey(instance.sessionKey))
+                          .map(({ agentId, sessionId, updatedAtMs }) => ({
+                            agentId,
+                            sessionId,
+                            updatedAtMs,
+                          }))
                       : [];
                     break;
                   }
@@ -544,6 +501,21 @@ async function runPreparedUsageCostWorker(
                         : undefined;
                     });
                     break;
+                  case "memory-event-time": {
+                    const { marker, range, updatedAtMs } = request.input;
+                    const binding = resolveBinding(marker, true);
+                    if (!binding.database) {
+                      throw new Error("Usage memory transcript database is unavailable");
+                    }
+                    const source = readSessionTranscriptEventTimeSourceFromDatabase(
+                      binding.database,
+                      marker,
+                      range,
+                      updatedAtMs,
+                    );
+                    output = await sessionTranscriptEventTimeSourceOverlapsRange(source, range);
+                    break;
+                  }
                   case "memory-cache": {
                     const binding = resolveBinding(
                       { agentId: location.agentId, storePath: location.databasePath },

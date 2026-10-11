@@ -20,6 +20,7 @@ export async function refreshCostUsageCacheForAgent(params: {
   storePath?: string;
   sessionFiles?: string[];
   startMs?: number;
+  endMs?: number;
   rebuildRows?: SessionCostUsageRollupRow[];
   incognito?: UsageCostIncognitoBinding;
 }): Promise<"refreshed" | "busy"> {
@@ -38,6 +39,7 @@ export async function refreshCostUsageCacheForAgent(params: {
             sessionsDir: scoped.sessionsDir,
             sessionFiles: scoped.sessionFiles,
             startMs: scoped.startMs,
+            endMs: scoped.endMs,
             rebuildRows: scoped.rebuildRows,
           },
           scoped.incognito,

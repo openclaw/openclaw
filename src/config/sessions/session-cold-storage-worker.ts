@@ -27,6 +27,7 @@ import {
 } from "./session-accessor.sqlite-delete-snapshot.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
 import {
+  MAX_SESSION_COLD_ARCHIVE_DECODED_BYTES,
   readVerifiedSessionColdArchive,
   resolveSessionColdArchivePath,
   sessionColdRecordSchema,
@@ -73,8 +74,6 @@ import {
 } from "./session-turn.kernel.js";
 import { resolveSessionWorkStartError } from "./session-work-start.js";
 import { prepareTranscriptPayload, transcriptEventJsonSql } from "./transcript-payload.js";
-
-const MAX_COLD_ARCHIVE_BYTES = 64 * 1024 * 1024;
 
 export type SessionColdPreparationWorkerData = {
   type: "sqlite-transcript-archive-v2";
@@ -352,7 +351,7 @@ export async function prepareSessionColdBatchInWorker(
     return result;
   }
   result.freePages = selection.value.freePages;
-  const maxBytes = Math.min(input.maxBytes, MAX_COLD_ARCHIVE_BYTES);
+  const maxBytes = Math.min(input.maxBytes, MAX_SESSION_COLD_ARCHIVE_DECODED_BYTES);
   const candidates = [
     ...selection.value.externalizations.map((archive) => ({
       kind: "externalize" as const,
@@ -381,7 +380,7 @@ export async function prepareSessionColdBatchInWorker(
       if (!(error instanceof ColdArchiveLimitError)) {
         throw error;
       }
-      if (remaining === MAX_COLD_ARCHIVE_BYTES) {
+      if (remaining === MAX_SESSION_COLD_ARCHIVE_DECODED_BYTES) {
         result.oversizedSessionIds.push(
           candidate.kind === "archive" ? candidate.plan.sessionId : candidate.archive.session_id,
         );
@@ -419,7 +418,7 @@ function decodeSessionColdRecords(
   archive: SessionColdArchive,
 ): SessionColdRecord[] {
   const records = zlib
-    .zstdDecompressSync(bytes, { maxOutputLength: MAX_COLD_ARCHIVE_BYTES })
+    .zstdDecompressSync(bytes, { maxOutputLength: MAX_SESSION_COLD_ARCHIVE_DECODED_BYTES })
     .toString("utf8")
     .trimEnd()
     .split("\n")
