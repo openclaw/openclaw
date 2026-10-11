@@ -367,10 +367,6 @@ function refreshChatSessionFacts(host: ChatPageHost, binding: ChatMetadataBindin
       if (!binding.isCurrent() || binding.version !== version) {
         return;
       }
-      if (outcome.status === "invalidated") {
-        binding.sessionFactsInvalidated = true;
-        binding.sessionFactsRequest = undefined;
-      }
       if (outcome.status === "current" && host.sessionsResult) {
         host.sessionsResult = {
           ...host.sessionsResult,

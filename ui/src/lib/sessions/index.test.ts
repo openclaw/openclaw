@@ -66,27 +66,30 @@ function changed(key: string) {
 
 afterEach(() => vi.useRealTimers());
 
-it("shares confirmed archive visibility after Gateway events", async () => {
-  const key = "agent:main:archive-from-agent";
-  const held = row(key, { sessionId: "archive-session" });
-  const { sessions, emitEvent } = sessionHarness({
-    "sessions.list": () => sessionsResult([held], 1),
-  });
-  const reconcile = (archived: boolean, updatedAt: number) =>
-    emitEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: { ...held, sessionKey: key, reason: "patch", archived, updatedAt },
+it.each([false, null])(
+  "shares confirmed archive visibility after a %s restore event",
+  async (restored) => {
+    const key = "agent:main:archive-from-agent";
+    const held = row(key, { sessionId: "archive-session" });
+    const { sessions, emitEvent } = sessionHarness({
+      "sessions.list": () => sessionsResult([held], 1),
     });
-  await sessions.refresh({ agentId: "main", force: true });
-  reconcile(true, 2);
-  expect(sessions.archiveVisibility(key)).toBe("archived");
-  await sessions.refresh({ agentId: "main", force: true });
-  expect(sessions.archiveVisibility(key)).toBe("archived");
-  reconcile(false, 3);
-  expect(sessions.archiveVisibility(key)).toBeUndefined();
-  sessions.dispose();
-});
+    const reconcile = (archived: boolean | null, updatedAt: number) =>
+      emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: { ...held, sessionKey: key, reason: "patch", archived, updatedAt },
+      });
+    await sessions.refresh({ agentId: "main", force: true });
+    reconcile(true, 2);
+    expect(sessions.archiveVisibility(key)).toBe("archived");
+    await sessions.refresh({ agentId: "main", force: true });
+    expect(sessions.archiveVisibility(key)).toBe("archived");
+    reconcile(restored, 3);
+    expect(sessions.archiveVisibility(key)).toBeUndefined();
+    sessions.dispose();
+  },
+);
 
 it("automatically retries an explicitly retryable group catalog failure", async () => {
   vi.useFakeTimers();

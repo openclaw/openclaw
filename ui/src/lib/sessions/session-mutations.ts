@@ -609,6 +609,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       return mapSessionResultRows(archived, (row) => applyPendingRow(row, sourceAgentId));
     },
     observeArchiveState: archiveState.observe,
+    observeArchiveRead: archiveState.observeRead,
     confirmArchiveState: archiveState.confirm,
     reset,
     retireModelOverride: modelOverrides.retire,

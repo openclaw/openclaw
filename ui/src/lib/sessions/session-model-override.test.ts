@@ -5,6 +5,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { SessionsPatchResult } from "../../../../src/gateway/session-utils.types.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -12,6 +14,102 @@ import {
 } from "./session-capability.test-support.ts";
 
 describe("session model override lifecycle", () => {
+  it.each([
+    { source: "primary", outcome: "success" },
+    { source: "primary", outcome: "rejection" },
+    { source: "supplemental", outcome: "success" },
+    { source: "supplemental", outcome: "rejection" },
+    { source: "descriptor", outcome: "success" },
+    { source: "descriptor", outcome: "rejection" },
+  ] as const)(
+    "preserves omitted compact settings through $source reads and patch $outcome",
+    async ({ source, outcome }) => {
+      const initial: GatewaySessionRow = {
+        key: "agent:main:compact-settings",
+        sessionId: "compact-settings",
+        kind: "direct",
+        updatedAt: 1,
+        thinkingLevel: "low",
+        fastMode: false,
+        contextWindow: "standard",
+      };
+      const next = { thinkingLevel: "high", fastMode: true, contextWindow: "large" } as const;
+      let listed = initial;
+      const reply = createDeferred<unknown>();
+      const dispatched = createDeferred<void>();
+      const client = createTestGatewayClient(async (method) => {
+        if (method === "sessions.list") {
+          return sessionsResult([listed], 2);
+        }
+        if (method === "sessions.describe") {
+          return { session: listed };
+        }
+        if (method === "sessions.patch") {
+          dispatched.resolve();
+          return reply.promise;
+        }
+        throw new Error(`Unexpected Gateway method: ${method}`);
+      });
+      const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
+      let operation: ReturnType<typeof sessions.patch> | undefined;
+      try {
+        await sessions.refresh({ agentId: "main", force: true });
+        operation = sessions.patch(initial.key, next, {
+          agentId: "main",
+          expectedSessionId: initial.sessionId,
+          deferListRefresh: true,
+        });
+        await dispatched.promise;
+        listed = {
+          key: initial.key,
+          sessionId: initial.sessionId,
+          kind: "direct",
+          updatedAt: 2,
+          rowMode: "compact",
+        };
+        if (source === "primary") {
+          await sessions.refresh({ agentId: "main", force: true });
+        } else {
+          const reconcile = sessions.captureReconcile();
+          const row =
+            source === "descriptor"
+              ? (
+                  await client.request<{ session: GatewaySessionRow }>("sessions.describe", {
+                    key: initial.key,
+                    agentId: "main",
+                  })
+                ).session
+              : (await sessions.list({ agentId: "main" }))?.sessions[0];
+          reconcile(row);
+        }
+        expect(sessions.state.result?.sessions[0]).toMatchObject(next);
+        if (outcome === "rejection") {
+          const rejected = expect(operation).rejects.toThrow("Settings rejected");
+          reply.reject(new Error("Settings rejected"));
+          await rejected;
+          expect(sessions.state.result?.sessions[0]).toMatchObject({
+            thinkingLevel: "low",
+            fastMode: false,
+            contextWindow: "standard",
+          });
+        } else {
+          reply.resolve({
+            ok: true,
+            key: initial.key,
+            path: "",
+            entry: { ...initial, ...next, updatedAt: 3 },
+          });
+          await operation;
+          expect(sessions.state.result?.sessions[0]).toMatchObject(next);
+        }
+      } finally {
+        reply.resolve({ ok: true, key: initial.key, path: "", entry: initial });
+        await operation?.catch(() => undefined);
+        sessions.dispose();
+      }
+    },
+  );
+
   it.each(["resolve", "reject"])(
     "does not resurrect a deleted session's model when its pending patch %s",
     async (outcome) => {

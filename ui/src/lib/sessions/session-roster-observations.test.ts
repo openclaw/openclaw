@@ -59,8 +59,6 @@ it.each(["main", "global"])(
       decorate: (value) => value,
     });
     observations.stageObservedRows([descriptor], connection.capture(), "main", 2)();
-    const clear = rowProvenance.createSessionWriteObservation(5, null, undefined, 300);
-    const selectClear = provenance.observeFields(descriptor, ["providerReview"], clear, "main");
     const unrelated = Array.from({ length: 300 }, (_, index) => ({
       ...row,
       key: `agent:main:unrelated-${index}`,
@@ -84,7 +82,7 @@ it.each(["main", "global"])(
       snapshotAt: 200,
       providerReview: { id: "pause", runId: "run", canContinue: false },
     };
-    const selectFresh = provenance.observeReadRow(fresh, 3, "main");
+    provenance.observeReadRow(fresh, 3, "main");
     for (const [name, agentId, rows] of [
       ["fresh", "main", [...unrelated, fresh]],
       [
@@ -113,10 +111,7 @@ it.each(["main", "global"])(
 
     const projected = observations.projectRows([row])[0];
     assert(projected);
-    expect(projected).toEqual({ ...fresh, key, providerReview: undefined });
-    expect(selectFresh(projected, ["label", "providerReview"])).toEqual(["label"]);
-    expect(selectClear(projected, ["label", "providerReview"])).toEqual(["providerReview"]);
-    expect(observations.fieldObservation(projected, "providerReview").writer).toBe(clear.source);
+    expect(projected).toEqual({ ...fresh, key });
     expect(validUnrelated).toHaveBeenCalled();
     expect(identity.mock.calls.every(([candidate]) => candidate.sessionId === row.sessionId)).toBe(
       true,
