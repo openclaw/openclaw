@@ -1,4 +1,4 @@
-import type { SnapshotsResult } from "./cloud-worker-snapshot-rows.ts";
+import type { SnapshotsResult } from "./cloud-worker-snapshot-rows.tsx";
 
 export function buildEnvironmentFixture(state = "provisioning", error?: string) {
   return {

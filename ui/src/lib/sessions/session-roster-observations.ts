@@ -24,20 +24,13 @@ import { createSessionRowProvenance } from "./session-row-provenance.ts";
 import { matchesExistingSession, type SessionChangedRowResult } from "./session-row-reconcile.ts";
 import { createSessionRunTerminalStaging } from "./session-run-terminal.ts";
 
-type ObservedSessionRow = {
-  target: SessionRowTarget;
-  row: GatewaySessionRow | null;
-};
-
-type RegisteredSessionRow = {
+type RegisteredRow = {
   target: SessionRowTarget;
   scope: SessionConnectionScope | null;
   snapshot: {
     row: GatewaySessionRow | null;
-    visible: GatewaySessionRow | null;
-    hasObserved: boolean;
     sessionId: string | null;
-    invalidatedRevision: number;
+    hasObserved: boolean;
     retired: boolean;
   };
   listener: SessionRowListener;
@@ -46,20 +39,14 @@ type RegisteredSessionRow = {
   isValid: (sessionId: string) => boolean;
   decorate: (row: GatewaySessionRow) => GatewaySessionRow | null;
 };
-
-type RowProjection = (entry: ObservedSessionRow) => {
+type RowProjection = (entry: { target: SessionRowTarget; row: GatewaySessionRow | null }) => {
   row: GatewaySessionRow | null;
-  invalidateRevision?: number;
-  invalidationReason?: string;
-  certification?: { revision: number; reason?: string };
-  observationRevision?: number;
+  invalidate?: "now" | "later";
+  retire?: boolean;
   eventResult?: SessionChangedRowResult;
 };
 
-type SessionRowAdmission = { row: GatewaySessionRow; revision: number };
-type RowEventDelivery = SessionEventDelivery<RegisteredSessionRow>;
-
-/** Metadata follows held rows; wire values stay in their existing roster owners. */
+/** Shared row presentation; lists retain their own membership. */
 export function createSessionRosterObservations(
   host: {
     connection: SessionConnectionOwner;
@@ -77,46 +64,27 @@ export function createSessionRosterObservations(
   lists: ReadonlyMap<string, ObservedSessionList>,
 ) {
   const provenance = createSessionRowProvenance();
-  const { owner, identity, inheritRow, mergeRow, rowRevision } = provenance;
-  const registeredRows = new Set<RegisteredSessionRow>();
-  const certifications = new Map<SessionRowTarget, { revision: number; reason?: string }>();
-  const certificationRefresh = createSessionEventRefreshCoordinator({
+  const { owner, identity, inheritRow, mergeRow, rowRevision, observeReadRow } = provenance;
+  const registeredRows = new Set<RegisteredRow>();
+  const invalidatedRows = new Map<RegisteredRow, string | undefined>();
+  const refresh = createSessionEventRefreshCoordinator({
     active: true,
     refresh: async () => {
-      stageManagedResults(
-        host.connection.capture(),
-        (entry) => entry.snapshot.result,
-        ({ target, row }) => ({
-          row,
-          invalidateRevision: certifications.get(target)?.revision,
-          invalidationReason: certifications.get(target)?.reason,
-        }),
-      ).notify();
+      const pending = [...invalidatedRows];
+      invalidatedRows.clear();
+      for (const [entry, reason] of pending) {
+        if (isCurrent(entry)) {
+          entry.onInvalidate?.(reason);
+        }
+      }
     },
   });
-  const clearCertification = (target: SessionRowTarget, retired = false) => {
-    certifications.delete(target);
-    if (!certifications.size) {
-      if (retired) {
-        certificationRefresh.reset();
-      } else {
-        certificationRefresh.absorb();
-      }
-    }
-  };
-  const registrationIsAttached = (entry: RegisteredSessionRow) =>
+  const isAttached = (entry: RegisteredRow) =>
     registeredRows.has(entry) && entry.scope !== null && host.connection.isCurrent(entry.scope);
-  const registrationIsCurrent = (entry: RegisteredSessionRow) =>
-    registrationIsAttached(entry) &&
+  const isCurrent = (entry: RegisteredRow) =>
+    isAttached(entry) &&
     !entry.snapshot.retired &&
     (entry.snapshot.sessionId === null || entry.isValid(entry.snapshot.sessionId));
-  const captureEventDelivery = createSessionEventDelivery(
-    registeredRows,
-    host.connection,
-    registrationIsAttached,
-    registrationIsCurrent,
-    provenance.hasNewerFacts,
-  );
   const matchesTarget = (row: GatewaySessionRow, target: SessionRowTarget) => {
     const parsedAgent = parseAgentSessionKey(row.key)?.agentId;
     return (
@@ -128,304 +96,155 @@ export function createSessionRosterObservations(
         normalizeAgentId(row.agentId) === normalizeAgentId(parsedAgent))
     );
   };
-  const registeredRow = (entry: RegisteredSessionRow) =>
-    registrationIsCurrent(entry) ? entry.snapshot.row : null;
-  const acceptsRowIdentity = (entry: RegisteredSessionRow, row: GatewaySessionRow) =>
-    registrationIsCurrent(entry) &&
+  const acceptsRow = (entry: RegisteredRow, row: GatewaySessionRow) =>
+    isCurrent(entry) &&
     matchesTarget(row, entry.target) &&
     Boolean(row.sessionId && entry.isValid(row.sessionId)) &&
     (entry.snapshot.sessionId === null || entry.snapshot.sessionId === row.sessionId);
-  const acceptsRow = (
-    entry: RegisteredSessionRow,
-    row: GatewaySessionRow,
-    revision: number,
-    seedHeld = false,
-  ) =>
-    acceptsRowIdentity(entry, row) &&
-    (revision > entry.snapshot.invalidatedRevision ||
-      (seedHeld &&
-        entry.snapshot.sessionId === null &&
-        entry.snapshot.invalidatedRevision === 0 &&
-        provenance.hasObservation(row)));
-  const successorRetirement = (
-    entry: RegisteredSessionRow,
-    admissions: readonly SessionRowAdmission[],
-  ) => {
-    const previous = entry.snapshot;
-    const sessionId = previous.sessionId;
-    if (!registrationIsAttached(entry) || previous.retired || !sessionId) {
-      return undefined;
-    }
-    const successor = admissions.some(
-      ({ row, revision }) =>
-        row.sessionId &&
-        row.sessionId !== sessionId &&
-        matchesTarget(row, entry.target) &&
-        entry.isValid(row.sessionId) &&
-        (!entry.isValid(sessionId) ||
-          (revision > previous.invalidatedRevision &&
-            (!previous.row || !provenance.hasNewerFacts(previous.row, revision)))),
-    );
-    return successor
-      ? { entry, previous, snapshot: { ...previous, row: null, visible: null, retired: true } }
-      : undefined;
-  };
   const captureHeldRows = (sessionIds?: ReadonlySet<string | undefined>) => {
     const state = host.readState();
     const primaryRows = indexRows(state.result?.sessions ?? [], state.agentId, sessionIds);
-    const epoch = host.connection.capture()?.epoch;
     const observedRows = new Map<string, GatewaySessionRow[]>();
-    const append = (key: string, row: GatewaySessionRow) => {
-      const rows = observedRows.get(key) ?? [];
-      rows.push(row);
-      observedRows.set(key, rows);
+    const append = (row: GatewaySessionRow, agentId?: string | null) => {
+      if (
+        (sessionIds && !sessionIds.has(row.sessionId)) ||
+        (state.resultCached && rowRevision(row) === 0)
+      ) {
+        return;
+      }
+      const key = identity(row, agentId);
+      if (key) {
+        const rows = observedRows.get(key) ?? [];
+        rows.push(row);
+        observedRows.set(key, rows);
+      }
     };
     for (const entry of lists.values()) {
-      if (entry.connectionEpoch === epoch) {
-        for (const [key, row] of indexRows(
-          entry.snapshot.result?.sessions ?? [],
-          entry.snapshot.agentId,
-          sessionIds,
-        )) {
-          append(key, row);
+      if (entry.connectionEpoch === host.connection.capture()?.epoch) {
+        for (const row of entry.snapshot.result?.sessions ?? []) {
+          append(row, entry.snapshot.agentId);
         }
       }
     }
     for (const entry of registeredRows) {
-      const row = registeredRow(entry);
-      const key =
-        row &&
-        (!sessionIds || sessionIds.has(row.sessionId)) &&
-        identity(row, entry.target.agentId);
-      if (row && key) {
-        append(key, row);
+      if (isCurrent(entry) && entry.snapshot.row) {
+        append(entry.snapshot.row, entry.target.agentId);
       }
     }
     return { state, primaryRows, observedRows };
   };
-  const { indexRows, merge, prepareProjection, projectFields, heldRowsFor, currentRow } =
+  const { indexRows, merge, prepareProjection, projectFields, currentRow } =
     createSessionRosterProjection(provenance, captureHeldRows);
-  const observeReadRow = (row: GatewaySessionRow, revision: number, agentId?: string | null) =>
-    provenance.observeReadRow(row, revision, agentId, heldRowsFor(row, agentId));
-  const observeReadRows = (
-    rows: readonly GatewaySessionRow[],
-    revision: number,
-    agentId?: string | null,
-  ) => {
-    if (rows.length === 0) {
-      return [];
-    }
-    const held = captureHeldRows();
-    return rows.map((row) => ({
-      row,
-      select: provenance.observeReadRow(row, revision, agentId, heldRowsFor(row, agentId, held)),
-    }));
-  };
+  const captureEventDelivery = createSessionEventDelivery(
+    registeredRows,
+    host.connection,
+    isAttached,
+    isCurrent,
+  );
   const stageManagedResults = (
     scope: SessionConnectionScope | null,
     project: (entry: ObservedSessionList) => SessionsListResult | null,
     projectRow?: RowProjection,
-    admitRead = false,
-    admittedRows: readonly SessionRowAdmission[] = [],
-    event?: RowEventDelivery,
-  ): {
-    changed: boolean;
-    notify: (publishedRows?: readonly SessionRowAdmission[], reason?: string) => void;
-  } => {
+    event?: SessionEventDelivery<RegisteredRow>,
+    reason?: string,
+  ) => {
     if (!scope || !host.connection.isCurrent(scope)) {
       return { changed: false, notify: () => {} };
     }
-    const registrations = [...registeredRows];
-    const changes: Array<{
-      key: string;
-      entry: ObservedSessionList;
-      previous: ObservedSessionList["snapshot"];
-      snapshot: ObservedSessionList["snapshot"];
-    }> = [];
-    const rowChanges: Array<{
-      entry: RegisteredSessionRow;
-      previous: RegisteredSessionRow["snapshot"];
-      snapshot: RegisteredSessionRow["snapshot"];
-      invalidationReason?: string;
-    }> = [];
-    for (const [key, entry] of lists) {
+    const changedLists: ObservedSessionList[] = [];
+    const changedRows: RegisteredRow[] = [];
+    const invalidateNow: RegisteredRow[] = [];
+    for (const entry of lists.values()) {
       if (entry.connectionEpoch !== scope.epoch) {
         continue;
       }
-      const previous = entry.snapshot;
-      const decorated = host.decorate(project(entry), entry);
-      if (decorated !== entry.snapshot.result) {
-        changes.push({ key, entry, previous, snapshot: { ...previous, result: decorated } });
+      const result = host.decorate(project(entry), entry);
+      if (result !== entry.snapshot.result) {
+        entry.snapshot = { ...entry.snapshot, result };
+        changedLists.push(entry);
       }
     }
-    for (const entry of registrations) {
-      const retirement = successorRetirement(entry, admittedRows);
-      if (retirement) {
-        rowChanges.push(retirement);
+    for (const entry of registeredRows) {
+      if (!isAttached(entry)) {
         continue;
       }
-      if (!registrationIsCurrent(entry)) {
-        continue;
-      }
-      const previous = entry.snapshot;
-      const held = registeredRow(entry);
-      const projected = projectRow?.({ target: entry.target, row: held }) ?? { row: held };
-      const row =
+      const projected = projectRow?.({ target: entry.target, row: entry.snapshot.row }) ?? {
+        row: entry.snapshot.row,
+      };
+      const replacement =
         projected.row &&
-        (held !== null || admitRead) &&
-        // Invalidation fences incoming reads, not accepted updates to the held incarnation.
-        (projected.row === held ||
-          (admitRead
-            ? acceptsRow(
-                entry,
-                projected.row,
-                projected.observationRevision ?? rowRevision(projected.row),
-                true,
-              )
-            : acceptsRowIdentity(entry, projected.row)))
-          ? projected.row
-          : admitRead && projected.row
-            ? held // Rejecting a stale read must not remove the current descriptor.
-            : null;
-      const decorated = row ? entry.decorate(row) : null;
-      const visible =
-        row &&
-        decorated &&
-        matchesTarget(decorated, entry.target) &&
-        identity(decorated, entry.target.agentId) === identity(row, entry.target.agentId)
-          ? inheritRow(decorated, row)
-          : null;
-      const invalidatedRevision =
-        !previous.row || entry.onInvalidate
-          ? Math.max(previous.invalidatedRevision, projected.invalidateRevision ?? 0)
-          : previous.invalidatedRevision;
-      if (projected.certification && entry.onInvalidate) {
-        certifications.set(entry.target, projected.certification);
-        certificationRefresh.schedule();
+        entry.snapshot.sessionId !== null &&
+        projected.row.sessionId !== entry.snapshot.sessionId &&
+        matchesTarget(projected.row, entry.target) &&
+        entry.isValid(projected.row.sessionId ?? "") &&
+        (projected.row.updatedAt ?? 0) >= (entry.snapshot.row?.updatedAt ?? 0);
+      if (projected.retire || replacement) {
+        entry.snapshot = { ...entry.snapshot, row: null, retired: true };
+        invalidatedRows.delete(entry);
+        changedRows.push(entry);
+        continue;
       }
-      const certification = certifications.get(entry.target);
-      if (
-        certification &&
-        (invalidatedRevision >= certification.revision ||
-          (admitRead &&
-            admittedRows.some(
-              ({ row: admitted, revision }) =>
-                revision > certification.revision && acceptsRow(entry, admitted, revision),
-            )))
-      ) {
-        clearCertification(entry.target);
+      if (!isCurrent(entry)) {
+        continue;
       }
-      const hasObserved =
-        previous.hasObserved || row !== null || Boolean(projected.eventResult?.deletedKey);
-      let nextSnapshot = previous;
-      if (
-        row !== previous.row ||
-        visible !== previous.visible ||
-        hasObserved !== previous.hasObserved ||
-        invalidatedRevision !== previous.invalidatedRevision
-      ) {
-        nextSnapshot = {
-          // Settled local row intents remain held, as they do in existing lists.
-          row: visible ?? row,
-          visible,
-          hasObserved,
-          invalidatedRevision,
-          sessionId: previous.sessionId ?? row?.sessionId ?? null,
+      if (projected.invalidate && entry.onInvalidate) {
+        if (projected.invalidate === "later") {
+          invalidatedRows.set(entry, reason);
+          refresh.schedule();
+        } else {
+          invalidateNow.push(entry);
+        }
+      }
+      if (projected.row && !acceptsRow(entry, projected.row)) {
+        continue;
+      }
+      const row = projected.row ? entry.decorate(projected.row) : null;
+      if (row && !matchesTarget(row, entry.target)) {
+        continue;
+      }
+      if (row !== entry.snapshot.row || projected.eventResult?.deletedKey) {
+        entry.snapshot = {
+          row,
+          sessionId: entry.snapshot.sessionId ?? row?.sessionId ?? null,
+          hasObserved:
+            entry.snapshot.hasObserved ||
+            row !== null ||
+            Boolean(projected.eventResult?.deletedKey),
           retired: Boolean(projected.eventResult?.deletedKey),
         };
-        rowChanges.push({
-          entry,
-          previous,
-          snapshot: nextSnapshot,
-          invalidationReason: projected.invalidationReason,
-        });
+        changedRows.push(entry);
       }
-      if (
-        entry.onEvent &&
-        projected.eventResult &&
-        (!projected.eventResult.admittedRow ||
-          acceptsRowIdentity(entry, projected.eventResult.admittedRow))
-      ) {
-        event?.results.set(entry, {
-          snapshot: nextSnapshot,
-          result: { ...projected.eventResult, row: visible ?? undefined },
-        });
+      if (projected.eventResult) {
+        event?.results.set(entry, projected.eventResult);
       }
     }
-    if (!host.connection.isCurrent(scope)) {
-      return { changed: false, notify: () => {} };
-    }
-    // Every held window receives the fact before a listener can start another read.
-    let changed = false;
-    for (const change of changes) {
-      if (lists.get(change.key) === change.entry && change.entry.snapshot === change.previous) {
-        change.entry.snapshot = change.snapshot;
-        changed = true;
-      }
-    }
-    for (const change of rowChanges) {
-      if (
-        registrationIsAttached(change.entry) &&
-        (change.snapshot.retired || registrationIsCurrent(change.entry)) &&
-        change.entry.snapshot === change.previous
-      ) {
-        change.entry.snapshot = change.snapshot;
-        if (change.snapshot.retired) {
-          clearCertification(change.entry.target, true);
-        }
-        changed = true;
-      }
-    }
-    const notify = (publishedRows: readonly SessionRowAdmission[] = [], reason?: string) => {
-      if (!host.connection.isCurrent(scope)) {
-        return;
-      }
-      // A publication can retire its original leases, never a reentrant replacement.
-      for (const entry of registrations) {
-        const retirement = successorRetirement(entry, publishedRows);
-        if (retirement) {
-          entry.snapshot = retirement.snapshot;
-          clearCertification(entry.target, true);
-          rowChanges.push(retirement);
-        }
-      }
-      for (const { key, entry, snapshot } of changes) {
-        for (const listener of entry.listeners) {
-          if (!host.connection.isCurrent(scope)) {
-            return;
-          }
-          if (lists.get(key) !== entry || entry.snapshot !== snapshot) {
-            break;
-          }
-          listener(snapshot);
-        }
-      }
-      for (const { entry, previous, snapshot, invalidationReason } of rowChanges) {
+    return {
+      changed: changedLists.length > 0 || changedRows.length > 0,
+      notify() {
         if (!host.connection.isCurrent(scope)) {
           return;
         }
-        if (
-          registrationIsAttached(entry) &&
-          (snapshot.retired || registrationIsCurrent(entry)) &&
-          entry.snapshot === snapshot
-        ) {
-          // A captured recipient must finish this frame before replacing its binding.
-          if (snapshot.retired && entry.onEvent && event?.captures(entry)) {
-            entry.listener(snapshot.visible, { eventPending: true });
-          } else {
-            entry.listener(snapshot.visible);
-          }
-          if (
-            registrationIsCurrent(entry) &&
-            entry.snapshot === snapshot &&
-            snapshot.invalidatedRevision > previous.invalidatedRevision
-          ) {
-            entry.onInvalidate?.(invalidationReason ?? reason);
+        for (const entry of changedLists) {
+          for (const listener of entry.listeners) {
+            listener(entry.snapshot);
           }
         }
-      }
+        for (const entry of changedRows) {
+          if (isAttached(entry)) {
+            if (entry.snapshot.retired && event) {
+              entry.listener(entry.snapshot.row, { eventPending: true });
+            } else {
+              entry.listener(entry.snapshot.row);
+            }
+          }
+        }
+        for (const entry of invalidateNow) {
+          if (isCurrent(entry)) {
+            entry.onInvalidate?.(reason);
+          }
+        }
+      },
     };
-    return { changed, notify };
   };
   const stageObservedRows = (
     rows: readonly GatewaySessionRow[],
@@ -434,194 +253,144 @@ export function createSessionRosterObservations(
     issuedRevision?: number,
     managed = true,
   ) => {
+    for (const row of rows) {
+      if (issuedRevision !== undefined) {
+        observeReadRow(row, issuedRevision, agentId);
+      }
+    }
     const offered = indexRows(rows, agentId);
-    const readRevisions = new WeakMap(
-      rows.map((row) => [row, issuedRevision ?? rowRevision(row)] as const),
-    );
-    const { projectFields: project } = prepareProjection();
     return stageManagedResults(
       scope,
       (entry) => merge(entry.snapshot.result, managed ? rows : [], entry.snapshot.agentId, agentId),
       (entry) => {
-        const key = entry.row ? identity(entry.row, entry.target.agentId) : null;
-        const matching = key
-          ? offered.get(key)
-          : [...offered.values()].find(
-              (row) =>
-                owner(row, agentId) === normalizeAgentId(entry.target.agentId) &&
-                matchesTarget(row, entry.target),
-            );
+        const matching = [...offered.values()].find((row) => matchesTarget(row, entry.target));
         return {
           row: matching
-            ? entry.row
-              ? mergeRow(entry.row, project(matching, agentId), entry.target.agentId)
-              : project(matching, agentId)
+            ? entry.row && entry.row.sessionId === matching.sessionId
+              ? mergeRow(entry.row, matching, entry.target.agentId)
+              : matching
             : entry.row,
-          ...(!entry.row && matching
-            ? { observationRevision: readRevisions.get(matching) ?? 0 }
-            : {}),
         };
       },
-      true,
-      rows.map((row) => ({ row, revision: issuedRevision ?? rowRevision(row) })),
     ).notify;
+  };
+  const publishedRow = (matches: (row: GatewaySessionRow, agentId?: string | null) => boolean) => {
+    const state = host.readState();
+    const primary = state.result?.sessions.find((row) => matches(row, state.agentId));
+    if (primary) {
+      return primary;
+    }
+    for (const entry of lists.values()) {
+      const row = entry.snapshot.result?.sessions.find((candidate) =>
+        matches(candidate, entry.scope.agentId),
+      );
+      if (row) {
+        return row;
+      }
+    }
+    for (const entry of registeredRows) {
+      if (
+        isCurrent(entry) &&
+        entry.snapshot.row &&
+        matches(entry.snapshot.row, entry.target.agentId)
+      ) {
+        return entry.snapshot.row;
+      }
+    }
+    return undefined;
   };
   const descriptions = createSessionDescribeReads({
     connection: host.connection,
     canReuse: () => host.observerError() === null,
-    currentRow: (params) => {
-      const held = observations.publishedRow((row, ownerAgentId) => {
-        const agentId = parseAgentSessionKey(params.key)?.agentId ?? params.agentId;
-        return (
-          areUiSessionKeysEquivalent(row.key, params.key) &&
-          (!agentId || owner(row, ownerAgentId) === normalizeAgentId(agentId)) &&
-          provenance.hasObservation(row)
-        );
-      });
-      return held ? projectFields(held, params.agentId) : undefined;
-    },
+    currentRow: (params) =>
+      publishedRow((row, agentId) =>
+        matchesExistingSession(row, params.key, params.agentId ?? agentId ?? null),
+      ),
   });
   const observations = {
     descriptions,
     reset() {
-      // Retained cache rows carry presentation, not evidence from the retired connection.
       provenance.reset();
       registeredRows.clear();
-      certifications.clear();
-      certificationRefresh.reset();
+      invalidatedRows.clear();
+      refresh.reset();
       descriptions.clear();
     },
     registerRow(
-      this: void,
       target: SessionRowTarget,
       listener: SessionRowListener,
-      options: Pick<RegisteredSessionRow, "isValid" | "decorate" | "onInvalidate" | "onEvent">,
+      options: Pick<RegisteredRow, "isValid" | "decorate" | "onInvalidate" | "onEvent">,
     ) {
-      const entry: RegisteredSessionRow = {
-        target: Object.freeze({ ...target }),
+      const entry: RegisteredRow = {
+        target,
         scope: host.connection.capture(),
         listener,
         ...options,
-        snapshot: {
-          row: null,
-          visible: null,
-          hasObserved: false,
-          sessionId: null,
-          invalidatedRevision: 0,
-          retired: false,
-        },
+        snapshot: { row: null, sessionId: null, hasObserved: false, retired: false },
       };
       registeredRows.add(entry);
       return {
-        current: () => (registeredRow(entry) ? entry.snapshot.visible : null),
+        current: () => (isCurrent(entry) ? entry.snapshot.row : null),
         sessionId: () => entry.snapshot.sessionId,
         hasObserved: () => entry.snapshot.hasObserved,
-        isCurrent: () => registrationIsCurrent(entry),
-        readInvalidated: (revision: number) => revision <= entry.snapshot.invalidatedRevision,
-        acceptsRead: (row: GatewaySessionRow, revision: number) => acceptsRow(entry, row, revision),
-        clear: (revision: number) => {
-          const held = registeredRow(entry);
-          if (!registrationIsCurrent(entry) || (held && provenance.hasNewerFacts(held, revision))) {
-            return () => {};
-          }
-          const snapshot = {
-            ...entry.snapshot,
-            row: null,
-            visible: null,
-            hasObserved: true,
-            invalidatedRevision: Math.max(entry.snapshot.invalidatedRevision, revision),
-          };
-          entry.snapshot = snapshot;
-          clearCertification(entry.target);
+        isCurrent: () => isCurrent(entry),
+        acceptsRead: (row: GatewaySessionRow) => acceptsRow(entry, row),
+        clear: () => {
+          entry.snapshot = { ...entry.snapshot, row: null, hasObserved: true };
           return () => {
-            if (registrationIsCurrent(entry) && entry.snapshot === snapshot) {
-              entry.listener(null);
+            if (isCurrent(entry)) {
+              listener(null);
             }
           };
         },
         dispose: () => {
           registeredRows.delete(entry);
-          clearCertification(entry.target, true);
+          invalidatedRows.delete(entry);
         },
       };
     },
     inheritRow,
     mergeRow,
     currentRow,
-    observedRow(this: void, key: string, agentId?: string | null) {
-      return observations.publishedRow(
+    publishedRow,
+    observedRow: (key: string, agentId?: string | null) =>
+      publishedRow(
         (row, ownerAgentId) =>
-          observations.hasLiveObservation(row) &&
+          provenance.hasObservation(row) &&
           matchesExistingSession(row, key, agentId ?? ownerAgentId ?? null),
-      );
-    },
+      ),
     mergeRows: merge,
-    publishedRow(
-      this: void,
-      matches: (row: GatewaySessionRow, agentId?: string | null) => boolean,
-    ) {
-      const state = host.readState();
-      // Primary rows own shared presentation before managed and descriptor-only rows.
-      const primary = state.result?.sessions.find((row) => matches(row, state.agentId));
-      if (primary) {
-        return primary;
-      }
-      for (const entry of lists.values()) {
-        const row = entry.snapshot.result?.sessions.find((candidate) =>
-          matches(candidate, entry.scope.agentId),
-        );
-        if (row) {
-          return row;
-        }
-      }
-      for (const entry of registeredRows) {
-        const row = registeredRow(entry);
-        if (row && matches(row, entry.target.agentId)) {
-          return row;
-        }
-      }
-      return undefined;
-    },
     projectFields,
     prepareProjection,
-    projectRows: (rows: readonly GatewaySessionRow[]): GatewaySessionRow[] =>
-      rows.length === 0 ? [] : prepareProjection(rows).projectRows(rows),
+    projectRows: (rows: readonly GatewaySessionRow[]) => prepareProjection(rows).projectRows(rows),
     stageObservedRows,
     stageManagedResults,
     captureEventDelivery,
     rowRevision,
     hasLiveObservation: (row: GatewaySessionRow) =>
       host.connection.capture() !== null && provenance.hasObservation(row),
-    isCurrentRow: (row: GatewaySessionRow, revision?: number, agentId?: string | null): boolean => {
-      const held = heldRowsFor(row, agentId);
-      const readRevision = revision ?? rowRevision(row);
-      // Cold descriptors carry first-read fences before any live row can carry their receipts.
-      return (
-        !held.some((current) => rowRevision(current) > readRevision) &&
-        (revision === undefined ||
-          held.some(provenance.hasObservation) ||
-          ![...registeredRows].some(
-            (entry) =>
-              acceptsRowIdentity(entry, row) && !acceptsRow(entry, row, readRevision, true),
-          ))
-      );
-    },
     bindOwner: (result: SessionsListResult | null, agentId?: string | null) => {
       for (const row of result?.sessions ?? []) {
         provenance.bindOwner(row, agentId);
       }
     },
-    observeReadRows,
-    observeFields: provenance.observeFields,
-    fieldNames: provenance.fieldNames,
-    fieldObservation: provenance.fieldObservation,
+    observeReadRow,
+    observeClears: provenance.observeClears,
+    observeReadRows: (
+      rows: readonly GatewaySessionRow[],
+      revision: number,
+      agentId?: string | null,
+    ) => {
+      for (const row of rows) {
+        observeReadRow(row, revision, agentId);
+      }
+    },
     stageRunTerminal: createSessionRunTerminalStaging({
       readState: host.readState,
       prepareProjection,
       provenance,
       stage: stageManagedResults,
     }),
-    // Local copies keep source provenance; they are not new Gateway reads.
     copyRow: (row: GatewaySessionRow, patch: Partial<GatewaySessionRow>) =>
       inheritRow({ ...row, ...patch }, row),
     captureReconciliation(revision: number) {
@@ -631,10 +400,7 @@ export function createSessionRosterObservations(
         revision,
         observe: (row: GatewaySessionRow, agentId?: string | null) =>
           observeReadRow(row, revision, agentId),
-        isCurrent: (row: GatewaySessionRow | undefined, agentId?: string | null) =>
-          scope !== null &&
-          host.connection.isCurrent(scope) &&
-          (!row || observations.isCurrentRow(row, Math.max(revision, rowRevision(row)), agentId)),
+        isCurrent: () => scope !== null && host.connection.isCurrent(scope),
         stage: (row: GatewaySessionRow, agentId?: string | null) =>
           stageObservedRows([row], scope, agentId, revision),
       };
@@ -645,50 +411,29 @@ export function createSessionRosterObservations(
       primary: SessionsListResult | null,
       agentId?: string | null,
     ) {
-      const donor = previous.resultCached ? null : previous.result;
-      const presented = reconcileRosterPresentationMetadata(result, donor);
-      observations.inherit(presented, result, donor, agentId);
-      const incomingRows = indexRows(presented?.sessions ?? [], agentId);
-      let accepted = merge(
-        merge(presented, previous.result?.sessions ?? [], agentId, previous.agentId),
-        primary?.sessions ?? [],
-        agentId,
-        host.readState().agentId,
+      const presented = reconcileRosterPresentationMetadata(
+        result,
+        previous.resultCached ? null : previous.result,
       );
-      const epoch = host.connection.capture()?.epoch;
-      for (const entry of lists.values()) {
-        if (entry.connectionEpoch === epoch) {
-          accepted = merge(
-            accepted,
-            entry.snapshot.result?.sessions ?? [],
-            agentId,
-            entry.snapshot.agentId,
-          );
-        }
-      }
-      for (const entry of registeredRows) {
-        const row = registeredRow(entry);
-        if (row) {
-          accepted = merge(accepted, [row], agentId, entry.target.agentId, incomingRows);
-        }
-      }
-      // Publish canonical row identities now, not on a later unrelated event.
+      observations.inherit(presented, result, agentId);
+      const previousRows = previous.result?.sessions ?? [];
+      let accepted = merge(
+        presented,
+        previous.resultCached ? previousRows.filter(provenance.hasObservation) : previousRows,
+        agentId,
+        previous.agentId,
+      );
+      accepted = merge(accepted, primary?.sessions ?? [], agentId, host.readState().agentId);
       return projectSessionResultRows(accepted, observations.projectRows(accepted?.sessions ?? []));
     },
     inherit(
-      this: void,
       result: SessionsListResult | null,
       previous: SessionsListResult | null,
-      donor?: SessionsListResult | null,
       agentId?: string | null,
-    ): void {
+    ) {
       const previousRows = indexRows(previous?.sessions ?? [], agentId);
-      const donors = indexRows(donor?.sessions ?? [], agentId);
       for (const row of result?.sessions ?? []) {
-        const key = identity(row, agentId);
-        if (key) {
-          inheritRow(row, previousRows.get(key), donors.get(key));
-        }
+        inheritRow(row, previousRows.get(identity(row, agentId) ?? ""));
       }
     },
   };

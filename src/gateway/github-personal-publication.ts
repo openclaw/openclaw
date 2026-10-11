@@ -8,7 +8,11 @@ import type {
 import { preparePersonalGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import { acquireWorktreeRunLease } from "../agents/worktrees/run-lease.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
-import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
+import {
+  readGitHubPublicationSessionLifecycle,
+  readGitHubPublicationSessionLifecycleInWorker,
+} from "../state/github-publication-session-lifecycles.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   getSessionRepositoryWorkspaceStore,
   type PreparedRepositoryWorkspace,
@@ -29,16 +33,23 @@ import {
 } from "./github-publication-availability.js";
 import { executeGitHubPublication } from "./github-publication-executor.js";
 import {
+  GitHubPublicationRequesterUnavailableError,
   rejectGitHubPublicationSelection,
   type GitHubPublicationPreparation,
 } from "./github-publication-failure.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
-import { prepareGitHubPublicationTarget } from "./github-publication-target.js";
+import { insertPersonalGitHubPublicationAsync } from "./github-publication-request-async.js";
+import type { GitHubPublicationRequesterV2 } from "./github-publication-requester.js";
+import { bindGitHubPublicationSourceLifetime } from "./github-publication-source.js";
 import {
-  readRepositoryGitHubPublication,
-  terminalRepositoryGitHubPublication,
-} from "./github-repository-publication-store.js";
+  claimPersonalGitHubPublicationAsync,
+  readPersonalGitHubPublicationAsync,
+  readRepositoryGitHubPublicationAsync,
+  type GitHubPublicationTransitionAuthority,
+} from "./github-publication-store-async.js";
+import { prepareGitHubPublicationTarget } from "./github-publication-target.js";
+import { terminalRepositoryGitHubPublication } from "./github-repository-publication-store.js";
 import { resolveReceiptOwner } from "./github-repository-publication-workspace.js";
 import type { RepositoryGitHubPublicationStatusRow } from "./github-repository-publication.kernel.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
@@ -49,6 +60,8 @@ export type PersonalGitHubSessionAction = PersonalGitHubAction & {
   agentId: string;
   lifecycleRevision: string | null;
 };
+export type PersonalGitHubSessionActionV2 = PersonalGitHubSessionAction &
+  Pick<GitHubPublicationRequesterV2, "version" | "signal" | "prepareSource">;
 type Selection = { generation: string; account: { accountId: number; login: string } };
 type PersonalPublicationWorkspace = { assertCurrent: () => void; assertCustody: () => void };
 
@@ -59,7 +72,7 @@ export type PreparedRepositoryPublicationStatus = {
 };
 
 export async function preparePersonalRepositoryPublicationStatus(requestId: string) {
-  const row = readRepositoryGitHubPublication(requestId);
+  const row = await readRepositoryGitHubPublicationAsync(requestId);
   return row && row.owner_profile_id !== null && !terminalRepositoryGitHubPublication(row)
     ? {
         requestId: row.request_id,
@@ -264,7 +277,22 @@ export async function preparePersonalGitHubPublicationSelection(
 
 export function createPersonalGitHubPublicationCoordinator(
   placements: WorkerSessionPlacementStore,
+  assertRuntimeCurrent = captureOpenClawStateWorkerContext().admission.assertCurrent,
+  runtimeSignal?: AbortSignal,
 ) {
+  const prepareSource = async (
+    action: PersonalGitHubSessionActionV2,
+    selector: Parameters<GitHubPublicationRequesterV2["prepareSource"]>[0],
+  ) => {
+    const source = await action.prepareSource(selector);
+    try {
+      assertRuntimeCurrent();
+      return runtimeSignal ? bindGitHubPublicationSourceLifetime(source, runtimeSignal) : source;
+    } catch (error) {
+      await source.release();
+      throw error;
+    }
+  };
   const instanceId = placements.workspaceResultInstanceId();
   const active = new Map<string, string>();
   const status = (
@@ -316,7 +344,7 @@ export function createPersonalGitHubPublicationCoordinator(
     });
   };
   const execute = async (
-    action: PersonalGitHubSessionAction,
+    action: PersonalGitHubSessionAction | PersonalGitHubSessionActionV2,
     row: PersonalGitHubPublicationRow,
     workspace: PersonalPublicationWorkspace,
   ): Promise<SessionGitHubPublicationResult> => {
@@ -337,7 +365,25 @@ export function createPersonalGitHubPublicationCoordinator(
       }
     };
     assertCurrent();
-    const execution = claimPersonalGitHubPublication(row, instanceId, assertCurrent);
+    const authority: GitHubPublicationTransitionAuthority | undefined =
+      "version" in action
+        ? {
+            assertAction: assertCurrent,
+            assertCustody: assertRuntimeCurrent,
+            prepareSource: () =>
+              prepareSource(action, {
+                agentId: row.agent_id,
+                sessionKey: row.session_key,
+                sessionId: row.session_id,
+                lifecycleRevision: action.lifecycleRevision,
+                worktreeId: row.worktree_id,
+                personalOwnerProfileId: action.owner,
+              }),
+          }
+        : undefined;
+    const execution = authority
+      ? await claimPersonalGitHubPublicationAsync(row, instanceId, authority)
+      : claimPersonalGitHubPublication(row, instanceId, assertCurrent);
     active.set(row.request_id, execution.row.execution_id);
     try {
       return await executeGitHubPublication<PersonalGitHubPublicationRow>({
@@ -390,7 +436,7 @@ export function createPersonalGitHubPublicationCoordinator(
       });
     } catch (error) {
       try {
-        execution.interrupt();
+        await execution.interrupt();
       } catch {
         /* Permanent deletion or a newer execution already fenced this operation. */
       }
@@ -399,22 +445,22 @@ export function createPersonalGitHubPublicationCoordinator(
       active.delete(row.request_id);
     }
   };
-  return {
+  const methods = {
     async requestPersonalForSession(
       input: SessionGitHubPublishParams,
-      action: PersonalGitHubSessionAction,
+      action: PersonalGitHubSessionAction | PersonalGitHubSessionActionV2,
     ): Promise<SessionGitHubPublicationResult> {
       if (input.selection?.source !== "personal" || input.idempotencyKey.length > 128) {
         throw new Error("My GitHub publication requires an explicit bounded account selection.");
       }
       const selected = input.selection;
       action.assertCurrent();
-      const readRequest = () =>
-        readPersonalGitHubPublication(action.owner, {
-          sessionId: action.sessionId,
-          idempotencyKey: input.idempotencyKey,
-        });
-      const existing = readRequest();
+      const request = { sessionId: action.sessionId, idempotencyKey: input.idempotencyKey };
+      const existing =
+        "version" in action
+          ? await readPersonalGitHubPublicationAsync(action.owner, request)
+          : readPersonalGitHubPublication(action.owner, request);
+      action.assertCurrent();
       if (existing) {
         assertPersonalGitHubPublicationReplay(existing, input, selected);
         action.assertCurrent();
@@ -422,7 +468,10 @@ export function createPersonalGitHubPublicationCoordinator(
       }
       const bound = bindPersonalGitHubPublicationSelection(action, selected, {
         idempotencyKey: input.idempotencyKey,
-        hasRequest: () => Boolean(readRequest()),
+        hasRequest: () =>
+          Boolean(
+            "version" in action ? existing : readPersonalGitHubPublication(action.owner, request),
+          ),
       });
       return await withWorkspace(action, async (workspace) => {
         const assertCurrent = () => {
@@ -480,11 +529,30 @@ export function createPersonalGitHubPublicationCoordinator(
           reported_at_ms: null,
         };
         row.request_digest = personalGitHubRequestDigest(row);
-        return await execute(
-          action,
-          insertPersonalGitHubPublication(row, action.lifecycleRevision, assertCurrent),
-          workspace,
-        );
+        let accepted: PersonalGitHubPublicationRow;
+        if ("version" in action) {
+          const source = await prepareSource(action, {
+            agentId: action.agentId,
+            sessionKey: action.sessionKey,
+            sessionId: action.sessionId,
+            lifecycleRevision: action.lifecycleRevision,
+            personalOwnerProfileId: action.owner,
+            worktreeId: worktree.id,
+          });
+          try {
+            assertCurrent();
+            accepted = await insertPersonalGitHubPublicationAsync(
+              row,
+              action.lifecycleRevision,
+              source,
+            );
+          } finally {
+            await source.release();
+          }
+        } else {
+          accepted = insertPersonalGitHubPublication(row, action.lifecycleRevision, assertCurrent);
+        }
+        return await execute(action, accepted, workspace);
       });
     },
     personalStatus(
@@ -510,16 +578,28 @@ export function createPersonalGitHubPublicationCoordinator(
       });
       return row ? status(row, action, session) : null;
     },
+
     async confirmPersonal(
       input: SessionGitHubConfirmParams,
-      action: PersonalGitHubSessionAction,
+      action: PersonalGitHubSessionAction | PersonalGitHubSessionActionV2,
     ): Promise<SessionGitHubPublicationResult> {
       action.assertCurrent();
-      const row = readPersonalGitHubPublication(action.owner, { requestId: input.requestId });
-      const lifecycle = readGitHubPublicationSessionLifecycle({
-        publicationKind: "personal",
+      const request = { requestId: input.requestId };
+      const lifecycleRequest = {
+        publicationKind: "personal" as const,
         requestId: input.requestId,
-      });
+      };
+      const [row, lifecycle] =
+        "version" in action
+          ? await Promise.all([
+              readPersonalGitHubPublicationAsync(action.owner, request),
+              readGitHubPublicationSessionLifecycleInWorker(lifecycleRequest),
+            ])
+          : [
+              readPersonalGitHubPublication(action.owner, request),
+              readGitHubPublicationSessionLifecycle(lifecycleRequest),
+            ];
+      action.assertCurrent();
       if (
         !row ||
         row.session_id !== action.sessionId ||
@@ -543,6 +623,35 @@ export function createPersonalGitHubPublicationCoordinator(
         action,
         async (workspace) => await execute(action, row, workspace),
       );
+    },
+  };
+  return {
+    ...methods,
+
+    requestPersonalForSession(
+      input: SessionGitHubPublishParams,
+      action: PersonalGitHubSessionAction,
+    ) {
+      return methods.requestPersonalForSession(input, action);
+    },
+
+    confirmPersonal(input: SessionGitHubConfirmParams, action: PersonalGitHubSessionAction) {
+      return methods.confirmPersonal(input, action);
+    },
+    requestPersonalForSessionV2(
+      input: SessionGitHubPublishParams,
+      action: PersonalGitHubSessionActionV2,
+    ) {
+      if (action.version !== 2) {
+        throw new GitHubPublicationRequesterUnavailableError();
+      }
+      return methods.requestPersonalForSession(input, action);
+    },
+    confirmPersonalV2(input: SessionGitHubConfirmParams, action: PersonalGitHubSessionActionV2) {
+      if (action.version !== 2) {
+        throw new GitHubPublicationRequesterUnavailableError();
+      }
+      return methods.confirmPersonal(input, action);
     },
   };
 }
