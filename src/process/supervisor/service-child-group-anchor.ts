@@ -229,6 +229,11 @@ export function runServiceChildGroupAnchor(): void {
       return;
     }
     const cleanupDeadline = Date.now() + GRACEFUL_CANCEL_TIMEOUT_MS;
+    const termGraceDone = delay(GRACEFUL_CANCEL_TIMEOUT_MS);
+    if (!start.ownedWorker && !forceCleanup && rootExit && pendingOutput.size > 0) {
+      // Preserve inherited diagnostics after root exit within the same cleanup budget.
+      await Promise.race([rootSettledDone.promise, termGraceDone, forceCleanupRequested.promise]);
+    }
     if (subreaper) {
       try {
         while (
@@ -274,7 +279,6 @@ export function runServiceChildGroupAnchor(): void {
       }
       return;
     }
-    const termGraceDone = delay(GRACEFUL_CANCEL_TIMEOUT_MS);
     if (start.ownedWorker) {
       if (!forceCleanup) {
         process.kill(0, "SIGTERM");

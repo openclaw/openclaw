@@ -6,7 +6,6 @@ import {
   OLD_HEAD,
   WORKSPACE_TREE,
   commandResult,
-  createGitHubPublicationRequesterFixture,
   createRealPublicationWorkspace,
   createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
@@ -29,6 +28,7 @@ import { GitHubPublicationRequesterUnavailableError } from "./github-publication
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
 import {
+  createGitHubPublicationRequesterFixture,
   createRequesterPolicyFixture,
   createRequesterPublicationFixture,
   guestScopes,
