@@ -129,6 +129,9 @@ export function applyJobResult(
     result.status === "error" && typeof result.error === "string"
       ? resolveCronRunErrorReason(result.error, result.provider, result.errorClassification)
       : undefined;
+  // This run reported its own outcome, so the job is no longer sitting on a
+  // restart-interrupted one.
+  job.state.lastRunInterruptionReason = undefined;
   if (result.status === "error") {
     state.deps.log.warn(
       {
@@ -200,6 +203,7 @@ export function applyJobResult(
     job.state.consecutiveSkipped = 0;
   } else if (result.status === "skipped") {
     job.state.consecutiveErrors = 0;
+    job.state.consecutiveRestartInterruptions = 0;
     job.state.consecutiveSkipped = (job.state.consecutiveSkipped ?? 0) + 1;
     if (alertConfig?.includeSkipped && !opts.replay) {
       maybeEmitFailureAlert(state, {
@@ -214,6 +218,7 @@ export function applyJobResult(
     }
   } else {
     job.state.consecutiveErrors = 0;
+    job.state.consecutiveRestartInterruptions = 0;
     job.state.consecutiveSkipped = 0;
     if (completionStatus === "succeeded") {
       job.state.lastFailureAlertAtMs = undefined;

@@ -47,6 +47,13 @@ export function markInterruptedStartupRun(params: {
     typeof job.state.consecutiveErrors === "number" && Number.isFinite(job.state.consecutiveErrors)
       ? Math.max(0, Math.floor(job.state.consecutiveErrors))
       : 0;
+  // Track how much of that error streak is infrastructure rather than job
+  // failure, so auto-disable can spend only the job's own budget.
+  const previousRestartInterruptions =
+    typeof job.state.consecutiveRestartInterruptions === "number" &&
+    Number.isFinite(job.state.consecutiveRestartInterruptions)
+      ? Math.max(0, Math.floor(job.state.consecutiveRestartInterruptions))
+      : 0;
 
   params.state.deps.log.warn(
     { jobId: job.id, runningAtMs },
@@ -60,9 +67,13 @@ export function markInterruptedStartupRun(params: {
   job.state.lastRunStatus = "error";
   job.state.lastStatus = "error";
   job.state.lastError = STARTUP_INTERRUPTED_ERROR;
+  // No provider failover classification applies: the run never reported an
+  // outcome. The interruption reason is the structured cause instead.
   job.state.lastErrorReason = undefined;
+  job.state.lastRunInterruptionReason = "gateway-restart";
   job.state.lastDurationMs = Math.max(0, nowMs - runningAtMs);
   job.state.consecutiveErrors = previousErrors + 1;
+  job.state.consecutiveRestartInterruptions = previousRestartInterruptions + 1;
   job.state.lastDelivered = false;
   job.state.lastDeliveryStatus = "unknown";
   job.state.lastDeliveryError = STARTUP_INTERRUPTED_ERROR;

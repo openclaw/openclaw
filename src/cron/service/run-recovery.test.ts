@@ -1,6 +1,8 @@
+import { serialize } from "node:v8";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../../infra/sqlite-worker-contract.js";
 import * as stateRead from "../../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
@@ -34,7 +36,8 @@ import {
   recoverCronRunForTest,
 } from "./run-recovery.test-support.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
-import { createCronServiceState } from "./state.js";
+import { createCronServiceState, type CronServiceDeps } from "./state.js";
+import { runPostPersistCronNotifications } from "./store.js";
 import { onTimer } from "./timer.test-support.js";
 
 function tryCreateCronTaskRun(
@@ -548,6 +551,121 @@ describe("atomic cron run recovery", () => {
     expect(persisted?.runningAtMs).toBeUndefined();
     expect(persisted?.lastRunStatus).toBe("error");
     releaseLocalCronRunReceiptOwnership(receipt);
+  });
+
+  it.each([false, true])(
+    "queues a threshold-crossing interrupted-run alert after persistence (large facts=%s)",
+    async (largeFacts) => {
+      const { storePath } = await makeStorePath();
+      const startedAtMs = Date.parse("2026-08-13T10:35:00.000Z");
+      const nowMs = startedAtMs + 30_000;
+      const job = makeJob("interrupted-threshold-alert", startedAtMs);
+      if (largeFacts) {
+        job.name = "n".repeat(17 * 1024 * 1024);
+      }
+      job.delivery = { mode: "announce", channel: "last" };
+      job.failureAlert = { after: 2, cooldownMs: 60_000 };
+      job.state.consecutiveErrors = 1;
+      await writeCronStoreSnapshot({ storePath, jobs: [job] });
+      const sendCronFailureAlert = vi.fn(async () => undefined);
+      const state = makeState(logger, storePath, nowMs, { sendCronFailureAlert });
+
+      const result = await recoverCronRunForTest(state, {
+        jobId: job.id,
+        runningAtMs: startedAtMs,
+      });
+
+      expect(result).toMatchObject({ kind: "repaired" });
+      if (result.kind !== "repaired") {
+        throw new Error("expected repaired interrupted run");
+      }
+      expect(sendCronFailureAlert).not.toHaveBeenCalled();
+      expect(result.notifications).toHaveLength(1);
+      if (largeFacts) {
+        expect(serialize(result).byteLength).toBeGreaterThan(SQLITE_WORKER_MAX_MESSAGE_BYTES);
+      }
+      expect((await loadCronStore(storePath)).jobs[0]?.state).toMatchObject({
+        consecutiveErrors: 2,
+        lastFailureAlertAtMs: nowMs,
+        lastFailureNotificationDeliveryStatus: "unknown",
+      });
+
+      runPostPersistCronNotifications(state, result.notifications);
+      expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+      expect(sendCronFailureAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runAtMs: startedAtMs,
+          payload: expect.objectContaining({
+            text: expect.stringContaining("failed 2 times"),
+          }),
+        }),
+      );
+    },
+  );
+
+  it("keeps interrupted-run alerts disabled by failureAlert false", async () => {
+    const { storePath } = await makeStorePath();
+    const startedAtMs = Date.parse("2026-08-13T10:36:00.000Z");
+    const job = makeJob("interrupted-alert-disabled", startedAtMs);
+    job.delivery = { mode: "announce", channel: "last" };
+    job.failureAlert = false;
+    job.state.consecutiveErrors = 1;
+    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const state = makeState(logger, storePath, startedAtMs + 30_000, { sendCronFailureAlert });
+
+    const result = await recoverCronRunForTest(state, {
+      jobId: job.id,
+      runningAtMs: startedAtMs,
+    });
+
+    expect(result).toMatchObject({ kind: "repaired", notifications: [] });
+    expect(sendCronFailureAlert).not.toHaveBeenCalled();
+    expect((await loadCronStore(storePath)).jobs[0]?.state).toMatchObject({
+      consecutiveErrors: 2,
+      lastFailureNotificationDeliveryStatus: "not-requested",
+    });
+  });
+
+  it("keeps only auto-disable notification on the tenth interrupted failure", async () => {
+    const { storePath } = await makeStorePath();
+    const startedAtMs = Date.parse("2026-08-13T10:37:00.000Z");
+    const nowMs = startedAtMs + 30_000;
+    const job = makeJob("interrupted-auto-disable", startedAtMs);
+    job.delivery = { mode: "announce", channel: "last" };
+    job.failureAlert = { after: 10, cooldownMs: 0 };
+    // Ten genuine run failures already spent the budget; the interruption adds
+    // to the raw streak but never to the job's own failure count.
+    job.state.consecutiveErrors = 10;
+    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+    const enqueueSystemEvent = vi.fn();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const state = makeState(logger, storePath, nowMs, { enqueueSystemEvent, sendCronFailureAlert });
+
+    const result = await recoverCronRunForTest(state, {
+      jobId: job.id,
+      runningAtMs: startedAtMs,
+    });
+
+    expect(result).toMatchObject({ kind: "repaired" });
+    if (result.kind !== "repaired") {
+      throw new Error("expected repaired interrupted run");
+    }
+    expect(result.notifications).toHaveLength(1);
+    expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
+      enabled: false,
+      state: {
+        consecutiveErrors: 11,
+        consecutiveRestartInterruptions: 1,
+        lastRunInterruptionReason: "gateway-restart",
+        lastFailureNotificationDeliveryStatus: "not-requested",
+        autoDisabled: { reason: "consecutive-failures", consecutiveErrors: 10 },
+      },
+    });
+
+    runPostPersistCronNotifications(state, result.notifications);
+    expect(enqueueSystemEvent).toHaveBeenCalledOnce();
+    expect(sendCronFailureAlert).not.toHaveBeenCalled();
   });
 
   it("restores a finalized quiet trigger with a skipped receipt", async () => {

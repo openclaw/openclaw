@@ -40,6 +40,19 @@ describe("cron protocol schema", () => {
     expect(patchStateProperties.streamSourceIdentity).toBeUndefined();
   });
 
+  it("reports restart-interruption facts without accepting them in state patches", () => {
+    const stateProperties = (CronJobStateSchema as SchemaLike).properties ?? {};
+    expect(stateProperties.lastRunInterruptionReason).toBeDefined();
+    expect(stateProperties.consecutiveRestartInterruptions).toBeDefined();
+
+    const updateProperties = (CronUpdateParamsSchema as SchemaLike).properties ?? {};
+    const patchProperties = (updateProperties.patch as SchemaLike | undefined)?.properties ?? {};
+    const patchStateProperties =
+      (patchProperties.state as SchemaLike | undefined)?.properties ?? {};
+    expect(patchStateProperties.lastRunInterruptionReason).toBeUndefined();
+    expect(patchStateProperties.consecutiveRestartInterruptions).toBeUndefined();
+  });
+
   it("reports schedule activation without accepting it in state patches", () => {
     const stateProperties = (CronJobStateSchema as SchemaLike).properties ?? {};
     expect(stateProperties.scheduleActivatedAtMs).toBeDefined();

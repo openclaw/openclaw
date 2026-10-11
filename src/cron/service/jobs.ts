@@ -59,6 +59,7 @@ type DeliveryValidationOptions = { configuredChannels?: readonly string[] };
 function resetJobFailureState(job: CronStoredJob): void {
   delete job.state.autoDisabled;
   job.state.consecutiveErrors = 0;
+  job.state.consecutiveRestartInterruptions = 0;
   job.state.scheduleErrorCount = 0;
   if (job.schedule.kind === "stream") {
     job.state.streamRestartExhausted = undefined;

@@ -10,7 +10,7 @@ type CronAutoDisableReason = NonNullable<CronJobState["autoDisabled"]>["reason"]
 
 /**
  * Run failures get more room than schedule errors (10 vs. 3) because provider
- * and network errors are often transient, and restart-interrupted runs count too.
+ * and network errors are often transient.
  */
 const MAX_CONSECUTIVE_RUN_FAILURES = 10;
 
@@ -55,13 +55,28 @@ export function autoDisableCronJob(params: {
   return true;
 }
 
+/**
+ * Counts only the run failures the job itself produced. A run the gateway killed
+ * mid-flight proves nothing about the job, so restart interruptions recorded
+ * inside the current error streak are excluded from the auto-disable budget;
+ * otherwise repeated restarts would disable a healthy schedule.
+ */
+export function resolveCronJobRunFailureCount(job: Pick<CronJob, "state">): number {
+  const consecutiveErrors = Math.max(0, Math.floor(job.state.consecutiveErrors ?? 0));
+  const restartInterruptions = Math.max(
+    0,
+    Math.floor(job.state.consecutiveRestartInterruptions ?? 0),
+  );
+  return Math.max(0, consecutiveErrors - restartInterruptions);
+}
+
 /** Auto-disables only time-based recurring jobs once their run-error streak reaches the limit. */
 export function maybeAutoDisableCronJobAfterRunFailure(params: {
   job: CronJob;
   atMs: number;
   deferredNotifications: DeferredCronNotifications;
 }): boolean {
-  const consecutiveErrors = params.job.state.consecutiveErrors ?? 0;
+  const consecutiveErrors = resolveCronJobRunFailureCount(params.job);
   if (
     (params.job.schedule.kind !== "cron" && params.job.schedule.kind !== "every") ||
     consecutiveErrors < MAX_CONSECUTIVE_RUN_FAILURES

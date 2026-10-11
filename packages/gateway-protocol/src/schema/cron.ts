@@ -407,6 +407,9 @@ const CronDeliveryTraceSchema = closedObject({
   delivered: Type.Optional(Type.Boolean()),
 });
 
+/** Closed taxonomy for runs that ended without a job outcome of their own. */
+const CronRunInterruptionReasonSchema = Type.Literal("gateway-restart");
+
 const CronAutoDisabledSchema = closedObject({
   reason: Type.Union([Type.Literal("consecutive-failures"), Type.Literal("schedule-errors")]),
   atMs: CronDateTimestampMsSchema,
@@ -449,6 +452,10 @@ export const CronJobStateSchema = closedObject({
   lastDiagnostics: Type.Optional(CronRunDiagnosticsSchema),
   lastDiagnosticSummary: Type.Optional(Type.String()),
   lastErrorReason: Type.Optional(FailoverReasonSchema),
+  // Report-only scheduler facts separating infrastructure interruption from job
+  // failure; callers cannot patch either field.
+  lastRunInterruptionReason: Type.Optional(CronRunInterruptionReasonSchema),
+  consecutiveRestartInterruptions: Type.Optional(Type.Integer({ minimum: 0 })),
   lastDurationMs: Type.Optional(Type.Integer({ minimum: 0 })),
   consecutiveErrors: Type.Optional(Type.Integer({ minimum: 0 })),
   // Report-only schedule-computation error counter behind auto-disable;
