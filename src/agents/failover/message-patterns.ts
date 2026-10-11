@@ -96,7 +96,8 @@ const COMMON_AUTH_ERROR_PATTERNS = [
   "insufficient permissions",
   "insufficient permission",
   /missing scopes?:/i,
-  "expired",
+  // gRPC DEADLINE_EXCEEDED is "deadline expired", a request timeout rather than a credential.
+  /(?<!deadline )expired/i,
   AUTH_HTTP_STATUS_RE,
   "no credentials found",
   "no api key found",
@@ -185,6 +186,7 @@ const ERROR_PATTERNS = {
     "timeout",
     "timed out",
     "deadline exceeded",
+    "deadline expired",
     /^(?=[\s\S]*\bgot status:\s*internal\b)(?=[\s\S]*\bcode["']?\s*[:=]\s*500\b)/i,
     /^(?=[\s\S]*["']status["']\s*:\s*["']internal["'])(?=[\s\S]*["']code["']\s*:\s*500\b)/i,
     "connection error",
