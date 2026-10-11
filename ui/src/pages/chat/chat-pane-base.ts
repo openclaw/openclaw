@@ -122,8 +122,10 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     this.paneLifecycleRoot?.dispatchEvent(new Event(CHAT_PANE_LIFECYCLE_CHANGED_EVENT));
   }
   protected override async scheduleUpdate() {
-    // Keep first paint immediate; fold later async publications into one paint.
+    // Coalesce active-pane boot data only; settled and inactive panes keep immediate updates.
     if (
+      this.active &&
+      !this.transcriptReady &&
       this.hasUpdated &&
       this.isConnected &&
       this.presented &&

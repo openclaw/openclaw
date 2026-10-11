@@ -5,6 +5,7 @@ import { html } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import { getChatComposerState, resetChatComposerState } from "./components/chat-composer-state.ts";
@@ -16,7 +17,7 @@ afterEach(() => {
 });
 
 describe("chat pane suspension", () => {
-  it("paints the latest async publications together and releases a frame on disconnect", async () => {
+  it("batches active boot publications, resumes immediate updates when ready, and releases frames", async () => {
     const frames = new Map<number, FrameRequestCallback>();
     let frameId = 0;
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
@@ -27,8 +28,9 @@ describe("chat pane suspension", () => {
     const { pane, state } = createTestChatPane({
       client: { request: vi.fn() } as unknown as GatewayBrowserClient,
     });
+    state.settings = { ...pane.context.theme.settings, chatShowTaskProgress: false };
     const render = vi.fn(() => html`<p>${state.chatMessage}</p>`);
-    const lifecycle = Object.assign(pane, { render });
+    const lifecycle = Object.assign(pane, { render, active: true });
     ChatPaneBase.prototype.connectedCallback.call(lifecycle);
     await lifecycle.updateComplete;
     render.mockClear();
@@ -47,6 +49,20 @@ describe("chat pane suspension", () => {
       await lifecycle.updateComplete;
       expect(render).toHaveBeenCalledOnce();
       expect(lifecycle.textContent).toBe("Latest publication");
+      setChatHistoryLoad(state, {
+        phase: "failed",
+        sessionKey: state.sessionKey,
+        requestAgentId: undefined,
+        startup: true,
+        message: "Synthetic history failure",
+        retryable: false,
+      });
+      state.chatMessage = "Ready result";
+      lifecycle.requestUpdate();
+      await lifecycle.updateComplete;
+      expect(frames.size).toBe(0);
+      expect(lifecycle.textContent).toBe("Ready result");
+      setChatHistoryLoad(state, { phase: "idle" });
       lifecycle.requestUpdate();
       await Promise.resolve();
       expect(frames.size).toBe(1);
