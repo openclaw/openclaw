@@ -75,7 +75,6 @@ const hoisted = vi.hoisted(() => ({
   loadSessionStoreMock: vi.fn(),
   readAcpResumeSessionOwnerMock: vi.fn(),
   resolveStorePathMock: vi.fn(),
-  areHeartbeatsEnabledMock: vi.fn(),
   cleanupFailedAcpSpawnMock: vi.fn(),
   closeRuntimeOnFailureMock: vi.fn(),
   registerSubagentRunMock: vi.fn(),
@@ -136,10 +135,6 @@ vi.mock("../../../config/config.js", () => ({
 
 vi.mock("../../../gateway/call.js", () => ({
   callGateway: hoisted.callGatewayMock,
-}));
-
-vi.mock("../../../infra/heartbeat-wake.js", () => ({
-  areHeartbeatsEnabled: hoisted.areHeartbeatsEnabledMock,
 }));
 
 // mock-isolation: Keep captured requester identity with the fixture's synthetic session store.
@@ -314,12 +309,6 @@ function expectInitializeSessionFields(expected: Record<string, unknown>): Recor
   );
 }
 
-function expectBindingCallFields(expected: Record<string, unknown>): Record<string, unknown> {
-  const input = latestBindingInput();
-  expect(input).toMatchObject(expected);
-  return input;
-}
-
 function expectRelayCallFields(expected: Record<string, unknown>, callIndex = 0): void {
   expectRecordFields(
     hoisted.startAcpSpawnParentStreamRelayMock.mock.calls[callIndex]?.[0],
@@ -429,11 +418,7 @@ function mockSessionStore(entries: Record<string, SessionEntry> = {}) {
   );
 }
 
-function configureHeartbeatParent(sessionKey: string, envelope: Partial<SessionEntry> = {}) {
-  const cfg = hoisted.state.cfg;
-  cfg.agents = {
-    defaults: { ...cfg.agents?.defaults, heartbeat: { every: "30m", target: "last" } },
-  };
+function configureRoutableParent(sessionKey: string, envelope: Partial<SessionEntry> = {}) {
   mockSessionStore({
     [sessionKey]: {
       sessionId: "parent-sess-1",
@@ -489,7 +474,6 @@ describe("spawnAcpDirect", () => {
     setActivePluginRegistry(createTestRegistry());
     acpRuntimeRegistryTesting.resetAcpRuntimeBackendsForTests();
     replaceSpawnConfig(createDefaultSpawnConfig());
-    hoisted.areHeartbeatsEnabledMock.mockReset().mockReturnValue(true);
     hoisted.cleanupFailedAcpSpawnMock.mockReset().mockResolvedValue(undefined);
     hoisted.closeRuntimeOnFailureMock.mockReset().mockResolvedValue(undefined);
     hoisted.registerSubagentRunMock.mockReset().mockResolvedValue(undefined);
@@ -1080,7 +1064,7 @@ describe("spawnAcpDirect", () => {
     );
 
     expect(result.status, JSON.stringify(result)).toBe("accepted");
-    expectBindingCallFields({
+    expect(latestBindingInput()).toMatchObject({
       placement: "child",
       conversation: {
         channel: "matrix",
@@ -1163,7 +1147,7 @@ describe("spawnAcpDirect", () => {
     );
 
     expect(result.status).toBe("accepted");
-    expectBindingCallFields({
+    expect(latestBindingInput()).toMatchObject({
       placement: "child",
       conversation: {
         channel: "custom",
@@ -1238,7 +1222,7 @@ describe("spawnAcpDirect", () => {
         agentId: ownerAgentId,
         agent: agentId === "bot-alpha" ? "bot-alpha" : "codex",
       });
-      expectBindingCallFields({
+      expect(latestBindingInput()).toMatchObject({
         placement: "child",
         conversation: {
           channel: "matrix",
@@ -1276,49 +1260,61 @@ describe("spawnAcpDirect", () => {
     });
   });
 
-  it("implicitly streams mode=run ACP spawns for subagent requester sessions", async () => {
-    const context = configureHeartbeatParent("agent:main:subagent:parent");
-    const firstHandle = createRelayHandle(new Promise<void>(() => {}));
-    const secondHandle = createRelayHandle();
-    hoisted.startAcpSpawnParentStreamRelayMock
-      .mockReset()
-      .mockReturnValueOnce(firstHandle)
-      .mockReturnValueOnce(secondHandle);
-    const result = await spawn({}, context);
+  it.for([true, false])(
+    "streams subagent ACP spawns only with a parent route (%s)",
+    async (routable) => {
+      const context = configureRoutableParent("agent:main:subagent:parent");
+      if (!routable) {
+        mockSessionStore({
+          [context.agentSessionKey]: { sessionId: "parent-sess-1", updatedAt: Date.now() },
+        });
+      }
+      const firstHandle = createRelayHandle(new Promise<void>(() => {}));
+      const secondHandle = createRelayHandle();
+      hoisted.startAcpSpawnParentStreamRelayMock
+        .mockReset()
+        .mockReturnValueOnce(firstHandle)
+        .mockReturnValueOnce(secondHandle);
+      const result = await spawn({}, context);
 
-    const accepted = expectAcceptedSpawn(result);
-    expect(accepted.mode).toBe("run");
-    const agentCall = gatewayRequest("agent");
-    expect(agentCall?.params?.deliver).toBe(false);
-    expect(agentCall?.params?.channel).toBeUndefined();
-    expect(agentCall?.params?.to).toBeUndefined();
-    expect(agentCall?.params?.threadId).toBeUndefined();
-    expectRelayCallFields({
-      parentSessionKey: "agent:main:subagent:parent",
-      agentId: "codex",
-      ownerAgentId: "main",
-      childSessionId: "sess-123",
-      deliveryContext: {
-        channel: "discord",
-        to: "channel:parent-channel",
-        accountId: "default",
-      },
-    });
-    const dispatchOrder = expectDefined(
-      hoisted.callGatewayMock.mock.invocationCallOrder[0],
-      "dispatch order",
-    );
-    expect(hoisted.startAcpSpawnParentStreamRelayMock.mock.invocationCallOrder[0]).toBeLessThan(
-      dispatchOrder,
-    );
-    expect(secondHandle.notifyStarted.mock.invocationCallOrder[0]).toBeGreaterThan(dispatchOrder);
-    expect(firstHandle.notifyStarted).not.toHaveBeenCalled();
-    expect(firstHandle.dispose).toHaveBeenCalledTimes(1);
-    expect(secondHandle.notifyStarted).toHaveBeenCalledTimes(1);
-  });
+      const accepted = expectAcceptedSpawn(result);
+      expect(accepted.mode).toBe("run");
+      if (!routable) {
+        expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
+        return;
+      }
+      const agentCall = gatewayRequest("agent");
+      expect(agentCall?.params?.deliver).toBe(false);
+      expect(agentCall?.params?.channel).toBeUndefined();
+      expect(agentCall?.params?.to).toBeUndefined();
+      expect(agentCall?.params?.threadId).toBeUndefined();
+      expectRelayCallFields({
+        parentSessionKey: "agent:main:subagent:parent",
+        agentId: "codex",
+        ownerAgentId: "main",
+        childSessionId: "sess-123",
+        deliveryContext: {
+          channel: "discord",
+          to: "channel:parent-channel",
+          accountId: "default",
+        },
+      });
+      const dispatchOrder = expectDefined(
+        hoisted.callGatewayMock.mock.invocationCallOrder[0],
+        "dispatch order",
+      );
+      expect(hoisted.startAcpSpawnParentStreamRelayMock.mock.invocationCallOrder[0]).toBeLessThan(
+        dispatchOrder,
+      );
+      expect(secondHandle.notifyStarted.mock.invocationCallOrder[0]).toBeGreaterThan(dispatchOrder);
+      expect(firstHandle.notifyStarted).not.toHaveBeenCalled();
+      expect(firstHandle.dispose).toHaveBeenCalledTimes(1);
+      expect(secondHandle.notifyStarted).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("does not implicitly stream for ACP requester sessions inside a subagent envelope", async () => {
-    const context = configureHeartbeatParent("agent:main:acp:child", {
+    const context = configureRoutableParent("agent:main:acp:child", {
       spawnedBy: "agent:main:subagent:parent",
       spawnDepth: 1,
       subagentRole: "orchestrator",

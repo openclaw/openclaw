@@ -13,6 +13,7 @@ import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-c
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { ExitError } from "../runtime.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-open.js";
+import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry-listing.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
@@ -82,7 +83,9 @@ function seedStoppedWalDatabase(filename: string, sql: string): void {
   }
   // Preserve a stopped writer's WAL family, including uncheckpointed schema and row changes.
   for (const artifact of family) {
-    fs.writeFileSync(artifact.filename, artifact.bytes);
+    const replacement = `${artifact.filename}.previous-process`;
+    fs.writeFileSync(replacement, artifact.bytes);
+    fs.renameSync(replacement, artifact.filename);
   }
 }
 
@@ -273,6 +276,10 @@ it.each([
               message: expect.stringContaining("stale Telegram General-topic"),
             }),
           ]),
+        );
+        // Inspection cannot admit an old-schema registry to ordinary runtime readers.
+        expect(() => listOpenClawRegisteredAgentDatabases({ env: state.env })).toThrow(
+          "legacy agent database registry schema",
         );
       },
     );

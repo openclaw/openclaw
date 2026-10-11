@@ -602,6 +602,27 @@ export function coerceCronDeliveryPreviews(value: unknown): Map<string, CronDeli
   );
 }
 
+function formatCronPolicies(job: CronJob): string {
+  const active = job.activeHours;
+  const skipEmpty = job.payload?.kind === "agentTurn" ? job.payload.skipIfScratchEmpty : undefined;
+  const includeReasoning =
+    job.payload?.kind === "agentTurn" ? job.payload.includeReasoning : undefined;
+  return sanitizeTerminalText(
+    [
+      active
+        ? `active hours=${active.start}-${active.end} @ ${active.timezone ?? "user"}`
+        : undefined,
+      job.idleOnly !== undefined ? `idle only=${job.idleOnly}` : undefined,
+      job.delivery?.target ? `delivery target=${job.delivery.target}` : undefined,
+      job.delivery?.directPolicy ? `direct policy=${job.delivery.directPolicy}` : undefined,
+      skipEmpty !== undefined ? `skip if scratch empty=${skipEmpty}` : undefined,
+      includeReasoning !== undefined ? `include reasoning=${includeReasoning}` : undefined,
+    ]
+      .filter((value) => value !== undefined)
+      .join("; "),
+  );
+}
+
 export function printCronList(
   jobs: Array<CronJob & { effectiveAgentId?: string | null }>,
   runtime: RuntimeEnv = defaultRuntime,
@@ -647,6 +668,10 @@ export function printCronList(
     }).join(" ");
 
     lines.push(line.trimEnd());
+    const policies = formatCronPolicies(job);
+    if (policies) {
+      lines.push(`  policies: ${policies}`);
+    }
   }
 
   runtime.log(lines.join("\n"));
@@ -667,6 +692,7 @@ export function printCronShow(
   runtime.log(`owner session: ${showValue(job.owner?.sessionKey)}`);
   runtime.log(`enabled: ${job.enabled ? "yes" : "no"}`);
   runtime.log(`schedule: ${showValue(formatSchedule(job.schedule, job.trigger !== undefined))}`);
+  runtime.log(`policies: ${formatCronPolicies(job) || "-"}`);
   if (job.schedule?.kind === "stream") {
     runtime.log(`stream status: ${showValue(job.state.streamStatus)}`);
     runtime.log(`stream error: ${showValue(job.state.streamError)}`);

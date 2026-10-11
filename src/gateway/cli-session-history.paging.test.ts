@@ -10,12 +10,14 @@ import {
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import { buildExecEventPrompt } from "../infra/heartbeat-events-filter.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../state/openclaw-agent-db-readonly-scope.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareCliSessionHistoryReader } from "./cli-session-history.js";
-import { withClaudeProjectsDir } from "./cli-session-history.test-support.js";
+import {
+  LEGACY_EXEC_EVENT_PROMPT,
+  withClaudeProjectsDir,
+} from "./cli-session-history.test-support.js";
 import { readChatHistoryPageKernel } from "./server-methods/chat-history-page-kernel.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
@@ -455,11 +457,7 @@ it.each([
           ),
           native("native-question", `${prefix}${events}real question`, 3_001),
           native("native-unmatched", `${prefix}${events}only in the native file`, 4_000),
-          native(
-            "native-exec",
-            `${events}${buildExecEventPrompt(["Exec completed (example, code 0) :: done"])}`,
-            5_000,
-          ),
+          native("native-exec", `${events}${LEGACY_EXEC_EVENT_PROMPT}`, 5_000),
         ].join("\n"),
       );
       const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });

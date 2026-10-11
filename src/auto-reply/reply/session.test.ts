@@ -3025,12 +3025,8 @@ describe("drainFormattedSystemEvents", () => {
     }
   });
 
-  it("leaves tagged cron events queued during heartbeat runs instead of re-rendering them (#44922)", async () => {
+  it("drains only the selected occurrence while preserving other queued events", async () => {
     try {
-      // A `sessionTarget: "main"` cron systemEvent is enqueued tagged `cron:<jobId>`
-      // and is surfaced by the heartbeat's dedicated reminder prompt. The generic
-      // render must not also emit it as a raw `System:` line during that heartbeat
-      // run, or the model sees the same text twice.
       enqueueSystemEvent("Reminder: rotate API keys", {
         sessionKey: "agent:main:main",
         contextKey: "cron:rotate-keys",
@@ -3051,7 +3047,6 @@ describe("drainFormattedSystemEvents", () => {
 
       expect(result).toContain("Model switched.");
       expect(result).not.toContain("rotate API keys");
-      // The cron event stays queued so the heartbeat path remains its single owner.
       expect(peekSystemEvents("agent:main:main")).toEqual(["Reminder: rotate API keys"]);
     } finally {
       resetSystemEventsForTest();
@@ -3243,11 +3238,13 @@ describe("initSessionState internal channel routing preservation", () => {
 
     const result = await initSessionState({
       ctx: {
-        Body: "heartbeat tick",
+        Body: "session event",
         SessionKey: sessionKey,
-        Provider: "heartbeat",
-        From: "heartbeat",
-        To: "heartbeat",
+        Provider: "internal",
+        InternalTurnSource: "event",
+        InputProvenance: { kind: "internal_system", sourceTool: "session-event" },
+        From: "internal",
+        To: "internal",
       },
       cfg,
     });
@@ -3255,11 +3252,12 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.lastChannel).toBe("mattermost");
     expect(result.sessionEntry.lastTo).toBe("channel:CHAN1");
     expect(result.sessionEntry.lastThreadId).toBeUndefined();
-    expect(result.sessionEntry.deliveryContext).toEqual({
+    const expectedContext = {
       channel: "mattermost",
       to: "channel:CHAN1",
       accountId: "default",
-    });
+    };
+    expect(result.sessionEntry.deliveryContext).toEqual(expectedContext);
     expect(result.sessionEntry.route).toEqual({
       channel: "mattermost",
       accountId: "default",
@@ -3273,11 +3271,7 @@ describe("initSessionState internal channel routing preservation", () => {
 
     const persisted = readSessionStoreFast(storePath);
     expect(persisted[sessionKey]?.lastThreadId).toBeUndefined();
-    expect(persisted[sessionKey]?.deliveryContext).toEqual({
-      channel: "mattermost",
-      to: "channel:CHAN1",
-      accountId: "default",
-    });
+    expect(persisted[sessionKey]?.deliveryContext).toEqual(expectedContext);
     expect(persisted[sessionKey]?.route).toEqual({
       channel: "mattermost",
       accountId: "default",

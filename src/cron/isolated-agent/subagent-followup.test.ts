@@ -691,12 +691,10 @@ describe("waitForDescendantSubagentSummary", () => {
 
   it.each([
     "NO_REPLY",
-    "HEARTBEAT_OK",
-    "**HEARTBEAT_OK**",
-    "<b>HEARTBEAT_OK</b>",
-    "<thinking>Check the schedule.</thinking>\nHEARTBEAT_OK",
-    '{"action":"HEARTBEAT_OK"}',
-    '"HEARTBEAT_OK"',
+    "**NO_REPLY**",
+    "<thinking>Check the schedule.</thinking>\nNO_REPLY",
+    '{"action":"NO_REPLY"}',
+    '"NO_REPLY"',
   ])(
     "skips the %s control-only parent reply instead of treating it as child output",
     async (parentReply) => {
@@ -718,25 +716,23 @@ describe("waitForDescendantSubagentSummary", () => {
   );
 
   it.each([
-    "HEARTBEAT_OK child completed the scheduled reminder",
-    "child completed the scheduled reminder HEARTBEAT_OK",
-    "<b>HEARTBEAT_OK</b> child completed the scheduled reminder",
-    "<thinking>Check the schedule.</thinking>\nHere is the scheduled reminder.\nHEARTBEAT_OK",
-    '{"action":"HEARTBEAT_OK","message":"child completed the scheduled reminder"}',
-  ])(
-    "preserves substantive synthesis that also contains a heartbeat token: %s",
-    async (synthesis) => {
-      vi.mocked(listDescendantRunsForRequester).mockResolvedValue([]);
-      vi.mocked(readLatestAssistantReply).mockResolvedValue(synthesis);
+    "<b>NO_REPLY</b>",
+    "NO_REPLY child completed the scheduled reminder",
+    "child completed the scheduled reminder NO_REPLY",
+    "<b>NO_REPLY</b> child completed the scheduled reminder",
+    "<thinking>Check the schedule.</thinking>\nHere is the scheduled reminder.\nNO_REPLY",
+    '{"action":"NO_REPLY","message":"child completed the scheduled reminder"}',
+  ])("preserves literal synthesis that also contains a silent token: %s", async (synthesis) => {
+    vi.mocked(listDescendantRunsForRequester).mockResolvedValue([]);
+    vi.mocked(readLatestAssistantReply).mockResolvedValue(synthesis);
 
-      const result = await waitForDescendantSubagentSummary({
-        sessionKey: "cron-session",
-        initialReply: undefined,
-        timeoutMs: 100,
-        observedActiveDescendants: true,
-      });
+    const result = await waitForDescendantSubagentSummary({
+      sessionKey: "cron-session",
+      initialReply: undefined,
+      timeoutMs: 100,
+      observedActiveDescendants: true,
+    });
 
-      expect(result).toBe(synthesis);
-    },
-  );
+    expect(result).toBe(synthesis);
+  });
 });

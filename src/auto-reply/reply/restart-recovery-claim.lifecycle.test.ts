@@ -144,7 +144,6 @@ it("settles native-incognito recovery through hook checkpoints and restart readi
     let drains = 0;
     const reply = await handleReplyAgentRunError(new Error("Backend stopped"), {
       resolveVisibleReplyDelivery: async () => false,
-      isHeartbeat: false,
       replyExpectation: "required",
       isRestartRecoveryArmed: controller.isArmed,
       replyOperation: operation,
@@ -243,7 +242,6 @@ it.each([
           }
           const reply = await handleReplyAgentRunError(new Error("Backend stopped"), {
             resolveVisibleReplyDelivery: async () => false,
-            isHeartbeat: false,
             replyExpectation: "required",
             isRestartRecoveryArmed: controller.isArmed,
             replyOperation: operation,

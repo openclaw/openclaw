@@ -61,6 +61,10 @@ describe("cron edit", () => {
     [["--command-input", ""], { payload: { kind: "command", input: "" } }],
     [["--script-timeout-seconds", "20"], { payload: { kind: "script", timeoutSeconds: 20 } }],
     [["--name", "Renamed"], { name: "Renamed" }],
+    [
+      ["--session", "main", "--message", "resume"],
+      { sessionTarget: "main", payload: { kind: "agentTurn", message: "resume" } },
+    ],
   ] as const)("sends only the requested patch for %j", async (args, patch) => {
     await edit(args);
     expectPatch(patch);
@@ -73,7 +77,7 @@ describe("cron edit", () => {
     ],
     [["--trigger-script", "", "--clear-trigger"], "--trigger-script must not be blank"],
     [["--script", " ", "--pacing-min", "30m"], "--script must not be blank"],
-    [["--session", "main", "--message", "resume"], 'sessionTarget "main" requires'],
+    [["--session", "main", "--command", '["true"]'], 'sessionTarget "main" requires'],
     [
       ["--session", "current", "--system-event", "resume"],
       'sessionTarget "current" cannot run systemEvent: systemEvent only runs in the main session',
@@ -120,8 +124,8 @@ describe("cron edit", () => {
   it.each([
     [["--enable", "--disable"], "Choose --enable or --disable, not both"],
     [
-      ["--session", "main", "--message", "resume"],
-      'cron sessionTarget "main" requires payload.kind="systemEvent" or "script"; agent turns use "isolated", "current", or "session:<key>"',
+      ["--session", "main", "--command", '["true"]'],
+      'cron sessionTarget "main" requires payload.kind="systemEvent", "agentTurn", or "script"',
     ],
   ])("keeps edit guidance for %j in JSON mode before RPC", async (args, message) => {
     const argv = process.argv;
@@ -239,7 +243,10 @@ describe("cron edit", () => {
 
   it.each([
     [{ kind: "script", script: "return {}" }, "Use --script-timeout-seconds"],
-    [{ kind: "heartbeat" }, "--timeout-seconds is not supported for heartbeat jobs"],
+    [
+      { kind: "systemEvent", text: "tick" },
+      "--timeout-seconds is not supported for systemEvent jobs",
+    ],
   ] as const)("rejects generic timeouts on stored %j", async (payload, message) => {
     existing({ payload });
     await reject(["edit", "job-1", "--timeout-seconds", "0"], message, ["cron.get"]);
@@ -355,6 +362,139 @@ describe("automation mutation options", () => {
       'sessionTarget "session:agent:main:conversation" cannot run systemEvent: systemEvent only runs in the main session',
     );
   });
+
+  it.each([true, false])("creates an ordinary job with explicit %s policies", async (value) => {
+    await run([
+      ...addArgs,
+      "--every",
+      "30m",
+      "--message",
+      "Check the scratch",
+      "--active-hours-start",
+      "22:00",
+      "--active-hours-end",
+      "06:00",
+      "--active-hours-timezone",
+      "America/Los_Angeles",
+      value ? "--idle-only" : "--no-idle-only",
+      value ? "--skip-if-scratch-empty" : "--no-skip-if-scratch-empty",
+      value ? "--include-reasoning" : "--no-include-reasoning",
+      "--delivery-target",
+      "owner",
+      "--direct-policy",
+      "block",
+    ]);
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.add",
+      expect.anything(),
+      expect.objectContaining({
+        activeHours: { start: "22:00", end: "06:00", timezone: "America/Los_Angeles" },
+        idleOnly: value,
+        payload: expect.objectContaining({
+          kind: "agentTurn",
+          skipIfScratchEmpty: value,
+          includeReasoning: value,
+        }),
+        delivery: expect.objectContaining({
+          mode: "announce",
+          target: "owner",
+          directPolicy: "block",
+          channel: undefined,
+        }),
+      }),
+    );
+  });
+
+  it("preserves an existing active window when editing one field", async () => {
+    existing({ activeHours: { start: "22:00", end: "06:00", timezone: "UTC" } });
+    await edit(["--active-hours-end", "08:00", "--no-idle-only"]);
+    expectPatch({
+      activeHours: { start: "22:00", end: "08:00", timezone: "UTC" },
+      idleOnly: false,
+    });
+  });
+
+  it("clears ordinary policies without replacing the rest of the job", async () => {
+    existing({ sessionTarget: "isolated" });
+    await edit([
+      "--clear-active-hours",
+      "--clear-idle-only",
+      "--clear-delivery-target",
+      "--clear-direct-policy",
+    ]);
+    expectPatch({
+      activeHours: null,
+      idleOnly: null,
+      delivery: { target: null, directPolicy: null },
+    });
+  });
+
+  it.each([true, false])("edits agent-turn scratch and reasoning policies to %s", async (value) => {
+    existing({ payload: { kind: "agentTurn", message: "Check" } });
+    await edit([
+      value ? "--skip-if-scratch-empty" : "--no-skip-if-scratch-empty",
+      value ? "--include-reasoning" : "--no-include-reasoning",
+    ]);
+    expectPatch({
+      payload: { kind: "agentTurn", skipIfScratchEmpty: value, includeReasoning: value },
+    });
+  });
+
+  it.each([
+    ["announce", "announce"],
+    ["none", "none"],
+    ["webhook", "announce"],
+  ])(
+    "switches %s delivery to an owner target without inheriting its destination",
+    async (mode, expectedMode) => {
+      existing({
+        sessionTarget: "isolated",
+        delivery: { mode, to: "previous-target", threadId: 42, channel: "telegram" },
+      });
+      await edit(["--delivery-target", "owner"]);
+      expectPatch({
+        delivery: {
+          target: "owner",
+          to: null,
+          threadId: null,
+          ...(mode === "webhook" ? { mode: expectedMode } : {}),
+        },
+      });
+    },
+  );
+
+  it("replaces owner targeting when an explicit recipient is selected", async () => {
+    existing({ delivery: { mode: "announce", target: "owner" }, sessionTarget: "isolated" });
+    await edit(["--to", "group-123"]);
+    expectPatch({ delivery: { target: null, to: "group-123" } });
+  });
+
+  it.each([
+    [["--idle-only", "--clear-idle-only"], "Use --idle-only/--no-idle-only"],
+    [["--active-hours-start", "09:00", "--clear-active-hours"], "Use --clear-active-hours"],
+    [["--delivery-target", "last"], "--delivery-target must be owner"],
+    [["--delivery-target", "owner", "--to", "group-123"], "cannot be combined with --to"],
+    [["--delivery-target", "owner", "--clear-delivery-target"], "Use --delivery-target"],
+    [["--direct-policy", "ignore"], "--direct-policy must be allow or block"],
+    [["--direct-policy", "block", "--clear-direct-policy"], "Use --direct-policy"],
+    [
+      ["--direct-policy", "block", "--webhook", "https://example.invalid/hook"],
+      "requires chat delivery",
+    ],
+  ] as const)(
+    "rejects contradictory or unsupported policy flags %j before RPC",
+    async (args, message) => {
+      await reject(["edit", "job-1", ...args], message);
+    },
+  );
+
+  it.each(["--skip-if-scratch-empty", "--include-reasoning"])(
+    "rejects %s for an existing command job",
+    async (flag) => {
+      existing({ payload: { kind: "command", argv: ["true"] } });
+      await reject(["edit", "job-1", flag], "require an agentTurn job or --message", ["cron.get"]);
+    },
+  );
 
   it.each([
     ["add", ["--at", "2030-01-01T09:00:00", "--tz", "Invalid/Timezone"], "Invalid --tz"],

@@ -110,7 +110,7 @@ it.each([
       cronEnabled: true,
       log: logger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
+      enqueueSessionEvent: vi.fn(),
       runIsolatedAgentJob,
       sendCronWebhook: async (params) =>
         await sendGatewayCronWebhook({
@@ -224,7 +224,7 @@ it("records a rejected durable attempt as not delivered before webhook dispatch"
     cronEnabled: true,
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
     runIsolatedAgentJob: async () => ({ status: "ok", summary: "scheduled result" }),
     sendCronWebhook,
   });

@@ -38,6 +38,7 @@ const mocks = vi.hoisted(() => ({
 }));
 registerGetReplyRuntimeOverrides(mocks);
 const { getReplyFromConfig } = await import("../../plugin-sdk/reply-runtime.js");
+const { getReplyFromConfig: getReplyFromConfigInternal } = await import("./get-reply.js");
 const { getRuntimeConfig: loadConfigMock } = await import("../../config/config.js");
 const { runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js");
 const { resolveDefaultModel: resolveDefaultModelMock } =
@@ -339,7 +340,7 @@ function runParams() {
   return vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0];
 }
 async function expectPreparedReply(cfg: OpenClawConfig, options?: InternalGetReplyOptions) {
-  await expect(getReplyFromConfig(buildGetReplyCtx(), options, cfg)).resolves.toEqual({
+  await expect(getReplyFromConfigInternal(buildGetReplyCtx(), options, cfg)).resolves.toEqual({
     text: "ok",
   });
   expect(runPreparedReplyMock).toHaveBeenCalledOnce();
@@ -372,30 +373,29 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     );
     vi.mocked(runPreparedReplyMock).mockResolvedValue({ text: "ok" });
   });
-  it("suppresses heartbeat model overrides for a model-locked session", async () => {
+  it("suppresses turn-local model overrides for a model-locked session", async () => {
     const { sessionKey } = await mockAutoFallbackSession(true);
     mockFallbackDirectiveResult(sessionKey, { resolvedThinkLevel: "off" });
     await expectPreparedReply(makeReasoningModelConfig(), {
-      isHeartbeat: true,
-      heartbeatModelOverride: "openai/gpt-5.5@openai:metered",
+      modelOverride: "openai/gpt-5.5@openai:metered",
     });
     expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
     expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toMatchObject({
       provider: "anthropic",
       model: "claude-fallback",
-      hasResolvedHeartbeatModelOverride: false,
+      hasResolvedTurnModelOverride: false,
     });
     expect(runParams()).toMatchObject({ provider: "anthropic", model: "claude-fallback" });
     expect(runParams()?.autoFallbackPrimaryProbe).toBeUndefined();
     expect(runParams()).not.toHaveProperty("configuredProfileId", "openai:metered");
   });
-  it("keeps an explicit heartbeat profile on its turn without persisting it into chat", async () => {
+  it("keeps an explicit turn-local profile on its turn without persisting it into chat", async () => {
     const { sessionKey, storePath } = await mockAutoFallbackSession();
     mockFallbackDirectiveResult(sessionKey, { provider: "openai", model: "gpt-5.5" });
     const cfg = makeReasoningModelConfig();
-    await getReplyFromConfig(
+    await getReplyFromConfigInternal(
       buildGetReplyCtx(),
-      { isHeartbeat: true, heartbeatModelOverride: "openai/gpt-5.5@openai:metered" },
+      { modelOverride: "openai/gpt-5.5@openai:metered" },
       cfg,
     );
     expect(runParams()).toMatchObject({
@@ -404,7 +404,7 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
       configuredProfileId: "openai:metered",
     });
     expect(loadSessionEntry({ storePath, sessionKey })?.authProfileOverride).toBeUndefined();
-    await getReplyFromConfig(buildGetReplyCtx(), undefined, cfg);
+    await getReplyFromConfigInternal(buildGetReplyCtx(), undefined, cfg);
     expect(vi.mocked(runPreparedReplyMock).mock.calls[1]?.[0]).not.toHaveProperty(
       "configuredProfileId",
       "openai:metered",

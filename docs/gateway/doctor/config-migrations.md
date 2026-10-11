@@ -20,6 +20,48 @@ the flow ends, including failed runs.
 
 ## Runtime config migration
 
+### Heartbeat to ordinary automations
+
+`openclaw doctor --fix` converts supported July 2026 or newer heartbeat settings,
+persisted monitors, and structured heartbeat tasks into ordinary editable
+automations. It preserves job identity, history, scratch revisions and explicit
+unset markers, disabled state, schedule anchors and pending occurrences, tool
+authority, delivery targets, and quiet hours. A standalone `HEARTBEAT_OK` marker
+in a saved prompt becomes `NO_REPLY`; every other prompt byte remains unchanged.
+
+Migrated jobs use standard Automations delivery semantics. Heartbeat-specific
+duplicate suppression and no-route skipping are removed: repeated updates can be
+delivered, and a missing route no longer skips the run before execution. Delivery
+failures follow ordinary automation handling. Doctor prints a one-time note when
+the existing cutover receipt completes, advising users who relied on either
+behavior to review their jobs' delivery settings.
+
+Existing tool caps and run authority are preserved. Standing approvals remain
+bound to their exact job definition, so a converted definition can require a
+one-time approval again; Doctor does not transfer an approval to different
+payload bytes or bypass its live parent approval.
+
+Conversion writes and verifies the canonical job and context data before removing
+legacy config or archiving files. Ambiguous input remains recoverable and the
+pending automation cannot execute. A completed provisioning receipt remains after
+job deletion, so repeated Doctor runs and restarts preserve operator edits and
+deletions. See [Heartbeat migration](/gateway/heartbeat) and the
+[shared-state policy fence](/reference/database-schemas/state-schema-history#state-schema-21).
+
+Candidate update admission validates the projected configuration without changing
+the live config, databases, or backups. The installed updater can then run
+Doctor's backed-up data migration before the legacy settings are removed.
+Package updates using candidate admission also inspect the original heartbeat
+files and automation scratch. Known conflicts refuse the update before the running
+Gateway stops, including when an older updater omits workspace files from its
+private rehearsal. Reconcile the reported source and scratch while preserving
+both originals, then retry the update.
+Unrelated invalid fields, unsupported legacy shapes, and heartbeat repairs in
+read-only, future-written, or included configuration still require operator
+repair before admission.
+
+### Provider configuration
+
 Runtime config reads require per-model context budgets and current GitHub Copilot
 settings. Doctor migrates retired provider-level `contextTokens` and
 `contextWindow` values into explicit model entries, preserves existing per-model
@@ -940,7 +982,7 @@ against the current SQLite owners before the import can rename profiles.
 
     A tool policy scope with nonempty `allow` and `alsoAllow` lists fails validation. `doctor --fix` merges the lists only when the effective profile grants remain unchanged for every agent and provider that inherits the extras. It retains `alsoAllow: []` as an explicit override so inherited extras cannot reappear. If the extras may extend a profile or grant Gateway configuration-read access, Doctor leaves the conflicting scope untouched and reports the exact keys and values to review manually. This applies at the root `tools` policy, per-agent and per-provider policies, and channel or gateway tool policies. Sandbox lists remain untouched because `allow` and `alsoAllow` inherit independently; conflicting sandbox lists still require manual repair. Plugin-owned `plugins.entries.*.config` is left to the owning plugin's doctor contract. Gateway startup leaves these conflicts unchanged and directs the operator to Doctor; unresolved conflicts still require operator guidance before the config can validate.
 
-    `doctor --fix` removes `workspace: null` from `agents.entries.<id>` so normal workspace resolution can apply. It also removes invalid `heartbeat.activeHours` windows from agent entries and `agents.defaults`, preserving other heartbeat settings. Reconfigure a valid window if needed; without an explicit or inherited window, heartbeat hours are unrestricted. These repairs also apply after migrating a legacy `agents.list` roster.
+    `doctor --fix` removes `workspace: null` from `agents.entries.<id>` so normal workspace resolution can apply, including after migrating a legacy `agents.list` roster. Supported legacy heartbeat settings instead pass through the durable automation cutover below. Invalid active-hour values remain unchanged with a repair diagnostic; Doctor does not silently replace quiet hours with unrestricted execution.
 
   </Accordion>
   <Accordion title="2. Legacy config key migrations">
@@ -966,7 +1008,7 @@ against the current SQLite owners before the import can rename profiles.
 
     Per-agent migrations apply to both keyed `agents.entries` and legacy `agents.list` rosters, including rosters that already set `agents.ownership: "explicit"`. For example, Doctor preserves an agent's legacy `memorySearch` settings under `memory.search`. Existing values at the current config paths take precedence.
 
-    For legacy rosters with multiple agents and no resolvable ambient owner, Doctor seeds `agents.defaults.systemAgent.agentId` from a uniquely marked `default: true` agent, or `main` when present. Sole-agent rosters need no owner repair. Doctor converts valid legacy default markers into explicit per-surface owners before runtime admission. Explicit fleet ownership disables the legacy default-marker fallback, so those rosters may still need repair. Doctor also pins `agents.defaults.heartbeat.agentId` only when heartbeat enrollment would otherwise be unresolved; existing heartbeat owners, shared defaults, and per-agent enrollment are preserved. These changes are reported and saved by `doctor --fix`, including the update-time doctor pass. If no default can be identified, configure the system-agent owner explicitly.
+    For legacy rosters with multiple agents and no resolvable ambient owner, Doctor seeds `agents.defaults.systemAgent.agentId` from a uniquely marked `default: true` agent, or `main` when present. Sole-agent rosters need no owner repair. Doctor converts valid legacy default markers into explicit per-surface owners before runtime admission. Explicit fleet ownership disables the legacy default-marker fallback, so those rosters may still need repair. Doctor resolves supported legacy heartbeat enrollment before moving each owner to an ordinary automation. It then removes the retired heartbeat config; subsequent config reloads do not overwrite the job or recreate one the operator deleted. These changes are reported and saved by `doctor --fix`, including the update-time doctor pass. If no default can be identified, configure the system-agent owner explicitly.
 
     <Note>
       Migration retention follows the July 2026 cutoff in the
@@ -1016,7 +1058,7 @@ against the current SQLite owners before the import can rename profiles.
     | `browser.ssrfPolicy.hostnameAllowlist`                                                           | wildcard-aware `browser.ssrfPolicy.allowedHostnames`                          |
     | sandbox browser `enableNoVnc`                                                                    | `noVncEnabled`                                                                |
     | root `media`                                                                                     | `attachments`                                                                |
-    | channel/account `heartbeat` visibility blocks                                                   | `heartbeatVisibility`                                                         |
+    | channel/account `heartbeat` or `heartbeatVisibility` blocks                                      | Ordinary automation delivery through the durable heartbeat cutover             |
     | `channels.slack.identity`                                                                        | `channels.slack.postAs`                                                       |
     | root `audit`                                                                                     | `logging.audit`                                                               |
     | `gateway.nodes.skills.enabled`                                                                   | `gateway.nodes.allowSkills`                                                   |

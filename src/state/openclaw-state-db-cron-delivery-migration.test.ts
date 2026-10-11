@@ -7,6 +7,7 @@ import { ensureCronRunReceiptSchema } from "../cron/store/run-receipt-store.js";
 import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { preflightOpenClawDatabaseSchemas } from "./openclaw-database-preflight.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   openOpenClawStateReadConnection,
   openOpenClawStateReadOnlyLocation,
@@ -14,6 +15,7 @@ import {
 import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  detectOpenClawStateDatabaseSchemaMigrations,
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
@@ -61,7 +63,7 @@ it.each(["managed transaction", "implicit snapshot"] as const)(
           receipt_id: "legacy-receipt",
         });
         const writer = openOpenClawStateDatabase(options);
-        expect(readStateSchemaContentVersion(writer.db)).toBe(20);
+        expect(readStateSchemaContentVersion(writer.db)).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
         const observation = observeSqliteReadSql(StatementSync.prototype);
         try {
           expect(readStateSchemaContentVersion(db)).toBe(19);
@@ -80,7 +82,7 @@ it.each(["managed transaction", "implicit snapshot"] as const)(
       }
       const observation = observeSqliteReadSql(StatementSync.prototype);
       try {
-        expect(readStateSchemaContentVersion(db)).toBe(20);
+        expect(readStateSchemaContentVersion(db)).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
         expect(observation.queries).toEqual([]);
       } finally {
         observation.restore();
@@ -122,7 +124,7 @@ it.each(["runtime open", "doctor repair"] as const)(
     ).toEqual([
       { receipt_id: "legacy-receipt", status: "running", delivery_attempt_state: "unknown" },
     ]);
-    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 20 });
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 21 });
     expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
     db.exec("UPDATE cron_run_receipts SET delivery_attempt_state = 'started'");
     closeOpenClawStateDatabaseForTest();
@@ -150,7 +152,7 @@ it.each(["runtime open", "doctor repair"] as const)(
       supportedVersions: { state: 19, agent: 23 },
     });
     expect(preflight.incompatible).toEqual([
-      expect.objectContaining({ kind: "state", foundVersion: 20, supportedVersion: 19 }),
+      expect.objectContaining({ kind: "state", foundVersion: 21, supportedVersion: 19 }),
     ]);
   },
 );
@@ -178,4 +180,58 @@ it("rolls receipt migration back with schema publication failure", () => {
   } finally {
     after.close();
   }
+});
+
+it("fences schema-20 schedulers without changing the catalog or stored automation", async () => {
+  const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("automation-policy-fence-") } };
+  const current = openOpenClawStateDatabase(options);
+  const databasePath = current.path;
+  closeOpenClawStateDatabaseForTest();
+  const legacy = new DatabaseSync(databasePath);
+  const jobJson = '{"id":"monitor","payload":{"kind":"heartbeat"},"state":{"lastRunAtMs":37}}';
+  const catalog = (() => {
+    try {
+      legacy.exec("PRAGMA user_version = 20; UPDATE schema_meta SET schema_version = 20");
+      legacy
+        .prepare(
+          "INSERT INTO cron_jobs (store_key, job_id, name, enabled, payload_kind, job_json, updated_at) VALUES ('fixture', 'monitor', 'Preserved monitor', 1, 'heartbeat', ?, 37)",
+        )
+        .run(jobJson);
+      return legacy.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY type, name").all();
+    } finally {
+      legacy.close();
+    }
+  })();
+
+  // Old-process bytes must not reuse this process's admission for the current schema.
+  const replacement = `${databasePath}.previous-process`;
+  copyFileSync(databasePath, replacement);
+  renameSync(replacement, databasePath);
+  expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
+    { kind: "automation-policy-fence-v21", path: databasePath },
+  ]);
+  expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+  const repaired = openOpenClawStateDatabase(options);
+  expect(repaired.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 21 });
+  expect(repaired.db.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
+    schema_version: 21,
+  });
+  expect(
+    repaired.db.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY type, name").all(),
+  ).toEqual(catalog);
+  expect(
+    repaired.db.prepare("SELECT job_json FROM cron_jobs WHERE job_id = 'monitor'").get(),
+  ).toEqual({
+    job_json: jobJson,
+  });
+  closeOpenClawStateDatabaseForTest();
+  expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
+  const preflight = await preflightOpenClawDatabaseSchemas({
+    env: options.env,
+    scope: "state",
+    supportedVersions: { state: 20, agent: 24 },
+  });
+  expect(preflight.incompatible).toEqual([
+    expect.objectContaining({ kind: "state", foundVersion: 21, supportedVersion: 20 }),
+  ]);
 });

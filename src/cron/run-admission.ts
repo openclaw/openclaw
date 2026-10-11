@@ -30,6 +30,7 @@ import type { CronExecutionIdentityAdmission } from "./service/state.js";
 /** Owns one cron tool admission and its private message grant through settlement. */
 export function prepareCronRunAdmission(params: {
   admissionSource?: AdmittedRunContext["admissionSource"];
+  assertSourceCurrent?: () => void;
   cfg: OpenClawConfig;
   agentId: string;
   runId: string;
@@ -41,7 +42,8 @@ export function prepareCronRunAdmission(params: {
   toolsAllow?: string[];
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   executionIdentity?: CronExecutionIdentityAdmission;
-  ingressBoundary?: "cron.isolated-agent" | "cron.script";
+  ingressBoundary?: "cron.isolated-agent" | "cron.session-agent" | "cron.script";
+  onAdmitted?: (context: AdmittedRunContext) => void;
   resolveGatewayContext?: GatewayContextResolver;
 }) {
   const { runId, scheduledToolPolicy } = params;
@@ -52,6 +54,7 @@ export function prepareCronRunAdmission(params: {
   const basePreparedRunAdmission = prepareAgentRunAdmission({
     operationalRunInstance,
     admissionSource: params.admissionSource,
+    assertSourceCurrent: params.assertSourceCurrent,
     cfg: params.cfg,
     facts: {
       runId,
@@ -66,6 +69,7 @@ export function prepareCronRunAdmission(params: {
     onAdmitted: (admitted) => {
       bindGatewayContextResolver(admitted, resolveGatewayContext);
       assertAdmitted = resolveAdmittedRunActiveAssertion(admitted);
+      params.onAdmitted?.(admitted);
     },
   });
   const preparedRunAdmission = params.executionIdentity?.onPostAdmission

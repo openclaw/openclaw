@@ -158,7 +158,7 @@ describe("native /status channel model routing", () => {
       locked: true,
     },
     {
-      selection: "prepared non-default heartbeat or fallback model",
+      selection: "prepared non-default turn-local or fallback model",
       source: undefined,
       preparedProvider: "xai",
       preparedModel: "grok-4.3",

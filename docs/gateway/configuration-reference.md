@@ -57,7 +57,7 @@ Per-channel config keys live in [Configuration - channels](/gateway/config-chann
 
 See [Configuration - agents](/gateway/config-agents) for:
 
-- `agents.defaults.*` (workspace, model, thinking, heartbeat, memory, media, skills, sandbox)
+- `agents.defaults.*` (workspace, model, thinking, memory, media, skills, sandbox)
 - `multiAgent.*` (multi-agent routing and bindings)
 - `session.*` (session lifecycle, compaction, pruning)
 - `messages.*` (message delivery, TTS, markdown rendering)

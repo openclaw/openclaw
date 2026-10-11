@@ -83,7 +83,7 @@ function makeState(storePath: string, isAgentAvailable?: CronServiceDeps["isAgen
     cronEnabled: true,
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
     runIsolatedAgentJob: vi.fn(),
     isAgentAvailable,
   });

@@ -453,19 +453,27 @@ export function createReefOwnerNoticeHandler(params: {
       accountId: "default",
       peer: { kind: "direct", id: notice.peer ?? params.handle },
     });
-    const queued = params.runtime.system.enqueueSystemEvent(notice.text, {
-      sessionKey: route.sessionKey,
-      contextKey: notice.contextKey,
-    });
-    if (!queued || !notice.wakeAgent) {
+    if (!notice.wakeAgent) {
+      params.runtime.system.enqueueSystemEvent(notice.text, {
+        sessionKey: route.sessionKey,
+        contextKey: notice.contextKey,
+      });
       return;
     }
-    params.runtime.system.requestHeartbeat({
-      source: "other",
-      intent: "immediate",
-      reason: "reef:delivery-rejected",
+    const expectedTarget = await params.runtime.system.captureSessionEventTarget(
+      route.agentId,
+      route.sessionKey,
+    );
+    const receipt = params.runtime.system.enqueueSessionEvent(notice.text, {
       agentId: route.agentId,
       sessionKey: route.sessionKey,
+      contextKey: notice.contextKey,
+      expectedTarget,
+      createIfMissing: true,
     });
+    const outcome = await receipt.settled;
+    if (outcome.status !== "completed") {
+      throw new Error(outcome.error ?? `Reef owner notice ${outcome.status}`);
+    }
   };
 }

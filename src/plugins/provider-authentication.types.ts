@@ -1,4 +1,5 @@
 import type { ApiKeyCredential, AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import type { EmbeddedRunTrigger } from "../agents/run-trigger.js";
 import type { PromptMode } from "../agents/system-prompt.types.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -307,7 +308,7 @@ export type ProviderSystemPromptContributionContext = {
   runtimeChannel?: string;
   runtimeCapabilities?: string[];
   agentId?: string;
-  trigger?: "cron" | "event" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
+  trigger?: EmbeddedRunTrigger;
 };
 
 export type ProviderTransformSystemPromptContext = ProviderSystemPromptContributionContext & {

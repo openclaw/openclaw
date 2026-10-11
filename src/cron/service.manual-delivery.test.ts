@@ -99,7 +99,7 @@ describe("manual cron delivery occurrence", () => {
         cronConfig: { triggers: { enabled: true } },
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
+        enqueueSessionEvent: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         runScriptJob,
       });
@@ -197,7 +197,8 @@ describe("manual cron delivery occurrence", () => {
           return { status: "ok" as const, summary: "must not send" };
         });
         const enqueueSystemEvent = vi.fn();
-        const requestHeartbeat = vi.fn();
+        const enqueueSessionEvent = vi.fn();
+        const runSessionEvent = vi.fn(async () => ({ status: "ok" as const }));
         const sendCronWebhook = vi.fn(async () => ({ status: "delivered" as const }));
         const cron = new CronService({
           scheduler: createTestGatewayScheduler(),
@@ -211,7 +212,14 @@ describe("manual cron delivery occurrence", () => {
           runScriptJob,
           runIsolatedAgentJob,
           enqueueSystemEvent,
-          requestHeartbeat,
+          enqueueSessionEvent,
+          runSessionEvent,
+          captureSessionEventTarget: async () => ({
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            sessionId: "current-receipt-session",
+            generation: "current-receipt-generation",
+          }),
           sendCronWebhook,
         });
         try {
@@ -252,7 +260,8 @@ describe("manual cron delivery occurrence", () => {
           expect(runScriptJob).toHaveBeenCalledTimes(phase === "script" ? 1 : 0);
           expect(runIsolatedAgentJob).toHaveBeenCalledTimes(phase === "webhook" ? 1 : 0);
           expect(enqueueSystemEvent).not.toHaveBeenCalled();
-          expect(requestHeartbeat).not.toHaveBeenCalled();
+          expect(enqueueSessionEvent).not.toHaveBeenCalled();
+          expect(runSessionEvent).not.toHaveBeenCalled();
           expect(sendCronWebhook).not.toHaveBeenCalled();
           expect(
             openOpenClawStateDatabase()
@@ -304,7 +313,7 @@ describe("manual cron delivery occurrence", () => {
             nowMs: () => now,
             log: createNoopLogger(),
             enqueueSystemEvent: vi.fn(),
-            requestHeartbeat: vi.fn(),
+            enqueueSessionEvent: vi.fn(),
             onEvent: (event) => {
               events.push(event);
               if (event.action === "finished") {

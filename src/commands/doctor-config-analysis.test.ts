@@ -115,6 +115,28 @@ describe("doctor config analysis helpers", () => {
     expect(result.config).toEqual({ hooks: { mappings: [{ id: "example" }] } });
   });
 
+  it("preserves heartbeat migration input while stripping unrelated unknown keys", () => {
+    const config = {
+      agents: {
+        defaults: { heartbeat: { every: "30m", activeHours: { start: "09:00", end: "17:00" } } },
+        entries: { ops: { heartbeat: { every: "1h", target: "telegram", to: "123" } } },
+      },
+      channels: { defaults: { heartbeatVisibility: { showAlerts: false } } },
+      unexpected: true,
+    };
+
+    const result = stripUnknownConfigKeys(config);
+
+    expect(result.removed).toEqual(["unexpected"]);
+    expect(result.config).toEqual({
+      agents: {
+        defaults: { heartbeat: { every: "30m", activeHours: { start: "09:00", end: "17:00" } } },
+        entries: { ops: { heartbeat: { every: "1h", target: "telegram", to: "123" } } },
+      },
+      channels: { defaults: { heartbeatVisibility: { showAlerts: false } } },
+    });
+  });
+
   it("preserves include syntax at agent defaults while stripping unknown keys", () => {
     const agents = { defaults: { $include: "./agent-defaults.json5" } };
     const result = stripUnknownConfigKeys({ agents, unexpected: true } as never);

@@ -4,19 +4,11 @@ import {
   executeSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
 } from "../infra/kysely-sync.js";
-import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db.js";
-import { captureCronMutationCommit } from "./mutation-completion.js";
 import {
   assertCronJobScratchContent,
   type CronJobScratchWriteInput,
   type CronJobScratchWriteOutcome,
-  type CronJobScratchWriteResult,
 } from "./scratch-contract.js";
-import { cronStoreKey } from "./store/key.js";
 import { getCronStoreKysely } from "./store/schema.js";
 
 type ScratchWriteKey = { storeKey: string; jobId: string };
@@ -127,39 +119,4 @@ export function writeCronJobScratchInDatabase(
         : {}),
     },
   };
-}
-
-/** Doctor retains its synchronous migration and compensation transaction owner. */
-export function writeCronJobScratchForMaintenance(params: {
-  storePath: string;
-  jobId: string;
-  content: string | null;
-  expectedRevision?: number;
-  sourceSha256?: string;
-  nowMs?: number;
-  options?: OpenClawStateDatabaseOptions;
-}): CronJobScratchWriteResult {
-  if (params.content !== null) {
-    assertCronJobScratchContent(params.content);
-  }
-  const input = {
-    storeKey: cronStoreKey(params.storePath),
-    jobId: params.jobId,
-    content: params.content,
-    expectedRevision: params.expectedRevision,
-    sourceSha256: params.sourceSha256,
-    nowMs: params.nowMs ?? Date.now(),
-  };
-  const markCommitted = captureCronMutationCommit("cron.scratch.set");
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const outcome = writeCronJobScratchInDatabase(db, input);
-      if (outcome.written && markCommitted) {
-        deferSqlitePostCommitPublication(db, markCommitted);
-      }
-      return outcome.result;
-    },
-    params.options,
-    { operationLabel: "cron.scratch.write" },
-  );
 }

@@ -1,5 +1,5 @@
 // Gateway post-ready runtime services.
-// Starts delayed maintenance, cron, heartbeat, recovery, and pricing refresh work.
+// Starts delayed maintenance, cron, recovery, and pricing refresh work.
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -10,10 +10,6 @@ import {
 } from "../infra/delivery-queue-sqlite.js";
 import { computeBackoffMs } from "../infra/delivery-recovery.shared.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import { resolveHeartbeatAgents, resolveHeartbeatIntervalMs } from "../infra/heartbeat-config.js";
-import type { runHeartbeatOnce } from "../infra/heartbeat-runner-run.js";
-import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner-scheduler.js";
-import { getHeartbeatWakeAbortSignal } from "../infra/heartbeat-wake.js";
 import type { DeliverOutboundPayloadsParams } from "../infra/outbound/deliver.js";
 import {
   schedulePendingSessionDeliveries,
@@ -25,7 +21,6 @@ import {
 } from "../process/gateway-work-admission.js";
 import { startSessionUpstreamMonitor } from "../sessions/session-upstream-monitor.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withAuthorizedQueuedConversationDelivery } from "./conversation-route-ownership.js";
 import {
@@ -39,20 +34,13 @@ import {
   type GatewayMaintenanceHandles,
 } from "./server-maintenance-lifecycle.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
-import {
-  createNoopHeartbeatRunner,
-  type GatewayRuntimeServiceLogger,
-} from "./server-runtime-service-shared.js";
+import type { GatewayRuntimeServiceLogger } from "./server-runtime-service-shared.js";
 import { measureStartup } from "./server-startup-trace.js";
 export { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 export {
   startGatewayChannelHealthMonitor,
   type GatewayChannelManager,
 } from "./server-runtime-startup-services.js";
-
-const loadHeartbeatExecution = createLazyRuntimeModule(
-  () => import("../infra/heartbeat-runner-run.js"),
-);
 
 type StartupMaintenanceParams = Parameters<
   typeof import("./server-startup-plugins.js").runGatewayPostReadyStartupMaintenance
@@ -492,56 +480,18 @@ export function activateGatewayScheduledServices(params: {
   cfgAtStart: OpenClawConfig;
   deps: import("../cli/deps.types.js").CliDeps;
   sessionDeliveryRecoveryMaxEnqueuedAt: number;
-  cronEnabled: boolean;
   log: GatewayRuntimeServiceLogger;
   resolveGatewayContext?: GatewayContextResolver;
-}): { heartbeatRunner: HeartbeatRunner; stopDeliveryRecovery: () => Promise<void> } {
+}): { stopScheduledServices: () => Promise<void>; stopDeliveryRecovery: () => Promise<void> } {
   if (params.minimalTestGateway) {
     // Minimal gateways keep handles callable but inert so tests can share shutdown paths with
     // production starts without launching background loops.
     return {
-      heartbeatRunner: createNoopHeartbeatRunner(),
+      stopScheduledServices: async () => {},
       stopDeliveryRecovery: async () => {},
     };
   }
   const { scheduler } = params;
-  if (
-    !params.cronEnabled &&
-    resolveHeartbeatAgents(params.cfgAtStart).some((agent) =>
-      Boolean(resolveHeartbeatIntervalMs(params.cfgAtStart, undefined, agent.heartbeat)),
-    )
-  ) {
-    params.log
-      .child("heartbeat")
-      .warn(
-        "scheduled heartbeats are disabled because the cron scheduler is disabled; enable cron and restart the gateway",
-      );
-  }
-  // Scheduled heartbeat wakes fire from a timer with no Gateway request, so
-  // without this the turn runs contextless and trusted built-in tools fail.
-  const heartbeatGatewayContextResolver = fenceScheduledGatewayContextResolver(
-    params.resolveGatewayContext,
-  );
-  const runScheduledHeartbeat = createScheduledGatewayRunner(heartbeatGatewayContextResolver);
-  let heartbeatStopped = false;
-  const heartbeatRunner = startHeartbeatRunner({
-    cfg: params.cfgAtStart,
-    readCurrentConfig: getRuntimeConfig,
-    ...(heartbeatGatewayContextResolver
-      ? {
-          runOnce: async (opts: Parameters<typeof runHeartbeatOnce>[0]) => {
-            const wakeSignal = getHeartbeatWakeAbortSignal();
-            const { runHeartbeatOnce } = await loadHeartbeatExecution();
-            // A stopped service or replaced wake must not enter execution after
-            // the import settles; the wake owner handles canceled work.
-            if (heartbeatStopped || wakeSignal?.aborted) {
-              return { status: "skipped", reason: "disabled" };
-            }
-            return await runScheduledHeartbeat(async () => await runHeartbeatOnce(opts));
-          },
-        }
-      : {}),
-  });
   const sessionUpstreamMonitor = startSessionUpstreamMonitor({ scheduler });
   const stopSessionDeliveryRuntime = startPendingSessionDeliveryRuntime({
     scheduler,
@@ -566,17 +516,16 @@ export function activateGatewayScheduledServices(params: {
     ]).then(() => {});
     return deliveryRecoveryStopPromise;
   };
-  const heartbeatRunnerWithUpstreamMonitor: HeartbeatRunner = {
-    updateConfig: heartbeatRunner.updateConfig,
-    stop: () => {
-      heartbeatStopped = true;
-      void stopDeliveryRecovery();
-      void sessionUpstreamMonitor.stop();
-      heartbeatRunner.stop();
-    },
+  let scheduledServicesStopPromise: Promise<void> | undefined;
+  const stopScheduledServices = () => {
+    scheduledServicesStopPromise ??= Promise.all([
+      stopDeliveryRecovery(),
+      sessionUpstreamMonitor.stop(),
+    ]).then(() => {});
+    return scheduledServicesStopPromise;
   };
   return {
-    heartbeatRunner: heartbeatRunnerWithUpstreamMonitor,
+    stopScheduledServices,
     stopDeliveryRecovery,
   };
 }

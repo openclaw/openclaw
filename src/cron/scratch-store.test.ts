@@ -21,12 +21,8 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createCronMutationCompletion } from "./mutation-completion.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "./scratch-contract.js";
 import { readCronScratchSnapshot } from "./scratch-read.js";
-import {
-  deleteCronJobScratch,
-  hashCronScratchSource,
-  readCronJobScratchState,
-} from "./scratch-store.js";
-import { writeCronJobScratchForMaintenance } from "./scratch-write.kernel.js";
+import { hashCronScratchSource, readCronJobScratchState } from "./scratch-store.js";
+import { writeCronScratchFixture } from "./scratch-store.test-support.js";
 import { CronService } from "./service.js";
 import * as runtimeMutation from "./service/runtime-mutation.js";
 import * as cronStore from "./store.js";
@@ -86,8 +82,8 @@ async function withScratchService(
 }
 
 describe("cron scratch worker service", () => {
-  it("initializes missing shared state for a heartbeat scratch read off the caller thread", async () => {
-    await withOpenClawTestState({ label: "heartbeat-scratch-cold-read" }, async (fixture) => {
+  it("initializes missing shared state for an ordinary scratch read off the caller thread", async () => {
+    await withOpenClawTestState({ label: "cron-scratch-cold-read" }, async (fixture) => {
       const databasePath = resolveOpenClawStateSqlitePath(fixture.env);
       await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
       const sql = observeMainThreadSql();
@@ -97,7 +93,7 @@ describe("cron scratch worker service", () => {
         sql.calibrate();
         observed = await readCronScratchSnapshot(
           fixture.statePath("cron", "jobs.json"),
-          { kind: "heartbeat", agentId: "alpha" },
+          { kind: "job", jobId: "missing", createdAtMsFallback: 1_000 },
           {
             path: databasePath,
             env: fixture.env,
@@ -409,15 +405,13 @@ async function createFixture(jobIds = ["job-1"]) {
       content: string | null,
       input: Partial<
         Pick<
-          Parameters<typeof writeCronJobScratchForMaintenance>[0],
+          Parameters<typeof writeCronScratchFixture>[0],
           "jobId" | "storePath" | "expectedRevision" | "nowMs" | "sourceSha256"
         >
       > = {},
-    ) => writeCronJobScratchForMaintenance({ ...fixture, jobId: "job-1", content, ...input }),
+    ) => writeCronScratchFixture({ ...fixture, jobId: "job-1", content, ...input }),
     read: (jobId = "job-1", storePath = fixture.storePath) =>
       readCronJobScratchState(storePath, jobId, fixture.options),
-    remove: (expectedRevision: number) =>
-      deleteCronJobScratch(fixture.storePath, "job-1", fixture.options, { expectedRevision }),
   };
 }
 
@@ -445,31 +439,7 @@ describe("cron job scratch store", () => {
     expect(fixture.read().scratch?.content).toBe("second");
   });
 
-  it("marks actual writes but not an unset no-op or revision conflict", async () => {
-    const fixture = await createFixture();
-    for (const [content, expectedRevision, expected, committed] of [
-      [null, undefined, { ok: true, currentRevision: 0 }, false],
-      [
-        "committed",
-        undefined,
-        {
-          ok: true,
-          currentRevision: 1,
-          scratch: { content: "committed", revision: 1, updatedAtMs: 10 },
-        },
-        true,
-      ],
-      ["stale", 0, { ok: false, reason: "revision-conflict", currentRevision: 1 }, false],
-    ] as const) {
-      const completion = createCronMutationCompletion("cron.scratch.set")!;
-      expect(
-        await completion.run(async () => fixture.write(content, { expectedRevision, nowMs: 10 })),
-      ).toEqual(expected);
-      expect(completion.isCommitted()).toBe(committed);
-    }
-  });
-
-  it("distinguishes empty content, CAS conflicts, tombstones, and guarded removal", async () => {
+  it("distinguishes empty content, CAS conflicts, and tombstones", async () => {
     const fixture = await createFixture();
     expect(fixture.read()).toEqual({ currentRevision: 0 });
     for (const [content, expectedRevision, nowMs, expected] of [
@@ -509,11 +479,6 @@ describe("cron job scratch store", () => {
         expect(fixture.read()).toEqual(snapshot);
       }
     }
-    expect(fixture.remove(3)).toBe(false);
-    expect(fixture.read().currentRevision).toBe(4);
-    expect(fixture.remove(4)).toBe(true);
-    expect(fixture.read()).toEqual({ currentRevision: 0 });
-    expect(fixture.remove(0)).toBe(true);
   });
 
   it("rejects a late write after the owning job is durably deleted", async () => {
@@ -556,29 +521,24 @@ describe("cron job scratch store", () => {
     },
   );
 
-  it.each(["write", "delete"] as const)(
-    "preserves native timestamp range errors during %s",
-    async (operation) => {
-      const fixture = await createFixture();
-      fixture.write("initial");
-      fixture.write(null);
-      const { db } = openOpenClawStateDatabase(fixture.options);
-      const storeKey = cronStoreKey(fixture.storePath);
-      // A valid SQLite integer can exceed the JavaScript driver's numeric range.
-      db.prepare(
-        "UPDATE cron_job_scratch SET updated_at_ms = ? WHERE store_key = ? AND job_id = ?",
-      ).run(9007199254740995n, storeKey, "job-1");
-      const stored = db.prepare(
-        "SELECT * FROM cron_job_scratch WHERE store_key = ? AND job_id = ?",
-      );
-      stored.setReadBigInts(true);
-      const before = stored.get(storeKey, "job-1");
-      expect(() =>
-        operation === "write" ? fixture.write("replacement") : fixture.remove(2),
-      ).toThrow(/too large to be represented as a JavaScript number/);
-      expect(stored.get(storeKey, "job-1")).toEqual(before);
-    },
-  );
+  it("preserves native timestamp range errors during writes", async () => {
+    const fixture = await createFixture();
+    fixture.write("initial");
+    fixture.write(null);
+    const { db } = openOpenClawStateDatabase(fixture.options);
+    const storeKey = cronStoreKey(fixture.storePath);
+    // A valid SQLite integer can exceed the JavaScript driver's numeric range.
+    db.prepare(
+      "UPDATE cron_job_scratch SET updated_at_ms = ? WHERE store_key = ? AND job_id = ?",
+    ).run(9007199254740995n, storeKey, "job-1");
+    const stored = db.prepare("SELECT * FROM cron_job_scratch WHERE store_key = ? AND job_id = ?");
+    stored.setReadBigInts(true);
+    const before = stored.get(storeKey, "job-1");
+    expect(() => fixture.write("replacement")).toThrow(
+      /too large to be represented as a JavaScript number/,
+    );
+    expect(stored.get(storeKey, "job-1")).toEqual(before);
+  });
 
   it("records migration provenance and clears it on plain rewrites", async () => {
     const fixture = await createFixture();

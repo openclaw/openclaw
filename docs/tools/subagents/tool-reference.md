@@ -311,7 +311,7 @@ appears in the transcript.
 Use the optional `message` field for private context that the resumed turn
 should receive. OpenClaw sends a default waiting reply when an interactive
 parent turn would otherwise end silently; `acknowledgment` overrides its text.
-This waiting reply is not sent to the user from sub-agent, heartbeat, or silent
+This waiting reply is not sent to the user from sub-agent, automation, or silent
 turns, and it does not replace a reply or
 message already delivered during the turn. This host-owned waiting status
 bypasses message-tool-only source suppression; ordinary model replies remain

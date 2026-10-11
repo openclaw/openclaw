@@ -61,7 +61,7 @@ require installing Codex for an API-only configuration. A literal provider
 Required profile bindings, provider auth settings, configured secret references,
 and explicit auth order still take precedence. An authored OpenClaw runtime choice
 prefers the API route when both kinds are eligible; runtime compatibility is
-checked independently. Unpinned heartbeat and subagent models inherit their
+checked independently. Unpinned automation and subagent models inherit their
 default model's route intent. Doctor reports a resolved billing-route change
 after saving a model-reference migration, including the consumer and old/new
 models, routes, and profiles.

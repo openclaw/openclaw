@@ -95,29 +95,33 @@ extension GatewayConnectionControlTests {
                     await connection._test_handlePush(
                         .event(EventFrame(
                             type: "event",
-                            event: "heartbeat",
-                            payload: OpenClawProtocol.AnyCodable(["ts": 1, "status": acknowledgement]))),
+                            event: "agent",
+                            payload: OpenClawProtocol.AnyCodable([
+                                "runId": acknowledgement, "seq": 1, "stream": "assistant", "ts": 1,
+                                "data": ["sessionKey": "b-main"],
+                            ]))),
                         socketGeneration: socket)
                 }
             }()
             do {
                 try await producer
-                try await Self.assertBufferedOwnership(buffered, replacement: replacement)
+                try await Self.assertBufferedOwnership(
+                    buffered, replacement: replacement, acknowledgement: acknowledgement)
             } catch {
                 await control.disconnect()
                 throw error
             }
             if ["unavailable", "adopted", "shutdown"].contains(replacement) {
                 let deadline = ContinuousClock.now + .seconds(2)
-                while control.lastHeartbeatEvent?.status != acknowledgement,
+                while !AgentEventStore.shared.events.contains(where: { $0.runId == acknowledgement }),
                       !(["unavailable", "adopted"].contains(replacement) && activity.current?.sessionKey == "a-main"),
                       ContinuousClock.now < deadline
                 {
                     try await Task.sleep(for: .milliseconds(10))
                 }
             } else {
-                try await TestWait.state("current primary heartbeat") {
-                    control.lastHeartbeatEvent?.status == acknowledgement
+                try await TestWait.observed("current primary event") {
+                    AgentEventStore.shared.events.contains { $0.runId == acknowledgement }
                 }
             }
             if replacement == "shutdown" {
@@ -130,7 +134,7 @@ extension GatewayConnectionControlTests {
                 #expect(activity.mainSessionKey == "a-main")
                 #expect(activity.current == nil)
             } else {
-                #expect(control.lastHeartbeatEvent?.status == acknowledgement)
+                #expect(AgentEventStore.shared.events.contains { $0.runId == acknowledgement })
                 #expect(activity.mainSessionKey == "b-main")
                 #expect(activity.current?.sessionKey == "b-main")
                 #expect(activity.iconState == .workingMain(.job))
@@ -143,17 +147,23 @@ extension GatewayConnectionControlTests {
     private nonisolated static func assertBufferedOwnership(
         _ stream: AsyncStream<GatewayConnection.PushDelivery>,
         replacement: String,
+        acknowledgement: String,
         sourceLocation: SourceLocation = #_sourceLocation) async throws
     {
         let admitsReplacement = ["admitted", "reconnect", "replaced-shutdown"].contains(replacement)
-        let terminalEvent = admitsReplacement ? "heartbeat" : (replacement == "shutdown" ? "shutdown" : "agent")
+        let terminalEvent = replacement == "shutdown" ? "shutdown" : "agent"
         var deliveries: [GatewayConnection.PushDelivery] = []
         var reachedTerminal = false
         for await delivery in stream {
             deliveries.append(delivery)
             if case let .event(event) = delivery.push, event.event == terminalEvent {
-                reachedTerminal = true
-                break
+                let agent = event.payload.flatMap {
+                    try? GatewayPayloadDecoding.decode($0, as: ControlAgentEvent.self)
+                }
+                if !admitsReplacement || agent?.runId == acknowledgement {
+                    reachedTerminal = true
+                    break
+                }
             }
         }
         guard reachedTerminal, !Task.isCancelled else {

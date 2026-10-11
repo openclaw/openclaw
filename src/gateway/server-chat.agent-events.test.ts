@@ -1,4 +1,4 @@
-// Server chat agent-event tests protect event fanout, heartbeat visibility,
+// Server chat agent-event tests protect event fanout, source visibility,
 // session lifecycle persistence, and subscriber registry behavior.
 
 import { expectDefined } from "@openclaw/normalization-core";
@@ -64,14 +64,6 @@ vi.mock("../config/io.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
 }));
 
-vi.mock("../infra/heartbeat-visibility.js", () => ({
-  resolveHeartbeatVisibility: vi.fn(() => ({
-    showOk: false,
-    showAlerts: true,
-    useIndicator: true,
-  })),
-}));
-
 // mock-isolation: Session projection fixtures own their entries without native database admission.
 vi.mock("./session-utils.js", () => {
   const loadSessionEntry = vi.fn(emptySessionLookup);
@@ -87,7 +79,6 @@ vi.mock("./session-utils-store-worker.js", () => ({
 }));
 
 import { getRuntimeConfig } from "../config/io.js";
-import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { makeClient, registerNodeSession } from "./node-registry.test-helpers.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
@@ -123,11 +114,6 @@ describe("agent event handler", () => {
     lineageProjection = undefined;
     resetAgentEventsForTest({ preserveListeners: true });
     vi.mocked(getRuntimeConfig).mockReturnValue({});
-    vi.mocked(resolveHeartbeatVisibility).mockReturnValue({
-      showOk: false,
-      showAlerts: true,
-      useIndicator: true,
-    });
     vi.mocked(loadSessionEntry).mockReset().mockReturnValue(emptySessionLookup());
     vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
     loadGatewaySessionLifecycleSnapshotMock
@@ -241,15 +227,12 @@ describe("agent event handler", () => {
 
   registerBoundedWidgetSnapshotsTest({ createHarness, widgetResult, logWarnMock });
 
-  it.each(["silent", "heartbeat"])("does not revive widgets from a %s turn", async (mode) => {
+  it("does not revive widgets from a silent turn", async () => {
     const h = createHarness();
     h.registerNamed("widgets");
-    if (mode === "heartbeat") {
-      registerAgentRunContext("run-widgets", { sessionKey: "session-widgets", isHeartbeat: true });
-    }
     await h.emitMany("run-widgets", [
       ["tool", { phase: "result", name: "show_widget", result: widgetResult("hidden") }],
-      ["assistant", { text: mode === "silent" ? "NO_REPLY" : "" }],
+      ["assistant", { text: "NO_REPLY" }],
       ["lifecycle", { phase: "end" }],
     ]);
     expect(h.chat().at(-1)?.[1].message).toBeUndefined();
@@ -1277,7 +1260,6 @@ describe("agent event handler", () => {
     registerAgentRunContext(runId, {
       sessionKey,
       isControlUiVisible: true,
-      isHeartbeat: false,
       verboseLevel: "full",
     });
     h.toolEventRecipients.add(runId, "conn-selected");
@@ -1390,36 +1372,6 @@ describe("agent event handler", () => {
       ["agent", "client-tool", "work", new Set(["conn-overlap", "conn-run-only"])],
       ["session.tool", "client-tool", "work", new Set(["conn-session-only"])],
     ]);
-  });
-
-  it("suppresses heartbeat tool events for Control UI and verbose node subscribers", async () => {
-    const h = createHarness({
-      resolveSessionKeyForRun: () => "session-heartbeat",
-    });
-
-    registerAgentRunContext("run-heartbeat-tool", {
-      sessionKey: "session-heartbeat",
-      isHeartbeat: true,
-      verboseLevel: "on",
-    });
-    h.toolEventRecipients.add("run-heartbeat-tool", "conn-run");
-    h.sessionEventSubscribers.subscribe("conn-session");
-
-    await h.emit(
-      "run-heartbeat-tool",
-      "tool",
-      {
-        phase: "start",
-        name: "read",
-        toolCallId: "tool-heartbeat-1",
-        args: { path: "HEARTBEAT.md" },
-      },
-      { ts: 1_234 },
-    );
-
-    expect(h.broadcastToConnIds).not.toHaveBeenCalled();
-    const nodeToolCalls = h.nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
-    expect(nodeToolCalls).toHaveLength(0);
   });
 
   it("broadcasts terminal session status to session subscribers on lifecycle end", async () => {

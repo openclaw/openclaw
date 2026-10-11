@@ -62,7 +62,6 @@ it.each([
         totalTokensVersion: 1,
       },
       agentHarnessId: runtime,
-      isHeartbeat: false,
       onCompactionNotice: notice,
     };
     const entry = await runSessionCompactionIfNeeded(params);

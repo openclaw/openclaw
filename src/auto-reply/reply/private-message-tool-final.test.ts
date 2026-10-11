@@ -7,7 +7,6 @@ const base = {
   sourceReplyDeliveryMode: "message_tool_only" as const,
   sendPolicyDenied: false,
   successfulSourceReplyDelivery: false,
-  isHeartbeat: false,
   isRoomEvent: false,
   finalText:
     "Here is the answer the user asked for. It includes enough detail to look like a visible response rather than an internal no-op note.",

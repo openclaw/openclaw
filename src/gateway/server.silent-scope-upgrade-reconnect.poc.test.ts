@@ -253,14 +253,14 @@ describe("gateway silent scope-upgrade reconnect", () => {
       const admin = await callGateway({
         url: `ws://127.0.0.1:${started.port}`,
         token: "secret",
-        method: "set-heartbeats",
-        params: { enabled: false },
+        method: "exec.approvals.get",
+        params: {},
         scopes: ["operator.admin"],
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
         timeoutMs: 2_000,
       });
-      expect(admin.ok).toBe(true);
+      expect(admin).toMatchObject({ file: { version: 1 } });
 
       const pending = await devicePairingModule.listDevicePairing();
       expect(pending.pending).toHaveLength(0);

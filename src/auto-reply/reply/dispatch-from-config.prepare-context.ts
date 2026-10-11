@@ -177,7 +177,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
   });
   const chatType = normalizeChatType(ctx.ChatType);
   state.replyOperationRunState.replyCompletion = resolveReplyCompletion(
-    resolveSourceReplyExpectation({ ctx, cfg, isHeartbeat: params.replyOptions?.isHeartbeat }),
+    resolveSourceReplyExpectation({ ctx, cfg }),
     "empty",
   );
   const { configuredVisibleReplies, harnessDefaultVisibleReplies } = resolveVisibleRepliesPolicy({
@@ -248,7 +248,6 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     shouldSuppressTyping: state.shouldSuppressTyping,
     messageToolAvailable,
     sessionStableMessageToolAvailable,
-    isHeartbeat: params.replyOptions?.isHeartbeat,
     requested: params.replyOptions?.sourceReplyDeliveryMode,
   } as const;
   let sourceReplyPolicy = resolveSourceReplyVisibilityPolicy({

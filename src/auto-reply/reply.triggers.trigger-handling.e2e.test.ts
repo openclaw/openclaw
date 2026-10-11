@@ -453,16 +453,6 @@ describe("trigger handling", () => {
           options: {},
           expectedPrompt: currentBody,
         },
-        {
-          label: "heartbeat",
-          request: {
-            Body: "HEARTBEAT /think:high",
-            From: "+1003",
-            To: "+1003",
-          },
-          options: { isHeartbeat: true },
-          expectedPrompt: undefined,
-        },
       ] as const;
 
       for (const testCase of thinkCases) {
@@ -483,43 +473,26 @@ describe("trigger handling", () => {
     });
   });
 
-  it("resolves heartbeat model selection from overrides", async () => {
+  it("uses a turn-local model override without changing the stored selection", async () => {
     await withTempHome(async (home) => {
-      const modelCases = [
-        {
-          label: "heartbeat-override",
-          setup: (cfg: ReturnType<typeof makeCfg>) => {
-            cfg.agents = {
-              ...cfg.agents,
-              defaults: {
-                ...cfg.agents?.defaults,
-                heartbeat: { model: "anthropic/claude-haiku-4-5-20251001" },
-              },
-            };
-          },
-          expected: { provider: "anthropic", model: "claude-haiku-4-5-20251001" },
-        },
-        {
-          label: "stored-override",
-          setup: () => undefined,
-          expected: { provider: "openai", model: "gpt-5.4" },
-        },
-      ] as const;
-
-      for (const testCase of modelCases) {
-        const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
-        runEmbeddedAgentMock.mockReset();
-        mockEmbeddedOkPayload();
-        const cfg = makeCfg(home);
-        cfg.session = { ...cfg.session, store: join(home, `${testCase.label}.sessions.json`) };
-        await writeStoredModelOverride(cfg);
-        testCase.setup(cfg);
-        await getReplyFromConfig(BASE_MESSAGE, { isHeartbeat: true }, cfg);
-
-        const call = firstMockCallArg(runEmbeddedAgentMock, "embedded OpenClaw agent");
-        expect(call?.provider).toBe(testCase.expected.provider);
-        expect(call?.model).toBe(testCase.expected.model);
-      }
+      const cfg = makeCfg(home);
+      await writeStoredModelOverride(cfg);
+      const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
+      mockEmbeddedOkPayload();
+      await getReplyFromConfig(
+        BASE_MESSAGE,
+        { modelOverride: "anthropic/claude-haiku-4-5-20251001" },
+        cfg,
+      );
+      const first = firstMockCallArg(runEmbeddedAgentMock, "embedded OpenClaw agent");
+      expect(first.provider).toBe("anthropic");
+      expect(first.model).toBe("claude-haiku-4-5-20251001");
+      runEmbeddedAgentMock.mockReset();
+      mockEmbeddedOkPayload();
+      await getReplyFromConfig(BASE_MESSAGE, undefined, cfg);
+      const next = firstMockCallArg(runEmbeddedAgentMock, "embedded OpenClaw agent");
+      expect(next.provider).toBe("openai");
+      expect(next.model).toBe("gpt-5.4");
     });
   });
 

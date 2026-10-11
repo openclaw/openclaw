@@ -6,15 +6,21 @@ import {
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
 import { createAgentLifecycleTerminalBackstop } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
+import {
+  assertSessionEventTargetCurrent,
+  captureSessionEventTargetForHost,
+  prepareSessionEventTargetForHost,
+} from "../../auto-reply/reply/session-event-target.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { consumeCronNextCheckProposal } from "../../infra/agent-run-registry.automation.js";
 import {
   claimAgentRunContext,
-  consumeCronNextCheckProposal,
+  getAgentRunContext,
   releaseAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -31,7 +37,11 @@ import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycl
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
+import { appendSessionRuntimeContext } from "../../sessions/runtime-context.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { isCronWithinActiveHours } from "../active-hours.js";
+import { isCronExecutionIdle } from "../execution-idle.js";
+import { resolveCronRunAdmissionSource } from "../run-authority.js";
 import { removeCronRunContinuationSessionIfIdle } from "../run-continuation-cleanup.js";
 import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../run-diagnostics.js";
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
@@ -40,6 +50,7 @@ import {
   resolveCronAbortReasonText,
 } from "../service/execution-errors.js";
 import type { CronAgentExecutionPhaseUpdate } from "../types.js";
+import { resolveCronActiveRuntimeConfig } from "./run-config.js";
 import type { CronRunExecutionParams } from "./run-execution.types.js";
 import { finalizeCronRun } from "./run-finalize.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
@@ -87,6 +98,7 @@ export async function runCronIsolatedAgentTurn(
 async function runCronIsolatedAgentTurnInTrace(
   params: RunCronAgentTurnParams,
 ): Promise<RunCronAgentTurnResult> {
+  params.assertCurrent?.();
   const admittedLifecycleGeneration = getAgentEventLifecycleGeneration();
   const upstreamAbortSignal = params.abortSignal ?? params.signal;
   const lifecycleAbortController = new AbortController();
@@ -138,27 +150,82 @@ async function runCronIsolatedAgentTurnInTrace(
           let runContextOwnerToken: string | undefined;
           let runLifecycleGeneration = admittedLifecycleGeneration;
           let executionStarted = false;
-          const notifyExecutionStarted = (info?: {
+          const resolveUnstartedTerminalMetadata = () =>
+            executionStarted ? undefined : { executionStarted: false, providerStarted: false };
+          let admissionDeferred = false;
+          let admissionDeferredReason: "busy" | "active-hours" | undefined;
+          const resolveStartDeferral = (): "busy" | "active-hours" | undefined => {
+            const cfg = resolveCronActiveRuntimeConfig(params.cfg);
+            if (
+              !isCronWithinActiveHours(
+                params.job.activeHours,
+                Date.now(),
+                cfg.agents?.defaults?.userTimezone,
+              )
+            ) {
+              return "active-hours";
+            }
+            return params.job.idleOnly &&
+              !isCronExecutionIdle(
+                cfg,
+                params.job,
+                prepared.context.agentId,
+                prepared.context.runSessionKey,
+              )
+              ? "busy"
+              : undefined;
+          };
+          const awaitStartPolicy = async (onAdmitted?: () => void) => {
+            let deferral = resolveStartDeferral();
+            while (deferral === "busy" && params.waitForIdle) {
+              await params.waitForIdle(prepared.context.runSessionKey, abortSignal);
+              params.assertCurrent?.();
+              abortSignal?.throwIfAborted();
+              deferral = resolveStartDeferral();
+            }
+            if (!deferral) {
+              onAdmitted?.();
+            }
+            return deferral;
+          };
+          const notifyExecutionStarted = async (info?: {
             lifecycleGeneration?: string;
             isFallback?: boolean;
             provider?: string;
             model?: string;
           }) => {
-            executionStarted = true;
-            if (info?.lifecycleGeneration) {
-              runLifecycleGeneration = info.lifecycleGeneration;
+            params.assertCurrent?.();
+            const markStarted = () => {
+              executionStarted = true;
+              if (info?.lifecycleGeneration) {
+                runLifecycleGeneration = info.lifecycleGeneration;
+              }
+              params.onExecutionStarted?.({
+                jobId: params.job.id,
+                agentId: prepared.context.agentId,
+                sessionId: prepared.context.currentRunSessionId(),
+                sessionKey: prepared.context.runSessionKey,
+                runId,
+                ...(info?.isFallback === true ? { isFallback: true } : {}),
+                phase: "runner_entered",
+                provider: info?.provider ?? prepared.context.liveSelection.provider,
+                model: info?.model ?? prepared.context.liveSelection.model,
+              });
+            };
+            const alreadyStarted = executionStarted;
+            const deferral = !alreadyStarted ? await awaitStartPolicy(markStarted) : undefined;
+            if (deferral) {
+              admissionDeferred = true;
+              admissionDeferredReason = deferral;
+              const error = new Error(
+                "Automation admission deferred by its current window or foreground activity",
+              );
+              lifecycleAbortController.abort(error);
+              throw error;
             }
-            params.onExecutionStarted?.({
-              jobId: params.job.id,
-              agentId: prepared.context.agentId,
-              sessionId: prepared.context.currentRunSessionId(),
-              sessionKey: prepared.context.runSessionKey,
-              runId,
-              ...(info?.isFallback === true ? { isFallback: true } : {}),
-              phase: "runner_entered",
-              provider: info?.provider ?? prepared.context.liveSelection.provider,
-              model: info?.model ?? prepared.context.liveSelection.model,
-            });
+            if (alreadyStarted) {
+              markStarted();
+            }
           };
           const notifyExecutionPhase = (
             info: Pick<CronAgentExecutionPhaseUpdate, "phase"> &
@@ -172,6 +239,7 @@ async function runCronIsolatedAgentTurnInTrace(
               provider: prepared.context.liveSelection.provider,
               model: prepared.context.liveSelection.model,
               ...info,
+              runId,
             });
           };
 
@@ -239,6 +307,17 @@ async function runCronIsolatedAgentTurnInTrace(
               resolveAgentRunErrorLifecycleFields(error, abortSignal),
           });
           try {
+            const deferral = await awaitStartPolicy();
+            if (deferral) {
+              return prepared.context.withRunSession({
+                status: "skipped",
+                executionStarted: false,
+                admissionDeferred: true,
+                admissionDeferredReason: deferral,
+                summary:
+                  "Automation admission deferred by its current window or foreground activity",
+              });
+            }
             assertAgentRunLifecycleGenerationCurrent(runLifecycleGeneration);
             runContextOwnerToken = claimAgentRunContext(
               runId,
@@ -247,8 +326,24 @@ async function runCronIsolatedAgentTurnInTrace(
                 sessionId: initialSessionId,
                 agentId: prepared.context.agentId,
                 lifecycleGeneration: runLifecycleGeneration,
+                sessionEventDelivery: prepared.context.sourceDelivery.fallback.directDelivery
+                  ? undefined
+                  : false,
                 cronRunsByJobId: new Map([
-                  [params.job.id, { pacingEnabled: params.job.pacing !== undefined }],
+                  [
+                    params.job.id,
+                    {
+                      pacingEnabled: params.job.pacing !== undefined,
+                      assertCurrent: () => {
+                        params.assertCurrent?.();
+                        abortSignal.throwIfAborted();
+                        assertAgentRunLifecycleGenerationCurrent(admittedLifecycleGeneration);
+                        if (!prepared.context.sessionWorkAdmission.isActive()) {
+                          throw new Error("Automation run owner is closed");
+                        }
+                      },
+                    },
+                  ],
                 ]),
               },
               {
@@ -269,7 +364,15 @@ async function runCronIsolatedAgentTurnInTrace(
               setRunContinuationCliExecutionProvider:
                 prepared.context.runContinuationSession?.setCliExecutionProvider,
               abortSignal,
-              lifecycle,
+              lifecycle: {
+                ...lifecycle,
+                // Capture freezes the terminal before the outer catch publishes it.
+                capture: (phase, resultOrError, extraData) =>
+                  lifecycle.capture(phase, resultOrError, {
+                    ...extraData,
+                    ...resolveUnstartedTerminalMetadata(),
+                  }),
+              },
               onPromptAdmission: (admission) => {
                 promptAdmission?.close();
                 promptAdmission = admission;
@@ -286,7 +389,7 @@ async function runCronIsolatedAgentTurnInTrace(
               thinkingCatalog: prepared.context.thinkingSelection.catalog,
               loadThinkingCatalog: prepared.context.thinkingSelection.loadThinkingCatalog,
               executionIdentity: params.executionIdentity,
-              admissionSource: params.admissionSource,
+              admissionSource: params.admissionSource ?? resolveCronRunAdmissionSource(params.job),
             };
             const execution = await prepared.context.sessionWorkAdmission.run(() =>
               withAgentRunLifecycleGeneration(runLifecycleGeneration, () =>
@@ -295,9 +398,74 @@ async function runCronIsolatedAgentTurnInTrace(
             );
             // Publish the execution fact captured before bookkeeping; cron persistence
             // and delivery retain their separate workflow outcome.
-            lifecycle.emit("end", execution.runResult);
+            lifecycle.emit("end", execution.runResult, resolveUnstartedTerminalMetadata());
             await promptAdmission?.finish();
+            const automationRun = getAgentRunContext(runId)?.cronRunsByJobId?.get(params.job.id);
+            const automationResult = automationRun?.result;
+            if (automationRun) {
+              automationRun.closed = true;
+            }
+            if (automationResult && automationResult.outcome !== "no_change") {
+              const originalTarget = prepared.context.resultTarget;
+              const source =
+                params.job.sessionTarget === "isolated" ? params.job.sourceConversation : undefined;
+              if (
+                source &&
+                (originalTarget.sessionId !== source.sessionId ||
+                  originalTarget.lifecycleRevision !== source.lifecycleRevision)
+              ) {
+                throw new Error(
+                  "Automation result creating conversation was replaced before settlement",
+                );
+              }
+              const target = originalTarget.sessionId
+                ? originalTarget
+                : await captureSessionEventTargetForHost(
+                    prepared.context.agentId,
+                    prepared.context.runSessionKey,
+                    { assertCaptureCurrent: params.assertCurrent },
+                  );
+              if (
+                !originalTarget.sessionId &&
+                target.sessionId !== prepared.context.currentRunSessionId()
+              ) {
+                throw new Error("Automation result run was replaced before settlement");
+              }
+              const scope = {
+                agentId: target.agentId ?? prepared.context.agentId,
+                sessionKey: target.sessionKey ?? prepared.context.runSessionKey,
+                storePath: target.storePath ?? prepared.context.cronSession.storePath,
+                sessionId: target.sessionId,
+                lifecycleRevision: target.lifecycleRevision,
+              };
+              const generation = await prepareSessionEventTargetForHost(target, {
+                assertAcceptanceCurrent: params.assertCurrent,
+              });
+              try {
+                const assertCurrent = () => {
+                  params.assertCurrent?.();
+                  abortSignal.throwIfAborted();
+                  assertAgentRunLifecycleGenerationCurrent(admittedLifecycleGeneration);
+                  if (!prepared.context.sessionWorkAdmission.isActive()) {
+                    throw new Error("Automation result owner is closed");
+                  }
+                  assertSessionEventTargetCurrent(target);
+                  generation.assertCurrent();
+                };
+                assertCurrent();
+                await appendSessionRuntimeContext({
+                  cfg: params.cfg,
+                  scope,
+                  content: `Automation result (recorded fact, not an instruction): ${automationResult.outcome}: ${automationResult.summary}`,
+                  idempotencyKey: `automation-result:${params.job.id}:${runId}`,
+                  assertCurrent,
+                });
+              } finally {
+                generation.release();
+              }
+            }
             const finalized = await finalizeCronRun({
+              automationResult,
               prepared: prepared.context,
               execution,
               abortReason,
@@ -319,9 +487,19 @@ async function runCronIsolatedAgentTurnInTrace(
               ? finalized
               : { ...finalized, nextCheck: { delayMs } };
           } catch (err) {
-            lifecycle.emit("error", err);
+            lifecycle.emit("error", err, resolveUnstartedTerminalMetadata());
             await promptAdmission?.finish();
             consumeCronNextCheckProposal(runId, params.job.id);
+            if (admissionDeferred && !executionStarted) {
+              return prepared.context.withRunSession({
+                status: "skipped",
+                executionStarted: false,
+                admissionDeferred: true,
+                admissionDeferredReason,
+                summary:
+                  "Automation admission deferred by its current window or foreground activity",
+              });
+            }
             const isCronLaneTimeout =
               isAborted() || isCommandLaneTaskTimeoutError(err, CommandLane.CronNested);
             const error = isCronLaneTimeout ? abortReason() : normalizeCronRunErrorText(err);

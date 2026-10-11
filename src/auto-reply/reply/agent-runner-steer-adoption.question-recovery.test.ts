@@ -121,7 +121,7 @@ describe("question response custody through reply adoption", () => {
             sessionKey: key,
             touchActiveSessionEntry: async () => {},
             typing,
-            typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+            typingSignals: createTypingSignaler({ typing, mode: "never" }),
           });
           expect(state.admission).toEqual({ status: "accepted", mode: "followup" });
         }
@@ -202,7 +202,7 @@ describe("question response custody through reply adoption", () => {
           sessionKey: key,
           touchActiveSessionEntry: async () => {},
           typing,
-          typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+          typingSignals: createTypingSignaler({ typing, mode: "never" }),
         });
       };
       const firstSteer = startSteer(first);
@@ -298,7 +298,7 @@ describe("question response custody through reply adoption", () => {
           sessionKey: key,
           touchActiveSessionEntry: async () => {},
           typing,
-          typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+          typingSignals: createTypingSignaler({ typing, mode: "never" }),
         });
         void adoption.catch(() => undefined);
         const tryDuplicate = () =>
@@ -745,7 +745,6 @@ describe("question response custody through reply adoption", () => {
                   typingSignals: createTypingSignaler({
                     typing,
                     mode: "never",
-                    isHeartbeat: false,
                   }),
                 })
           ).finally(() => {

@@ -138,6 +138,23 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       input.command.type === "backup.runs" ||
       (input.command.type === "restartSentinel.reportReceipt" &&
         typeof input.command.input === "string") ||
+      ((input.command.type === "clawMonitorCleanup.snapshot" ||
+        input.command.type === "clawMonitorCleanup.portable") &&
+        isRecord(input.command.input) &&
+        typeof input.command.input.agentId === "string" &&
+        (input.command.type !== "clawMonitorCleanup.snapshot" ||
+          input.command.input.defaultAgentId === undefined ||
+          typeof input.command.input.defaultAgentId === "string") &&
+        (typeof input.command.input.storePath === "string" ||
+          (input.command.type === "clawMonitorCleanup.portable" &&
+            input.command.input.storePath === undefined))) ||
+      ((input.command.type === "automationProactive.receipts" ||
+        input.command.type === "automationProactive.jobs") &&
+        isRecord(input.command.input) &&
+        (input.command.input.storePath === undefined ||
+          typeof input.command.input.storePath === "string") &&
+        Array.isArray(input.command.input.agentIds) &&
+        input.command.input.agentIds.every((agentId) => typeof agentId === "string")) ||
       ((input.command.type === "restartSentinel.current" ||
         input.command.type === "restartSentinel.snapshot" ||
         input.command.type === "restartSentinel.installReceipt" ||
@@ -197,12 +214,10 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       (input.command.type === "cron.scratch" &&
         typeof input.command.storeKey === "string" &&
         isRecord(input.command.selector) &&
-        ((input.command.selector.kind === "job" &&
-          typeof input.command.selector.jobId === "string" &&
-          typeof input.command.selector.createdAtMsFallback === "number" &&
-          Number.isFinite(input.command.selector.createdAtMsFallback)) ||
-          (input.command.selector.kind === "heartbeat" &&
-            typeof input.command.selector.agentId === "string"))) ||
+        input.command.selector.kind === "job" &&
+        typeof input.command.selector.jobId === "string" &&
+        typeof input.command.selector.createdAtMsFallback === "number" &&
+        Number.isFinite(input.command.selector.createdAtMsFallback)) ||
       (input.command.type === "cron.jobNames" &&
         (input.command.storePath === undefined || typeof input.command.storePath === "string") &&
         isStringArray(input.command.jobIds)) ||

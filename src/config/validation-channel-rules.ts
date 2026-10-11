@@ -26,30 +26,6 @@ export const bundledChannelIds = Object.freeze(
     .filter((channelId) => channelId.length > 0),
 );
 
-const bundledChannelIdSet = new Set(bundledChannelIds);
-const bundledChannelAliases = new Map<string, string>(
-  GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => entry.configurable !== false).flatMap(
-    (entry) => {
-      const channelId = normalizeLowercaseStringOrEmpty(entry.channelId);
-      if (!channelId) {
-        return [];
-      }
-      return (entry.aliases ?? [])
-        .map((alias) => [normalizeLowercaseStringOrEmpty(alias), channelId] as const)
-        .filter(([alias]) => alias.length > 0);
-    },
-  ),
-);
-
-export function normalizeBundledChannelId(raw?: string | null): string | null {
-  const normalized = normalizeLowercaseStringOrEmpty(raw);
-  if (!normalized) {
-    return null;
-  }
-  const resolved = bundledChannelAliases.get(normalized) ?? normalized;
-  return bundledChannelIdSet.has(resolved) ? resolved : null;
-}
-
 function buildDmPolicyDependencyWarning(params: {
   channelId: string;
   accountId?: string;

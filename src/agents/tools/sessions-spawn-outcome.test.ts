@@ -6,7 +6,6 @@ import {
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
 } from "../../acp/runtime/registry.js";
-import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -86,13 +85,9 @@ function observeRecoveredSpawn(result: unknown, mutatingAction: boolean) {
   const recovered = observe({ toolName: "read", outcome: "success" });
   const payloads = buildPayloads({
     assistantTexts: [report],
-    isHeartbeatTrigger: true,
     lastToolError: recovered.lastToolError,
   });
   expect(payloads.some((payload) => payload.text === report)).toBe(true);
-  expect(
-    payloads.some((payload) => getReplyPayloadMetadata(payload)?.heartbeatTerminalToolFailure),
-  ).toBe(mutatingAction);
 }
 
 describe("sessions_spawn terminal effects", () => {
@@ -109,7 +104,7 @@ describe("sessions_spawn terminal effects", () => {
       args: {},
       subagents: { requireAgentId: true },
     },
-  ])("keeps recovered $name rejection out of heartbeat failure", async (testCase) => {
+  ])("classifies recovered $name rejection as having no side effects", async (testCase) => {
     const callGateway = vi.spyOn(inProcessGateway, "callInProcessGatewayTool");
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
@@ -134,7 +129,7 @@ describe("sessions_spawn terminal effects", () => {
     observeRecoveredSpawn(snapshotToolSearchTargetTranscriptResult(result), false);
   });
 
-  it("keeps an internal argument exception out of heartbeat failure", async () => {
+  it("classifies an internal argument exception as having no side effects", async () => {
     const tool = createSessionsSpawnTool({ config, countActiveRuns: () => 0 });
     const error = await tool
       .execute("spawn", {

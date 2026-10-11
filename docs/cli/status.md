@@ -102,7 +102,7 @@ setup; a slow CLI can finish without a slow Gateway handler.
 
 When the Gateway is reachable and authorized, `status --json` uses its status
 projection instead of scanning every agent's plugin metadata and database
-ownership locally. The Gateway supplies session counts, heartbeat and task
+ownership locally. The Gateway supplies session counts, automation and task
 state, runtime vitals, and agent roster facts. The request keeps `operator.read`
 scope, including its redaction of session paths, recent sessions, model defaults,
 and detailed admission refusals. After the Gateway hydrates a physical session

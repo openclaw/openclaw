@@ -106,7 +106,7 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     expect(result.payloads?.[0]?.text).toBe("dreaming claimed");
   });
 
-  it("passes the heartbeat queue and re-arms setup progress when its hook does not claim", async () => {
+  it("re-arms setup progress when its hook does not claim", async () => {
     mockedGlobalHookRunner.hasHooks.mockImplementation(
       (hookName: string) => hookName === "before_agent_reply",
     );
@@ -116,16 +116,10 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
 
     await runEmbeddedAgent({
       ...createOverflowRunParams(state),
-      trigger: "heartbeat",
-      sessionKey: "agent:main:heartbeat:heartbeat",
-      heartbeatEventQueueSessionKey: "agent:main:heartbeat",
+      trigger: "cron",
       onExecutionPhase,
     });
 
-    expect(firstBeforeAgentReplyCall()[1]).toMatchObject({
-      sessionKey: "agent:main:heartbeat:heartbeat",
-      heartbeatEventQueueSessionKey: "agent:main:heartbeat",
-    });
     expect(onExecutionPhase).toHaveBeenCalledWith(
       expect.objectContaining({ phase: "before_agent_reply" }),
     );

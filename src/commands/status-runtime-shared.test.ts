@@ -2,6 +2,8 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  resolveStatusAutomations,
+  resolveStatusLastHeartbeat,
   resolveStatusGatewayDiagnosticsSafe,
   resolveStatusGatewayHealthSafe,
   resolveStatusRuntimeSnapshot,
@@ -77,6 +79,60 @@ describe("status-runtime-shared", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("reads scheduler status with the selected gateway and remaining probe budget", async () => {
+    vi.spyOn(performance, "now").mockReturnValue(22_000);
+    const value = { enabled: true, jobs: 2, nextWakeAtMs: null };
+    mocks.callGateway.mockResolvedValueOnce(value);
+    await expect(
+      resolveStatusAutomations({
+        config: {},
+        gatewayReachable: true,
+        gatewayProbeDeadlineMs: 60_000,
+        callOverrides: { url: "wss://gateway.example.com", token: "fixture" },
+      }),
+    ).resolves.toEqual({ ok: true, value });
+    expect(mocks.callGateway).toHaveBeenCalledExactlyOnceWith({
+      method: "cron.status",
+      params: {},
+      config: {},
+      timeoutMs: 38_000,
+      url: "wss://gateway.example.com",
+      token: "fixture",
+    });
+  });
+
+  it.each([
+    { gatewayReachable: false, gatewayProbeDeadlineMs: 60_000, error: "gateway unreachable" },
+    {
+      gatewayReachable: true,
+      gatewayProbeDeadlineMs: 0,
+      error: "Gateway probe budget exhausted before automation status.",
+    },
+    {
+      gatewayReachable: false,
+      gatewayProbeDeadlineMs: 60_000,
+      gatewayStartupPhase: "plugins",
+      error: "gateway still starting; phase plugins",
+    },
+  ])("does not probe automation status when $error", async ({ error, ...probe }) => {
+    await expect(resolveStatusAutomations({ config: {}, ...probe })).resolves.toEqual({
+      ok: false,
+      error,
+    });
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("preserves scheduler errors as an unavailable status", async () => {
+    mocks.callGateway.mockRejectedValueOnce(new Error("scheduler unavailable"));
+    await expect(
+      resolveStatusAutomations({
+        config: {},
+        gatewayReachable: true,
+        ...createStatusGatewayProbeBudget(),
+      }),
+    ).resolves.toEqual({ ok: false, error: "Error: scheduler unavailable" });
   });
 
   it("passes the remaining status budget through to provider usage", async () => {
@@ -432,7 +488,6 @@ describe("status-runtime-shared", () => {
       securityAudit: { summary: { critical: 0 }, findings: [] },
       usage: { providers: [] },
       health: { ok: true },
-      lastHeartbeat: { ok: true },
       gatewayService: { label: "LaunchAgent" },
       nodeService: { label: "node" },
     });
@@ -488,11 +543,10 @@ describe("status-runtime-shared", () => {
       }),
     ).resolves.toMatchObject({
       health: { error: "Error: gateway health probe timed out" },
-      lastHeartbeat: { ok: true },
     });
   });
 
-  it("shares the readiness deadline with deep health and skips heartbeat when it expires", async () => {
+  it("shares the readiness deadline with deep health and skips legacy JSON receipt when it expires", async () => {
     const clock = vi.spyOn(performance, "now").mockReturnValue(0);
     try {
       mocks.callGateway.mockImplementation(async () => {
@@ -508,7 +562,13 @@ describe("status-runtime-shared", () => {
       });
 
       expect(result.health).toEqual({ ok: true });
-      expect(result.lastHeartbeat).toBeNull();
+      await expect(
+        resolveStatusLastHeartbeat({
+          config: {},
+          gatewayReachable: true,
+          gatewayProbeDeadlineMs: 38_000,
+        }),
+      ).resolves.toBeNull();
       expect(mocks.callGateway).toHaveBeenCalledExactlyOnceWith({
         method: "health",
         params: { probe: true },
@@ -535,7 +595,7 @@ describe("status-runtime-shared", () => {
       });
 
       expect(snapshot.health).toEqual(health);
-      expect(snapshot.lastHeartbeat).toBeNull();
+      expect(snapshot).not.toHaveProperty("lastHeartbeat");
       expect(mocks.callGateway).not.toHaveBeenCalled();
     },
   );

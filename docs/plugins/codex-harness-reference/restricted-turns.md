@@ -28,7 +28,7 @@ mode.
 The current audited safe-deny names are:
 
 ```text
-agents_list, automations, canvas, dashboard, gateway, heartbeat_respond,
+agents_list, automations, canvas, dashboard, gateway,
 image_generate, memory_get, memory_search, message, music_generate, openclaw,
 progress_card, session_status, show_widget, skill_workshop, tts, video_generate,
 web_fetch, x_search

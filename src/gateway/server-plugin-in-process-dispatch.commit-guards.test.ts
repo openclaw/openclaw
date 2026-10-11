@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { callAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
@@ -128,7 +128,7 @@ it.each(["direct", "tool"] as const)(
                     workerGuard: { source: sessionMutationCommitGuard },
                   });
                   // The canonical writer (#167932) upserts session rows natively.
-                  nativeMutation = sql.queries.some((query) =>
+                  nativeMutation = sql.executedQueries.some((query) =>
                     /^(?:update "session_nodes" set\b|insert into "session_nodes"\s)/i.test(query),
                   );
                   respond(true, { label: entry?.label });
@@ -159,6 +159,7 @@ it.each(["direct", "tool"] as const)(
                 ),
         );
         expect(result).toEqual({ label: kind });
+        expect(loadSessionEntry(scope)?.label).toBe(kind);
         expect(nativeMutation).toBe(kind === "opaque");
       }
     });

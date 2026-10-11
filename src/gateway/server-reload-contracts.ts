@@ -2,7 +2,6 @@ import type { CliDeps } from "../cli/deps.types.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { GatewayRestartEmitter } from "../infra/restart.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -31,7 +30,6 @@ export type CurrentRuntimeSecretsPreparation = {
 type GatewayHotReloadState = {
   hooksConfig: ReturnType<typeof import("./hooks.js").resolveHooksConfig>;
   hookClientIpConfig: HookClientIpConfig;
-  heartbeatRunner: HeartbeatRunner;
   cronState: GatewayCronState;
 };
 

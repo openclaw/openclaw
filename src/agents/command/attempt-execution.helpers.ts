@@ -42,6 +42,7 @@ import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.
 import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-approval-output.js";
 import { isClaudeToolResultBlockType, isClaudeToolUseBlockType } from "../cli-output-records.js";
 import { cliBackendLog } from "../cli-runner/log.js";
+import type { RuntimeContextFragment } from "../internal-runtime-context.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import type { ReplyExpectation } from "../reply-completion.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
@@ -284,22 +285,35 @@ export async function claudeCliSessionTranscriptHasOrphanedToolUse(
   });
 }
 
+export function resolveFallbackRetryContext(params: {
+  isFallbackRetry: boolean;
+  sessionHasHistory?: boolean;
+  priorContextPrelude?: string;
+}): RuntimeContextFragment[] {
+  if (!params.isFallbackRetry) {
+    return [];
+  }
+  const prelude = params.priorContextPrelude?.trim();
+  if (!params.sessionHasHistory && !prelude) {
+    return [];
+  }
+  return [
+    ...(prelude ? [{ kind: "conversation-data" as const, text: prelude }] : []),
+    {
+      kind: "runtime-instruction",
+      text: "[Retry after the previous model attempt failed or timed out]",
+    },
+  ];
+}
+
 export function resolveFallbackRetryPrompt(params: {
   body: string;
   isFallbackRetry: boolean;
   sessionHasHistory?: boolean;
   priorContextPrelude?: string;
 }): string {
-  if (!params.isFallbackRetry) {
-    return params.body;
-  }
-  const prelude = params.priorContextPrelude?.trim();
-  if (!params.sessionHasHistory && !prelude) {
-    return params.body;
-  }
-  // Retain the original task: failed history may not contain enough context to reconstruct it. (#65760)
-  const retryMarked = `[Retry after the previous model attempt failed or timed out]\n\n${params.body}`;
-  return prelude ? `${prelude}\n\n${retryMarked}` : retryMarked;
+  // CLI transports need the original task even when failed history is incomplete. (#65760)
+  return [...resolveFallbackRetryContext(params).map(({ text }) => text), params.body].join("\n\n");
 }
 
 const CLAUDE_CLI_FALLBACK_PRELUDE_DEFAULT_CHAR_BUDGET = 8_000;

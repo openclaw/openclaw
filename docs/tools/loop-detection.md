@@ -104,7 +104,7 @@ and debug data remain in the delivered result; error results keep full compariso
 Outbound message-send results are hashed with volatile per-call ids (message id, file id, timestamp)
 stripped, so delivery IDs alone do not make repeated equivalent sends look like
 progress. When a run id is available, history is evaluated only within that run,
-so scheduled heartbeat cycles and fresh runs do not inherit stale loop counts
+so scheduled automation turns and fresh runs do not inherit stale loop counts
 from earlier runs.
 
 Successful `progress_card` calls are compared using the saved Markdown and plan,

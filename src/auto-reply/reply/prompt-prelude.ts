@@ -8,7 +8,6 @@ import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-d
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
-import { resolveInternalTurnTranscript } from "../internal-turn-source.js";
 import { buildInboundMediaNoteProjection } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { appendChannelPromptContext } from "./channel-prompt-context.js";
@@ -53,7 +52,6 @@ type ReplyPromptEnvelopeBaseParams = {
   startupAction: "new" | "reset";
   startupContextPrelude?: string | null;
   softResetTail?: string;
-  isHeartbeat?: boolean;
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
@@ -165,14 +163,9 @@ export function buildReplyPromptEnvelopeBase(
   const roomEventBody = isRoomEvent ? resolveRoomEventTranscriptBody(params) : undefined;
   const effectiveBaseBody =
     roomEventBody ?? (params.hasUserBody ? resetModelBody : MEDIA_ONLY_USER_TEXT);
-  const transcriptBody = params.isHeartbeat
-    ? resolveInternalTurnTranscript({
-        InputProvenance: params.ctx.InputProvenance ?? params.sessionCtx.InputProvenance,
-        InternalTurnSource: params.ctx.InternalTurnSource ?? params.sessionCtx.InternalTurnSource,
-      }).text
-    : params.isBareSessionReset
-      ? softResetTail || `[OpenClaw session ${params.startupAction}]`
-      : effectiveBaseBody;
+  const transcriptBody = params.isBareSessionReset
+    ? softResetTail || `[OpenClaw session ${params.startupAction}]`
+    : effectiveBaseBody;
   const fragments: RuntimeContextFragment[] = [
     ...(isRoomEvent ? [{ kind: "runtime-instruction" as const, text: ROOM_EVENT_PROMPT }] : []),
     ...(inboundUserContext

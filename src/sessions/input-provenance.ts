@@ -165,7 +165,7 @@ const USER_FACING_SESSION_STATE_PRESERVING_SOURCE_TOOLS: ReadonlySet<string> = n
 
 export function shouldPreserveUserFacingSessionStateForInputProvenance(value: unknown): boolean {
   const provenance = normalizeInputProvenance(value);
-  if (isProgressCardRefreshInputProvenance(provenance)) {
+  if (provenance?.kind === "internal_system" || isProgressCardRefreshInputProvenance(provenance)) {
     return true;
   }
   if (provenance?.kind !== "inter_session") {

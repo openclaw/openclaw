@@ -70,7 +70,6 @@ describe("buildEmbeddedRunPayloads tool-error silence", () => {
 
   it.each([
     { name: "a scheduled run", mutatingAction: false, isCronTrigger: true },
-    { name: "a heartbeat", mutatingAction: false, isHeartbeatTrigger: true },
     { name: "an aborted run", mutatingAction: false, runAborted: true },
   ])(
     "keeps failure reporting for $name despite NO_REPLY",

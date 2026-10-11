@@ -78,12 +78,17 @@ vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
   getBootstrapChannelPlugin: vi.fn((_channelId: string) => undefined),
 }));
 
-vi.mock("./doctor/shared/channel-legacy-config-migrate.js", () => ({
-  applyChannelDoctorCompatibilityMigrations: (cfg: Record<string, unknown>) => ({
-    next: cfg,
-    changes: [],
-  }),
-}));
+vi.mock("./doctor/shared/channel-legacy-config-migrate.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./doctor/shared/channel-legacy-config-migrate.js")>();
+  return {
+    ...actual,
+    applyChannelDoctorCompatibilityMigrations: (cfg: Record<string, unknown>) => ({
+      next: cfg,
+      changes: [],
+    }),
+  };
+});
 
 vi.mock("./doctor/shared/bundled-plugin-load-paths.js", () => ({
   maybeRepairBundledPluginLoadPaths: vi.fn((cfg: Record<string, unknown>) => ({

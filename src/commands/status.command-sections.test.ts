@@ -3,7 +3,6 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { HealthSummary } from "./health.js";
 import {
   buildStatusHealthRows,
-  buildStatusHeartbeatValue,
   buildStatusMemoryValue,
   buildStatusModelSelectionLines,
   buildStatusSecurityAuditLines,
@@ -64,23 +63,6 @@ const healthRows = (health: Partial<HealthSummary>) =>
   buildStatusHealthRows({
     health: { ...baseHealth, ...health },
   });
-
-it("shows valid configuration examples when heartbeat is waiting for a delivery route", () => {
-  const agent = {
-    agentId: "main",
-    enabled: true,
-    every: "1m",
-    everyMs: 60_000,
-    waitingForRoute: true,
-  };
-  const value = buildStatusHeartbeatValue({
-    summary: { heartbeat: { defaultAgentId: "main", agents: [agent] } },
-  });
-  expect(value).toContain("1m (main; waiting for delivery route");
-  expect(value).toContain('commands.ownerAllowFrom=["telegram:123456789"]');
-  expect(value).toContain('heartbeat.target="telegram"');
-  expect(value).toContain('heartbeat.to="123456789"');
-});
 
 it("prioritizes critical audit findings, caps warnings, and preserves remediation", () => {
   const lines = buildStatusSecurityAuditLines({

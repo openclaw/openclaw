@@ -89,7 +89,7 @@ function isAuthRelevantAgentSubfield(
   if (PROVIDER_AUTH_RELEVANT_AGENT_SUBFIELDS.has(field)) {
     return true;
   }
-  if (field === "heartbeat" || field === "subagents") {
+  if (field === "subagents") {
     return next === undefined || next === "model";
   }
   return (

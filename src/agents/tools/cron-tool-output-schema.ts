@@ -5,6 +5,8 @@ import {
   CronDeliveryPreviewSchema,
   CronJobSchema,
   CronRunLogEntrySchema,
+  CronScratchGetResultSchema,
+  CronScratchSetResultSchema,
 } from "../../../packages/gateway-protocol/src/schema/cron.js";
 import { defineToolOutputSchema } from "../schema/tool-output-schema.js";
 
@@ -167,6 +169,19 @@ export const CronToolOutputSchema = defineToolOutputSchema({
     next_check: closedObject({
       ok: Type.Literal(true),
       delayMs: Type.Number({ exclusiveMinimum: 0 }),
+    }),
+    scratch_get: CronScratchGetResultSchema,
+    scratch_set: CronScratchSetResultSchema,
+    record_result: closedObject({
+      ok: Type.Literal(true),
+      outcome: Type.Union([
+        Type.Literal("no_change"),
+        Type.Literal("progress"),
+        Type.Literal("done"),
+        Type.Literal("blocked"),
+        Type.Literal("needs_attention"),
+      ]),
+      summary: Type.String({ minLength: 1, maxLength: 2000 }),
     }),
     wake: Type.Union([
       closedObject({ ok: Type.Literal(true) }),

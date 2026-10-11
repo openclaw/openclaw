@@ -40,7 +40,7 @@ for an unresolved startup dependency or unknown process ownership.
 Native service stop deadlines still apply: the Gateway caps the drain at 315 seconds
 for systemd's 330-second limit, and 5 seconds for launchd's 20-second limit. Both
 leave time for cancellation and cleanup. These caps also apply to `--wait 0`. Longer model or
-heartbeat timeouts do not extend it. When available, the drain log reports the
+automation timeouts do not extend it. When available, the drain log reports the
 largest observed model request timeout for context.
 
 Queued heartbeat wakes settle as `gateway-draining` when shutdown closes admission,

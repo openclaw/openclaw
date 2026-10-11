@@ -11,11 +11,12 @@ import {
 import { withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { prepareGatewayRestartIteration } from "../cli/gateway-cli/run-loop-startup.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resetHeartbeatEventsForTest } from "../infra/heartbeat-events.js";
-import { requestHeartbeatAndWait, setHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
+import { peekSystemEventEntries } from "../infra/system-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { setTestEnvValue } from "../test-utils/env.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   createGatewayConfigPath,
@@ -50,25 +51,46 @@ async function startProvider() {
         input.includes(spawn.childSessionKey) &&
         input.includes("Reconcile before acting:"),
       );
+      const reconciliation = body.input.find(
+        (item) => item.type === "function_call_output" && item.call_id === "call_reconcile",
+      )?.output;
       const output = body.input.find(
         (item) => item.type === "function_call_output" && item.call_id === "call_spawn",
       )?.output;
       if (output) {
         spawn = JSON.parse(output) as Receipt;
       }
-      if (!title && !isNotice && !spawnRequested) {
-        spawnRequested = true;
+      const call =
+        !title && isNotice && !reconciliation
+          ? {
+              name: "session_status",
+              id: "call_reconcile",
+              args: { sessionKey: spawn?.childSessionKey, changesSince: 0 },
+            }
+          : !title && !isNotice && !spawnRequested
+            ? {
+                name: "sessions_spawn",
+                id: "call_spawn",
+                args: {
+                  task: `Return CHILD-DONE. ${WORKER}`,
+                  visible: true,
+                  mode: "run",
+                  expectsCompletionMessage: false,
+                },
+              }
+            : undefined;
+      if (call) {
+        if (call.name === "sessions_spawn") {
+          spawnRequested = true;
+        } else if (!spawn) {
+          throw new Error("Reconciliation preceded the real child spawn receipt");
+        }
         const item = {
           type: "function_call",
-          id: "fc_spawn",
-          call_id: "call_spawn",
-          name: "sessions_spawn",
-          arguments: JSON.stringify({
-            task: `Return CHILD-DONE. ${WORKER}`,
-            visible: true,
-            mode: "run",
-            expectsCompletionMessage: false,
-          }),
+          id: `fc_${call.id}`,
+          call_id: call.id,
+          name: call.name,
+          arguments: JSON.stringify(call.args),
         };
         writeOpenAiResponsesSse(response, [
           { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
@@ -82,7 +104,7 @@ async function startProvider() {
           {
             type: "response.completed",
             response: {
-              id: "resp_spawn",
+              id: `resp_${call.id}`,
               status: "completed",
               output: [item],
               usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
@@ -96,7 +118,7 @@ async function startProvider() {
           responseId: `resp_${requests.length}`,
         });
       }
-      if (isNotice) {
+      if (isNotice && reconciliation) {
         notice.resolve(body);
       }
     })().catch((error: unknown) => {
@@ -107,16 +129,18 @@ async function startProvider() {
       response.end();
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Provider did not bind");
+  const claim = await acquireTestPortBlock({ offsets: [0] });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(claim.port, "127.0.0.1", resolve);
+    });
+  } catch (error) {
+    await claim.release();
+    throw error;
   }
   return {
-    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    baseUrl: `http://127.0.0.1:${claim.port}/v1`,
     requests,
     errors,
     armNoticeObservation() {
@@ -128,21 +152,24 @@ async function startProvider() {
     },
     async stop() {
       server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await runQaGatewayFixture(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
+          }),
+        () => claim.release(),
+      );
     },
   };
 }
 
-describe("session notification store ownership through the Gateway", () => {
-  it.for(["different store", "same-store replacement"] as const)(
+describe("session notice store ownership through the Gateway", () => {
+  it.for(["different store", "same-store replacement", "same-store soft restart"] as const)(
     "handles a queued child notice after %s",
     { timeout: 180_000 },
     async (transition, { signal }) => {
       resetGatewayTestState();
-      resetHeartbeatEventsForTest();
-      const home = await setupGatewayTempHome({ prefix: "openclaw-heartbeat-store-" });
+      const home = await setupGatewayTempHome({ prefix: "openclaw-session-notice-store-" });
       let provider: Awaited<ReturnType<typeof startProvider>> | undefined;
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
       await runQaGatewayFixture(
@@ -159,18 +186,21 @@ describe("session notification store ownership through the Gateway", () => {
                 workspace: home.workspaceDir,
                 skipBootstrap: true,
                 model: "proof/primary",
-                heartbeat: { every: "30m" },
                 subagents: { allowAgents: ["*"], maxConcurrent: 2 },
                 models: Object.fromEntries(
                   ["primary", "backup"].map((model) => [
                     `proof/${model}`,
-                    { params: { transport: "sse", openaiWsWarmup: false } },
+                    {
+                      agentRuntime: { id: "openclaw" },
+                      params: { transport: "sse", openaiWsWarmup: false },
+                    },
                   ]),
                 ),
               },
             },
             models: {
               mode: "replace",
+              catalogRefresh: { enabled: false },
               providers: {
                 proof: {
                   baseUrl: provider.baseUrl,
@@ -253,6 +283,12 @@ describe("session notification store ownership through the Gateway", () => {
           const followupResult = await wait(followup.runId);
           expect(followupResult.status, JSON.stringify(followupResult)).toBe("ok");
 
+          expect(
+            peekSystemEventEntries(parentKey).some((event) =>
+              event.text.includes(child.childSessionKey),
+            ),
+          ).toBe(true);
+
           if (transition === "different store") {
             const { hash } = await gateway.client.request<{ hash: string }>("config.get", {});
             await gateway.client.request("config.patch", {
@@ -262,10 +298,7 @@ describe("session notification store ownership through the Gateway", () => {
                 agents: { defaults: { model: "proof/backup" } },
               }),
             });
-            expect(await gateway.client.request("last-heartbeat", {})).toMatchObject({
-              status: "skipped",
-              reason: "store-replaced",
-            });
+            expect(peekSystemEventEntries(parentKey)).toEqual([]);
             const after = await gateway.client.request<SessionsListResult>("sessions.list", {
               agentId: "main",
               limit: 100,
@@ -275,10 +308,22 @@ describe("session notification store ownership through the Gateway", () => {
             expect(provider.requests.map((request) => request.model)).not.toContain("backup");
           } else {
             await disconnectGatewayClient(gateway.client);
-            await gateway.server.close({ reason: "same-store replacement" });
+            await gateway.server.close({
+              reason: transition,
+              ...(transition === "same-store soft restart" ? { restartExpectedMs: 0 } : {}),
+            });
             gateway = undefined;
             const replacementRequestOffset = provider.requests.length;
             const replacementNotice = provider.armNoticeObservation();
+            await prepareGatewayRestartIteration(
+              await import("../cli/gateway-cli/lifecycle.runtime.js"),
+              {
+                warn: (message) => {
+                  throw new Error(message);
+                },
+              },
+              () => !signal.aborted,
+            );
             gateway = await start();
             await gateway.server.startupSettled;
             // Await the actual delayed notification; replacement must not need another wake.
@@ -299,26 +344,12 @@ describe("session notification store ownership through the Gateway", () => {
           }
           expect(provider.errors).toEqual([]);
         },
-        async () => {
-          if (!gateway) {
-            return;
-          }
-          setHeartbeatsEnabled(false);
-          await requestHeartbeatAndWait({
-            source: "manual",
-            intent: "immediate",
-            reason: "wake",
-            coalesceMs: 0,
-          });
-        },
         () => gateway && disconnectGatewayClient(gateway.client),
-        () => gateway?.server.close({ reason: "heartbeat store proof complete" }),
+        () => gateway?.server.close({ reason: "session notice store proof complete" }),
         () => provider?.stop(),
         () => resetSubagentRegistryForTests({ persist: false }),
         () => removeGatewayTempHome(home.tempHome),
         () => home.envSnapshot.restore(),
-        () => setHeartbeatsEnabled(true),
-        resetHeartbeatEventsForTest,
         resetGatewayTestState,
       );
     },

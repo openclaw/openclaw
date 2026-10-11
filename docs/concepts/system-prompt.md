@@ -113,7 +113,7 @@ Risk is enforced at runtime, not in prompt prose. Tool policy, exec approvals, s
 
 Gateway-owned prompt assembly carries context provenance separately from message text.
 Context producers distinguish runtime instructions from conversation data and
-heartbeat outcomes. In new sessions, model projection escapes internal-context
+automation outcomes. In new sessions, model projection escapes internal-context
 delimiter mentions in inbound text and quotes context data without changing the
 stored user transcript. Matching text never promotes a message into runtime
 context. This is prompt hardening, not an authorization boundary or a guarantee
@@ -147,7 +147,7 @@ The **Silent Replies** section applies only to sessions connected to external me
 
 ## Prompt snapshots
 
-OpenClaw keeps committed prompt snapshots for the Codex runtime happy path under `test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/`. They render selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack for Telegram direct, Discord group, and heartbeat turns: a pinned Codex `gpt-5.5` model prompt fixture, the Codex happy-path permission developer text, parent-local request instructions, OpenClaw developer instructions, native collaboration-mode instructions, user turn input, and references to dynamic tool specs.
+OpenClaw keeps committed prompt snapshots for the Codex runtime happy path under `test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/`. They render selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack for Telegram direct, Discord group, and scheduled turns: a pinned Codex `gpt-5.5` model prompt fixture, the Codex happy-path permission developer text, parent-local request instructions, OpenClaw developer instructions, native collaboration-mode instructions, user turn input, and references to dynamic tool specs.
 
 Refresh the pinned Codex model prompt fixture with `pnpm prompt:snapshots:sync-codex-model`. By default it looks for `$CODEX_HOME/models_cache.json`, then `~/.codex/models_cache.json`, then the maintainer checkout convention `~/code/codex/codex-rs/models-manager/models.json`; if none exist it exits without changing the committed fixture. Pass `--catalog <path>` to refresh from a specific `models_cache.json` or `models.json` file.
 
@@ -170,7 +170,7 @@ Turn startup seeds missing bootstrap templates only in the configured agent work
 
 On the native Codex harness, OpenClaw avoids repeating stable workspace files in every user turn. Codex loads the execution folder's `AGENTS.md`, including its `## Tools` section, through native project-doc discovery, so OpenClaw does not inject that file again. When execution uses another folder, OpenClaw adds the configured agent workspace's bounded `AGENTS.md` snapshot to the thread-level developer instructions so native Codex sub-agents inherit it. On the managed bundled stdio app-server, `SOUL.md`, `IDENTITY.md`, and `USER.md` are appended to parent-only model request instructions rather than native history, so newly delivered persona does not automatically flow to native subagents. Connections without a managed inference relay, including external and Desktop connections, deliver shared persona through refreshable thread developer instructions that native children can inherit. Selected personal `users/<profile-id>/USER.md` overlays are omitted on those connections because they lack a parent-only carrier; OpenClaw logs a warning when one is selected. Older history is preserved. `MEMORY.md` content is not pasted into every native Codex turn either: when memory tools are available for the agent workspace, Codex turns get a small workspace-memory note directing the model to `memory_search` or `memory_get`. If tools are disabled or memory search is unavailable, `MEMORY.md` falls back to the normal bounded turn-context path. `BOOTSTRAP.md` keeps the normal turn-context role.
 
-Heartbeat monitor scratch is not a bootstrap file. The heartbeat runner appends it only to the scheduled heartbeat user message; normal turns do not receive it, and the system prompt contains no heartbeat-specific section.
+Automation job scratch is not a bootstrap file. The scheduler includes it in that job's bounded run context; ordinary conversation turns do not receive another job's scratch, and the system prompt contains no heartbeat-specific section.
 
 On non-Codex harnesses, the remaining bootstrap files compose into the OpenClaw prompt per their existing gates. Keep injected files concise, especially non-Codex `MEMORY.md`: it should stay a curated long-term summary, with detailed daily notes in `memory/*.md` retrievable on demand via `memory_search` / `memory_get`. Oversized non-Codex `MEMORY.md` files increase prompt usage and can be partially injected under the bootstrap file limits below.
 

@@ -6,7 +6,6 @@ import {
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   hasActiveCronRun,
   hasScheduledNextRunAtMs,
-  HEARTBEAT_SKIP_DISABLED,
   isJobEnabled,
   isTimeScheduledJob,
   resolveJobErrorBackoffUntilMs,
@@ -116,7 +115,7 @@ export function isRunnableJob(params: {
       return nowMs >= nextRun;
     }
     // Other terminal one-shots stay consumed unless their owner explicitly
-    // scheduled a failed/skipped retry (#24355, #91775).
+    // scheduled a failed retry (#24355).
     if (isScheduledTerminalOneShotRetry(job, lastRunStatus, lastRun, nextRun)) {
       return typeof nextRun === "number" && nowMs >= nextRun;
     }
@@ -169,15 +168,7 @@ function isScheduledTerminalOneShotRetry(
   ) {
     return false;
   }
-  if (lastRunStatus === "error") {
-    return true;
-  }
-  return (
-    lastRunStatus === "skipped" &&
-    job.sessionTarget === "main" &&
-    job.wakeMode === "now" &&
-    job.state.lastError === HEARTBEAT_SKIP_DISABLED
-  );
+  return lastRunStatus === "error";
 }
 
 function isErrorBackoffPending(

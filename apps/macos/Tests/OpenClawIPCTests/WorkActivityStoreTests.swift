@@ -26,7 +26,8 @@ struct WorkActivityStoreTests {
             store.handleTool(sessionKey: "main", phase: "start", name: "read", meta: "old-tool", args: nil)
             store.handleTool(sessionKey: "main", phase: "result", name: "read", meta: "old-tool", args: nil)
 
-            // The heartbeat acknowledges that the primary consumer processed the preceding hello.
+            // An agent event acknowledges that the primary consumer processed the preceding hello.
+            let acknowledgement = UUID().uuidString
             await connection.shutdown()
             _ = try await connection.request(method: "health", params: nil, retryTransportFailures: false)
             let snapshot = try #require(await connection.lastSnapshot)
@@ -34,13 +35,16 @@ struct WorkActivityStoreTests {
             await connection._test_handlePush(
                 .event(EventFrame(
                     type: "event",
-                    event: "heartbeat",
-                    payload: AnyCodable(["ts": 1, "status": "work-lifetime-proof"]))),
+                    event: "agent",
+                    payload: AnyCodable([
+                        "runId": acknowledgement, "seq": 1, "stream": "assistant", "ts": 1,
+                        "data": ["sessionKey": "main"],
+                    ]))),
                 socketGeneration: 1)
-            try await TestWait.state("work lifetime heartbeat") {
-                control.lastHeartbeatEvent?.status == "work-lifetime-proof"
+            try await TestWait.observed("work lifetime event") {
+                AgentEventStore.shared.events.contains { $0.runId == acknowledgement }
             }
-            #expect(control.lastHeartbeatEvent?.status == "work-lifetime-proof")
+            #expect(AgentEventStore.shared.events.contains { $0.runId == acknowledgement })
             #expect(store.current == nil)
             #expect(store.iconState == .idle)
             #expect(store.lastToolUpdatedAt == nil)

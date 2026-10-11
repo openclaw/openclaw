@@ -1,22 +1,21 @@
 import type { ReplyTurnKind } from "./reply-run-registry.js";
 
 export function resolveReplyTurnKind(opts?: {
-  isHeartbeat?: boolean;
+  scheduledAutomation?: { job: { idleOnly?: boolean } };
   internalEventExecution?: unknown;
 }): ReplyTurnKind {
-  return opts?.isHeartbeat === true
-    ? "heartbeat"
+  return opts?.scheduledAutomation?.job.idleOnly
+    ? "background"
     : opts?.internalEventExecution
       ? "queued_followup"
       : "visible";
 }
 
 export function resolveReplyRunTrigger(turn: {
-  isHeartbeat: boolean;
-  followupRun: { run: { internalEventExecution?: unknown } };
+  followupRun: { run: { internalEventExecution?: unknown; scheduledAutomation?: unknown } };
 }) {
-  return turn.isHeartbeat
-    ? "heartbeat"
+  return turn.followupRun.run.scheduledAutomation
+    ? "cron"
     : turn.followupRun.run.internalEventExecution
       ? "event"
       : "user";

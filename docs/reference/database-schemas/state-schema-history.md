@@ -42,10 +42,48 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 18      | Original requesting authority retained with shared GitHub publication receipts                                                                                                                                                                                                                                                  | `v2026.9.6`         |
 | 19      | Durable original channel-owner authorization and revocation continuity                                                                                                                                                                                                                                                          | `v2026.9.7`         |
 | 20      | Cron receipt delivery-attempt fence prevents replay of ambiguous one-shot completions                                                                                                                                                                                                                                           | `v2026.10.1-beta.1` |
+| 21      | Ordinary automation timing and delivery policies replace Heartbeat monitoring; older schedulers refuse converted content                                                                                                                                                                                                        | Unreleased          |
 
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schema 21
+
+Schema 21 fences the [Heartbeat retirement](/gateway/heartbeat) approved in
+[#134994](https://github.com/openclaw/openclaw/issues/134994). Monitoring becomes
+ordinary editable automation jobs with per-job active hours, idle-only admission,
+owner delivery, direct-message policy, and empty-scratch suppression. These
+policies use existing canonical job JSON; no table or column is added. The
+original draft numbered this fence 16. Other migrations have since occupied
+versions 16 through 20, so the same compatibility boundary now advances 20 to 21.
+Schema-20 schedulers accept unknown job JSON fields without enforcing them and
+must refuse migrated content.
+
+Doctor converts supported July 2026 or newer configurations and monitor/task rows
+in place. It preserves job IDs, history, scratch revisions and tombstones,
+disabled state, schedule anchors, pending occurrences, and tool authority. Data
+is verified before legacy configuration or files are retired. Pending cutover
+receipts prevent execution during an incomplete import; completed receipts remain
+in existing `config_machine_state` after job deletion so a restart or repeated
+Doctor run cannot recreate a deleted automation.
+
+Standing approvals retain their existing exact-definition and generation checks;
+converting a definition can require approval again. The migration preserves run
+authority and tool caps without rebinding an old standing grant to new job bytes.
+
+The cutover preserves agent schema 25 without an additional agent migration.
+Doctor moves still-relevant pending heartbeat outcomes idempotently into ordinary
+session context. The `heartbeat_outcomes`
+table remains structurally present and inert; its physical removal needs a later,
+separately approved migration. See the
+[deferred storage cleanup](https://github.com/openclaw/openclaw/blob/main/src/state/README.md).
+
+Create a verified, WAL-aware backup before upgrading and stop older writers.
+The existing content-version admission and older-updater publication deferral
+remain in force. Verify candidate reopen and older-reader refusal. Rollback
+requires restoring the pre-upgrade backup into a separate state directory with
+its matching older build; never lower version markers to bypass the policy fence.
 
 ### State schema 20
 

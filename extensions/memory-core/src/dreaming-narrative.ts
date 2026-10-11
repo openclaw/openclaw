@@ -275,7 +275,8 @@ async function generateAndAppendDreamNarrative(
 
 /**
  * Cron sweeps return before inference, but their service retains completion and
- * publication until settlement. Heartbeat callers await the same work.
+ * publication until settlement. Interactive phases await the same work.
+ * A sweep without an owning agent still runs; only the subagent narrative is unavailable.
  */
 export async function runDreamNarrative(
   params: Omit<DreamNarrativeRequest, "agentId"> & { agentId?: string },

@@ -26,7 +26,7 @@ const CronSessionTargetSchema = Type.Union([
   Type.Literal("current"),
   Type.String({ pattern: "^session:.+" }),
 ]);
-/** Whether a cron job waits for heartbeat processing or wakes immediately. */
+/** Legacy wake input; scheduled runs execute their ordinary payload. */
 const CronWakeModeSchema = Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]);
 /** Run status factory reused for the active field and deprecated alias metadata. */
 function cronRunStatusSchema(options: Record<string, unknown> = {}) {
@@ -210,6 +210,12 @@ export const CronPacingSchema = Type.Object(
   },
 );
 
+const CronActiveHoursSchema = closedObject({
+  start: Type.String({ pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$" }),
+  end: Type.String({ pattern: "^(([01][0-9]|2[0-3]):[0-5][0-9]|24:00)$" }),
+  timezone: Type.Optional(NonEmptyString),
+});
+
 const CronSystemEventPayloadSchema = closedObject({
   kind: Type.Literal("systemEvent"),
   text: NonEmptyString,
@@ -241,12 +247,6 @@ const CronPayloadSchema = Type.Union([
   CronAgentTurnPayloadSchema,
   CronCommandPayloadSchema,
   CronScriptPayloadSchema,
-]);
-
-/** Reported payloads include the Gateway-owned heartbeat monitor. */
-const CronReportedPayloadSchema = Type.Union([
-  ...CronPayloadSchema.anyOf,
-  closedObject({ kind: Type.Literal("heartbeat") }),
 ]);
 
 /** Partial cron payload for job updates. */
@@ -326,7 +326,16 @@ const CronDeliverySharedProperties = {
   failureDestination: Type.Optional(CronFailureDestinationSchema),
 };
 
+const CronChatDeliveryProperties = {
+  target: Type.Optional(Type.Literal("owner")),
+  directPolicy: Type.Optional(Type.Union([Type.Literal("allow"), Type.Literal("block")])),
+};
+
 const CronDeliveryPatchSharedProperties = {
+  target: Type.Optional(Type.Union([Type.Literal("owner"), Type.Null()])),
+  directPolicy: Type.Optional(
+    Type.Union([Type.Literal("allow"), Type.Literal("block"), Type.Null()]),
+  ),
   channel: Type.Optional(Type.Union([CronAnnounceChannelSchema, Type.Null()])),
   threadId: Type.Optional(Type.Union([Type.String(), Type.Number(), Type.Null()])),
   accountId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
@@ -337,12 +346,14 @@ const CronDeliveryPatchSharedProperties = {
 const CronDeliveryNoopSchema = closedObject({
   mode: Type.Literal("none"),
   ...CronDeliverySharedProperties,
+  ...CronChatDeliveryProperties,
   to: Type.Optional(NonBlankString),
 });
 
 const CronDeliveryAnnounceSchema = closedObject({
   mode: Type.Literal("announce"),
   ...CronDeliverySharedProperties,
+  ...CronChatDeliveryProperties,
   completionDestination: Type.Optional(CronCompletionDestinationSchema),
   to: Type.Optional(NonBlankString),
 });
@@ -381,7 +392,9 @@ const CronDeliveryTraceTargetProperties = {
   to: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   accountId: Type.Optional(Type.String()),
   threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
-  source: Type.Optional(Type.Union([Type.Literal("explicit"), Type.Literal("last")])),
+  source: Type.Optional(
+    Type.Union([Type.Literal("explicit"), Type.Literal("last"), Type.Literal("owner")]),
+  ),
 };
 
 const CronDeliveryTraceSchema = closedObject({
@@ -512,10 +525,12 @@ export const CronJobSchema = closedObject({
   configRevision: Type.Optional(CronConfigRevisionSchema),
   schedule: CronScheduleSchema,
   pacing: Type.Optional(CronPacingSchema),
+  activeHours: Type.Optional(CronActiveHoursSchema),
+  idleOnly: Type.Optional(Type.Boolean()),
   trigger: Type.Optional(CronTriggerSchema),
   sessionTarget: CronSessionTargetSchema,
   wakeMode: CronWakeModeSchema,
-  payload: CronReportedPayloadSchema,
+  payload: CronPayloadSchema,
   delivery: Type.Optional(CronDeliverySchema),
   failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
   state: CronJobStateSchema,
@@ -598,6 +613,8 @@ export const CronAddParamsSchema = closedObject({
   ...CronCommonOptionalFields,
   schedule: CronScheduleSchema,
   pacing: Type.Optional(CronPacingSchema),
+  activeHours: Type.Optional(CronActiveHoursSchema),
+  idleOnly: Type.Optional(Type.Boolean()),
   trigger: Type.Optional(CronTriggerSchema),
   sessionTarget: CronSessionTargetSchema,
   wakeMode: CronWakeModeSchema,
@@ -639,6 +656,8 @@ const CronJobPatchSchema = closedObject({
   ...CronCommonOptionalFields,
   schedule: Type.Optional(CronScheduleSchema),
   pacing: Type.Optional(Type.Union([CronPacingSchema, Type.Null()])),
+  activeHours: Type.Optional(Type.Union([CronActiveHoursSchema, Type.Null()])),
+  idleOnly: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
   trigger: Type.Optional(Type.Union([CronTriggerSchema, Type.Null()])),
   sessionTarget: Type.Optional(CronSessionTargetSchema),
   wakeMode: Type.Optional(CronWakeModeSchema),

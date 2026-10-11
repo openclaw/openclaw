@@ -150,7 +150,10 @@ export function createCronTestContext(
       getDefaultAgentId: vi.fn(() => "main"),
       getJob: vi.fn((id: string) => jobs.find((job) => job.id === id)),
       prepareWake: vi.fn(async () => undefined),
-      wake: vi.fn(() => ({ ok: true }) as const),
+      wake: vi.fn((opts: Parameters<CronService["wake"]>[0]) => {
+        opts.commitGuard?.();
+        return { ok: true } as const;
+      }),
       readJob: vi.fn(async (id: string) => jobs.find((job) => job.id === id)),
       readScratch: vi.fn<CronService["readScratch"]>(async () => ({ currentRevision: 0 })),
       writeScratch: vi.fn(

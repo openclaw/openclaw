@@ -281,7 +281,6 @@ Direct chats collapse to the agent's main session key by default, so true isolat
     ownership: "explicit",
     defaults: {
       authInheritance: { agentId: "alex" },
-      heartbeat: { agentId: "alex" },
       systemAgent: { agentId: "alex" },
     },
     entries: {
@@ -321,7 +320,7 @@ Bindings are deterministic and most-specific wins. See [Channel routing](/channe
 - If a binding sets multiple match fields (for example `peer` + `guildId`), all specified fields must match (`AND` semantics).
 - A binding that omits `accountId` matches only the default account, not every account. Use `accountId: "*"` for a channel-wide fallback, or `accountId: "<name>"` for one account. Adding the same binding again with an explicit account id upgrades the existing channel-only binding instead of duplicating it.
 
-For existing multi-agent configs, `openclaw doctor --fix` materializes legacy ambient default routing into channel-wide bindings plus explicit heartbeat, Custodian, Talk, and auth-inheritance owners where needed. It also removes retired default markers from single-agent configs; the sole agent still resolves implicitly. Runtime admission requires the canonical roster, so run Doctor before starting a directly replaced binary with legacy markers. The normal update flow runs the candidate Doctor.
+For existing multi-agent configs, `openclaw doctor --fix` materializes legacy ambient default routing into channel-wide bindings plus explicit system-agent, Custodian, Talk, and auth-inheritance owners where needed. It also removes retired default markers from single-agent configs; the sole agent still resolves implicitly. Runtime admission requires the canonical roster, so run Doctor before starting a directly replaced binary with legacy markers. The normal update flow runs the candidate Doctor.
 
 For a multi-agent roster defined directly in the main config file without a
 legacy `default: true` marker, Doctor adds `agents.ownership: "explicit"` for
@@ -367,7 +366,7 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
 ## Platform examples
 
 These examples select channel and service owners explicitly. Channel bindings route
-messages; `systemAgent`, `heartbeat`, and `talk.agentId` select their own owners.
+messages; `systemAgent` and `talk.agentId` select their own owners.
 When the previous owner was not `main`, `authInheritance.agentId` preserves the
 shared credential source independently of channel routing.
 
@@ -380,7 +379,6 @@ shared credential source independently of channel routing.
       agents: {
         ownership: "explicit",
         defaults: {
-          heartbeat: { agentId: "main" },
           systemAgent: { agentId: "main" },
         },
         entries: {
@@ -434,7 +432,6 @@ shared credential source independently of channel routing.
       agents: {
         ownership: "explicit",
         defaults: {
-          heartbeat: { agentId: "main" },
           systemAgent: { agentId: "main" },
         },
         entries: {
@@ -491,7 +488,6 @@ shared credential source independently of channel routing.
         ownership: "explicit",
         defaults: {
           authInheritance: { agentId: "home" },
-          heartbeat: { agentId: "home" },
           systemAgent: { agentId: "home" },
         },
         entries: {
@@ -566,7 +562,6 @@ shared credential source independently of channel routing.
         ownership: "explicit",
         defaults: {
           authInheritance: { agentId: "chat" },
-          heartbeat: { agentId: "chat" },
           systemAgent: { agentId: "chat" },
         },
         entries: {
@@ -602,7 +597,6 @@ shared credential source independently of channel routing.
         ownership: "explicit",
         defaults: {
           authInheritance: { agentId: "chat" },
-          heartbeat: { agentId: "chat" },
           systemAgent: { agentId: "chat" },
         },
         entries: {
@@ -692,7 +686,6 @@ Each agent can have its own sandbox and tool restrictions:
     ownership: "explicit",
     defaults: {
       authInheritance: { agentId: "personal" },
-      heartbeat: { agentId: "personal" },
       systemAgent: { agentId: "personal" },
     },
     entries: {

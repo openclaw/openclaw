@@ -236,7 +236,7 @@ successful tools and clears it only after the matching action succeeds.
 The callback remains optional for source compatibility with older experimental
 harnesses. Optional does not mean ignorable for a harness that executes tools:
 without terminal reports, OpenClaw cannot preserve mutating-tool failure truth
-across later tool calls, including quiet heartbeat completion.
+across later tool calls, including silent automation completion.
 
 ## Settled tool finalization
 

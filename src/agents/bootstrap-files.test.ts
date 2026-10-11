@@ -555,17 +555,17 @@ describe("resolveBootstrapContextForRun", () => {
   beforeEach(() => clearInternalHooks());
   afterEach(() => clearInternalHooks());
 
-  it("keeps bootstrap context empty in lightweight heartbeat mode", async () => {
+  it("keeps bootstrap context empty in lightweight automation mode", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "persona", "utf8");
 
     const files = await resolveBootstrapFilesForRun({
       workspaceDir,
       contextMode: "lightweight",
-      runKind: "heartbeat",
+      runKind: "cron",
     });
 
-    // Heartbeat context comes from cron scratch via the heartbeat runner now.
+    // Automation checklist context comes from the canonical cron scratch owner.
     expect(files).toStrictEqual([]);
   });
 });

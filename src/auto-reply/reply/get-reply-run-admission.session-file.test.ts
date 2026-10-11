@@ -1,13 +1,17 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { clearCommandLane, enqueueCommandInLane } from "../../process/command-queue.js";
+import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { prepareReplyRunAdmission } from "./get-reply-run-admission.js";
 import type { PreparedReplyRunContext } from "./get-reply-run-context.js";
+import { loadSessionUpdatesRuntime } from "./get-reply-run-helpers.js";
 import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
 import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
@@ -18,6 +22,18 @@ import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authori
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { createTypingController } from "./typing.js";
 
+vi.mock("../../skills/runtime/remote.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../skills/runtime/remote.js")>()),
+  getRemoteSkillEligibility: () => undefined,
+}));
+vi.mock("../../skills/runtime/session-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../skills/runtime/session-snapshot.js")>()),
+  resolveReusableWorkspaceSkillSnapshot: vi.fn(async () => ({
+    snapshot: { prompt: "", skills: [] },
+    shouldRefresh: false,
+    snapshotVersion: 0,
+  })),
+}));
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
   resolveSessionAuthSelection: vi.fn(async () => undefined),
 }));
@@ -41,11 +57,11 @@ vi.mock("./get-reply-run-helpers.js", async (importOriginal) => ({
     resolveActiveEmbeddedRunSessionIdBySessionFile: () => undefined,
     resolveEmbeddedSessionLane,
   }),
-  loadSessionUpdatesRuntime: async () => ({
+  loadSessionUpdatesRuntime: vi.fn(async () => ({
     ensureSkillSnapshot: async ({ sessionEntry }: { sessionEntry: SessionEntry }) => ({
       sessionEntry,
     }),
-  }),
+  })),
 }));
 
 function createAdmissionFixture() {
@@ -107,7 +123,6 @@ function createAdmissionFixture() {
       resolvedBlockStreamingBreak: "message_end",
     },
     runtimePolicySessionKey: sessionKey,
-    isHeartbeat: false,
     explicitThinkingLevelOverride: undefined,
     effectiveQueueMode: undefined,
     promptSessionCtx: ctx,
@@ -152,9 +167,106 @@ function createAdmissionFixture() {
   return { context, entry, sessionKey, sessionId };
 }
 
-afterEach(() => vi.clearAllMocks());
+afterEach(() => {
+  vi.clearAllMocks();
+  vi.unstubAllEnvs();
+});
 
 describe("prepared reply transcript identity", () => {
+  it.each([
+    { source: "event", revoked: false },
+    { source: "event", revoked: true },
+    { source: "scheduled", revoked: true },
+  ] as const)(
+    "persists first-turn skills only for current $source authority (revoked: $revoked)",
+    async ({ source, revoked }) => {
+      vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const { context, entry, sessionKey } = createAdmissionFixture();
+        const scope = {
+          agentId: "main",
+          sessionKey,
+          storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
+        };
+        await replaceSessionEntry(scope, entry);
+        const originalEntry = loadSessionEntry(scope);
+        const entered = createDeferred();
+        const resume = createDeferred();
+        const refusal = new Error("skill event source retired");
+        let current = true;
+        const assertCurrent = () => {
+          if (!current) {
+            throw refusal;
+          }
+        };
+        vi.mocked(loadSessionUpdatesRuntime).mockResolvedValueOnce(
+          await import("./session-updates.js"),
+        );
+        vi.mocked(resolveReusableWorkspaceSkillSnapshot).mockImplementationOnce(async () => {
+          entered.resolve();
+          await resume.promise;
+          return {
+            snapshot: { prompt: "", skills: [] },
+            shouldRefresh: false,
+            snapshotVersion: 0,
+          };
+        });
+        const workspaceDir = state.statePath("workspace");
+        context.params.storePath = scope.storePath;
+        context.params.opts =
+          source === "event"
+            ? { internalEventExecution: { assertCurrent, onStarted() {}, onTerminal() {} } }
+            : {
+                scheduledAutomation: {
+                  admissionSource: "operator-schedule",
+                  assertCurrent,
+                  job: {
+                    id: "skill-source",
+                    name: "Skill source",
+                    enabled: true,
+                    createdAtMs: 1,
+                    updatedAtMs: 1,
+                    schedule: { kind: "every", everyMs: 60_000 },
+                    sessionTarget: "main",
+                    wakeMode: "now",
+                    payload: { kind: "agentTurn", message: "Check for updates" },
+                    state: {},
+                  },
+                },
+              };
+        const pending = prepareReplyRunAdmission({
+          ...context,
+          isFirstTurnInSession: true,
+          skillsWorkspaceDir: workspaceDir,
+          workspaceDir,
+        });
+        try {
+          await awaitGateBeforeSettlement(
+            entered.promise,
+            pending,
+            "Skill preparation did not start",
+          );
+          current = !revoked;
+          resume.resolve();
+          if (revoked) {
+            await expect(pending).rejects.toBe(refusal);
+            expect(loadSessionEntry(scope)).toEqual(originalEntry);
+            expect(context.params.sessionStore?.[sessionKey]).toEqual(entry);
+          } else {
+            await expect(pending).resolves.toMatchObject({ kind: "ready" });
+            expect(loadSessionEntry(scope)).toMatchObject({
+              systemSent: true,
+              skillsSnapshot: { prompt: "", skills: [] },
+            });
+          }
+        } finally {
+          resume.resolve();
+          await Promise.allSettled([pending]);
+        }
+      });
+    },
+  );
+
   it.each([
     { sessionKey: "global", agentId: "research" },
     { sessionKey: undefined, agentId: "main" },

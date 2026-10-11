@@ -199,8 +199,6 @@ export function prepareEmbeddedRunTerminal(input: {
     lastToolError: cleanYield ? undefined : attempt.lastToolError,
     config: runParams.config,
     isCronTrigger: runParams.trigger === "cron",
-    // A conversation's continuation keeps conversational silence and failure reporting.
-    isHeartbeatTrigger: runParams.trigger === "heartbeat" && !runParams.continuesConversation,
     sessionKey: runParams.sessionKey ?? runParams.sessionId,
     provider: input.activeErrorContext.provider,
     providerOwner: input.providerOwner,

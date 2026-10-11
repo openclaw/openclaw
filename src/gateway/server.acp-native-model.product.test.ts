@@ -201,7 +201,6 @@ module.exports = {
           defaults: {
             workspace: state.workspaceDir,
             skipBootstrap: true,
-            heartbeat: { every: "0m" },
             model: { primary: primary.modelRef },
             models: {
               [primary.modelRef]: nativeModelSettings,

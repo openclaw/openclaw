@@ -37,7 +37,6 @@ const SHARED_CHANNEL_FIELD_HELP: Record<string, string> = {
     'Who may use the agent in groups: "allowlist" trusts groupAllowFrom, "open" allows any group, "disabled" turns group chat off.',
   groups: "Per-group overrides, keyed by group id.",
   healthMonitor: "Per-channel opt-out for the health monitor that restarts stalled channels.",
-  heartbeatVisibility: "Which heartbeat results this channel shows.",
   historyLimit:
     "Channel-specific history limit. Consult channel guidance for observed-message windows and session user-turn trimming; zero has different meanings for those consumers.",
   legacyWebhook:

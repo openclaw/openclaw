@@ -2,8 +2,6 @@ package ai.openclaw.app
 
 import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewaySession
-import ai.openclaw.app.ui.cronWakeModeLabel
-import ai.openclaw.app.ui.cronWakeModeOptions
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -16,17 +14,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CronJobManagementTest {
-  @Test
-  fun wakeModeLabelsPreserveGatewayCodes() {
-    assertEquals(
-      listOf("next-heartbeat", "now"),
-      cronWakeModeOptions().map { it.code },
-    )
-    assertEquals("Next heartbeat", cronWakeModeLabel("next-heartbeat"))
-    assertEquals("Now", cronWakeModeLabel("now"))
-    assertEquals("future-mode", cronWakeModeLabel("future-mode"))
-  }
-
   @Test
   fun parsesEveryClosedCronRunOutcome() {
     val started = parseGatewayCronRunOutcome(objectJson("""{"ok":true,"ran":true}"""))
@@ -545,7 +532,6 @@ class CronJobManagementTest {
         $configRevisionField
         "schedule":$schedule,
         "sessionTarget":"isolated",
-        "wakeMode":"next-heartbeat",
         "payload":$payload,
         "state":{}
       }

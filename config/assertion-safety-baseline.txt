@@ -1459,7 +1459,6 @@ src/agents/tools/dashboard-tool.ts	1
 src/agents/tools/embedded-gateway-stub.ts	7
 src/agents/tools/gateway-tool.ts	2
 src/agents/tools/goal-tools.ts	2
-src/agents/tools/heartbeat-response-tool.ts	1
 src/agents/tools/image-tool.helpers.ts	2
 src/agents/tools/image-tool.ts	1
 src/agents/tools/in-process-gateway.ts	1
@@ -1502,7 +1501,6 @@ src/auto-reply/chunk.ts	1
 src/auto-reply/command-auth.ts	3
 src/auto-reply/command-turn-context.ts	1
 src/auto-reply/heartbeat-filter.ts	2
-src/auto-reply/heartbeat-tool-response.ts	2
 src/auto-reply/reply.directive.directive-behavior.e2e-mocks.ts	1
 src/auto-reply/reply/acp-reset-target.ts	1
 src/auto-reply/reply/agent-lifecycle-terminal.ts	2
@@ -1621,7 +1619,7 @@ src/claws/add.ts	7
 src/claws/cron.ts	11
 src/claws/doctor.ts	2
 src/claws/export.ts	8
-src/claws/lifecycle-delete-support.ts	5
+src/claws/lifecycle-delete-support.ts	4
 src/claws/mcp.ts	1
 src/claws/openclaw-profile.ts	1
 src/claws/package-update.ts	1
@@ -2124,9 +2122,6 @@ src/infra/fs-safe-remove.ts	4
 src/infra/gateway-lock.ts	2
 src/infra/gateway-processes.ts	1
 src/infra/git-commit.ts	1
-src/infra/heartbeat-outcome-store.ts	1
-src/infra/heartbeat-runner-config.ts	1
-src/infra/heartbeat-visibility.ts	1
 src/infra/install-package-dir.ts	2
 src/infra/json-utf8-bytes.ts	4
 src/infra/kysely-sync-cache-state.ts	1

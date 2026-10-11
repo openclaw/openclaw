@@ -2,17 +2,11 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage, createHook } from "node:async_hooks";
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
-import { MessageChannel } from "node:worker_threads";
 import { enqueueCommandInLane, getQueueSize } from "../process/command-queue.js";
 import { BoundedSerialQueue } from "../shared/bounded-serial-queue.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
 import { collectForRetentionCheck } from "../test-utils/retention.js";
-import {
-  requestSessionEventWake,
-  requestSessionEventWakeAndWait,
-  setSessionEventWakeHandler,
-} from "./session-event-wake.js";
 import { ensureTerminalUploadCleanup, stageTerminalUpload } from "./terminal-file-upload.js";
 
 const [resource, rootArgument] = process.argv.slice(2);
@@ -109,46 +103,20 @@ async function timerFixture(): Promise<Fixture> {
       "A real native timeout must remain alive",
     );
   };
-  if (resource === "terminal") {
-    let uploadedPath = "";
-    hook.enable();
-    let references: WeakRef<object>[];
-    try {
-      references = await completedCaller(async () => {
-        const uploaded = await stageTerminalUpload(
-          {
-            name: "retention.txt",
-            contentBase64: Buffer.from("retention fixture").toString("base64"),
-            assertCommitAllowed: () => assert.equal(context.getStore()?.label, resource),
-          },
-          { tempRoot: root },
-        );
-        uploadedPath = uploaded.path;
-      });
-    } finally {
-      hook.disable();
-    }
-    return {
-      references,
-      assertAlive,
-      reuse: async () => {
-        assert.equal(await readFile(uploadedPath, "utf8"), "retention fixture");
-        await ensureTerminalUploadCleanup({ tempRoot: root });
-        assert.equal(await readFile(uploadedPath, "utf8"), "retention fixture");
-      },
-      close: async () => {
-        await rm(path.dirname(uploadedPath), { recursive: true, force: true });
-        await ensureTerminalUploadCleanup({ tempRoot: root });
-      },
-    };
-  }
-  assert.equal(resource, "wake");
-  const dispose = setSessionEventWakeHandler(async () => ({ status: "ran", durationMs: 0 }));
+  let uploadedPath = "";
   hook.enable();
   let references: WeakRef<object>[];
   try {
-    references = await completedCaller(() => {
-      requestSessionEventWake({ source: "other", intent: "event", coalesceMs: 120_000 });
+    references = await completedCaller(async () => {
+      const uploaded = await stageTerminalUpload(
+        {
+          name: "retention.txt",
+          contentBase64: Buffer.from("retention fixture").toString("base64"),
+          assertCommitAllowed: () => assert.equal(context.getStore()?.label, resource),
+        },
+        { tempRoot: root },
+      );
+      uploadedPath = uploaded.path;
     });
   } finally {
     hook.disable();
@@ -157,29 +125,18 @@ async function timerFixture(): Promise<Fixture> {
     references,
     assertAlive,
     reuse: async () => {
-      // The product wake is unref'ed; own process liveness until its delivery settles.
-      const lifetime = new MessageChannel();
-      lifetime.port1.on("message", () => {});
-      try {
-        assert.deepEqual(
-          await requestSessionEventWakeAndWait({
-            source: "other",
-            intent: "event",
-            coalesceMs: 0,
-          }),
-          { status: "ran", durationMs: 0 },
-        );
-      } finally {
-        lifetime.port1.close();
-        lifetime.port2.close();
-      }
+      assert.equal(await readFile(uploadedPath, "utf8"), "retention fixture");
+      await ensureTerminalUploadCleanup({ tempRoot: root });
+      assert.equal(await readFile(uploadedPath, "utf8"), "retention fixture");
     },
-    close: async () => dispose(),
+    close: async () => {
+      await rm(path.dirname(uploadedPath), { recursive: true, force: true });
+      await ensureTerminalUploadCleanup({ tempRoot: root });
+    },
   };
 }
 
-const fixture =
-  resource === "terminal" || resource === "wake" ? await timerFixture() : await queueFixture();
+const fixture = resource === "terminal" ? await timerFixture() : await queueFixture();
 try {
   await collectForRetentionCheck(`queue-${resource}`);
   fixture.assertAlive();

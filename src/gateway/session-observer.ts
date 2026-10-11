@@ -11,7 +11,6 @@ import {
 } from "../agents/session-activity-notes.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -463,7 +462,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     capturedReader?: SessionObserverRead,
   ): SessionObserverEventSteps {
     let reader = capturedReader;
-    if (work.disposed || getAgentRunContext(event.runId)?.isHeartbeat) {
+    if (work.disposed) {
       return;
     }
     const lifecyclePhase = event.stream === "lifecycle" ? event.data.phase : undefined;

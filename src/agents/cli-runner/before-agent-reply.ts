@@ -32,7 +32,6 @@ export async function runCliBeforeAgentReply(
             jobId: params.jobId,
             agentId: params.agentId,
             sessionKey: params.sessionKey,
-            heartbeatEventQueueSessionKey: params.heartbeatEventQueueSessionKey,
             sessionId: params.sessionId,
             workspaceDir: params.workspaceDir,
             trigger: params.trigger,

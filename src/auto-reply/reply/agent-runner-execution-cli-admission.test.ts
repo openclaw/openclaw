@@ -118,7 +118,7 @@ describe("executeAgentTurn: CLI admission", () => {
 
   it.each([
     "ordinary",
-    "heartbeat",
+    "event",
     "preserved",
     "revised",
     "revision-established",
@@ -129,7 +129,7 @@ describe("executeAgentTurn: CLI admission", () => {
     const sessionKey =
       kind === "ordinary"
         ? "main"
-        : kind === "heartbeat"
+        : kind === "event"
           ? "global"
           : "agent:main:cli-binding-settlement";
     const storePath = makeTestSessionStorePath();
@@ -241,7 +241,7 @@ describe("executeAgentTurn: CLI admission", () => {
         ...createMinimalRunAgentTurnParams({ followupRun }),
         sessionKey,
         storePath,
-        isHeartbeat: kind === "heartbeat",
+        opts: { internalEventExecution: followupRun.run.internalEventExecution },
         activeSessionStore: { [sessionKey]: entry },
         getActiveSessionEntry: () => entry,
       });

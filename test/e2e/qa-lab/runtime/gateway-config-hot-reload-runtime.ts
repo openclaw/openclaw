@@ -301,29 +301,52 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         verifyContinuity,
         proveGroup,
       };
-      await proveGroup("heartbeat monitor", async () => {
-        for (const every of ["1h", "0m", "2h"] as const) {
-          await patch({ agents: { entries: { qa: { heartbeat: { every } } } } });
-          await waitForHotReloadFact("accepted system monitor config", async () => {
-            const { jobs } = await rpc<{
-              jobs: CronJob[];
-            }>("cron.list", { includeDisabled: true, includeDeliveryPreviews: false });
-            const heartbeat = jobs.find(
-              (job) => job.agentId === "qa" && job.payload.kind === "heartbeat",
+      await proveGroup("automations", async () => {
+        const initialScheduler = await rpc<{ enabled: boolean }>("cron.status");
+        const automation = await rpc<CronJob>("cron.add", {
+          agentId: "qa",
+          name: "Hot reload automation",
+          enabled: false,
+          schedule: { kind: "every", everyMs: 3_600_000 },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "Hot reload automation proof" },
+          delivery: { mode: "none" },
+        });
+        try {
+          for (const change of [
+            { everyMs: 3_600_000, enabled: true, schedulerEnabled: true },
+            { everyMs: 3_600_000, enabled: false, schedulerEnabled: false },
+            { everyMs: 7_200_000, enabled: true, schedulerEnabled: true },
+          ]) {
+            await rpc("cron.update", {
+              id: automation.id,
+              patch: {
+                enabled: change.enabled,
+                schedule: { kind: "every", everyMs: change.everyMs },
+              },
+            });
+            await patch({ cron: { enabled: change.schedulerEnabled } });
+            await waitForHotReloadFact("accepted automation scheduler config", async () => {
+              const scheduler = await rpc<{ enabled: boolean }>("cron.status");
+              return scheduler.enabled === change.schedulerEnabled ? true : undefined;
+            });
+            const persisted = await rpc<CronJob>("cron.get", { id: automation.id });
+            assert.equal(persisted.id, automation.id);
+            assert.equal(persisted.agentId, "qa");
+            assert.equal(persisted.enabled, change.enabled);
+            assert.equal(persisted.payload.kind, "agentTurn");
+            assert(persisted.schedule.kind === "every");
+            assert.equal(persisted.schedule.everyMs, change.everyMs);
+            await verifyContinuity(
+              "automations",
+              "Real config.patch reloaded scheduler enablement without replacing the edited automation or restarting the Gateway",
             );
-            return heartbeat?.enabled === (every !== "0m") &&
-              heartbeat.schedule.kind === "every" &&
-              (every === "0m" ||
-                heartbeat.schedule.everyMs === (every === "1h" ? 3_600_000 : 7_200_000))
-              ? true
-              : undefined;
-          });
+          }
+        } finally {
+          await rpc("cron.remove", { id: automation.id });
+          await patch({ cron: { enabled: initialScheduler.enabled } });
         }
-        await patch({ agents: { entries: { qa: { heartbeat: { every: "0m" } } } } });
-        await verifyContinuity(
-          "heartbeat monitor",
-          "Real config.patch writes changed persisted monitor cadence and enablement on the same Gateway boot",
-        );
       });
       await proveHotReloadTerminalStartup(terminalProof);
 

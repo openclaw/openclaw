@@ -128,7 +128,7 @@ export async function admitFollowupTurn(params: {
     sessionKey: replySessionKey ?? "",
     expectedSessionId: initialEntry?.sessionId,
     storePath: params.defaults.storePath,
-    kind: "queued_followup",
+    kind: params.queued.run.scheduledAutomation?.job.idleOnly ? "background" : "queued_followup",
     // Settings writers can refresh this queued source while admission waits.
     // Copy only selection at the admission owner’s writer fence, before any
     // source-adoption await. Session identity and authority keep their original
@@ -390,7 +390,6 @@ export async function admitFollowupTurn(params: {
         sessionStore,
         sessionKey: replySessionKey,
         storePath: params.defaults.storePath,
-        isHeartbeat: false,
         abortSignal: operation.abortSignal,
         onCompactionStart: () => operation.setPhase("preflight_compacting"),
         onSessionIdChanged: (sessionId) => operation.updateSessionId(sessionId),

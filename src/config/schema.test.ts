@@ -10,7 +10,6 @@ describe("config schema", () => {
   type SchemaInput = NonNullable<Parameters<typeof buildConfigSchemaCore>[0]>;
   let baseSchema: ReturnType<typeof buildConfigSchemaCore>;
   let pluginUiHintInput: SchemaInput;
-  let heartbeatChannelInput: SchemaInput;
   let cachedMergeInput: SchemaInput;
 
   beforeAll(() => {
@@ -26,15 +25,6 @@ describe("config schema", () => {
             "twilio.authToken": { label: "Original Token", sensitive: true },
             " .twilio.authToken ": { label: "Auth Token", help: "Twilio credential" },
           },
-        },
-      ],
-    };
-    heartbeatChannelInput = {
-      channels: [
-        {
-          id: "imessage",
-          label: "iMessage",
-          configSchema: { type: "object" },
         },
       ],
     };
@@ -399,18 +389,6 @@ describe("config schema", () => {
     expect(last?.schema?.type).toBe("object");
     expect(last?.schema?.additionalProperties).toBe(true);
     expect(last?.schema?.description).toContain("omitted");
-  });
-
-  it("adds heartbeat target hints with dynamic channels", () => {
-    const res = buildConfigSchemaCore(heartbeatChannelInput);
-
-    const defaultsHint = res.uiHints["agents.defaults.heartbeat.target"];
-    const entryHint = res.uiHints["agents.entries.*.heartbeat.target"];
-    expect(defaultsHint?.help).toContain("imessage");
-    expect(defaultsHint?.help).toContain("owner");
-    expect(defaultsHint?.help).toContain("last");
-    expect(defaultsHint?.placeholder).toBe("owner");
-    expect(entryHint?.help).toContain("imessage");
   });
 
   it("caches merged schemas for identical plugin/channel metadata", () => {

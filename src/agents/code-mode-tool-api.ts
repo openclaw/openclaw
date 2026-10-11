@@ -118,44 +118,75 @@ function createVariantDeclarations(params: {
   }
   const names: string[] = [];
   const objects: ObjectDeclaration[] = [];
+  const reuseObjectDeclaration = (schema: unknown, rendered: string): string => {
+    let output = rendered;
+    const object = output === "unknown" ? undefined : readObjectDeclaration("", schema);
+    if (!object) {
+      return output;
+    }
+    // Extended results share already-declared fields without widening either contract.
+    for (const base of objects) {
+      if (
+        !Object.entries(base.properties).every(
+          ([key, value]) =>
+            Object.hasOwn(object.properties, key) &&
+            base.required.has(key) === object.required.has(key) &&
+            isDeepStrictEqual(value, object.properties[key]),
+        )
+      ) {
+        continue;
+      }
+      const properties = Object.fromEntries(
+        Object.entries(object.properties).filter(([key]) => !Object.hasOwn(base.properties, key)),
+      );
+      const extension = toolSchemaDeclaration({
+        ...outputSchema,
+        anyOf: [
+          {
+            type: "object",
+            properties,
+            required: [...object.required].filter((key) => Object.hasOwn(properties, key)),
+            additionalProperties: false,
+          },
+        ],
+      });
+      const factored =
+        Object.keys(properties).length === 0 ? base.name : `${base.name} & ${extension}`;
+      if (extension !== "unknown" && factored.length < output.length) {
+        output = factored;
+      }
+    }
+    return output;
+  };
   for (const [index, schema] of variants.variants.entries()) {
     const name = `${prefix}Output${index}`;
     // Preserve root shape constraints; unsupported types stay unknown.
-    let output = toolSchemaDeclaration({ ...outputSchema, anyOf: [schema] });
-    const object = output === "unknown" ? undefined : readObjectDeclaration(name, schema);
-    if (object) {
-      // Extended results share their already-declared fields without widening either contract.
-      for (const base of objects) {
-        if (
-          !Object.entries(base.properties).every(
-            ([key, value]) =>
-              Object.hasOwn(object.properties, key) &&
-              base.required.has(key) === object.required.has(key) &&
-              isDeepStrictEqual(value, object.properties[key]),
-          )
-        ) {
-          continue;
-        }
-        const properties = Object.fromEntries(
-          Object.entries(object.properties).filter(([key]) => !Object.hasOwn(base.properties, key)),
-        );
-        const extension = toolSchemaDeclaration({
-          ...outputSchema,
-          anyOf: [
-            {
-              type: "object",
-              properties,
-              required: [...object.required].filter((key) => Object.hasOwn(properties, key)),
-              additionalProperties: false,
-            },
-          ],
-        });
-        const factored =
-          Object.keys(properties).length === 0 ? base.name : `${base.name} & ${extension}`;
-        if (extension !== "unknown" && factored.length < output.length) {
+    const rendered = toolSchemaDeclaration({ ...outputSchema, anyOf: [schema] });
+    let output = reuseObjectDeclaration(schema, rendered);
+    if (
+      rendered !== "unknown" &&
+      isRecord(schema) &&
+      Array.isArray(schema.anyOf) &&
+      Object.keys(schema).every((key) => key === "anyOf")
+    ) {
+      const branches = schema.anyOf.map((branch) => ({
+        schema: branch,
+        rendered: toolSchemaDeclaration({ ...outputSchema, anyOf: [branch] }),
+      }));
+      // Branch isolation must not deepen knowledge lost to the original traversal bounds.
+      if ([...new Set(branches.map((branch) => branch.rendered))].join(" | ") === rendered) {
+        const factored = [
+          ...new Set(
+            branches.map((branch) => reuseObjectDeclaration(branch.schema, branch.rendered)),
+          ),
+        ].join(" | ");
+        if (factored.length < output.length) {
           output = factored;
         }
       }
+    }
+    const object = rendered === "unknown" ? undefined : readObjectDeclaration(name, schema);
+    if (object) {
       objects.push(object);
     }
     if (!append(`type ${name} = ${output};`)) {

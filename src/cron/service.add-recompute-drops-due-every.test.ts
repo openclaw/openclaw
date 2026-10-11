@@ -36,7 +36,6 @@ describe("add() must not drop a due every-job's pending run", () => {
     };
 
     const enqueueSystemEvent = vi.fn();
-    const requestHeartbeat = vi.fn();
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const cron = new CronService({
       scheduler: createTestGatewayScheduler(),
@@ -45,7 +44,7 @@ describe("add() must not drop a due every-job's pending run", () => {
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent,
-      requestHeartbeat,
+      enqueueSessionEvent: vi.fn(),
       runIsolatedAgentJob,
     });
 

@@ -17,6 +17,8 @@ import {
 const mocks = vi.hoisted(() => ({
   ownerKey: Symbol("session-state-notices-fixture"),
   pending: [] as SystemEvent[],
+  nextOccurrenceId: 0,
+  ownedIds: new Set<string>(),
   capture: vi.fn<typeof captureSessionEventTargetForHost>(async () => ({
     sessionId: "original",
     generation: "current",
@@ -56,11 +58,27 @@ vi.mock("../infra/system-event-ownership.js", () => ({ isSystemEventStoreCurrent
 // mock-isolation: Keep pending occurrences local so these timer cases cannot drain shared queues.
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEventEntry: (text: string, options: Partial<SystemEvent>) => {
-    const occurrence: SystemEvent = { text, ...options, id: String(mocks.pending.length), ts: 1 };
+    if (
+      mocks.pending.some(
+        (event) =>
+          event.text === text &&
+          event.contextKey === options.contextKey &&
+          event.sessionStorePath === options.sessionStorePath,
+      )
+    ) {
+      return null;
+    }
+    const occurrence: SystemEvent = {
+      text,
+      ...options,
+      id: String(mocks.nextOccurrenceId++),
+      ts: 1,
+    };
     mocks.pending.push(occurrence);
     return occurrence;
   },
   peekSystemEventEntries: () => [...mocks.pending],
+  isSystemEventTurnOwned: (_key: string, event: SystemEvent) => mocks.ownedIds.has(event.id ?? ""),
 }));
 // mock-isolation: Observe adoption without opening cursor writers; the permissions suite covers native custody.
 vi.mock("./session-state-notice-acknowledgment.js", () => ({
@@ -70,7 +88,10 @@ vi.mock("./session-state-notice-acknowledgment.js", () => ({
 beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
+  mocks.capture.mockReset().mockResolvedValue({ sessionId: "original", generation: "current" });
   mocks.pending.length = 0;
+  mocks.nextOccurrenceId = 0;
+  mocks.ownedIds.clear();
 });
 afterEach(async () => {
   await vi.runAllTimersAsync();
@@ -107,6 +128,169 @@ describe("decodeSessionStateNoticeContextKey", () => {
 });
 
 describe("enqueueSessionStateNotice", () => {
+  it.each(["capture refusal", "pre-claim rejection", "released admission"] as const)(
+    "recovers an unadopted notice after %s and soft restart",
+    async (failure) => {
+      const input = {
+        watcherSessionKey: "agent:main:main",
+        watcherStorePath: "/synthetic/store.sqlite",
+        targetSessionKey: "agent:main:child",
+        lastSeenSequence: 42,
+      };
+      if (failure === "capture refusal") {
+        mocks.capture.mockRejectedValueOnce(new Error("Gateway is restarting"));
+      } else {
+        mocks.capture.mockResolvedValueOnce({ sessionId: "original", generation: "retired" });
+        mocks.enqueue.mockImplementationOnce(() => {
+          if (failure === "pre-claim rejection") {
+            throw new Error("Captured lifecycle generation retired before claim");
+          }
+          return {
+            id: "rejected-notice",
+            accepted: Promise.resolve({ ok: false, error: "Gateway is restarting" }),
+            cancel: () => false,
+            settled: Promise.resolve({
+              status: "cancelled",
+              executionStarted: false,
+              delivered: false,
+            }),
+          };
+        });
+      }
+      mocks.capture.mockResolvedValueOnce({ sessionId: "original", generation: "replacement" });
+      enqueueSessionStateNotice(input);
+      await vi.advanceTimersByTimeAsync(20_000);
+      const original = mocks.pending.find(
+        (event) => event.contextKey === encodeTarget(input.targetSessionKey),
+      );
+      expect(original?.id).toEqual(expect.any(String));
+      const priorHandoffs = failure === "capture refusal" ? 0 : 1;
+      expect(mocks.enqueue).toHaveBeenCalledTimes(priorHandoffs);
+      expect(mocks.acknowledge).not.toHaveBeenCalled();
+
+      await drainGlobalSingletonLifecycleState("restart");
+      enqueueSessionStateNotice(input);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(mocks.enqueue).toHaveBeenCalledTimes(priorHandoffs + 1);
+      const handoff = mocks.enqueue.mock.calls.at(-1)![1];
+      expect(handoff.expectedTarget?.generation).toBe("replacement");
+      expect(handoff.occurrences?.map((event) => event.id)).toEqual([original?.id]);
+      expect(mocks.acknowledge).not.toHaveBeenCalled();
+      await handoff.onAdopted?.();
+      expect(mocks.acknowledge).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("rejects a late pre-restart capture without replacing the fresh recovery", async () => {
+    const input = {
+      watcherSessionKey: "agent:main:main",
+      watcherStorePath: "/synthetic/store.sqlite",
+      targetSessionKey: "agent:main:child",
+      lastSeenSequence: 42,
+    };
+    const retiredCapture = createDeferred<SessionEventTarget>();
+    mocks.capture
+      .mockReturnValueOnce(retiredCapture.promise)
+      .mockResolvedValueOnce({ sessionId: "original", generation: "replacement" });
+    enqueueSessionStateNotice(input);
+    await drainGlobalSingletonLifecycleState("restart");
+    enqueueSessionStateNotice(input);
+    retiredCapture.resolve({ sessionId: "original", generation: "retired" });
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(mocks.enqueue).toHaveBeenCalledOnce();
+    expect(mocks.enqueue.mock.calls[0]![1].expectedTarget?.generation).toBe("replacement");
+    expect(mocks.capture).toHaveBeenCalledTimes(2);
+    expect(mocks.acknowledge).not.toHaveBeenCalled();
+  });
+
+  it("recovers an unadopted notice under fresh authority after soft restart", async () => {
+    const input = {
+      watcherSessionKey: "agent:main:main",
+      watcherStorePath: "/synthetic/store.sqlite",
+      targetSessionKey: "agent:main:child",
+      lastSeenSequence: 42,
+    };
+    mocks.pending.push({ id: "passive", text: "Unrelated passive notice", ts: 1 });
+    mocks.capture
+      .mockResolvedValueOnce({ sessionId: "original", generation: "retired" })
+      .mockResolvedValueOnce({ sessionId: "original", generation: "replacement" });
+    enqueueSessionStateNotice(input);
+    await vi.advanceTimersByTimeAsync(1);
+    const original = mocks.pending.find(
+      (event) => event.contextKey === encodeTarget(input.targetSessionKey),
+    );
+    expect(original?.id).toEqual(expect.any(String));
+
+    await drainGlobalSingletonLifecycleState("restart");
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(mocks.acknowledge).not.toHaveBeenCalled();
+    // Startup sweep republishes the still-pending durable cursor, not a caller wake.
+    enqueueSessionStateNotice(input);
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(mocks.enqueue).toHaveBeenCalledOnce();
+    const handoff = mocks.enqueue.mock.calls[0]![1];
+    expect(handoff.expectedTarget?.generation).toBe("replacement");
+    expect(handoff.occurrences).toHaveLength(1);
+    expect(handoff.occurrences?.[0]?.id).toBe(original?.id);
+    expect(mocks.pending.filter((event) => event.id === "passive")).toHaveLength(1);
+    expect(mocks.acknowledge).not.toHaveBeenCalled();
+    await handoff.onAdopted?.();
+    expect(mocks.acknowledge).toHaveBeenCalledOnce();
+  });
+
+  it("reserves one occurrence through capture, debounce, and handoff settlement", async () => {
+    const input = {
+      watcherSessionKey: "agent:main:main",
+      targetSessionKey: "agent:main:child",
+      lastSeenSequence: 42,
+    };
+    const capture = createDeferred<SessionEventTarget>();
+    const settled = createDeferred<SessionEventOutcome>();
+    mocks.capture.mockReturnValueOnce(capture.promise);
+    mocks.enqueue.mockReturnValueOnce({
+      id: "owned-notice",
+      accepted: Promise.resolve({ ok: true }),
+      cancel: () => false,
+      settled: settled.promise,
+    });
+    try {
+      enqueueSessionStateNotice(input);
+      enqueueSessionStateNotice(input);
+      expect(mocks.capture).toHaveBeenCalledOnce();
+      capture.resolve({ sessionId: "original", generation: "current" });
+      await vi.advanceTimersByTimeAsync(1);
+      enqueueSessionStateNotice(input);
+      await vi.advanceTimersByTimeAsync(19_999);
+      enqueueSessionStateNotice(input);
+      expect(mocks.capture).toHaveBeenCalledOnce();
+      expect(mocks.enqueue).toHaveBeenCalledOnce();
+      expect(mocks.pending).toHaveLength(1);
+    } finally {
+      capture.resolve({ sessionId: "original", generation: "current" });
+      settled.resolve({ status: "completed", executionStarted: true, delivered: false });
+      await vi.runAllTimersAsync();
+    }
+  });
+
+  it("does not rearm a projection claimed by another turn", async () => {
+    const input = {
+      watcherSessionKey: "agent:main:main",
+      targetSessionKey: "agent:main:child",
+      lastSeenSequence: 42,
+    };
+    enqueueSessionStateNotice({ ...input, queueOnly: true });
+    const event = mocks.pending[0]!;
+    mocks.ownedIds.add(event.id!);
+    enqueueSessionStateNotice(input);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(mocks.capture).not.toHaveBeenCalled();
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(mocks.pending).toEqual([event]);
+  });
+
   it("cancels a newer watcher buffer when an older queued batch starts during close", async () => {
     const firstSettled = createDeferred<SessionEventOutcome>();
     const secondSettled = createDeferred<SessionEventOutcome>();

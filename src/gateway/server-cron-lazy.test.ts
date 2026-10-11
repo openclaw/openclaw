@@ -190,9 +190,9 @@ describe("createLazyGatewayCronState", () => {
     hoisted.setState(createCronState(cron));
 
     const lazy = createLazyGatewayCronState(createParams());
-    await lazy.cron.remove("heartbeat-monitor", { systemOwned: true });
+    await lazy.cron.remove("ordinary-job", { systemOwned: true });
 
-    expect(cron["remove"]).toHaveBeenCalledExactlyOnceWith("heartbeat-monitor", {
+    expect(cron["remove"]).toHaveBeenCalledExactlyOnceWith("ordinary-job", {
       systemOwned: true,
     });
   });
@@ -204,10 +204,51 @@ describe("createLazyGatewayCronState", () => {
     const lazy = createLazyGatewayCronState(createParams());
     await lazy.cron.prepareWake?.();
 
-    expect(lazy.cron.wake({ mode: "now", text: "ping" })).toEqual({ ok: true });
+    expect(await lazy.cron.wake({ mode: "now", text: "ping" })).toEqual({ ok: true });
     expect(cron["start"]).not.toHaveBeenCalled();
     expect(cron["wake"]).toHaveBeenCalledExactlyOnceWith({ mode: "now", text: "ping" });
   });
+
+  it.each(["active", "stopped", "caller-revoked"] as const)(
+    "retains lazy Hook wake admission authority through loading (%s)",
+    async (outcome) => {
+      const cron = createCronService();
+      const start = vi.spyOn(cron, "start");
+      const state = createCronState(cron);
+      const deferHookWake = vi.fn<NonNullable<GatewayCronState["deferHookWake"]>>(async (opts) => {
+        opts.commitGuard();
+        return { ok: true, eventOutcome: "queued" };
+      });
+      state.deferHookWake = deferHookWake;
+      hoisted.setState(state);
+      const lazy = createLazyGatewayCronState(createParams());
+      let current = true;
+      const accepted = lazy.deferHookWake?.({
+        text: "synthetic Hook notice",
+        agentId: "main",
+        commitGuard: () => {
+          if (!current) {
+            throw new Error("caller revoked");
+          }
+        },
+      });
+      if (outcome === "stopped") {
+        lazy.cron.stop();
+      } else if (outcome === "caller-revoked") {
+        current = false;
+      }
+      if (outcome === "active") {
+        await expect(accepted).resolves.toEqual({ ok: true, eventOutcome: "queued" });
+        expect(deferHookWake).toHaveBeenCalledOnce();
+        expect(start).not.toHaveBeenCalled();
+      } else {
+        await expect(accepted).rejects.toThrow(
+          outcome === "stopped" ? "Scheduled Hook wake owner changed" : "caller revoked",
+        );
+        expect(deferHookWake).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("starts the loaded cron service once", async () => {
     const cron = createCronService();
@@ -262,7 +303,7 @@ describe("createLazyGatewayCronState", () => {
 
     const lazy = createLazyGatewayCronState(createParams());
 
-    expect(lazy.cron.wake({ mode: "now", text: "ping" })).toEqual({ ok: false });
+    expect(await lazy.cron.wake({ mode: "now", text: "ping" })).toEqual({ ok: false });
 
     await vi.waitFor(() => {
       expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
@@ -424,7 +465,6 @@ function createCronState(cron: GatewayCronServiceContract): GatewayCronState {
     reconcileExitWatchers: vi.fn(async () => {}),
     reconcileStreamWatchers: vi.fn(async () => {}),
     stopStreamWatchers: vi.fn(async () => {}),
-    reconcileSystemJobs: vi.fn(async () => "converged" as const),
   } satisfies GatewayCronState;
 }
 

@@ -1,5 +1,5 @@
 import type { SlackShortcutMiddlewareArgs } from "@slack/bolt";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { encodeSlackApprovalAction, type SlackApprovalAction } from "../../approval-actions.js";
 import { installSlackTestRuntime } from "../../test-runtime.test-support.js";
 
@@ -292,4 +292,20 @@ export function createContext(overrides?: {
       return shortcutHandler;
     },
   };
+}
+
+export function hasLoneSurrogate(value: string): boolean {
+  return Array.from(value).some((char) => {
+    const codePoint = char.codePointAt(0) ?? 0;
+    return codePoint >= 0xd800 && codePoint <= 0xdfff;
+  });
+}
+
+export function expectRecordFields(
+  actual: Record<string, unknown>,
+  expected: Record<string, unknown>,
+): void {
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(value);
+  }
 }

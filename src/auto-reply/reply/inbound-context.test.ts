@@ -8,30 +8,30 @@ import { finalizeInboundContext, finalizeInboundContextForSdk } from "./inbound-
 import { buildInboundUserContextPrefix } from "./inbound-meta.js";
 
 describe("inbound context contract (providers + extensions)", () => {
-  it.each([
-    ["heartbeat", "heartbeat"],
-    ["exec-event", "exec"],
-  ] as const)("folds the legacy %s source without changing the reply route", (provider, source) => {
-    const input: MsgContext = {
-      Body: "An internal turn",
-      Provider: provider,
-      Surface: provider,
-      OriginatingChannel: "telegram",
-      OriginatingTo: "chat:123",
-      MessageThreadId: "456",
-      InputProvenance: { kind: "internal_system", sourceTool: "existing-source" },
-    };
-    const ctx = finalizeInboundContextForSdk(input);
-    expect(ctx).toMatchObject({
-      InternalTurnSource: source,
-      OriginatingChannel: "telegram",
-      OriginatingTo: "chat:123",
-      MessageThreadId: "456",
-      InputProvenance: { kind: "internal_system", sourceTool: "existing-source" },
-    });
-    expect(ctx.Provider).toBeUndefined();
-    expect(ctx.Surface).toBeUndefined();
-  });
+  it.each([["exec-event", "exec"]] as const)(
+    "folds the legacy %s source without changing the reply route",
+    (provider, source) => {
+      const input: MsgContext = {
+        Body: "An internal turn",
+        Provider: provider,
+        Surface: provider,
+        OriginatingChannel: "telegram",
+        OriginatingTo: "chat:123",
+        MessageThreadId: "456",
+        InputProvenance: { kind: "internal_system", sourceTool: "existing-source" },
+      };
+      const ctx = finalizeInboundContextForSdk(input);
+      expect(ctx).toMatchObject({
+        InternalTurnSource: source,
+        OriginatingChannel: "telegram",
+        OriginatingTo: "chat:123",
+        MessageThreadId: "456",
+        InputProvenance: { kind: "internal_system", sourceTool: "existing-source" },
+      });
+      expect(ctx.Provider).toBeUndefined();
+      expect(ctx.Surface).toBeUndefined();
+    },
+  );
 
   it("preserves a typed wake without inventing a transport", () => {
     const ctx = finalizeInboundContext({ Body: "Background work", InternalTurnSource: "exec" });

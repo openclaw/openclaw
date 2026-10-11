@@ -5,14 +5,11 @@ import path from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
+import { isInternalRuntimeContextCarrierText } from "../../../../extensions/qa-lab/test-api.js";
 import { buildDeviceAuthPayloadV3 } from "../../../../packages/gateway-client/src/device-auth.js";
 import { rawDataToString } from "../../../../packages/gateway-client/src/websocket-data.js";
 import type { ResponseFrame } from "../../../../packages/gateway-protocol/src/schema/frames.js";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
-import {
-  INTERNAL_RUNTIME_CONTEXT_BEGIN,
-  INTERNAL_RUNTIME_CONTEXT_END,
-} from "../../../../src/agents/internal-runtime-context.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -68,13 +65,7 @@ function userTexts(body: ProviderRequest): string[] {
           : (item.content ?? []).map((part) => part.text ?? "").join(""),
       )
       // Runtime context has its own user-role carrier; it is not a conversation turn.
-      .filter(
-        (text) =>
-          !(
-            text.startsWith(`${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n`) &&
-            text.endsWith(`\n${INTERNAL_RUNTIME_CONTEXT_END}`)
-          ),
-      )
+      .filter((text) => !isInternalRuntimeContextCarrierText(text))
   );
 }
 

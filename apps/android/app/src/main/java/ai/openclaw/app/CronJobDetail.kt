@@ -31,7 +31,6 @@ data class GatewayCronJobDetail(
   val scheduleCommand: String?,
   val scheduleCwd: String?,
   val sessionTarget: String,
-  val wakeMode: String,
   val payloadKind: String,
   val payloadText: String?,
   val payloadLabel: NativeText,
@@ -150,7 +149,6 @@ internal fun parseGatewayCronJobDetail(job: JsonObject?): GatewayCronJobDetail? 
   val schedule = value["schedule"].asObjectOrNull() ?: return null
   val payload = value["payload"].asObjectOrNull() ?: return null
   val sessionTarget = value.nonBlankString("sessionTarget") ?: return null
-  val wakeMode = value.nonBlankString("wakeMode") ?: return null
   val payloadKind = payload.nonBlankString("kind") ?: return null
   val scheduleKind = schedule.nonBlankString("kind") ?: return null
   if (scheduleKind !in setOf("at", "every", "cron", "on-exit")) return null
@@ -175,7 +173,6 @@ internal fun parseGatewayCronJobDetail(job: JsonObject?): GatewayCronJobDetail? 
     scheduleCommand = schedule.nonBlankString("command"),
     scheduleCwd = schedule.nonBlankString("cwd"),
     sessionTarget = sessionTarget,
-    wakeMode = wakeMode,
     payloadKind = payloadKind,
     payloadText = cronPayloadText(payload),
     payloadLabel = cronPayloadLabel(payload),

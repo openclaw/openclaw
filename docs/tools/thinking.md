@@ -204,10 +204,16 @@ Malformed local-model reasoning tags are handled conservatively. Closed `<think>
 - [Slash commands](/tools/slash-commands) — changing the thinking level mid-session
 - [Configuration reference](/gateway/configuration-reference) — where the thinking defaults are configured
 
-## Heartbeats
+<a id="heartbeats" />
 
-- Heartbeat check body is the configured heartbeat prompt (default: `Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply NO_REPLY.`). Inline directives in a heartbeat message apply as usual (but avoid changing session defaults from heartbeats).
-- Heartbeat delivery uses the last outbound-capable non-reasoning payload. Separate reasoning or `Thinking` payloads remain internal, and a reasoning-only heartbeat result produces no alert.
+## Scheduled checks
+
+Periodic checks use an ordinary automation's message, scratch, and thinking
+settings. Set the job's thinking level rather than changing a shared session's
+defaults from inside a scheduled prompt. Reasoning stays out of delivery unless
+the job explicitly enables `payload.includeReasoning` (`--include-reasoning`).
+This delivery option does not change the model's thinking level. See
+[Automation payloads](/automation/cron-jobs/payloads).
 
 ## Web chat UI
 

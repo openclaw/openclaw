@@ -2,14 +2,12 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it } from "vitest";
-import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.public.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { selectHeartbeatToolResponse } from "../heartbeat-tool-response.js";
 import {
   getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
@@ -22,7 +20,6 @@ import type { DirectBlockDelivery } from "./reply-delivery.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 
 const baseParams = {
-  isHeartbeat: false,
   didLogHeartbeatStrip: false,
   blockStreamingEnabled: false,
   blockReplyPipeline: null,
@@ -58,60 +55,6 @@ function buildTestReplyPayloads(overrides: TestReplyPayloadParams) {
   return buildReplyPayloads({ ...baseParams, ...overrides });
 }
 
-describe("heartbeat reply scratch", () => {
-  it.each([
-    { notify: false, proposals: ["  PRIVATE_SCRATCH\n\n- keep exact spacing  \n"] },
-    { notify: true, proposals: [""] },
-    { notify: false, proposals: ["old proposal", "new proposal"] },
-    { notify: false, proposals: ["old proposal", undefined] },
-  ])(
-    "preserves the latest private decision through embedded and final payloads: %j",
-    async ({ notify, proposals }) => {
-      const responses = proposals.map((scratch, index) => ({
-        outcome: "done" as const,
-        notify,
-        summary: `Monitor checked ${index + 1}.`,
-        ...(scratch !== undefined ? { scratch } : {}),
-      }));
-      const payloads = responses.flatMap((heartbeatToolResponse) =>
-        buildEmbeddedRunPayloads({
-          assistantTexts: [],
-          lastAssistant: undefined,
-          sessionKey: "agent:main:main",
-          isHeartbeatTrigger: true,
-          heartbeatToolResponse,
-        }),
-      );
-      const expected = proposals.at(-1);
-      const embedded = expectDefined(
-        selectHeartbeatToolResponse(payloads),
-        "expected the embedded heartbeat response",
-      );
-      expect(getReplyPayloadMetadata(embedded.payload)?.heartbeatScratchProposal).toBe(expected);
-      const { replyPayloads } = await buildTestReplyPayloads({ isHeartbeat: true, payloads });
-
-      expect(replyPayloads).toHaveLength(proposals.length);
-      const selected = expectDefined(
-        selectHeartbeatToolResponse(replyPayloads),
-        "expected the final heartbeat response",
-      );
-      expect(getReplyPayloadMetadata(selected.payload)?.heartbeatScratchProposal).toBe(expected);
-      expect(selected.response).toEqual({
-        outcome: "done",
-        notify,
-        summary: `Monitor checked ${proposals.length}.`,
-      });
-      const serialized = JSON.stringify(replyPayloads);
-      expect(serialized).not.toContain('"scratch"');
-      for (const scratch of proposals) {
-        if (scratch) {
-          expect(serialized).not.toContain(JSON.stringify(scratch));
-        }
-      }
-    },
-  );
-});
-
 type ResolveReplyTransportParams = Parameters<
   NonNullable<ChannelThreadingAdapter["resolveReplyTransport"]>
 >[0];
@@ -129,7 +72,7 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 async function expectSameTargetRepliesDelivered(params: { provider: string; to: string }) {
   const { replyPayloads } = await buildTestReplyPayloads({
     payloads: [{ text: "hello world!" }],
-    messageProvider: "heartbeat",
+    messageProvider: "event",
     originatingChannel: "feishu",
     originatingTo: "ou_abc123",
     messagingToolSentTexts: ["different message"],
@@ -294,9 +237,8 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(fallback.replyPayloads[0]?.replyToId).toBeUndefined();
   });
 
-  it("strips legacy bracket tool blocks from heartbeat replies", async () => {
+  it("strips legacy bracket tool blocks from replies", async () => {
     const { replyPayloads } = await buildTestReplyPayloads({
-      isHeartbeat: true,
       payloads: [
         {
           text: [
@@ -806,7 +748,7 @@ describe("buildReplyPayloads media filter integration", () => {
   it("does not suppress same-target replies when accountId differs", async () => {
     const { replyPayloads } = await buildTestReplyPayloads({
       payloads: [{ text: "hello world!" }],
-      messageProvider: "heartbeat",
+      messageProvider: "event",
       originatingChannel: "telegram",
       originatingTo: "268300329",
       accountId: "personal",

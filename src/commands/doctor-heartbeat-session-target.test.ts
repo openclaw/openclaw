@@ -84,6 +84,8 @@ describe("describeHeartbeatSessionTargetIssues", () => {
       const warnings = await describeHeartbeatSessionTargetIssues(cfg);
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toContain("resolved to agent:ops:slack:channel:c123");
+      expect(warnings[0]).toContain("missing session route or recipient");
+      expect(warnings[0]).toContain("delivery failure instead of skipping the run");
       expect(readFileSyncSpy.mock.calls.map(([file]) => file)).not.toContain(storePath);
     } finally {
       readFileSyncSpy.mockRestore();
@@ -150,7 +152,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     writeStore(cfg, {});
 
     const warning = (await describeHeartbeatSessionTargetIssues(cfg))[0];
-    expect(warning).toContain('reason="no-route"');
+    expect(warning).toContain("missing owner route can cause a delivery failure");
     expect(warning).toContain('commands.ownerAllowFrom=["telegram:123456789"]');
     expect(warning).toContain('heartbeat.target="telegram"');
     expect(warning).toContain('heartbeat.to="123456789"');

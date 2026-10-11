@@ -10,6 +10,7 @@ import {
 import { isSystemEventStoreCurrent } from "../infra/system-event-ownership.js";
 import {
   enqueueSystemEventEntry,
+  isSystemEventTurnOwned,
   peekSystemEventEntries,
   type SystemEvent,
 } from "../infra/system-events.js";
@@ -45,21 +46,24 @@ function noticeKey(notice: PendingNotice): string {
 const notices = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionStateNotices"),
   () => {
-    const pendingNotices = new Set<PendingNotice>();
+    const reservations = new Map<string, { notice?: PendingNotice }>();
+    const releaseNotice = (notice: PendingNotice) => {
+      const id = notice.occurrence.id;
+      if (id && reservations.get(id)?.notice === notice) {
+        reservations.delete(id);
+      }
+    };
     const debouncer = createInboundDebouncer<PendingNotice>({
       debounceMs: 20_000,
       maxWaitMs: 20_000,
       buildKey: noticeKey,
       onCancel: (items) => {
         for (const item of items) {
-          pendingNotices.delete(item);
+          releaseNotice(item);
         }
       },
       onFlush: (items, createFlush) => {
-        for (const item of items) {
-          pendingNotices.delete(item);
-        }
-        return createFlush({
+        const flush = createFlush({
           dispatch: async (lifecycle) => {
             const latest = items.at(-1);
             if (!latest) {
@@ -118,19 +122,75 @@ const notices = resolveGlobalSingleton(
             }
           },
         });
+        return {
+          admission: flush.admission,
+          completion: flush.completion.finally(() => {
+            for (const item of items) {
+              releaseNotice(item);
+            }
+          }),
+        };
       },
       onError: (error) => log.warn(`Session state notice was not delivered: ${String(error)}`),
     });
     return {
-      enqueue(notice: PendingNotice) {
-        pendingNotices.add(notice);
-        return runInDetachedAsyncContext(() => debouncer.enqueue(notice));
+      enqueue(request: Omit<PendingNotice, "target">) {
+        const id = request.occurrence.id;
+        if (!id || reservations.has(id)) {
+          return;
+        }
+        const reservation: { notice?: PendingNotice } = {};
+        reservations.set(id, reservation);
+        const release = () => {
+          if (reservations.get(id) === reservation) {
+            reservations.delete(id);
+          }
+        };
+        const assertCurrent = () => {
+          if (reservations.get(id) !== reservation) {
+            throw new Error("Session state notice owner was closed");
+          }
+          if (
+            !isSystemEventStoreCurrent(
+              request.sessionKey,
+              request.occurrence.sessionStorePath ?? null,
+            )
+          ) {
+            throw new Error("Session state notice watcher store was replaced");
+          }
+        };
+        void (async () => {
+          try {
+            const target = await captureSessionEventTargetForHost(
+              request.agentId,
+              request.sessionKey,
+              { assertCurrent },
+            );
+            assertCurrent();
+            const current = peekSystemEventEntries(request.sessionKey).find(
+              (event) => event.id === id,
+            );
+            if (!current || isSystemEventTurnOwned(request.sessionKey, current)) {
+              release();
+              return;
+            }
+            const notice = { ...request, target };
+            reservation.notice = notice;
+            await runInDetachedAsyncContext(() => debouncer.enqueue(notice));
+          } catch (error) {
+            release();
+            log.warn(`Session state notice was not admitted: ${String(error)}`);
+          }
+        })();
       },
       async close() {
-        for (const key of new Set([...pendingNotices].map(noticeKey))) {
+        const keys = new Set(
+          [...reservations.values()].flatMap(({ notice }) => (notice ? [noticeKey(notice)] : [])),
+        );
+        for (const key of keys) {
           debouncer.cancelKey(key);
         }
-        pendingNotices.clear();
+        reservations.clear();
         await debouncer.drain();
       },
     };
@@ -177,39 +237,34 @@ export function enqueueSessionStateNotice(params: {
     return;
   }
   const storePath = params.watcherStorePath ?? null;
-  const occurrence = enqueueSystemEventEntry(
-    sessionStateNoticeText(params.targetSessionKey, params.lastSeenSequence),
-    {
-      sessionKey: params.watcherSessionKey,
-      sessionStorePath: storePath,
-      contextKey: `${SESSION_STATE_CONTEXT_PREFIX}${Buffer.from(params.targetSessionKey, "utf8").toString("hex")}`,
-      ...(params.queueOnly ? { replace: true } : {}),
-    },
-  );
+  const text = sessionStateNoticeText(params.targetSessionKey, params.lastSeenSequence);
+  const contextKey = `${SESSION_STATE_CONTEXT_PREFIX}${Buffer.from(params.targetSessionKey, "utf8").toString("hex")}`;
+  let occurrence = enqueueSystemEventEntry(text, {
+    sessionKey: params.watcherSessionKey,
+    sessionStorePath: storePath,
+    contextKey,
+    ...(params.queueOnly ? { replace: true } : {}),
+  });
   // Ambient group and nested-session notices remain context for the next ordinary turn.
-  if (!occurrence || params.queueOnly || isSubagentSessionKey(params.watcherSessionKey)) {
+  if (params.queueOnly || isSubagentSessionKey(params.watcherSessionKey)) {
     return;
   }
-  const assertCurrent = () => {
-    if (!isSystemEventStoreCurrent(params.watcherSessionKey, storePath)) {
-      throw new Error("Session state notice watcher store was replaced");
-    }
-  };
-  void captureSessionEventTargetForHost(agentId, params.watcherSessionKey, { assertCurrent })
-    .then((target) => {
-      assertCurrent();
-      if (
-        peekSystemEventEntries(params.watcherSessionKey).some((event) => event.id === occurrence.id)
-      ) {
-        return notices.enqueue({
-          sessionKey: params.watcherSessionKey,
-          changedSessionKey: params.targetSessionKey,
-          agentId,
-          target,
-          occurrence,
-        });
-      }
-      return undefined;
-    })
-    .catch((error: unknown) => log.warn(`Session state notice was not admitted: ${String(error)}`));
+  // A restart or rejected admission can leave the durable cursor's exact projection passive.
+  occurrence ??=
+    peekSystemEventEntries(params.watcherSessionKey).find(
+      (event) =>
+        event.text === text &&
+        event.contextKey === contextKey &&
+        event.sessionStorePath === storePath &&
+        !event.deliveryContext,
+    ) ?? null;
+  if (!occurrence || isSystemEventTurnOwned(params.watcherSessionKey, occurrence)) {
+    return;
+  }
+  notices.enqueue({
+    sessionKey: params.watcherSessionKey,
+    changedSessionKey: params.targetSessionKey,
+    agentId,
+    occurrence,
+  });
 }

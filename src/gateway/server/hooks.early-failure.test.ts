@@ -9,6 +9,8 @@ import { consumeAcpTurnStream } from "../../acp/control-plane/manager.turn-strea
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import type { HookMappingConfig } from "../../config/types.hooks.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { RunCronAgentTurnParams } from "../../cron/isolated-agent/run-prepare-runtime.js";
+import { withCronSessionPreparation } from "../../cron/isolated-agent/run-session-state.js";
 import type { RunCronAgentTurnResult } from "../../cron/isolated-agent/run.types.js";
 import { createSuiteLogPathTracker } from "../../logging/log-test-helpers.js";
 import {
@@ -88,14 +90,23 @@ function createPluginHookDispatcher(options: { admissionTimeoutMs?: number } = {
 }
 
 function queueHookRunner(onStart = vi.fn()) {
-  mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
-    async (params: { lane: string; onExecutionStarted?: () => void }) =>
-      await enqueueCommandInLane(params.lane, async () => {
-        params.onExecutionStarted?.();
-        onStart();
-        return { status: "ok", summary: "done" };
-      }),
-  );
+  mocks.runCronIsolatedAgentTurn.mockImplementationOnce(async (params: RunCronAgentTurnParams) => {
+    await withCronSessionPreparation(
+      {
+        storePath: "/synthetic/hook-admission",
+        sessionKey: params.sessionKey,
+        signal: params.abortSignal,
+        onInterrupt: () => {},
+        onLaneWait: params.onLaneWait,
+      },
+      async () => {},
+    );
+    return await enqueueCommandInLane(params.lane ?? CommandLane.CronNested, async () => {
+      params.onExecutionStarted?.();
+      onStart();
+      return { status: "ok", summary: "done" };
+    });
+  });
   return onStart;
 }
 

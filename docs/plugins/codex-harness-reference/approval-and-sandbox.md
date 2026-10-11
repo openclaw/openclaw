@@ -20,7 +20,7 @@ elicitation response are separate from the general presets below.
 Local stdio app-server sessions default to YOLO mode:
 `approvalPolicy: "never"`, `approvalsReviewer: "user"`, and
 `sandbox: "danger-full-access"`. This trusted local operator posture lets
-unattended OpenClaw turns and heartbeats make progress without native approval
+unattended OpenClaw turns and automations make progress without native approval
 prompts that nobody is around to answer.
 
 If Codex's local system requirements file disallows implicit YOLO approval,

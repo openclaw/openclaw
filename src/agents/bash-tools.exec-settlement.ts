@@ -62,7 +62,6 @@ export async function settleExecProcessExit({
       delete session.eventRouting;
       delete session.notifyDeliveryContext;
       delete session.notifySessionTarget;
-      delete session.notifyFromConversationTurn;
       delete session.notifyOnExit;
       delete session.notifyOnExitEmptySuccess;
       if (session.finalizationFailed || session.cleanupUncertain) {

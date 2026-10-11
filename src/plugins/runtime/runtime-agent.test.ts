@@ -789,11 +789,32 @@ describe("plugin runtime session work admission", () => {
     });
     await mutationStarted.promise;
 
-    const work = runtime.session.runWithWorkAdmission({ storePath, sessionKey }, async () => {});
-    releaseMutation.resolve();
-    await mutation;
-
-    await expect(work).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+    const lifecycle = await import("../../sessions/session-lifecycle-admission.js");
+    const beginAdmission = lifecycle.beginSessionWorkAdmission;
+    const admissionStarted = createDeferred<Parameters<typeof beginAdmission>[0]>();
+    const admissionSpy = vi
+      .spyOn(lifecycle, "beginSessionWorkAdmission")
+      .mockImplementation((params) => {
+        const pending = beginAdmission(params);
+        admissionStarted.resolve(params);
+        return pending;
+      });
+    const run = vi.fn(async () => {});
+    const work = runtime.session.runWithWorkAdmission({ storePath, sessionKey }, run);
+    const rejected = expect(work).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+    try {
+      // The worker read must capture the original session before replacement wins the lock.
+      const requested = await admissionStarted.promise;
+      expect([...requested.identities]).toEqual([sessionKey, sessionId]);
+      releaseMutation.resolve();
+      await mutation;
+      await rejected;
+      expect(run).not.toHaveBeenCalled();
+    } finally {
+      releaseMutation.resolve();
+      admissionSpy.mockRestore();
+      await mutation;
+    }
   });
 
   it("holds admission through the callback and relays lifecycle interruption", async () => {

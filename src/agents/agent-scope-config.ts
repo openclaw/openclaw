@@ -95,7 +95,6 @@ export type ResolvedAgentConfig = {
   typingMode?: AgentEntry["typingMode"];
   tts?: AgentEntry["tts"];
   contextLimits?: AgentContextLimitsConfig;
-  heartbeat?: AgentEntry["heartbeat"];
   identity?: AgentEntry["identity"];
   groupChat?: AgentEntry["groupChat"];
   subagents?: AgentEntry["subagents"];
@@ -434,7 +433,6 @@ export function resolveAgentConfig(
       typeof entry.contextLimits === "object" && entry.contextLimits
         ? { ...agentDefaults?.contextLimits, ...entry.contextLimits }
         : agentDefaults?.contextLimits,
-    heartbeat: entry.heartbeat,
     identity: entry.identity,
     groupChat: entry.groupChat,
     subagents: typeof entry.subagents === "object" && entry.subagents ? entry.subagents : undefined,

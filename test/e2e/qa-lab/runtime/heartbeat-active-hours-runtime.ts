@@ -1,18 +1,19 @@
-// Heartbeat active-hours evidence runs the real wake-lane guards and reload path.
-// Interval cadence itself is covered by the system cron monitor integration tests.
+// Retained QA entrypoint proves migrated active hours through the ordinary scheduler.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import { CronService, type CronEvent } from "../../../../src/cron/service.js";
+import { loadCronJobsStore } from "../../../../src/cron/store.js";
+import { racePromiseWithAbortSignal } from "../../../../src/infra/abort-signal.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
-import { isWithinActiveHours } from "../../../../src/infra/heartbeat-active-hours.js";
-import { startHeartbeatRunner } from "../../../../src/infra/heartbeat-runner.js";
-import { requestHeartbeat } from "../../../../src/infra/heartbeat-wake.js";
+import { GatewayScheduler } from "../../../../src/infra/gateway-scheduler.js";
+import { createGatewaySchedulerClock } from "../../../../src/test-utils/gateway-scheduler-clock.js";
+import { withOpenClawTestState } from "../../../../src/test-utils/openclaw-test-state.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
-const HEARTBEAT_INTERVAL_MS = 100;
-const HEARTBEAT_INTERVAL = `${HEARTBEAT_INTERVAL_MS}ms`;
+const AUTOMATION_INTERVAL_MS = 60_000;
 
 type HeartbeatRuntimeOptions = {
   artifactBase: string;
@@ -23,6 +24,8 @@ type HeartbeatRuntimeOptions = {
 type SchedulerObservation = {
   at: string;
   outcome: "active-fire" | "quiet-hours-skip";
+  executions: number;
+  nextRunAtMs: number;
 };
 
 function parseOptions(argv: string[], repoRoot = process.cwd()): HeartbeatRuntimeOptions {
@@ -49,83 +52,31 @@ function parseOptions(argv: string[], repoRoot = process.cwd()): HeartbeatRuntim
   return { artifactBase, repoRoot, timeoutMs };
 }
 
-function heartbeatConfig(quietHours: boolean): OpenClawConfig {
+function activeHours(quietHours: boolean) {
   return {
-    agents: {
-      entries: { main: {} },
-      defaults: {
-        heartbeat: {
-          activeHours: quietHours
-            ? { start: "00:00", end: "00:00", timezone: "UTC" }
-            : { start: "00:00", end: "24:00", timezone: "UTC" },
-          every: HEARTBEAT_INTERVAL,
-          target: "none",
-        },
-      },
-    },
+    start: "00:00",
+    end: quietHours ? "00:00" : "24:00",
+    timezone: "UTC",
   };
-}
-
-async function waitForObservation(
-  observations: SchedulerObservation[],
-  outcome: SchedulerObservation["outcome"],
-  afterCount: number,
-  timeoutMs: number,
-) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const observation = observations.slice(afterCount).find((entry) => entry.outcome === outcome);
-    if (observation) {
-      return observation;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 20);
-    });
-  }
-  throw new Error(`heartbeat wake lane did not observe ${outcome} within ${timeoutMs}ms`);
-}
-
-async function pokeScheduledHeartbeat(params: {
-  observations: SchedulerObservation[];
-  outcome: SchedulerObservation["outcome"];
-  afterCount: number;
-  timeoutMs: number;
-}) {
-  // The cron monitor fires at or after the configured due slot. Wait past one
-  // interval so the runner's cooldown gate admits the equivalent scheduled poke.
-  await new Promise((resolve) => {
-    setTimeout(resolve, HEARTBEAT_INTERVAL_MS + 50);
-  });
-  requestHeartbeat({
-    source: "interval",
-    intent: "scheduled",
-    reason: "interval",
-    coalesceMs: 0,
-  });
-  return await waitForObservation(
-    params.observations,
-    params.outcome,
-    params.afterCount,
-    params.timeoutMs,
-  );
 }
 
 function createWriter(options: HeartbeatRuntimeOptions) {
   return createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
     logFileName: "heartbeat-active-hours.log",
-    primaryModel: "heartbeat/scheduler",
+    primaryModel: "automations/scheduler",
     providerMode: "mock-openai",
     repoRoot: options.repoRoot,
     target: {
       id: "heartbeat-active-hours",
-      title: "Heartbeat active-hours scheduler",
+      title: "Migrated heartbeat active-hours scheduler",
       sourcePath: "test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.ts",
       docsRefs: ["docs/gateway/heartbeat.md"],
       codeRefs: [
         "test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.ts",
-        "src/infra/heartbeat-runner.ts",
-        "src/infra/heartbeat-active-hours.ts",
+        "src/cron/service/timer-scheduler.ts",
+        "src/cron/service/timer-execution.ts",
+        "src/cron/active-hours.ts",
       ],
     },
   });
@@ -135,54 +86,112 @@ export async function runHeartbeatActiveHoursRuntime(options: HeartbeatRuntimeOp
   await fs.mkdir(options.artifactBase, { recursive: true });
   const writer = createWriter(options);
   const startedAt = Date.now();
-  const observations: SchedulerObservation[] = [];
   const phaseObservations: SchedulerObservation[] = [];
-  let currentConfig = heartbeatConfig(false);
-  const runner = startHeartbeatRunner({
-    cfg: currentConfig,
-    readCurrentConfig: () => currentConfig,
-    runOnce: async ({ cfg, heartbeat }) => {
-      const active = isWithinActiveHours(cfg!, heartbeat);
-      const outcome = active ? "active-fire" : "quiet-hours-skip";
-      observations.push({ at: new Date().toISOString(), outcome });
-      writer.appendLog(`heartbeat-active-hours: ${outcome}\n`);
-      return active
-        ? { status: "ran", durationMs: 1 }
-        : { status: "skipped", reason: "quiet-hours" };
-    },
-  });
   try {
-    phaseObservations.push(
-      await pokeScheduledHeartbeat({
-        observations,
-        outcome: "active-fire",
-        afterCount: 0,
-        timeoutMs: options.timeoutMs,
-      }),
-    );
-    const beforeQuiet = observations.length;
-    currentConfig = heartbeatConfig(true);
-    runner.updateConfig(currentConfig);
-    phaseObservations.push(
-      await pokeScheduledHeartbeat({
-        observations,
-        outcome: "quiet-hours-skip",
-        afterCount: beforeQuiet,
-        timeoutMs: options.timeoutMs,
-      }),
-    );
-    const beforeReload = observations.length;
-    currentConfig = heartbeatConfig(false);
-    runner.updateConfig(currentConfig);
-    phaseObservations.push(
-      await pokeScheduledHeartbeat({
-        observations,
-        outcome: "active-fire",
-        afterCount: beforeReload,
-        timeoutMs: options.timeoutMs,
-      }),
-    );
-
+    await withOpenClawTestState({ label: "automation-active-hours" }, async (state) => {
+      const config: OpenClawConfig = {
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
+        plugins: { enabled: false },
+      };
+      await state.writeConfig(config);
+      const clock = createGatewaySchedulerClock(Date.now());
+      const scheduler = new GatewayScheduler({ clock: clock.clock });
+      const storePath = state.statePath("cron", "jobs.json");
+      const finished: CronEvent[] = [];
+      let executions = 0;
+      const cron = new CronService({
+        scheduler,
+        storePath,
+        cronEnabled: true,
+        defaultAgentId: "main",
+        log: {
+          debug() {},
+          info() {},
+          warn: (_details, message) => writer.appendLog(`${message}\n`),
+          error: (_details, message) => writer.appendLog(`${message}\n`),
+        },
+        enqueueSystemEvent() {},
+        runIsolatedAgentJob: async () => {
+          throw new Error("Expected ordinary shared-session automation");
+        },
+        runSessionEvent: async () => {
+          executions += 1;
+          return { status: "ok", executionStarted: true, summary: "Scheduled check completed" };
+        },
+        onEvent: (event) => {
+          if (event.action === "finished") {
+            finished.push(event);
+          }
+        },
+      });
+      try {
+        const job = await cron.add({
+          name: "Migrated active-hours check",
+          agentId: "main",
+          enabled: true,
+          schedule: { kind: "every", everyMs: AUTOMATION_INTERVAL_MS },
+          activeHours: activeHours(false),
+          sessionTarget: "main",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "Perform the scheduled check" },
+          delivery: { mode: "none" },
+        });
+        await cron.start();
+        const fireNext = async (outcome: SchedulerObservation["outcome"]) => {
+          const dueAtMs = cron.getJob(job.id)?.state.nextRunAtMs;
+          if (typeof dueAtMs !== "number" || dueAtMs <= scheduler.now()) {
+            throw new Error("Automation did not retain its next scheduled occurrence");
+          }
+          const beforeCount = finished.length;
+          const beforeExecutions = executions;
+          await racePromiseWithAbortSignal(
+            Promise.resolve(clock.advanceTo(dueAtMs)),
+            AbortSignal.timeout(options.timeoutMs),
+          );
+          const events = finished.slice(beforeCount);
+          const expectedStatus = outcome === "active-fire" ? "ok" : "skipped";
+          const expectedExecutions = beforeExecutions + (outcome === "active-fire" ? 1 : 0);
+          const persisted = (await loadCronJobsStore(storePath)).jobs.find(
+            (candidate) => candidate.id === job.id,
+          );
+          const nextRunAtMs = persisted?.state.nextRunAtMs;
+          if (
+            events.length !== 1 ||
+            events[0]?.status !== expectedStatus ||
+            executions !== expectedExecutions ||
+            persisted?.state.lastRunStatus !== expectedStatus ||
+            typeof nextRunAtMs !== "number" ||
+            nextRunAtMs <= dueAtMs ||
+            (outcome === "quiet-hours-skip" &&
+              events[0]?.summary !== "Outside this automation's active hours")
+          ) {
+            throw new Error(
+              `Scheduled ${outcome} failed: ${JSON.stringify({ events, executions, state: persisted?.state })}`,
+            );
+          }
+          const observation = {
+            at: new Date(scheduler.now()).toISOString(),
+            outcome,
+            executions,
+            nextRunAtMs,
+          };
+          phaseObservations.push(observation);
+          writer.appendLog(`heartbeat-active-hours: ${outcome}\n`);
+        };
+        await fireNext("active-fire");
+        await cron.update(job.id, { activeHours: activeHours(true) });
+        await fireNext("quiet-hours-skip");
+        await cron.update(job.id, { activeHours: activeHours(false) });
+        cron.stop();
+        await cron.waitForIdle();
+        await cron.start();
+        await fireNext("active-fire");
+      } finally {
+        cron.stop();
+        await cron.waitForIdle();
+        await scheduler.stop();
+      }
+    });
     const summaryPath = path.join(options.artifactBase, "heartbeat-active-hours-summary.json");
     await fs.writeFile(
       summaryPath,
@@ -191,7 +200,8 @@ export async function runHeartbeatActiveHoursRuntime(options: HeartbeatRuntimeOp
     );
     return await writer.write({
       artifacts: [{ kind: "summary", filePath: summaryPath }],
-      details: "Observed active fire, quiet-hours skip, and active-hours reload fire",
+      details:
+        "Observed scheduled active fire, quiet-hours skip without execution, and persisted policy reload fire",
       durationMs: Math.max(1, Date.now() - startedAt),
       status: "pass",
     });
@@ -203,8 +213,6 @@ export async function runHeartbeatActiveHoursRuntime(options: HeartbeatRuntimeOp
       durationMs: Math.max(1, Date.now() - startedAt),
       status: "fail",
     });
-  } finally {
-    runner.stop();
   }
 }
 

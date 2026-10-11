@@ -5,6 +5,7 @@ import {
   GatewayDrainingError,
 } from "../../process/gateway-work-admission.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
+import { subscribeCronJobsStoreMutations } from "../store.js";
 import type { CronRunRecoveryProposal } from "../store/run-recovery-read.types.js";
 import type { CronRunRecoveryResult, InterruptedStartupRun } from "../store/run-recovery.types.js";
 import {
@@ -22,10 +23,78 @@ import { cancelCronRunAdmissionWaiters } from "./run-admission.js";
 import { emitInterruptedCronRun } from "./run-recovery-events.js";
 import { recoverCronRunProposals } from "./run-recovery.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
-import type { CronServiceState } from "./state.js";
+import { emit, type CronServiceState } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import { MIN_REFIRE_GAP_MS } from "./timer-execution-timeout.js";
 import { armTimer, runMissedJobs, stopTimer } from "./timer.js";
+
+const mutationSubscriptions = new WeakMap<CronServiceState, () => void>();
+
+function stopStoreMutationSubscription(state: CronServiceState): void {
+  mutationSubscriptions.get(state)?.();
+  mutationSubscriptions.delete(state);
+}
+
+/** Adopts a committed lifecycle change while the caller holds the cron operation lock. */
+export async function reloadProvisionedCronJobs(
+  state: CronServiceState,
+  generation = state.lifecycleGeneration,
+): Promise<void> {
+  const isCurrent = () => !state.stopped && state.lifecycleGeneration === generation;
+  // Startup's final reload adopts publications received before scheduling is ready.
+  if (!isCurrent() || !state.schedulerStarted) {
+    return;
+  }
+  const previousIds = new Set(state.store?.jobs.map((job) => job.id));
+  await ensureLoaded(state, { forceReload: true });
+  if (!isCurrent()) {
+    return;
+  }
+  await recomputeUnownedCronSchedules(state);
+  if (!isCurrent()) {
+    return;
+  }
+  armTimer(state);
+  for (const job of state.store?.jobs ?? []) {
+    if (!previousIds.has(job.id)) {
+      emit(state, {
+        jobId: job.id,
+        action: "added",
+        job,
+        nextRunAtMs: job.state.nextRunAtMs,
+      });
+    }
+  }
+}
+
+function subscribeStoreMutations(state: CronServiceState): void {
+  const generation = state.lifecycleGeneration;
+  mutationSubscriptions.set(
+    state,
+    subscribeCronJobsStoreMutations(state.deps.storePath, () => {
+      const refresh = async () => {
+        await locked(state, async () => await reloadProvisionedCronJobs(state, generation));
+        if (state.stopped || state.lifecycleGeneration !== generation || !state.schedulerStarted) {
+          return;
+        }
+        // Reconciliation reads the service again; retain its work after releasing the lock.
+        await state.deps.onProvisionedJobsReloaded?.();
+      };
+      const reportFailure = (err: unknown) => {
+        state.deps.log.warn({ err: String(err) }, "cron: failed to adopt provisioned jobs");
+      };
+      try {
+        const work = runInDetachedAsyncContext(() =>
+          state.deps.runSchedulerOwned ? state.deps.runSchedulerOwned(refresh) : refresh(),
+        ).catch(reportFailure);
+        // stop() closes future publications; accepted worker work still owns its settlement.
+        state.schedulerDrain = Promise.all([state.schedulerDrain, work]).then(() => undefined);
+      } catch (err) {
+        reportFailure(err);
+      }
+    }),
+  );
+}
 
 function applyRecoveryResult(params: {
   state: CronServiceState;
@@ -246,6 +315,7 @@ export async function start(state: CronServiceState): Promise<void> {
 }
 
 async function startOnce(state: CronServiceState): Promise<void> {
+  stopStoreMutationSubscription(state);
   if (state.schedulerScope.signal.aborted) {
     state.schedulerScope = state.deps.scheduler.scope();
   }
@@ -257,6 +327,13 @@ async function startOnce(state: CronServiceState): Promise<void> {
     state.deps.log.info({ enabled: false }, "cron: disabled");
     return;
   }
+  subscribeStoreMutations(state);
+  const failedStart = (error: unknown): never => {
+    if (!state.schedulerStarted && state.lifecycleGeneration === generation) {
+      stopStoreMutationSubscription(state);
+    }
+    throw error;
+  };
 
   const skipJobIds = new Set<string>();
   await locked(state, async () => {
@@ -297,7 +374,7 @@ async function startOnce(state: CronServiceState): Promise<void> {
     if (listForeignReceipts(state).length > 0) {
       await recomputeUnownedCronSchedules(state);
     }
-  });
+  }).catch(failedStart);
 
   if (state.stopped || state.lifecycleGeneration !== generation) {
     return;
@@ -339,6 +416,7 @@ async function startOnce(state: CronServiceState): Promise<void> {
     if (state.stopped || state.lifecycleGeneration !== generation) {
       return;
     }
+    state.schedulerStarted = true;
     armTimer(state);
     resumeForeignReceiptMonitor(state);
     state.deps.log.info(
@@ -349,13 +427,17 @@ async function startOnce(state: CronServiceState): Promise<void> {
       },
       "cron: started",
     );
-  });
+  }).catch(failedStart);
 }
 
 /** Stops the cron service timer without mutating persisted job state. */
 export function stop(state: CronServiceState) {
-  state.lifecycleGeneration += 1;
+  // One close owns its teardown; repeated drain calls must not revoke that work.
+  if (!state.stopped) {
+    state.lifecycleGeneration += 1;
+  }
   state.stopped = true;
+  stopStoreMutationSubscription(state);
   // stop() closes admission synchronously; only external drain callers join it.
   state.schedulerDrain = Promise.all([state.schedulerDrain, state.schedulerScope.stop()]).then(
     () => undefined,

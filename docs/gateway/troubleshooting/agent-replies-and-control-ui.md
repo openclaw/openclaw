@@ -75,7 +75,7 @@ If a shared model catalog worker exits and its automatic runtime replacement fai
 opening the model picker, preparing a chat, or sending a new message can check the
 failed runtime again without restarting the Gateway. The picker shows **Loading
 models…** while checking, then returns to **Models unavailable** if preparation
-still fails. Repeated foreground checks have a short cooldown. Cron and Heartbeat
+still fails. Repeated foreground checks have a short cooldown. Scheduled jobs
 get one check per failure episode; later scheduled runs do not keep rebuilding a
 runtime that remains unavailable. Existing messages and tasks are not replayed.
 

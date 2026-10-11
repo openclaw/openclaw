@@ -112,7 +112,7 @@ describe("one-shot recovery", () => {
           scheduler: createTestGatewayScheduler(clock.clock),
           nowMs: clock.clock.now,
           enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
+          enqueueSessionEvent: vi.fn(),
           runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
           runCommandJob,
           onEvent,
@@ -339,7 +339,7 @@ it("keeps reads responsive and finishes a dispatched repair after the scheduler 
     nowMs: () => nowMs,
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
     runIsolatedAgentJob: runner,
     runCommandJob: runner,
     onEvent,
@@ -477,7 +477,7 @@ async function seedInterruptedBatch() {
     nowMs: () => nowMs,
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
     runIsolatedAgentJob: runner,
     runCommandJob: runner,
     onEvent,
@@ -605,7 +605,7 @@ it("retains a committed repair after reply loss without replaying it on the next
     job.failureAlert = { after: 1, cooldownMs: 0 };
     return job;
   });
-  const enqueueSystemEvent = vi.fn();
+  const enqueueSessionEvent = vi.fn();
   const onEvent = vi.fn<(event: CronEvent) => void>();
   const runner = vi.fn(async () => ({ status: "ok" as const }));
   const state = createCronServiceState({
@@ -616,8 +616,8 @@ it("retains a committed repair after reply loss without replaying it on the next
     isAgentAvailable: () => true,
     nowMs: () => nowMs,
     log: logger,
-    enqueueSystemEvent,
-    requestHeartbeat: vi.fn(),
+    enqueueSystemEvent: vi.fn(),
+    enqueueSessionEvent,
     runIsolatedAgentJob: runner,
     runCommandJob: runner,
     onEvent,
@@ -634,7 +634,7 @@ it("retains a committed repair after reply loss without replaying it on the next
   const finishedIds = () =>
     onEvent.mock.calls.flatMap(([event]) => (event.action === "finished" ? [event.jobId] : []));
   const notificationKeys = () =>
-    enqueueSystemEvent.mock.calls.map(([, options]) => options.contextKey);
+    enqueueSessionEvent.mock.calls.map(([, options]) => options.contextKey);
 
   const admissions = observeCronTimerAdmissions(state);
   const reply = loseFirstCronMutationReply();
@@ -696,8 +696,8 @@ it("reloads committed schedule maintenance after reply loss without repeating it
   job.schedule = { kind: "cron", expr: "invalid" };
   job.state = { scheduleErrorCount: 2 };
   await writeCronStoreSnapshot({ storePath, jobs: [job] });
-  const enqueueSystemEvent = vi.fn();
-  const state = makeCronRecoveryState(logger, storePath, nowMs, { enqueueSystemEvent });
+  const enqueueSessionEvent = vi.fn();
+  const state = makeCronRecoveryState(logger, storePath, nowMs, { enqueueSessionEvent });
   const reply = loseFirstCronMutationReply("cron.scheduleUnowned");
   onTestFinished(async () => {
     await reply.close();
@@ -709,9 +709,9 @@ it("reloads committed schedule maintenance after reply loss without repeating it
   expect(reply.wasDropped()).toBe(true);
   const persisted = (await loadCronStore(storePath)).jobs[0];
   expect(persisted).toMatchObject({ enabled: false, state: { scheduleErrorCount: 3 } });
-  expect(enqueueSystemEvent).not.toHaveBeenCalled();
+  expect(enqueueSessionEvent).not.toHaveBeenCalled();
   await ensureLoadedForRead(state);
   expect(state.store?.jobs[0]).toEqual(persisted);
-  expect(enqueueSystemEvent).not.toHaveBeenCalled();
+  expect(enqueueSessionEvent).not.toHaveBeenCalled();
   expect(reply.attempts).toHaveLength(2);
 });

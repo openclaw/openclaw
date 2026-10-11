@@ -152,7 +152,11 @@ limits, routing policy, and error responses.
       --data '{"text":"The sample import completed","mode":"now","agentId":"main"}'
     ```
 
-    HTTP `200` includes `eventOutcome: "queued"` when the queue accepts the wake or `eventOutcome: "coalesced"` when the same wake is already the queue's most recent pending event. With `mode: "now"`, the response confirms admission to ordinary session execution, not completed execution or delivery. The event waits behind existing work in that session and does not depend on heartbeat cadence or active hours. Use `mode: "next-heartbeat"` to retain the event for the next heartbeat.
+    HTTP `200` includes `eventOutcome: "queued"` when the queue accepts the wake or `eventOutcome: "coalesced"` when the same wake is already pending. With `mode: "now"`, the response confirms admission to ordinary session execution, not completed execution or delivery. The event waits behind existing work in that session and does not depend on an automation's cadence or active hours. The retained `mode: "next-heartbeat"` spelling defers to a valid scheduled target.
+
+    Deferred wakes require Automations to be enabled and an enabled ordinary scheduled job targeting that agent's main session. One-shot receivers must have no restricted active-hours window: a skipped occurrence can finish without consuming attached notices. All-day active hours (`00:00`–`24:00`) are allowed. Recurring receivers may keep active-hours filters because a later occurrence can receive the notice. The notice belongs to the selected scheduled occurrence and is consumed when that job runs at or after the selected time. Without an eligible receiver, direct and mapped wakes return HTTP `503` with guidance to use `mode: "now"` or create an automation. Coalescing applies only to notices pending for the same current job definition, session, and selected scheduled time; an unrelated passive notice does not satisfy a deferred wake.
+
+    Deferred notices for one selected scheduled occurrence share a prompt limit of 2,000 weighted characters; CJK characters count more heavily than ASCII. Admission returns HTTP `503` before accepting a new notice that would exceed the complete pending batch limit. Exact coalesced duplicates add no text. Shorten the notice or use `mode: "now"`; immediate wakes keep their ordinary input limits. The receiver delivers accepted notices whole. If older pending slots together exceed the limit, only the complete notices that fit are consumed and the remainder stays queued. This does not schedule another run.
 
     A full session queue returns HTTP `503` with an actionable error instead of evicting an accepted event. Let the session process its pending events before retrying. This applies to mapped wake actions too; duplicate wakes can still coalesce when the queue is full.
 
@@ -171,6 +175,8 @@ limits, routing policy, and error responses.
     For direct channel delivery, supply both a concrete `channel` and `to`; add `accountId` to select an enabled channel account. Supplying only part of a destination, using `channel: "last"`, or selecting an invalid account returns `400` before dispatch. Direct hooks do not inherit the main session's last recipient.
 
     With no destination, the default `deliver: true` allows a completion system event on the target agent's main session. Set `deliver: false` to suppress successful announcements and ignore destination fields; completion is logged instead. Non-ok outcomes still produce a failure event. Disabling announcement is not a tool restriction: restrict the agent's tools separately if it must not send messages.
+
+    `wakeMode: "next-heartbeat"` defers completion announcements through the same scheduled receiver. The announcement retains the session captured before the run; a removed receiver or replaced session is logged as undelivered instead of redirecting it.
 
   </Accordion>
   <Accordion title="Mapped hooks (POST /hooks/<name>)">

@@ -4,14 +4,23 @@ import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
+import { upsertClawCronRef } from "../claws/cron.js";
 import { buildClawRemovePlan, readClawStatus } from "../claws/lifecycle-state.js";
 import { resolveClawMonitorCleanupBinding } from "../claws/monitor-cleanup-binding.js";
 import type { ClawMonitorCleanupGateway } from "../claws/monitor-cleanup-contract.js";
-import * as clawOwnership from "../claws/provenance-async.js";
+import { readPortableHeartbeatState } from "../claws/portable-heartbeat-state.js";
+import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { clearCronJobActive, markCronJobActive } from "../cron/active-jobs.js";
+import { readDefaultProactiveJobReceiptInDatabase } from "../cron/proactive-job-receipt.kernel.js";
+import { writeCronJobScratch } from "../cron/scratch-store.js";
 import { getSuspensionVisibleCronTaskRunCount } from "../cron/service/active-run-cancellation.js";
+import { cronStoreKey } from "../cron/store/key.js";
 import { upsertCronJobRow } from "../cron/store/row-codec.js";
 import {
   prepareCronRunReceiptClaim,
@@ -37,7 +46,112 @@ import {
 
 const fixture = useClawMonitorFixture();
 
-describe("Claw serving monitor cleanup", () => {
+describe("Claw serving automation cleanup", () => {
+  it.each(["default", "session", "foreign-session"] as const)(
+    "preserves agent-less work belonging to its %s owner during Claw removal",
+    async (ownership) => {
+      const current = await fixture(false);
+      const config = current.getConfig();
+      await current.writeConfig({
+        ...config,
+        agents: {
+          ...config.agents,
+          defaults: {
+            ...config.agents?.defaults,
+            systemAgent: { agentId: ownership === "session" ? "other" : "worker" },
+          },
+          entries: {
+            ...config.agents?.entries,
+            other: { workspace: current.state.path("other-workspace") },
+          },
+        },
+      });
+      const job = await current.cron.add({
+        name: "Independent agent-less work",
+        enabled: false,
+        schedule: { kind: "every", everyMs: 86_400_000 },
+        payload: { kind: "agentTurn", message: "Retain the selected agent" },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        ...(ownership === "default"
+          ? {}
+          : { sessionKey: `agent:${ownership === "session" ? "worker" : "other"}:followup` }),
+      });
+      expect(job.agentId).toBeUndefined();
+      expect(job.owner).toBeUndefined();
+      const plan = await current.plan();
+      if (ownership === "foreign-session") {
+        expect(plan.blockers).toEqual([]);
+        const removal = await current.apply(plan);
+        expect(removal, JSON.stringify(removal)).toMatchObject({
+          status: "complete",
+          agentRemoved: true,
+        });
+      } else {
+        expect(plan.blockers).toContainEqual(
+          expect.objectContaining({ code: "agent_job_attached" }),
+        );
+        await expect(current.apply(plan)).rejects.toMatchObject({ code: "remove_blocked" });
+        await current.withDeletion(async (deletion) => {
+          await expect(
+            current.gateway.quiesce("worker", deletion.entry.operationId, []),
+          ).rejects.toThrow("Independent or changed cron job");
+        });
+        await expect(
+          fs.access(path.join(current.workspaceDir, "SOUL.md")),
+        ).resolves.toBeUndefined();
+      }
+      expect(await current.cron.readJob(job.id)).toBeDefined();
+    },
+  );
+
+  it("rejects an agent-less job committed after the cancellation inventory was captured", async () => {
+    const current = await fixture(false);
+    const config = current.getConfig();
+    await current.writeConfig({
+      ...config,
+      agents: {
+        ...config.agents,
+        defaults: {
+          ...config.agents?.defaults,
+          systemAgent: { agentId: "worker" },
+        },
+      },
+    });
+    expect(current.getConfig().agents?.defaults?.systemAgent?.agentId).toBe("worker");
+    const originalQuiesce = current.cron.quiesceJobs.bind(current.cron);
+    const original = (await current.cron.list({ includeDisabled: true }))[0]!;
+    const quiesce = vi
+      .spyOn(current.cron, "quiesceJobs")
+      .mockImplementationOnce(async (...args) => {
+        upsertCronJobRow(
+          openOpenClawStateDatabase().db,
+          cronStoreKey(current.state.statePath("cron", "jobs.json")),
+          {
+            ...original,
+            id: "new-agent-less-work",
+            agentId: undefined,
+            owner: undefined,
+            declarationKey: undefined,
+            sessionKey: undefined,
+            enabled: false,
+          },
+          10,
+        );
+        return originalQuiesce(...args);
+      });
+    try {
+      await current.withDeletion(async (deletion) => {
+        await expect(
+          current.gateway.quiesce("worker", deletion.entry.operationId, []),
+        ).rejects.toThrow("changed before monitor cancellation");
+      });
+      await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).resolves.toBeUndefined();
+    } finally {
+      quiesce.mockRestore();
+    }
+  });
+
   it.each(["quiesce", "drain"])(
     "retains a configured agent without a Claw install during %s",
     async (phase) => {
@@ -86,8 +200,17 @@ describe("Claw serving monitor cleanup", () => {
     await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).rejects.toThrow();
   });
 
-  it("retains local monitor blockers when the serving inspection is unavailable", async () => {
+  it("retains independent job blockers when the serving inspection is unavailable", async () => {
     const current = await fixture(false);
+    await current.cron.add({
+      agentId: "worker",
+      name: "independent operator task",
+      enabled: false,
+      schedule: { kind: "every", everyMs: 86_400_000 },
+      payload: { kind: "agentTurn", message: "Independent task" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+    });
     const plan = await buildClawRemovePlan("worker", {
       config: current.getConfig(),
       monitorGateway: {
@@ -104,23 +227,107 @@ describe("Claw serving monitor cleanup", () => {
       expect(job).toMatchObject({
         action: "retain",
         blocked: true,
-        details: { monitorInspection: "unavailable" },
       });
     }
     expect(deletionJournal.readAgentDeletionJournal("worker")).toBeUndefined();
   });
 
-  it("removes recorded Claw schedules alongside monitors with one disposition each", async () => {
+  it("removes recorded Claw schedules with one disposition each", async () => {
     const current = await fixture(false, undefined, true);
     const plan = await current.plan();
     expect(plan.blockers).toEqual([]);
     expect(plan.actions.filter((action) => action.kind === "cronJob")).toHaveLength(1);
-    expect(plan.actions.filter((action) => action.kind === "scheduledJob")).toHaveLength(1);
+    expect(plan.actions.filter((action) => action.kind === "scheduledJob")).toEqual([]);
     expect(await current.apply(plan)).toMatchObject({
       status: "complete",
       cronJobs: [expect.objectContaining({ manifestId: "daily", action: "removed" })],
     });
   });
+
+  it("removes an imported ordinary automation through the serving owner and retains its provisioning receipt", async () => {
+    const current = await fixture(false, undefined, false, true);
+    const storePath = current.state.statePath("cron", "jobs.json");
+    const database = openOpenClawStateDatabase();
+    const receipt = readDefaultProactiveJobReceiptInDatabase(database.db, storePath, "worker");
+    expect(receipt).toBeDefined();
+    const monitors = await current.gateway.inspect("worker");
+    expect(monitors).toEqual([]);
+    const plan = await current.plan();
+    expect(plan.blockers).toEqual([]);
+    expect(await current.apply(plan)).toMatchObject({ status: "complete", agentRemoved: true });
+    expect(await current.cron.readJob(receipt!.jobId)).toBeUndefined();
+    expect(
+      (await readPortableHeartbeatState("worker", current.getConfig(), {})).ref,
+    ).toBeUndefined();
+    expect(readDefaultProactiveJobReceiptInDatabase(database.db, storePath, "worker")).toEqual(
+      receipt,
+    );
+  });
+
+  it.each(["job", "scratch", "scratch-before-cancellation", "released-ref", "receipt"])(
+    "refuses to quiesce an imported ordinary automation after its %s changes",
+    async (changed) => {
+      const current = await fixture(false, undefined, false, true);
+      const ref = (await readPortableHeartbeatState("worker", current.getConfig(), {})).ref!;
+      const storePath = current.state.statePath("cron", "jobs.json");
+      const monitors = await current.gateway.inspect("worker");
+      const editScratch = async () => {
+        expect(
+          (
+            await writeCronJobScratch({
+              storePath,
+              jobId: ref.schedulerJobId!,
+              content: "operator-owned scratch",
+              expectedRevision: 1,
+            })
+          ).ok,
+        ).toBe(true);
+      };
+      const originalQuiesce = current.cron.quiesceJobs.bind(current.cron);
+      const quiesce =
+        changed === "scratch-before-cancellation"
+          ? vi.spyOn(current.cron, "quiesceJobs").mockImplementationOnce(async (...args) => {
+              await editScratch();
+              return await originalQuiesce(...args);
+            })
+          : undefined;
+      if (changed === "job") {
+        await current.cron.update(ref.schedulerJobId!, { name: "operator-owned edit" });
+      } else if (changed === "scratch") {
+        await editScratch();
+      } else if (changed === "released-ref") {
+        upsertClawCronRef({ ...ref, status: "removed" });
+      } else if (changed === "receipt") {
+        openOpenClawStateDatabase()
+          .db.prepare("DELETE FROM config_machine_state WHERE state_key = ?")
+          .run(`automation-default:${cronStoreKey(storePath)}:worker`);
+        expect(
+          readDefaultProactiveJobReceiptInDatabase(
+            openOpenClawStateDatabase().db,
+            storePath,
+            "worker",
+          ),
+        ).toBeUndefined();
+      }
+      try {
+        await current.withDeletion(async (deletion) => {
+          await expect(
+            current.gateway.quiesce("worker", deletion.entry.operationId, monitors),
+          ).rejects.toThrow(
+            changed === "scratch-before-cancellation"
+              ? "changed before monitor cancellation"
+              : "Independent or changed cron job",
+          );
+          expect(await current.cron.readJob(ref.schedulerJobId!)).toBeDefined();
+          await expect(
+            fs.access(path.join(current.workspaceDir, "SOUL.md")),
+          ).resolves.toBeUndefined();
+        });
+      } finally {
+        quiesce?.mockRestore();
+      }
+    },
+  );
 
   it("requires authenticated administrator scope for the monitor phase method", () => {
     expect(isGatewayMethodClassified("claws.monitors")).toBe(true);
@@ -154,10 +361,8 @@ describe("Claw serving monitor cleanup", () => {
   );
 
   it.each([
-    { boundary: "journal", changedOwner: "operation" },
-    { boundary: "journal", changedOwner: "scheduler" },
-    { boundary: "ownership", changedOwner: "operation" },
-    { boundary: "ownership", changedOwner: "scheduler" },
+    { boundary: "snapshot", changedOwner: "operation" },
+    { boundary: "snapshot", changedOwner: "scheduler" },
     { boundary: "inventory", changedOwner: "operation" },
     { boundary: "inventory", changedOwner: "scheduler" },
   ])(
@@ -174,31 +379,26 @@ describe("Claw serving monitor cleanup", () => {
             current.replaceCron();
           }
         };
-        const originalJournal = deletionJournal.readAgentDeletionJournalAsync;
-        const originalOwnership = clawOwnership.readClawPackageOwnership;
+        const originalRead = stateReader.executeExistingOpenClawStateRead;
         const originalList = current.cron.list.bind(current.cron);
+        let changed = false;
         const preparation =
-          boundary === "journal"
+          boundary === "snapshot"
             ? vi
-                .spyOn(deletionJournal, "readAgentDeletionJournalAsync")
-                .mockImplementationOnce(async (...args) => {
-                  const journal = await originalJournal(...args);
-                  replaceOwner();
-                  return journal;
-                })
-            : boundary === "ownership"
-              ? vi
-                  .spyOn(clawOwnership, "readClawPackageOwnership")
-                  .mockImplementationOnce(async (...args) => {
-                    const ownership = await originalOwnership(...args);
+                .spyOn(stateReader, "executeExistingOpenClawStateRead")
+                .mockImplementation(async (...args) => {
+                  const snapshot = await originalRead(...args);
+                  if (!changed && args[1].type === "clawMonitorCleanup.snapshot") {
+                    changed = true;
                     replaceOwner();
-                    return ownership;
-                  })
-              : vi.spyOn(current.cron, "list").mockImplementationOnce(async (opts) => {
-                  const jobs = await originalList(opts);
-                  replaceOwner();
-                  return jobs;
-                });
+                  }
+                  return snapshot;
+                })
+            : vi.spyOn(current.cron, "list").mockImplementationOnce(async (opts) => {
+                const jobs = await originalList(opts);
+                replaceOwner();
+                return jobs;
+              });
         const quiesce = vi.spyOn(current.cron, "quiesceJobs");
         try {
           await expect(
@@ -212,6 +412,38 @@ describe("Claw serving monitor cleanup", () => {
         } finally {
           preparation.mockRestore();
           quiesce.mockRestore();
+        }
+      });
+    },
+  );
+
+  it.each(["runtime", "source"])(
+    "refuses a changed %s configuration before cancelling ordinary jobs",
+    async (changed) => {
+      const current = await fixture(false);
+      await current.withDeletion(async (deletion) => {
+        const originalList = current.cron.list.bind(current.cron);
+        const list = vi.spyOn(current.cron, "list").mockImplementationOnce(async (opts) => {
+          const jobs = await originalList(opts);
+          if (changed === "runtime") {
+            current.getConfig().agents!.entries!.worker!.name = "replacement owner";
+          } else {
+            setRuntimeConfigSnapshot(current.getConfig(), structuredClone(current.getConfig()));
+          }
+          return jobs;
+        });
+        const cancel = vi.spyOn(current.cron, "quiesceJobs");
+        try {
+          await expect(
+            current.gateway.quiesce("worker", deletion.entry.operationId, []),
+          ).rejects.toThrow("configuration changed");
+          expect(cancel).not.toHaveBeenCalled();
+          await expect(
+            fs.access(path.join(current.workspaceDir, "SOUL.md")),
+          ).resolves.toBeUndefined();
+        } finally {
+          list.mockRestore();
+          cancel.mockRestore();
         }
       });
     },
@@ -267,7 +499,7 @@ describe("Claw serving monitor cleanup", () => {
     async (unverifiable) => {
       const current = await fixture(false);
       const monitor = (await current.cron.list({ includeDisabled: true })).find(
-        (job) => job.agentId === "worker" && job.payload.kind === "heartbeat",
+        (job) => job.agentId === "worker" && job.payload.kind === "agentTurn",
       )!;
       const prepared = prepareCronRunReceiptClaim({
         observed: undefined,
@@ -340,8 +572,10 @@ describe("Claw serving monitor cleanup", () => {
     await current.withDeletion(async (deletion) => {
       await current.gateway.quiesce("worker", deletion.entry.operationId, monitors);
       expect(() => database.db.prepare("SELECT 1")).toThrow();
-      for (const monitor of monitors) {
-        await current.cron.remove(monitor.id, { systemOwned: true });
+      for (const job of await current.cron.list({ includeDisabled: true })) {
+        if (job.agentId === "worker") {
+          await current.cron.remove(job.id);
+        }
       }
       expect(
         (await current.cron.list({ includeDisabled: true })).filter(
@@ -364,9 +598,9 @@ describe("Claw serving monitor cleanup", () => {
       const plan = await current.plan();
       const database = openOpenClawStateDatabase();
       if (failure === "cron-persistence") {
-        database.db.exec(`CREATE TRIGGER refuse_monitor_delete
+        database.db.exec(`CREATE TRIGGER refuse_owned_job_delete
           BEFORE DELETE ON cron_jobs WHEN OLD.agent_id = 'worker'
-          BEGIN SELECT RAISE(ABORT, 'synthetic monitor persistence failure'); END`);
+          BEGIN SELECT RAISE(ABORT, 'synthetic job persistence failure'); END`);
       }
       const renameSync = fsNode.renameSync.bind(fsNode);
       const writeFailure =
@@ -406,13 +640,15 @@ describe("Claw serving monitor cleanup", () => {
       } finally {
         writeFailure?.mockRestore();
         if (failure === "cron-persistence") {
-          database.db.exec("DROP TRIGGER refuse_monitor_delete");
+          database.db.exec("DROP TRIGGER refuse_owned_job_delete");
         }
       }
       expect(result).toMatchObject({
         status: "partial",
-        agentRemoved: failure === "cron-persistence" || failure === "reload",
-        error: { code: "monitor_cleanup_failed" },
+        agentRemoved: failure === "reload",
+        error: {
+          code: failure === "cron-persistence" ? "cron_cleanup_failed" : "monitor_cleanup_failed",
+        },
       });
       if (failure === "config-write") {
         expect(result.error?.message).toContain("synthetic config persistence failure");
@@ -432,7 +668,6 @@ describe("Claw serving monitor cleanup", () => {
             (job) => job.agentId === "worker",
           ),
         ).toBe(true);
-        await current.reconcile();
       }
       const retry = await current.plan();
       expect(await current.apply(retry)).toMatchObject({ status: "complete" });
@@ -447,10 +682,10 @@ describe("Claw serving monitor cleanup", () => {
   );
 
   it("rejects source drift after preview before creating a deletion fence", async () => {
-    const current = await fixture(false);
+    const current = await fixture(false, undefined, false, true);
     const plan = await current.plan();
     const monitor = (await current.cron.list({ includeDisabled: true })).find(
-      (job) => job.agentId === "worker" && job.payload.kind === "heartbeat",
+      (job) => job.agentId === "worker" && job.payload.kind === "agentTurn",
     )!;
     upsertCronJobRow(
       openOpenClawStateDatabase().db,
@@ -496,6 +731,82 @@ describe("Claw serving monitor cleanup", () => {
     }
   });
 
+  it("cancels the owned portable runner and waits for settlement before deleting files", async ({
+    signal: testSignal,
+  }) => {
+    const started = createDeferred<AbortSignal>();
+    const cancelled = createDeferred();
+    const release = createDeferred();
+    const current = await fixture(
+      true,
+      async ({ abortSignal }) => {
+        if (!abortSignal) {
+          throw new Error("Missing cancellation signal");
+        }
+        abortSignal.addEventListener("abort", () => cancelled.resolve(), { once: true });
+        started.resolve(abortSignal);
+        await release.promise;
+        return { status: "ok" };
+      },
+      false,
+      true,
+    );
+    const portable = await readPortableHeartbeatState("worker", current.getConfig(), {});
+    const run = current.cron.run(portable.ref!.schedulerJobId!, "force");
+    let removing: ReturnType<typeof current.apply> | undefined;
+    try {
+      const signal = await withinTest(
+        awaitGateBeforeSettlement(started.promise, run, "Portable runner did not start"),
+        testSignal,
+      );
+      const plan = await current.plan();
+      removing = current.apply(plan);
+      await withinTest(
+        awaitGateBeforeSettlement(
+          cancelled.promise,
+          removing,
+          "Claw removal did not cancel its runner",
+        ),
+        testSignal,
+      );
+      expect(signal.aborted).toBe(true);
+      await withinTest(run, testSignal);
+      expect(getSuspensionVisibleCronTaskRunCount({ agentId: "worker" })).toBe(1);
+      expect(deletionJournal.readAgentDeletionJournal("worker")?.cleanupCompleted).toBe(false);
+      await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).resolves.toBeUndefined();
+      release.resolve();
+      expect(await removing).toMatchObject({ status: "complete", agentRemoved: true });
+      expect(await current.cron.readJob(portable.ref!.schedulerJobId!)).toBeUndefined();
+      await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).rejects.toThrow();
+    } finally {
+      release.resolve();
+      await run;
+      await removing;
+    }
+  });
+
+  it.each([false, true])(
+    "removes the imported ordinary automation (enabled=%s)",
+    async (enabled) => {
+      const current = await fixture(enabled, undefined, false, true);
+      expect(await current.gateway.inspect("worker")).toEqual([]);
+      const plan = await current.plan();
+      expect(plan.blockers).toEqual([]);
+      expect(plan.actions.filter((action) => action.kind === "scheduledJob")).toEqual([]);
+      expect(plan.actions.filter((action) => action.kind === "cronJob")).toEqual([
+        expect.objectContaining({ action: "remove", blocked: false }),
+      ]);
+      const result = await current.apply(plan);
+      expect(result).toMatchObject({ status: "complete", agentRemoved: true });
+      expect(
+        (await current.cron.list({ includeDisabled: true })).every(
+          (job) => job.agentId !== "worker",
+        ),
+      ).toBe(true);
+      await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).rejects.toThrow();
+    },
+  );
+
   it.each([
     "ordinary",
     "imported",
@@ -505,17 +816,17 @@ describe("Claw serving monitor cleanup", () => {
     "changed-name",
     "changed-wake",
     "changed-delivery",
-  ])("keeps %s scheduled work outside monitor cleanup", async (variant) => {
+  ])("keeps %s scheduled work outside Claw ownership", async (variant) => {
     const current = await fixture(false);
     const monitor = (await current.cron.list({ includeDisabled: true })).find(
-      (job) => job.agentId === "worker" && job.payload.kind === "heartbeat",
+      (job) => job.agentId === "worker" && job.payload.kind === "agentTurn",
     )!;
     const changed = {
       ...monitor,
       id: variant.startsWith("changed-") ? monitor.id : "independent",
       ...(variant === "ordinary" ? { declarationKey: "operator-job" } : {}),
       ...(variant === "changed-name" ? { name: "operator name" } : {}),
-      ...(variant === "changed-wake" ? { wakeMode: "now" as const } : {}),
+      ...(variant === "changed-wake" ? { wakeMode: "next-heartbeat" as const } : {}),
       ...(variant === "changed-delivery" ? { delivery: { mode: "announce" as const } } : {}),
       ...(variant === "imported" ? { declarationKey: "heartbeat-task:worker:imported" } : {}),
       ...(variant === "reassigned" ? { agentId: "other", owner: { agentId: "worker" } } : {}),
@@ -531,8 +842,19 @@ describe("Claw serving monitor cleanup", () => {
       10,
     );
     const plan = await current.plan();
-    expect(plan.blockers).toContainEqual(expect.objectContaining({ code: "agent_job_attached" }));
-    await expect(current.apply(plan)).rejects.toMatchObject({ code: "remove_blocked" });
+    if (variant.startsWith("changed-")) {
+      expect(await current.apply(plan)).toMatchObject({
+        status: "partial",
+        agentRemoved: false,
+        error: {
+          code: "monitor_cleanup_failed",
+          message: expect.stringContaining("Independent or changed cron job"),
+        },
+      });
+    } else {
+      expect(plan.blockers).toContainEqual(expect.objectContaining({ code: "agent_job_attached" }));
+      await expect(current.apply(plan)).rejects.toMatchObject({ code: "remove_blocked" });
+    }
     await expect(fs.readFile(path.join(current.workspaceDir, "SOUL.md"), "utf8")).resolves.toBe(
       "synthetic managed file\n",
     );

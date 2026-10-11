@@ -1,13 +1,18 @@
-import type { SQLInputValue } from "node:sqlite";
+import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type { Selectable } from "kysely";
+import { z } from "zod";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import { cronJobDefinitionFromReadView } from "../cron/job-read-view.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
 import { createTrustedCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
 import { applyDefaultCronToolsAllow } from "../cron/tools-allow.js";
 import type { CronJob } from "../cron/types.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
@@ -15,27 +20,28 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import type { ClawAutomationMutationGateway } from "./automation-mutation-contract.js";
+import {
+  CLAW_CRON_REF_SCHEMA_VERSION,
+  CLAW_PORTABLE_HEARTBEAT_ID,
+  type PersistedClawCronRef,
+  type PersistedClawHeartbeatRef,
+} from "./cron.types.js";
+import { parseClawOpenClawProfile } from "./schema.js";
 import type { ClawAddPlan, ClawCronJob } from "./types.js";
-
-export const CLAW_CRON_REF_SCHEMA_VERSION = "openclaw.clawCronRef.v1" as const;
-
-export type PersistedClawCronRef = {
-  schemaVersion: typeof CLAW_CRON_REF_SCHEMA_VERSION;
-  agentId: string;
-  manifestId: string;
-  declarationKey: string;
-  schedulerJobId?: string;
-  status: "pending" | "complete" | "failed" | "removed";
-  job: ClawCronJob;
-  error?: string;
-  createdAtMs: number;
-  updatedAtMs: number;
-};
+export {
+  CLAW_CRON_REF_SCHEMA_VERSION,
+  CLAW_PORTABLE_HEARTBEAT_ID,
+  type PersistedClawCronRef,
+  type PersistedClawHeartbeatRef,
+  type ClawPortableHeartbeat,
+} from "./cron.types.js";
 
 type CronRefDatabase = Pick<DB, "claw_cron_refs">;
 type CronRefRow = Selectable<CronRefDatabase["claw_cron_refs"]>;
 
 export type ClawCronGateway = {
+  mutateAutomation?: ClawAutomationMutationGateway;
   add: (input: Record<string, unknown>) => Promise<unknown>;
   get?: (schedulerJobId: string) => Promise<unknown>;
   list?: (agentId: string) => Promise<unknown>;
@@ -70,7 +76,7 @@ function rowToRef(row: CronRefRow): PersistedClawCronRef {
   };
 }
 
-function refToRow(ref: PersistedClawCronRef): CronRefRow {
+function refToRow(ref: PersistedClawCronRef | PersistedClawHeartbeatRef): CronRefRow {
   return {
     schema_version: ref.schemaVersion,
     agent_id: ref.agentId,
@@ -281,7 +287,9 @@ export async function installClawCronJobs(
     nowMs?: number;
   } = {},
 ): Promise<PersistedClawCronRef[]> {
-  const actions = plan.actions.filter((action) => action.kind === "cronJob");
+  const actions = plan.actions.filter(
+    (action) => action.kind === "cronJob" && action.id !== CLAW_PORTABLE_HEARTBEAT_ID,
+  );
   if (actions.length === 0) {
     return [];
   }
@@ -394,23 +402,22 @@ export function readClawCronRefs(
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): PersistedClawCronRef[] {
-  const database = openOpenClawStateDatabase(options);
-  if (
-    options.readOnly &&
-    !database.db /* sqlite-allow-raw: read-only Claw cron table-existence probe. */
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claw_cron_refs'")
-      .get()
-  ) {
-    return [];
-  }
-  const query = getNodeSqliteKysely<CronRefDatabase>(database.db)
+  return readClawCronRefsInDatabase(openOpenClawStateDatabase(options).db, agentId);
+}
+
+export function readClawCronRefsInDatabase(
+  db: DatabaseSync,
+  agentId: string,
+): PersistedClawCronRef[] {
+  const query = getNodeSqliteKysely<CronRefDatabase>(db)
     .selectFrom("claw_cron_refs")
     .selectAll()
     .where("agent_id", "=", agentId)
+    .where("manifest_id", "!=", CLAW_PORTABLE_HEARTBEAT_ID)
     .orderBy("manifest_id")
     .compile();
   const rows =
-    database.db /* sqlite-allow-raw: execute compiled Kysely with the existing native read error boundary. */
+    db /* sqlite-allow-raw: execute compiled Kysely with the existing native read error boundary. */
       .prepare(query.sql)
       // SAFETY: The compiled predicate binds a string; the canonical schema supplies the row shape.
       .all(...(query.parameters as SQLInputValue[])) as CronRefRow[];
@@ -445,7 +452,7 @@ export function markClawCronRefRemoved(
 }
 
 export function upsertClawCronRef(
-  ref: PersistedClawCronRef,
+  ref: PersistedClawCronRef | PersistedClawHeartbeatRef,
   options: OpenClawStateDatabaseOptions = {},
 ): void {
   runOpenClawStateWriteTransaction(({ db }) => {
@@ -467,4 +474,42 @@ export function upsertClawCronRef(
         ),
     );
   }, options);
+}
+
+const ClawHeartbeatRefJobSchema = z
+  .object({
+    heartbeat: z.unknown(),
+    configRevision: z.string().min(1),
+    scratchDigest: z.string().optional(),
+    sourceScratchDigest: z.string().optional(),
+    sourceAgentDigest: z.string().optional(),
+  })
+  .strict();
+
+export function readClawHeartbeatRefInDatabase(
+  db: DatabaseSync,
+  agentId: string,
+): PersistedClawHeartbeatRef | undefined {
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<CronRefDatabase>(db)
+      .selectFrom("claw_cron_refs")
+      .selectAll()
+      .where("agent_id", "=", agentId)
+      .where("manifest_id", "=", CLAW_PORTABLE_HEARTBEAT_ID),
+  );
+  if (!row) {
+    return undefined;
+  }
+  const job = ClawHeartbeatRefJobSchema.parse(JSON.parse(row.job_json));
+  const parsed = parseClawOpenClawProfile({
+    schemaVersion: 1,
+    agent: { heartbeat: job.heartbeat },
+  });
+  if (!parsed.ok || !parsed.profile.agent.heartbeat) {
+    throw new Error(
+      "Invalid portable heartbeat provenance; preserve the stored state and inspect claws status before retrying.",
+    );
+  }
+  return { ...rowToRef(row), job: { ...job, heartbeat: parsed.profile.agent.heartbeat } };
 }

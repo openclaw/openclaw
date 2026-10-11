@@ -21,7 +21,6 @@ export class MockContextEngine implements ContextEngine {
     sessionId: string;
     sessionKey?: string;
     message: AgentMessage;
-    isHeartbeat?: boolean;
   }): Promise<IngestResult> {
     return { ingested: true };
   }

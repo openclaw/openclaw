@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { listAgentEntries, tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
+import { tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
 import { normalizeRouteBindingChannelId } from "../routing/binding-scope.js";
@@ -148,10 +148,6 @@ export function materializeLegacyDefaultAgentRoles(
       insertedPaths.push(["agents", "defaults", key, "agentId"]);
       changed = true;
     };
-    materialize(
-      "heartbeat",
-      !listAgentEntries(cfg).some((entry) => entry.heartbeat) && defaults?.heartbeat === undefined,
-    );
     materialize("systemAgent", unset("systemAgent"));
     // Auth transitions are pinned or refused by the roster write guard; fixed-store rows need
     // their owner recorded immediately because a later restart loses the migration sidecar.

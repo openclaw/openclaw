@@ -78,8 +78,6 @@ export type RunCliAgentParams = {
   runtimePolicySessionKey?: string;
   sessionEntry?: SessionEntry;
   trigger?: EmbeddedRunTrigger;
-  /** Heartbeat-transported turn that continues a conversation (its own command completion). */
-  continuesConversation?: boolean;
   sessionFile: string;
   /** Start a fresh CLI process so per-turn MCP authority is reloaded from this run. */
   disableCliLiveSession?: boolean;

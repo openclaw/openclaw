@@ -1,8 +1,14 @@
 // Tests CLI dispatch arguments and runtime selection for agent runner turns.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { clearCliSessionInStore } from "../../agents/cli-session-store.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
@@ -69,6 +75,67 @@ afterEach(() => {
 });
 
 describe("runCliAgentWithLifecycle", () => {
+  it.for(["admitted", "retired"] as const)(
+    "publishes scheduled CLI start only after native admission: %s",
+    async (outcome, { signal }) => {
+      const runId = `scheduled-start-${outcome}`;
+      const entered = createDeferred();
+      const release = createDeferred();
+      const onStarted = vi.fn();
+      const providerWork = vi.fn();
+      const phases: unknown[] = [];
+      const stop = onAgentEvent((event) => {
+        if (event.runId === runId && event.stream === "lifecycle") {
+          phases.push(event.data.phase);
+        }
+      });
+      cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
+        await params.onExecutionStarted?.();
+        providerWork();
+        return { payloads: [], meta: {} };
+      });
+      const pending = runCliAgentWithLifecycle({
+        runId,
+        onAgentRunStart: onStarted,
+        deferLifecycleStartUntilExecution: true,
+        runParams: createRunParams(runId, {
+          onExecutionStarted: async () => {
+            entered.resolve();
+            await release.promise;
+            if (outcome === "retired") {
+              throw new Error("scheduled native admission retired");
+            }
+          },
+        }),
+      });
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(entered.promise, pending, "native admission was bypassed"),
+          signal,
+        );
+        expect(onStarted).not.toHaveBeenCalled();
+        expect(phases).toEqual([]);
+        expect(providerWork).not.toHaveBeenCalled();
+        release.resolve();
+        if (outcome === "retired") {
+          await expect(pending).rejects.toThrow("scheduled native admission retired");
+          expect(onStarted).not.toHaveBeenCalled();
+          expect(phases).toEqual([]);
+          expect(providerWork).not.toHaveBeenCalled();
+        } else {
+          await pending;
+          expect(onStarted).toHaveBeenCalledOnce();
+          expect(phases).toEqual(["start"]);
+          expect(providerWork).toHaveBeenCalledOnce();
+        }
+      } finally {
+        release.resolve();
+        await Promise.allSettled([pending]);
+        stop();
+      }
+    },
+  );
+
   it("bridges completed CLI compaction lifecycles to reply callbacks", async () => {
     cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
       emitAgentEvent({

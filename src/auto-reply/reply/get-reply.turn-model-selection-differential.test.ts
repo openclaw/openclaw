@@ -14,7 +14,6 @@ import {
   TURN_MODEL_DEFAULT_REF,
   TURN_MODEL_DIFFERENTIAL_FIXTURES,
   TURN_MODEL_LIVE_CHANNEL_REF,
-  TURN_MODEL_OVERRIDE_REF,
   createTurnModelEntry,
   turnModelRefLabel,
   turnModelVerdict,
@@ -85,7 +84,10 @@ async function seedFixtureStore(
 }
 
 async function observeReplySelection(params: {
-  fixture: Pick<TurnModelDifferentialFixture, "name" | "ctx" | "child" | "heartbeat" | "locked">;
+  fixture: Pick<
+    TurnModelDifferentialFixture,
+    "name" | "ctx" | "child" | "modelOverride" | "locked"
+  >;
   cfg: OpenClawConfig;
   sessionKey: string;
   sessionStore: Record<string, SessionEntry>;
@@ -113,10 +115,9 @@ async function observeReplySelection(params: {
   expect(isPathInside(state.root, resolveAgentWorkspaceDirMock(cfg, "main"))).toBe(true);
   await getReplyFromConfig(
     buildGetReplyCtx({ SessionKey: sessionKey, ...fixture.ctx }),
-    fixture.heartbeat
+    fixture.modelOverride
       ? {
-          isHeartbeat: true,
-          heartbeatModelOverride: turnModelRefLabel(TURN_MODEL_OVERRIDE_REF),
+          modelOverride: turnModelRefLabel(fixture.modelOverride),
         }
       : undefined,
     cfg,

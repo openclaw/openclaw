@@ -94,7 +94,7 @@ async function runPersistedDiagnosticCase(params: {
         cronConfig: { triggers: { enabled: true } },
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
+        enqueueSessionEvent: vi.fn(),
         onEvent: (event) => events.push(structuredClone(event)),
         runIsolatedAgentJob: async (runParams) =>
           await runCronIsolatedAgentTurn({

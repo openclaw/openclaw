@@ -9,9 +9,12 @@ import type {
   PreparedPostSessionPluginMigration,
 } from "../../../infra/state-migrations.types.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
+import type { AutomaticHeartbeatRepairAdmission } from "../../doctor-automatic-heartbeat-repair.js";
 import type { CronCodexRuntimePolicyTarget } from "../cron/store-migration.js";
 
 export type DoctorConfigPreflightOptions = {
+  /** Scoped updater normalization after maintenance and verified database backup admission. */
+  automaticHeartbeatRepair?: AutomaticHeartbeatRepairAdmission;
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
   migrateState?: boolean;
   /** Select Doctor normalization without enabling repair-only migrations. */
@@ -56,23 +59,26 @@ export function prepareDoctorConfigMigrationResult(
     snapshot.sourceConfig;
   return async (params: {
     cfg: OpenClawConfig;
+    modelBillingRouteConfig?: OpenClawConfig;
     shouldWriteConfig: boolean;
     metadataSnapshot?: PluginMetadataSnapshot;
     pluginInventoryChanged?: boolean;
     runWithCurrentPluginMetadata: <T>(config: OpenClawConfig, run: () => T) => T;
   }) => {
     let modelBillingRouteWarnings: string[] = [];
+    // Heartbeat model intent moves to jobs before retired config fields disappear.
+    const billingRouteConfig = params.modelBillingRouteConfig ?? params.cfg;
     if (
       (params.shouldWriteConfig || preflight.modelBillingRouteMigrationSource) &&
-      (!isDeepStrictEqual(billingRouteSource.agents, params.cfg.agents) ||
-        !isDeepStrictEqual(billingRouteSource.models, params.cfg.models))
+      (!isDeepStrictEqual(billingRouteSource.agents, billingRouteConfig.agents) ||
+        !isDeepStrictEqual(billingRouteSource.models, billingRouteConfig.models))
     ) {
       const { collectModelBillingRouteMigrationWarnings } =
         await import("./model-billing-route-migration.js");
       modelBillingRouteWarnings = params.runWithCurrentPluginMetadata(params.cfg, () =>
         collectModelBillingRouteMigrationWarnings({
           before: billingRouteSource,
-          after: params.cfg,
+          after: billingRouteConfig,
           metadataSnapshot: params.metadataSnapshot,
         }),
       );

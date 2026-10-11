@@ -3,7 +3,7 @@ doc-schema-version: 1
 summary: "Overview of automation mechanisms: automations, hooks, standing orders, and workflows"
 read_when:
   - Deciding how to automate work with OpenClaw
-  - Choosing between heartbeat, automations, hooks, and standing orders
+  - Choosing between automations, hooks, and standing orders
   - Looking for the right automation entry point
 title: "Automation"
 ---
@@ -20,9 +20,7 @@ flowchart TD
     START --> Q4{React to lifecycle events?}
     START --> Q5{Give the agent persistent instructions?}
 
-    Q1 -->|Yes| Q1a{Specific job or ambient monitor?}
-    Q1a -->|Specific job| CRON["Automations"]
-    Q1a -->|Ambient monitor| HEARTBEAT["Heartbeat monitor automation"]
+    Q1 -->|Yes| CRON["Automations"]
 
     Q3 -->|Yes| FLOW[Lobster]
     Q4 -->|Yes| HOOKS[Hooks]
@@ -37,33 +35,33 @@ flowchart TD
 | Check inbox every 30 min                  | Automations                                | Independent recurring schedule and job history         |
 | Trigger safely on new IMAP email          | IMAP plugin                                | Sender-gated isolated reader sessions                  |
 | Monitor calendar for upcoming events      | Automations                                | Explicit recurring schedule and delivery policy        |
-| Surface ambient main-session updates      | Heartbeat                                  | System-owned monitor automation and quiet alerts       |
+| Surface ambient main-session updates      | Automations                                | Per-job active hours, idle priority, and quiet results |
 | Run a script on session reset             | Hooks                                      | Internal `HOOK.md` scripts react to lifecycle events   |
 | Trigger an agent from an external service | [Webhooks](/automation/cron-jobs#webhooks) | Authenticated HTTP ingress, not an internal event hook |
 | Execute code on every tool call           | Plugin hooks                               | Typed `api.on(...)` handlers can intercept tool calls  |
 | Always check compliance before replying   | Standing Orders                            | Injected into every session automatically              |
 
 <a id="scheduled-tasks-cron-vs-heartbeat" />
+<a id="automations-vs-heartbeat" />
 
-### Automations vs Heartbeat
+### Monitoring with automations
 
-| Dimension       | User-authored automations                   | Heartbeat monitor automation            |
-| --------------- | ------------------------------------------- | --------------------------------------- |
-| Timing          | One-shot, interval, or cron expression      | Scheduler-owned interval, default 30min |
-| Session context | Isolated, current, named, or main session   | Main session, optionally isolated       |
-| Delivery        | Channel, webhook, or silent                 | Owner-routed alerts or silent           |
-| Best for        | Explicit reports, reminders, recurring work | Ambient monitoring and event follow-up  |
+Periodic checks are ordinary editable automations. Give each check its own
+instructions, schedule, and delivery policy. Use an active window for quiet hours,
+`idleOnly` to give foreground work priority, and private job scratch for a checklist.
+Return `NO_REPLY` when there is nothing to report.
 
-Both use the same Automations scheduler. Create an automation for work with its
-own instructions or schedule; use heartbeat as the system-owned ambient monitor
-when periodic main-session awareness is useful.
+Existing heartbeat configuration migrates through `openclaw doctor --fix`.
+After migration, the job owns its settings: deleting it stops that monitor,
+and a restart or config reload does not recreate it. See
+[Heartbeat migration](/gateway/heartbeat).
 
 ## Core concepts
 
 ### Automations
 
 Automations are OpenClaw's built-in scheduler for all recurring and one-shot
-work, including heartbeat monitors. The scheduler persists jobs, wakes the agent
+work, including periodic monitoring. The scheduler persists jobs, wakes the agent
 at the right time, and can deliver output to a chat channel or webhook endpoint.
 It supports one-shot reminders, recurring intervals and cron expressions, and
 inbound webhook triggers.
@@ -97,21 +95,21 @@ flow. They are discovered from hook directories and managed with
 
 See [Hooks](/automation/hooks).
 
-### Heartbeat
+<a id="heartbeat" />
 
-Heartbeat is a system-owned monitor automation that runs a periodic main-session
-turn, every 30 minutes by default. It can use small monitor-scratch context to
-surface anything requiring attention without extending session freshness. Create separate automation jobs for work requiring
-its own schedule. Empty scratch skips as `empty-heartbeat-file`. Scheduled
-monitor turns defer while the main queue or automation work is busy, another run
-for the same agent is active, or the target session has active or queued work.
+### Heartbeat migration
 
-See [Heartbeat](/gateway/heartbeat).
+Heartbeat's former periodic monitor is now an ordinary agent-turn automation.
+The separate heartbeat execution path is retired. Immediate exec completions,
+hooks, and other session notices use normal session execution without waiting
+for a periodic monitor.
+
+See [Heartbeat migration](/gateway/heartbeat) and
+[Monitoring policies](/automation/cron-jobs/schedules#monitoring-policies).
 
 ## How they work together
 
-- **Automations** own every recurring schedule, including reports, reminders, and heartbeat monitors.
-- **Heartbeat** is the system-owned ambient monitor automation. Independently scheduled checks belong in their own automation jobs.
+- **Automations** own every recurring schedule, including reports, reminders, and monitoring.
 - **Hooks** react to specific events (session resets, compaction, message flow) with custom scripts. Plugin hooks cover tool calls.
 - **Standing orders** give the agent persistent context and authority boundaries.
 
@@ -133,5 +131,5 @@ schedule and instructions you choose; they do not restore inferred follow-ups.
 - [Hooks](/automation/hooks) — event-driven lifecycle scripts
 - [Plugin hooks](/plugins/hooks) — in-process tool, prompt, message, and lifecycle hooks
 - [Standing Orders](/automation/standing-orders) — persistent agent instructions
-- [Heartbeat](/gateway/heartbeat) — periodic main-session turns
+- [Heartbeat migration](/gateway/heartbeat) — migrate periodic monitoring to editable jobs
 - [Configuration Reference](/gateway/configuration-reference) — all config keys

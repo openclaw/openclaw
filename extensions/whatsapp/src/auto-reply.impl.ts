@@ -1,5 +1,4 @@
-export { HEARTBEAT_PROMPT, stripHeartbeatToken } from "openclaw/plugin-sdk/reply-runtime";
-export { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-runtime";
+export { SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-runtime";
 
 export { DEFAULT_WEB_MEDIA_BYTES } from "./auto-reply/constants.js";
 export { monitorWebChannel } from "./auto-reply/monitor.js";

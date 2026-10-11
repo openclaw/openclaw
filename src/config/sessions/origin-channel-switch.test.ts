@@ -233,7 +233,7 @@ describe("session origin across a non-delivery turn", () => {
         ExplicitDeliverRoute: true,
       },
     },
-    { name: "heartbeat", turn: { InternalTurnSource: "heartbeat", ChatType: "direct" } },
+    { name: "event", turn: { InternalTurnSource: "event", ChatType: "direct" } },
     {
       name: "cron",
       turn: {

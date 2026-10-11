@@ -49,7 +49,7 @@ function createCron(params: {
     cronEnabled: true,
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
     ...params,
   });
 }
@@ -457,8 +457,7 @@ describe("cron one-shot schedule ownership", () => {
       state: { nextRunAtMs: replacementAt, runningAtMs: interruptedAt },
     };
     await saveCronStore(storePath, { version: 1, jobs: [job] });
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeat = vi.fn();
+    const runSessionEvent = vi.fn(async () => ({ status: "ok" as const }));
     const onEvent = vi.fn((event: CronEvent) => event);
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const cron = new CronService({
@@ -466,17 +465,24 @@ describe("cron one-shot schedule ownership", () => {
       storePath,
       cronEnabled: true,
       log: logger,
-      enqueueSystemEvent,
-      requestHeartbeat,
+      enqueueSystemEvent: vi.fn(),
+      runSessionEvent,
       runIsolatedAgentJob,
       onEvent,
     });
     try {
       await cron.start();
-      expect(enqueueSystemEvent).toHaveBeenCalledOnce();
-      expect(requestHeartbeat).toHaveBeenCalledOnce();
+      expect(runSessionEvent).not.toHaveBeenCalled();
+      const replacementRunAt = now + DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS;
+      expect(cron.getJob(job.id)?.state.nextRunAtMs).toBe(replacementRunAt);
+      await clock.advanceTo(replacementRunAt);
+      expect(runSessionEvent).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          job: expect.objectContaining({ id: job.id }),
+          text: "run the replacement once",
+        }),
+      );
       expect(runIsolatedAgentJob).not.toHaveBeenCalled();
-      expect(enqueueSystemEvent.mock.calls[0]?.[0]).toBe("run the replacement once");
       for (const jobs of [
         await cron.list({ includeDisabled: true }),
         (await loadCronStore(storePath)).jobs,
@@ -486,7 +492,7 @@ describe("cron one-shot schedule ownership", () => {
           id: job.id,
           enabled: false,
           state: {
-            lastRunAtMs: now,
+            lastRunAtMs: replacementRunAt,
             lastRunStatus: "ok",
           },
         });
@@ -505,7 +511,7 @@ describe("cron one-shot schedule ownership", () => {
             error: "cron: job interrupted by gateway restart",
             runAtMs: interruptedAt,
           }),
-          expect.objectContaining({ jobId: job.id, status: "ok", runAtMs: now }),
+          expect.objectContaining({ jobId: job.id, status: "ok", runAtMs: replacementRunAt }),
         ]),
       );
     } finally {

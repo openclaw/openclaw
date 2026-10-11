@@ -1,23 +1,25 @@
+/** @deprecated v4 reporting projection; ordinary jobs own cadence and delivery. */
+import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  buildHeartbeatSummary,
-  enrolledHeartbeatAgentIds,
-  isEnrolledHeartbeatAgent,
+  getPublishedHeartbeatSummary,
   type HeartbeatSummary,
-} from "./heartbeat-summary-projection.js";
-export { resolveHeartbeatIntervalMs } from "./heartbeat-config.js";
+} from "./heartbeat-summary-snapshot.js";
 
-export type { HeartbeatSummary };
+export type { HeartbeatSummary } from "./heartbeat-summary-snapshot.js";
 
-/** Return whether heartbeat scheduling applies to an agent. */
-export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string): boolean {
-  return isEnrolledHeartbeatAgent(cfg, agentId, enrolledHeartbeatAgentIds(cfg));
-}
-
-/** Resolve display-ready heartbeat settings for an agent. */
 export function resolveHeartbeatSummaryForAgent(
   cfg: OpenClawConfig,
   agentId?: string,
 ): HeartbeatSummary {
-  return buildHeartbeatSummary(cfg, agentId, enrolledHeartbeatAgentIds(cfg));
+  const owner = agentId ?? tryResolveAmbientOwnerAgentId(cfg);
+  return getPublishedHeartbeatSummary(cfg, owner);
+}
+
+/** Projects a published receipt snapshot without repeating roster or database reads. */
+export function resolveHeartbeatSummariesForAgents(
+  cfg: OpenClawConfig,
+  agentIds: readonly string[],
+): HeartbeatSummary[] {
+  return agentIds.map((agentId) => getPublishedHeartbeatSummary(cfg, agentId));
 }

@@ -113,7 +113,6 @@ function normalizeAgentModelScope(value: unknown): unknown {
     }
     assign("mediaModels", mediaModels);
   }
-  assign("heartbeat", normalizeNestedModelField(value.heartbeat, "model", normalizeStringModelRef));
   assign(
     "subagents",
     normalizeNestedModelField(value.subagents, "model", normalizeAgentModelSelectionForConfig),

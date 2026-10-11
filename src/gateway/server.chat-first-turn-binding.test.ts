@@ -7,7 +7,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { activeExecRequestOwners } from "../infra/exec-request-context.js";
-import { areHeartbeatsEnabled, setHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import * as subscriptions from "./server-runtime-subscriptions.js";
@@ -55,10 +54,7 @@ it("binds a first native chat.send before streaming and persists its stopped par
   let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
   let original: ChatAbortControllerEntry | undefined;
   const lifecycle: Array<{ phase?: unknown; sessionId?: unknown; aborted?: unknown }> = [];
-  const heartbeatsEnabled = areHeartbeatsEnabled();
   try {
-    // A zero interval still permits event-driven wakes to consume the scripted response.
-    setHeartbeatsEnabled(false);
     await new Promise<void>((resolve, reject) => {
       providerServer.once("error", reject);
       providerServer.listen(0, "127.0.0.1", resolve);
@@ -76,7 +72,6 @@ it("binds a first native chat.send before streaming and persists its stopped par
         defaults: {
           workspace: state.workspaceDir,
           skipBootstrap: true,
-          heartbeat: { every: "0m" },
           model: { primary: provider.modelRef },
           models: {
             [provider.modelRef]: {
@@ -295,11 +290,7 @@ it("binds a first native chat.send before streaming and persists its stopped par
       }
     } finally {
       observeSubscriptions.mockRestore();
-      try {
-        await state.cleanup();
-      } finally {
-        setHeartbeatsEnabled(heartbeatsEnabled);
-      }
+      await state.cleanup();
     }
   }
 });

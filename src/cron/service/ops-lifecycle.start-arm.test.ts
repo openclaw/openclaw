@@ -14,6 +14,7 @@ import {
 } from "../../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "../service.js";
 import { saveCronStore } from "../store.js";
+import type { CronServiceDeps } from "./state.js";
 
 const gateway = vi.hoisted(() => ({ state: undefined as GatewayCronState | undefined }));
 vi.mock("../../gateway/server-cron.js", () => ({
@@ -36,8 +37,7 @@ it.each([
       createDueIsolatedJob({ id: "upcoming", nowMs: now, nextRunAtMs: now + 12_000 }),
     ];
     for (const job of jobs) {
-      job.sessionTarget = "main";
-      job.payload = { kind: "systemEvent", text: job.id };
+      job.payload = { kind: "command", argv: ["fixture-task", job.id] };
     }
     await saveCronStore(storePath, { version: 1, jobs });
     const database = openOpenClawStateDatabase().db;
@@ -51,7 +51,9 @@ it.each([
       END;
     `);
     }
-    const enqueueSystemEvent = vi.fn();
+    const runCommandJob = vi.fn<NonNullable<CronServiceDeps["runCommandJob"]>>(async () => ({
+      status: "ok" as const,
+    }));
     const log = { ...noopLogger, debug: vi.fn(), warn: vi.fn() };
     const clock = createGatewaySchedulerClock(now);
     const scheduler = createTestGatewayScheduler(clock.clock);
@@ -67,8 +69,8 @@ it.each([
       storePath,
       cronEnabled: true,
       log,
-      enqueueSystemEvent,
-      requestHeartbeat: vi.fn(),
+      enqueueSystemEvent: vi.fn(),
+      runCommandJob,
       runIsolatedAgentJob: vi.fn(),
     });
     gateway.state = {
@@ -78,7 +80,6 @@ it.each([
       reconcileExitWatchers: async () => {},
       reconcileStreamWatchers: async () => {},
       stopStreamWatchers: async () => {},
-      reconcileSystemJobs: async () => "converged",
     };
     const { cron } = createLazyGatewayCronState({
       cfg: {},
@@ -99,15 +100,15 @@ it.each([
         );
       }
       database.exec("DROP TRIGGER IF EXISTS reject_startup_terminal_write");
-      expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(["overdue"]);
+      expect(runCommandJob.mock.calls.map(([{ job }]) => job.id)).toEqual(["overdue"]);
       cron.pauseScheduling();
       await clock.advanceBy(15_000);
-      expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(["overdue"]);
+      expect(runCommandJob.mock.calls.map(([{ job }]) => job.id)).toEqual(["overdue"]);
       cron.resumeScheduling();
       await clock.advanceBy(15_000);
-      expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(["overdue", "upcoming"]);
+      expect(runCommandJob.mock.calls.map(([{ job }]) => job.id)).toEqual(["overdue", "upcoming"]);
       await clock.advanceBy(60_000);
-      expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(["overdue", "upcoming"]);
+      expect(runCommandJob.mock.calls.map(([{ job }]) => job.id)).toEqual(["overdue", "upcoming"]);
     } finally {
       cron.stop();
       await scheduler.stop();

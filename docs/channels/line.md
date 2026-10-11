@@ -272,8 +272,8 @@ as untrusted.
   cards when possible.
 - Streaming responses are buffered. LINE receives full chunks. The loading
   animation runs only in one-to-one chats — LINE's loading API accepts a user id
-  and rejects group and room ids — so a group reply arrives without one. Heartbeat
-  turns also show the loading animation while the reply is generated.
+  and rejects group and room ids — so a group reply arrives without one.
+  Noninteractive automation and system-event turns do not show typing.
 - Media downloads are capped by `channels.line.mediaMaxMb` (default 10).
 - Inbound media is saved under `~/.openclaw/media/inbound/` before it is passed
   to the agent, matching the shared media store used by other channel plugins.

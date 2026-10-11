@@ -462,11 +462,13 @@ describe("claws cli", () => {
     );
     expect(mocks.logs).toContain("Added agent: demo-agent");
     expect(mocks.logs.some((line) => line.startsWith("Workspace: "))).toBe(true);
-    mocks.callGatewayFromCli.mockResolvedValue({
-      config: { agents: { entries: { "demo-agent": {} } } },
-      configRevisionHash: "applied",
-      appliedConfigHash: "applied",
-    });
+    mocks.callGatewayFromCli
+      .mockResolvedValueOnce({
+        config: { agents: { entries: { "demo-agent": {} } } },
+        configRevisionHash: "applied",
+        appliedConfigHash: "applied",
+      })
+      .mockResolvedValueOnce({ monitors: [] });
     vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(1).mockReturnValue(20_000);
     const [, options] = mocks.applyClawAddPlan.mock.calls[0]!;
     await expect(
@@ -818,11 +820,13 @@ describe("claws cli", () => {
       status: "complete",
       agentId: "demo-agent",
     });
-    mocks.callGatewayFromCli.mockResolvedValue({
-      config: { agents: { entries: { "demo-agent": {} } } },
-      configRevisionHash: "applied",
-      appliedConfigHash: "applied",
-    });
+    mocks.callGatewayFromCli
+      .mockResolvedValueOnce({
+        config: { agents: { entries: { "demo-agent": {} } } },
+        configRevisionHash: "applied",
+        appliedConfigHash: "applied",
+      })
+      .mockResolvedValueOnce({ monitors: [] });
     vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValueOnce(1).mockReturnValue(20_000);
     const [plan, , options] = mocks.applyClawUpdatePlan.mock.calls[0]!;
     await expect(

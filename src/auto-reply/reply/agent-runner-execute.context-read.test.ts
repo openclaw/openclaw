@@ -125,7 +125,6 @@ it("keeps a cron context prefix readable when an inbound turn persists before qu
       cfg: {},
       commandBody: "incoming DM",
       defaultModel: "test",
-      isHeartbeat: false,
       queueKey: target.sessionKey,
       resolvedQueue: { mode: "followup" },
       sessionCtx: { Provider: "telegram" },
@@ -140,7 +139,7 @@ it("keeps a cron context prefix readable when an inbound turn persists before qu
       replyToChannel: "telegram",
       replyToMode: "off",
       typingMode: "never",
-      typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+      typingSignals: createTypingSignaler({ typing, mode: "never" }),
       applyReplyToMode: (payload) => payload,
       getActiveSessionEntry: () => entry,
       setActiveSessionEntry: (next) => {

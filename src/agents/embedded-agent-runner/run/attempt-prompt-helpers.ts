@@ -38,10 +38,8 @@ export type ResolvedPromptBuildHookResult = PluginHookBeforePromptBuildResult & 
 };
 
 type PromptBuildHookRunner = Pick<HookRunner, "runBeforePromptBuild"> &
-  Partial<Pick<HookRunner, "runAgentTurnPrepare" | "runHeartbeatPromptContribution">> & {
-    hasHooks: (
-      hookName: "agent_turn_prepare" | "heartbeat_prompt_contribution" | "before_prompt_build",
-    ) => boolean;
+  Partial<Pick<HookRunner, "runAgentTurnPrepare">> & {
+    hasHooks: (hookName: "agent_turn_prepare" | "before_prompt_build") => boolean;
   };
 
 // Draining consumes durable injections. Retain them for retries of the same run.
@@ -80,7 +78,7 @@ export async function resolvePromptBuildHookResult(params: {
     promptBuildDrainCache.set(runId, queuedContext.queuedInjections);
   }
   // Hook ordering mirrors the prompt assembly boundary: queued injections first,
-  // then prepare/heartbeat contributions, then prompt-build hooks.
+  // then prepare contributions, then prompt-build hooks.
   const logHookFailure = (hookName: string) => (hookErr: unknown) => {
     log.warn(`${hookName} hook failed: ${String(hookErr)}`);
     return undefined;
@@ -97,21 +95,6 @@ export async function resolvePromptBuildHookResult(params: {
             params.hookCtx,
           )
           .catch(logHookFailure("agent_turn_prepare"))
-      : undefined;
-  const heartbeatContribution =
-    params.hookCtx.trigger === "heartbeat" &&
-    params.hookRunner?.runHeartbeatPromptContribution &&
-    params.hookRunner.hasHooks("heartbeat_prompt_contribution")
-      ? await params.hookRunner
-          .runHeartbeatPromptContribution(
-            {
-              sessionKey: params.hookCtx.sessionKey,
-              agentId: params.hookCtx.agentId,
-              heartbeatName: "heartbeat",
-            },
-            params.hookCtx,
-          )
-          .catch(logHookFailure("heartbeat_prompt_contribution"))
       : undefined;
   const promptBuildResult = params.hookRunner?.hasHooks("before_prompt_build")
     ? await params.hookRunner
@@ -141,7 +124,7 @@ export async function resolvePromptBuildHookResult(params: {
         ),
       )
     : undefined;
-  const pendingContext = [queuedContext, turnPrepareResult, heartbeatContribution];
+  const pendingContext = [queuedContext, turnPrepareResult];
   const joinContext = (key: "prependContext" | "appendContext") =>
     joinPresentTextSegments([...pendingContext, promptBuildResult].map((source) => source?.[key]));
   return {
