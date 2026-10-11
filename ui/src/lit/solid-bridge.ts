@@ -9,6 +9,7 @@ import {
   flush,
   getOwner,
   onCleanup,
+  onSettled,
   runWithOwner,
   untrack,
 } from "solid-js";
@@ -44,14 +45,16 @@ export function createLitContentRef(value: () => unknown): (element: HTMLElement
     part?.setConnected(false);
     renderLit(nothing, host);
   });
-  return (element) => {
-    host = element;
-    // Refs run unowned; commit Lit before this owner's post-render observers.
+  onSettled(() => {
+    // Initial refs are detached; layout directives need the connected host.
     runWithOwner(owner, () => {
       createRenderEffect(value, (next) => {
         part = renderLit(next, host, { host });
       });
     });
+  });
+  return (element) => {
+    host = element;
   };
 }
 

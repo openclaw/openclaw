@@ -65,6 +65,10 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "packages/gateway-protocol/src/schema/plugin-install-progress.ts":
       // Shared protocol readers must not pull the lazy Plugins page into chat.
       return "plugin-contracts-runtime";
+    case "ui/src/components/solid/copy-button.tsx":
+    case "ui/src/components/copy-button-state.ts":
+      // Login recovery also copies commands, before any Chat route can load.
+      return "copy-button-runtime";
     case "ui/src/components/login-gate.ts":
     case "ui/src/components/login-gate-feedback.ts":
     case "ui/src/i18n/locales/en-login.ts":
@@ -170,7 +174,7 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 includeDependenciesRecursively: true,
                 // Shared boot needs a smaller partition cap because its dense chat
                 // modules can exceed the compressed-size budget after regrouping.
-                minSize: 64 * 1024,
+                minSize: (route === "chat" ? 128 : 64) * 1024,
                 maxSize: (route === "shared" ? 1344 : 1408) * 1024,
               };
             }),

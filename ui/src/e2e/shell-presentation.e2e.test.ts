@@ -76,7 +76,7 @@ suite.define(() => {
           await saveFrame(page, `${prefix}-navigation-initial`, [shell]);
           await page
             .locator(
-              ".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible, .sidebar-brand__collapse:visible",
+              '.topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible, [data-navigation-view][aria-pressed="true"]:visible',
             )
             .first()
             .click();
