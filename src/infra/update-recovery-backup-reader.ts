@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { z } from "zod";
 import {
   parseUpdateRecoveryBackupManifest,
@@ -205,20 +204,20 @@ function assertManifestLocation(
 
 /**
  * The recorded locator must name the pinned directory itself, not a link to it.
- * Compare identities instead of realpath spellings: Windows short (8.3) names,
- * letter case, and symlinked ancestors spell the same directory differently.
+ * pinDirectory opened this exact locator, and the pin revalidates its retained
+ * exact identity, so no realpath spelling comparison is needed: Windows short
+ * (8.3) names, letter case, and symlinked ancestors spell one directory
+ * differently.
  */
 async function assertPinnedDirectoryAt(
   pin: Awaited<ReturnType<typeof pinDirectory>>,
   directory: string,
   message: string,
 ): Promise<void> {
-  // The pin records exact bigint identities; Windows file IDs can exceed the
-  // safe-integer range, so a number stat would round and never match.
-  const entry = await fs.lstat(directory, { bigint: true });
-  if (!entry.isDirectory() || !sameFileIdentity(entry, pin.receipt.identity)) {
+  if (!(await fs.lstat(directory)).isDirectory()) {
     throw new Error(message);
   }
+  await pin.assertCurrent();
 }
 
 async function withRecoveryMetadata<T>(
