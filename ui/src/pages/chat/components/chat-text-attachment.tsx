@@ -8,7 +8,7 @@ import {
   untrack,
 } from "solid-js";
 import { LazyCustomElementRequestController } from "../../../app/lazy-custom-element.ts";
-import { MarkdownBlocks } from "../../../components/markdown-blocks.ts";
+import { MarkdownBlocks } from "../../../components/markdown-blocks-owner.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
