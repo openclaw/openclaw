@@ -15,17 +15,20 @@ export {
   resolveExistingSqliteFileUri,
   supportsNodeSqliteExtensionLoading,
 } from "../infra/node-sqlite.js";
+export { PostgresSyncConnection } from "../infra/postgres-sync/connection.js";
+export type { SqlConnection } from "../infra/sql-connection.js";
 export {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
   readSqliteDatabasePendingWriteToken,
   type SqliteDatabaseAdmissionKey,
 } from "../infra/sqlite-database-admission.js";
-export { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+export { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 export {
   assertTransactionUsable,
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
+  runSqliteReadSnapshotSync,
 } from "../infra/sqlite-transaction.js";
 export type {
   SqliteWorkerBackend,

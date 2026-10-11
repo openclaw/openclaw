@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import type { WorkboardNotificationSubscription } from "@openclaw/workboard-contract";
 import { describe, expect, it, vi } from "vitest";
+import { sqliteOnly as test } from "./test/sqlite-only.js";
 import { createWorkboardSqliteTestHarness } from "./test/sqlite-store.js";
 
 describe("Workboard scoped subscription listing", () => {
@@ -57,7 +58,8 @@ describe("Workboard scoped subscription listing", () => {
     }
   });
 
-  it("keeps exact card matching and refreshes between calls", async () => {
+  // Stores a NUL-containing text key, unsupported by PostgreSQL text.
+  test("keeps exact card matching and refreshes between calls", async () => {
     const { store } = createWorkboardSqliteTestHarness();
     const lower = await store.subscribeNotifications({ cardId: "card" });
     await store.subscribeNotifications({ cardId: "Card" });
@@ -81,7 +83,8 @@ describe("Workboard scoped subscription listing", () => {
     );
   });
 
-  it("validates selected and unscoped rows while excluding unrelated malformed subscriptions", async () => {
+  // Injects malformed subscriptions through a native SQLite file handle.
+  test("validates selected and unscoped rows while excluding unrelated malformed subscriptions", async () => {
     const { store, dbPath } = createWorkboardSqliteTestHarness();
     const selected = await store.subscribeNotifications({ boardId: "alpha", cardId: "card" });
     const unrelated = await store.subscribeNotifications({ boardId: "beta", cardId: "other" });
@@ -96,7 +99,8 @@ describe("Workboard scoped subscription listing", () => {
     await expect(store.listNotificationSubscriptions()).rejects.toThrow();
   });
 
-  it("deletes board notification subscriptions with empty board metadata", async () => {
+  // Injects and inspects malformed subscriptions through a native SQLite file handle.
+  test("deletes board notification subscriptions with empty board metadata", async () => {
     const { store, dbPath } = createWorkboardSqliteTestHarness();
     await store.upsertBoard({ id: "ops", name: "Ops" });
     await store.subscribeNotifications({
