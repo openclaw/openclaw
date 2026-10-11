@@ -134,6 +134,10 @@ function requireNodeRegistryPrivateState(nodeRegistry: object): NodeRegistryPriv
   return state;
 }
 
+function nodeInvokeError(code: string, message: string): NodeInvokeResult {
+  return { ok: false, error: { code, message } };
+}
+
 async function invokeNodeRegistryCore(
   state: NodeRegistryPrivateState,
   params: NodeInvokeParams,
@@ -151,42 +155,27 @@ async function invokeNodeRegistryCore(
       ? performance.now() + timeoutMs
       : undefined);
   if (isPrivateNodeInvokeCommand(params.command) && !allowPrivateCommand) {
-    return {
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: "private node command is not invocable" },
-    };
+    return nodeInvokeError("INVALID_REQUEST", "private node command is not invocable");
   }
   if (params.signal?.aborted) {
-    return { ok: false, error: { code: "ABORTED", message: "node invoke cancelled" } };
+    return nodeInvokeError("ABORTED", "node invoke cancelled");
   }
   let node = state.context.getNode(params.nodeId);
   if (!node) {
-    return { ok: false, error: { code: "NOT_CONNECTED", message: "node not connected" } };
+    return nodeInvokeError("NOT_CONNECTED", "node not connected");
   }
   if (node.client.invalidated === true) {
-    return {
-      ok: false,
-      error: { code: "PAIRING_CHANGED", message: "node pairing changed before dispatch" },
-    };
+    return nodeInvokeError("PAIRING_CHANGED", "node pairing changed before dispatch");
   }
   const expectedPairingGeneration = params.expectedPairingGeneration ?? node.pairingGeneration;
   if (state.context.hasCurrentPairingStateResolver && !expectedPairingGeneration) {
-    return {
-      ok: false,
-      error: { code: "PAIRING_CHANGED", message: "node pairing generation unavailable" },
-    };
+    return nodeInvokeError("PAIRING_CHANGED", "node pairing generation unavailable");
   }
   if (expectedPairingGeneration && node.pairingGeneration !== expectedPairingGeneration) {
-    return {
-      ok: false,
-      error: { code: "PAIRING_CHANGED", message: "node pairing changed before dispatch" },
-    };
+    return nodeInvokeError("PAIRING_CHANGED", "node pairing changed before dispatch");
   }
   if (params.expectedConnId && node.connId !== params.expectedConnId) {
-    return {
-      ok: false,
-      error: { code: "ROUTE_CHANGED", message: "node connection changed before dispatch" },
-    };
+    return nodeInvokeError("ROUTE_CHANGED", "node connection changed before dispatch");
   }
   if (expectedPairingGeneration && state.context.hasCurrentPairingStateResolver) {
     const pairingNode = node;
@@ -202,31 +191,22 @@ async function invokeNodeRegistryCore(
       );
     } catch (error) {
       if (params.signal?.aborted) {
-        return { ok: false, error: { code: "ABORTED", message: "node invoke cancelled" } };
+        return nodeInvokeError("ABORTED", "node invoke cancelled");
       }
       throw error;
     }
     if (resolution === ABSOLUTE_DEADLINE_EXPIRED) {
-      return { ok: false, error: { code: "TIMEOUT", message: "node invoke timed out" } };
+      return nodeInvokeError("TIMEOUT", "node invoke timed out");
     }
     if (resolution.status === "unavailable") {
-      return {
-        ok: false,
-        error: { code: "UNAVAILABLE", message: "node pairing state unavailable before dispatch" },
-      };
+      return nodeInvokeError("UNAVAILABLE", "node pairing state unavailable before dispatch");
     }
     if (resolution.status !== "current") {
-      return {
-        ok: false,
-        error: { code: "PAIRING_CHANGED", message: "node pairing changed before dispatch" },
-      };
+      return nodeInvokeError("PAIRING_CHANGED", "node pairing changed before dispatch");
     }
     node = resolution.session;
     if (params.expectedConnId && node.connId !== params.expectedConnId) {
-      return {
-        ok: false,
-        error: { code: "ROUTE_CHANGED", message: "node connection changed before dispatch" },
-      };
+      return nodeInvokeError("ROUTE_CHANGED", "node connection changed before dispatch");
     }
   }
   const requestId = randomUUID();
@@ -248,10 +228,7 @@ async function invokeNodeRegistryCore(
     Buffer.byteLength(serializeNodeEvent("node.invoke.request", payload), "utf8") >
       MAX_PAYLOAD_BYTES
   ) {
-    return {
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: "worker launch exceeds the node payload limit" },
-    };
+    return nodeInvokeError("INVALID_REQUEST", "worker launch exceeds the node payload limit");
   }
   const systemRunEvent = resolvePendingSystemRunEvent({
     command: params.command,
@@ -261,27 +238,21 @@ async function invokeNodeRegistryCore(
   // Serialization can consume the budget or close caller-owned authority.
   // Revalidate both before arming pending state and handing off to transport.
   if (params.signal?.aborted) {
-    return { ok: false, error: { code: "ABORTED", message: "node invoke cancelled" } };
+    return nodeInvokeError("ABORTED", "node invoke cancelled");
   }
   if (params.isDispatchAuthorized?.() === false) {
-    return {
-      ok: false,
-      error: {
-        code: "APPROVAL_AUTHORITY_CLOSED",
-        message: "runtime authority closed before node dispatch",
-      },
-    };
+    return nodeInvokeError(
+      "APPROVAL_AUTHORITY_CLOSED",
+      "runtime authority closed before node dispatch",
+    );
   }
   if (!state.context.isCommandAllowed(params.nodeId, params.command)) {
-    return {
-      ok: false,
-      error: { code: "POLICY_CHANGED", message: "node command is no longer allowed" },
-    };
+    return nodeInvokeError("POLICY_CHANGED", "node command is no longer allowed");
   }
   if (deadlineAtMs !== undefined) {
     timeoutMs = Math.max(0, deadlineAtMs - performance.now());
     if (timeoutMs === 0) {
-      return { ok: false, error: { code: "TIMEOUT", message: "node invoke timed out" } };
+      return nodeInvokeError("TIMEOUT", "node invoke timed out");
     }
     // Keep the precise monotonic budget for Gateway timers, but satisfy the integer
     // node-event contract without turning a sub-millisecond budget into "unbounded".
@@ -337,10 +308,7 @@ async function invokeNodeRegistryCore(
     if (pending) {
       state.context.invokeStreams.clearTimers(pending);
       state.context.pendingInvokes.delete(requestId);
-      pending.resolve({
-        ok: false,
-        error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
-      });
+      pending.resolve(nodeInvokeError("UNAVAILABLE", "failed to send invoke to node"));
     }
     return await result;
   }
@@ -448,10 +416,7 @@ export function registerNodeRegistryPrivateRuntime(
         ),
       invoke: async (params) => {
         if (!NODE_WORKER_PRIVATE_COMMANDS.includes(params.command)) {
-          return {
-            ok: false,
-            error: { code: "INVALID_REQUEST", message: "private node command is not allowed" },
-          };
+          return nodeInvokeError("INVALID_REQUEST", "private node command is not allowed");
         }
         const isProofCurrent = () =>
           params.isDispatchAuthorized() &&
@@ -478,13 +443,10 @@ export function registerNodeRegistryPrivateRuntime(
             },
           );
         if (!isProofCurrent()) {
-          return {
-            ok: false,
-            error: {
-              code: "PRIVATE_DIALECT_UNAVAILABLE",
-              message: "node worker supervisor dialect is unavailable",
-            },
-          };
+          return nodeInvokeError(
+            "PRIVATE_DIALECT_UNAVAILABLE",
+            "node worker supervisor dialect is unavailable",
+          );
         }
         return await invokeNodeRegistryCore(
           state,

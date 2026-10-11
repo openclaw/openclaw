@@ -77,6 +77,26 @@ to the [async channel hooks](/plugins/sdk-channel-plugins). Forward these hooks
 through wrapper and setup adapters while keeping existing synchronous signatures
 for older hosts.
 
+## Migrate inspection, authorization, and approval factories
+
+Use these async replacements when inspection or channel eligibility reads
+worker-owned state:
+
+| SDK subpath                               | Synchronous API                                    | Replacement                                             |
+| ----------------------------------------- | -------------------------------------------------- | ------------------------------------------------------- |
+| `conversation-binding-inspection-runtime` | `inspectConversationBinding`                       | `inspectConversationBindingAsync`                       |
+| `command-auth-native`                     | `resolveCommandAuthorization`                      | `resolveCommandAuthorizationAsync`                      |
+| `approval-delivery-runtime`               | `createApproverRestrictedNativeApprovalCapability` | `createApproverRestrictedNativeApprovalCapabilityAsync` |
+| `approval-handler-runtime`                | `createChannelApprovalNativeRuntimeAdapter`        | `createChannelApprovalNativeRuntimeAdapterAsync`        |
+| `approval-handler-adapter-runtime`        | `createLazyChannelApprovalNativeRuntimeAdapter`    | `createLazyChannelApprovalNativeRuntimeAdapterAsync`    |
+
+Await inspection and command authorization before consuming their results. The
+approval factories still return adapters synchronously; their async eligibility
+callbacks are awaited by the host. The original APIs preserve their synchronous
+contracts through the next Plugin SDK major compatibility window. Use the narrow
+subpaths above for new imports; broad compatibility barrels retain existing APIs
+without duplicating the replacements.
+
 ## Await Gateway approval publication
 
 Use `await context.approvalEvents.publishRequestedAsync(kind, request)` to prepare
