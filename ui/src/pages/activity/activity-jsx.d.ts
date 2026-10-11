@@ -23,7 +23,7 @@ declare module "@solidjs/web" {
         LinkReaderHovercardProvider,
         "client" | "readers" | "agentId" | "previewSeeds"
       >;
-      "wa-popover": JSX.HTMLAttributes<WaPopover> & {
+      "wa-popover": HTMLAttributes<WaPopover> & {
         for?: string;
         placement?: WaPopover["placement"];
         "without-arrow"?: boolean;

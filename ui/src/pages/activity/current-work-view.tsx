@@ -44,7 +44,6 @@ function CurrentSession(props: { owner: CurrentWorkProps; row: GatewaySessionRow
         })
       : null,
   );
-  // oxlint-disable-next-line solid/reactivity -- Solid 2 dynamic() tracks its source callback.
   const CurrentRow = dynamic(() => (target() ? "a" : "div"));
   return (
     <CurrentRow

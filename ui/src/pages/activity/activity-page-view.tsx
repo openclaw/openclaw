@@ -147,7 +147,7 @@ export function ActivityPageView(props: {
   });
   createEffect(expiry, (deadline) => {
     if (deadline === undefined) {
-      return;
+      return undefined;
     }
     const timer = setTimeout(
       () => props.controller.requestUpdate(),

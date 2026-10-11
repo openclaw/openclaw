@@ -121,7 +121,6 @@ function SessionLinkView(props: {
         })
       : null,
   );
-  // eslint-disable-next-line solid/reactivity -- Solid 2 dynamic() tracks its source in an owned memo.
   const SessionLink = dynamic(() => (target() ? "a" : "div"));
   const ownerName = createMemo(() => {
     locale();
@@ -508,7 +507,6 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
           onChange={(time) => props.onFiltersChange({ ...props.filters, time })}
           onReselect={(time) => props.onFiltersChange({ ...props.filters, time })}
         />
-        {/* oxlint-enable solid/no-react-specific-props */}
         <PeopleControl
           view={props}
           people={people()}
