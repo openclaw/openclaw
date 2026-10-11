@@ -251,7 +251,14 @@ export async function resolveFeishuMediaList(params: {
         maxBytes,
         originalFilename: resource.fileName,
       });
-      out.push({ path: saved.path, contentType: saved.contentType, kind: resource.kind });
+      out.push({
+        path: saved.path,
+        contentType: saved.contentType,
+        kind:
+          resource.kind === "document" && saved.contentType?.startsWith("image/")
+            ? "image"
+            : resource.kind,
+      });
       log?.(`feishu: downloaded ${resource.label}, saved to ${saved.path}`);
     } catch (err) {
       out.push({ kind: resource.kind });
