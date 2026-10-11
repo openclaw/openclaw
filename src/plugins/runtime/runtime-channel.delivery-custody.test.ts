@@ -1,4 +1,5 @@
 import net from "node:net";
+import path from "node:path";
 import tls from "node:tls";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -22,6 +23,7 @@ import {
   resetPluginStateStoreForTests,
 } from "../../plugin-sdk/plugin-state-test-runtime.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
@@ -40,6 +42,7 @@ let dispatchReplyFromConfig: typeof import("../../auto-reply/reply/dispatch-from
 let tryDispatchAcpReplyHook: typeof import("../../plugin-sdk/acpx.js").tryDispatchAcpReplyHook;
 let createRuntimeChannel: typeof import("./runtime-channel.js").createRuntimeChannel;
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-acp-matrix-custody-" });
+let storePath: string;
 
 function denyNetwork() {
   const denied = () => {
@@ -60,6 +63,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
   await tempDirs.cleanup();
@@ -187,7 +191,7 @@ async function fixture(
     sessionKey: params.sessionKey,
     storeSessionKey: params.sessionKey,
     cfg: {},
-    storePath: "/tmp/mock-sessions.json",
+    storePath,
     entry: {
       sessionId: "fixture",
       updatedAt: Date.now(),
@@ -247,6 +251,7 @@ async function fixture(
   const start = (owner: PluginInstance, key: string, sink: string[]) =>
     owner.run(() => {
       const cfg = {
+        session: { store: storePath },
         diagnostics: { enabled: false },
         acp: {
           enabled: !options.streaming,
@@ -408,7 +413,7 @@ async function fixture(
           ...turn,
           agentId: "main",
           routeSessionKey: key,
-          storePath: "/tmp/mock-sessions.json",
+          storePath,
           recordInboundSession: async () => {},
           dispatchReplyFromConfig,
           dispatchReplyWithBufferedBlockDispatcher:
@@ -442,7 +447,8 @@ async function fixture(
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  storePath = path.join(await tempDirs.make(), "sessions.json");
   vi.clearAllMocks();
   denyNetwork();
   setDiscordTestRegistry();
@@ -455,9 +461,7 @@ beforeEach(() => {
   sessionStoreMocks.loadSessionStoreEntry
     .mockReset()
     .mockImplementation(() => sessionStoreMocks.currentEntry);
-  sessionStoreMocks.resolveSessionStorePathCore
-    .mockReset()
-    .mockReturnValue("/tmp/mock-sessions.json");
+  sessionStoreMocks.resolveSessionStorePathCore.mockReset().mockReturnValue(storePath);
 });
 
 afterEach(() => vi.restoreAllMocks());
