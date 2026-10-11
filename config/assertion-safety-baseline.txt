@@ -430,7 +430,7 @@ extensions/logbook/src/analyze.ts	5
 extensions/logbook/src/service.ts	6
 extensions/matrix/src/actions.ts	2
 extensions/matrix/src/approval-handler.runtime.ts	3
-extensions/matrix/src/approval-native.ts	6
+extensions/matrix/src/approval-native.ts	5
 extensions/matrix/src/approval-reactions.ts	1
 extensions/matrix/src/auth-precedence.ts	1
 extensions/matrix/src/channel.ts	4
@@ -2097,7 +2097,7 @@ src/infra/agent-event-lifecycle.ts	1
 src/infra/agent-events.ts	2
 src/infra/approval-errors.ts	5
 src/infra/approval-gateway-resolver.ts	5
-src/infra/approval-handler-runtime.ts	10
+src/infra/approval-handler-runtime.ts	9
 src/infra/approval-presentation.ts	3
 src/infra/backup-archive-publication.ts	5
 src/infra/backup-create-stream.ts	3
@@ -2121,7 +2121,7 @@ src/infra/diagnostic-semantic-run-progress.ts	1
 src/infra/diagnostic-trace-context.ts	2
 src/infra/diagnostic-trace-propagation.ts	3
 src/infra/directory-durability.ts	3
-src/infra/exec-approval-channel-runtime.ts	5
+src/infra/exec-approval-channel-runtime.ts	4
 src/infra/exec-approval-policy-snapshot.ts	2
 src/infra/exec-approval-reply.ts	1
 src/infra/exec-approvals-allowlist.ts	7

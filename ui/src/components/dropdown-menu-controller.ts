@@ -14,7 +14,6 @@ export function connectDropdownMenu(
   options: DropdownMenuOptions,
   whenUpdated: () => Promise<unknown>,
 ): () => void {
-  let connected = true;
   const handleDocumentKeydown = (event: KeyboardEvent) => {
     if (event.defaultPrevented || consumeTooltipEscape(event, host.ownerDocument)) {
       return;
@@ -52,12 +51,11 @@ export function connectDropdownMenu(
       "wa-dropdown",
     );
     await dropdown?.updateComplete;
-    if (connected && host.isConnected) {
+    if (host.isConnected) {
       host.querySelector<HTMLElement>("wa-dropdown-item:not([disabled])")?.focus();
     }
   })();
   return () => {
-    connected = false;
     host.ownerDocument.removeEventListener("keydown", handleDocumentKeydown, true);
   };
 }
