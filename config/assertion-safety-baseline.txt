@@ -1192,7 +1192,7 @@ src/agents/auth-profiles/policy.ts	1
 src/agents/auth-profiles/profiles.ts	1
 src/agents/auth-profiles/usage.ts	1
 src/agents/bash-process-registry.ts	1
-src/agents/bash-tools.exec-approval-followup.ts	5
+src/agents/bash-tools.exec-approval-followup.ts	2
 src/agents/bash-tools.exec-approval-request.ts	2
 src/agents/bash-tools.exec-host-node-phases.ts	1
 src/agents/bash-tools.exec-host-node.ts	2
@@ -1753,7 +1753,7 @@ src/commands/doctor-sqlite-maintenance-lock.ts	1
 src/commands/doctor-state-integrity.ts	1
 src/commands/doctor-telegram-general-topic-conversations.ts	2
 src/commands/doctor-tools-md-migration.ts	5
-src/commands/doctor-workspace.ts	4
+src/commands/doctor-workspace.ts	2
 src/commands/doctor/cron/legacy-quarantine-migration.ts	1
 src/commands/doctor/cron/legacy-repair.ts	4
 src/commands/doctor/cron/store-migration.ts	2
