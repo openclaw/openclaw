@@ -14,14 +14,14 @@ When a new chat starts a managed worktree, OpenClaw can begin the first model
 turn while the checkout finishes. It first prepares the project instructions,
 workspace skills, and other prompt files from the selected Git commit in the
 final worktree directory. The initial prompt therefore uses the same paths and
-contents as a completed checkout. Workspace tools wait for checkout and the
+contents as a completed checkout. Workspace tools, including PDF analysis, wait for checkout and the
 session's initial diff baseline; tools that do not use the workspace can run
 immediately. Completion also waits for preparation, and a preparation failure
 ends the turn with a retryable error.
 
 Repositories with setup scripts, included files, unsupported checkout transforms,
 or project configuration that needs additional files finish preparation before
-the first turn starts. Sandboxed projections retain their existing preparation
+the first turn starts. Sandboxed projections require a fully published worktree before startup and retain their existing preparation
 flow, as do required remote-worker placements. An explicitly requested worktree name
 or existing session title can name the checkout. Otherwise, allocation chooses a
 short generated name while display-title generation runs in the background.

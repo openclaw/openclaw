@@ -465,9 +465,12 @@ export async function prepareSessionWorktree(params: {
       withSource,
       withRollback,
       onProgress: params.onProgress,
-      // A nested cwd may discover additional ancestor instructions. Its complete
-      // checkout remains the prompt boundary until that selection is available.
-      ...(params.onPromptReady && repository && workspace === repository.sourceRoot
+      // Sandboxes require a published registry owner before creating their projection.
+      // Nested cwd discovery also retains complete checkout as its prompt boundary.
+      ...(params.onPromptReady &&
+      !sandboxRequired &&
+      repository &&
+      workspace === repository.sourceRoot
         ? {
             onPromptReady: async (
               worktree: Parameters<NonNullable<CreateManagedWorktreeParams["onPromptReady"]>>[0],

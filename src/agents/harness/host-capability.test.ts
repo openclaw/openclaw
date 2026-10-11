@@ -137,7 +137,7 @@ afterEach(() => {
 });
 
 describe("agent harness host capability", () => {
-  it.each(["read", "workspace_plugin"])(
+  it.each(["read", "pdf", "workspace_plugin"])(
     "waits for the workspace before %s runs while independent tools remain usable",
     async (name) => {
       const { attempt } = await admittedAttempt("pending-workspace");

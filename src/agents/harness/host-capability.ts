@@ -33,7 +33,7 @@ import {
   createOpenClawCodingToolsInternal,
   createOpenClawCodingToolsInternalAsync,
 } from "../agent-tools.js";
-import { isCodeModeExecToolKind } from "../code-mode-control-tools.js";
+import { getCodeModeExecBeforeHookMetadataForToolKind } from "../code-mode-control-tools.js";
 import { log } from "../embedded-agent-runner/logger.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
@@ -339,7 +339,10 @@ export function createAgentHarnessHostCapabilities(params: {
     assertCurrent();
     if (
       workspaceReadiness &&
-      !isCodeModeExecToolKind(request.toolKind) &&
+      !getCodeModeExecBeforeHookMetadataForToolKind({
+        toolKind: request.toolKind,
+        params: request.params,
+      }) &&
       isWorkspaceToolName(request.toolName)
     ) {
       workspaceReadiness.assertCurrent();

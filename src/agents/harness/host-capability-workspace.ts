@@ -20,6 +20,7 @@ export const WORKSPACE_TOOL_NAMES = Object.freeze([
   "find",
   "apply_patch",
   "view_image",
+  "pdf",
 ]);
 const workspaceToolNames = new Set(WORKSPACE_TOOL_NAMES);
 const nativeWorkspaceToolNames: Readonly<Record<string, string>> = {
