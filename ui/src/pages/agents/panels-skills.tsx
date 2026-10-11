@@ -126,7 +126,7 @@ export function AgentSkills(
             <input
               class="settings-input"
               aria-label={t("agents.skillsPanel.filter")}
-              prop:value={params.filter}
+              value={params.filter}
               onInput={(event) => params.onFilterChange(event.currentTarget.value)}
               placeholder={t("agents.skillsPanel.searchPlaceholder")}
               autocomplete="off"

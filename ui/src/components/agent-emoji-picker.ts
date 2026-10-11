@@ -1,5 +1,6 @@
-import "@awesome.me/webawesome/dist/components/popover/popover.js";
 import type WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
+import "@awesome.me/webawesome/dist/components/popover/popover.js";
+import type { JSX as SolidJSX } from "@solidjs/web";
 import { html, svg } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
@@ -134,4 +135,16 @@ export class AgentEmojiPicker extends OpenClawLightDomElement {
 
 if (!customElements.get("openclaw-agent-emoji-picker")) {
   customElements.define("openclaw-agent-emoji-picker", AgentEmojiPicker);
+}
+
+type AgentEmojiPickerAttributes = SolidJSX.HTMLAttributes<AgentEmojiPicker> & {
+  [Key in keyof AgentEmojiPicker as `prop:${Key & string}`]?: AgentEmojiPicker[Key];
+};
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-agent-emoji-picker": AgentEmojiPickerAttributes;
+    }
+  }
 }

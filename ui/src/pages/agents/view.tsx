@@ -262,14 +262,14 @@ export function Agents(props: AgentsProps) {
                 <Switch>
                   <Match when={props.activePanel === "overview"}>
                     <Show when={agent().id} keyed>
-                      {() => (
+                      {(agentId) => (
                         <AgentOverview
                           {...props.overview}
                           {...configActions()}
                           agent={agent()}
                           defaultId={defaultId()}
                           agentFilesList={props.agentFiles.agentFilesList}
-                          agentIdentity={props.agentIdentityById[agent().id] ?? null}
+                          agentIdentity={props.agentIdentityById[agentId] ?? null}
                           canUpdateIdentity={props.access.canUpdateIdentity}
                           onSelectPanel={props.onSelectPanel}
                         />

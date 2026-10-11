@@ -505,11 +505,13 @@ export function AgentTools(
                     <span class="agent-tools-group__summary-main">
                       <span class="agent-tools-group__title">
                         {section().label}
-                        {section().source === "plugin" && section().pluginId ? (
-                          <span class="settings-row__value">
-                            {t("agentTools.plugin", { id: section().pluginId })}
-                          </span>
-                        ) : undefined}
+                        <Show when={section().source === "plugin" && section().pluginId} keyed>
+                          {(pluginId) => (
+                            <span class="settings-row__value">
+                              {t("agentTools.plugin", { id: pluginId })}
+                            </span>
+                          )}
+                        </Show>
                       </span>
                       <span
                         class="agent-tools-group__preview"

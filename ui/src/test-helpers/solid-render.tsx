@@ -7,7 +7,7 @@ export function mountSolid<Props extends object>(
   initial: Props,
   container: HTMLElement = document.createElement("div"),
 ) {
-  const [props, setProps] = createSignal(initial, { equals: false });
+  const [props, setProps] = createSignal<Props>(() => initial, { equals: false });
   const view = mount(() => <Component {...props()} />, { container });
   flush();
   return {

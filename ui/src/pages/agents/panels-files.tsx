@@ -192,7 +192,7 @@ export function AgentFiles(
                 <select
                   class="agent-tab-add"
                   aria-label={t("agents.files.addFile")}
-                  prop:value={""}
+                  value={""}
                   disabled={params.agentFilesLoading}
                   onChange={(e: Event) => {
                     const select = e.currentTarget;
@@ -285,7 +285,7 @@ export function AgentFiles(
                               ? t("common.loading")
                               : t("agents.files.loadHint")
                         }
-                        prop:value={draft()}
+                        value={draft()}
                         onInput={(e: Event) => {
                           if (e.currentTarget instanceof HTMLTextAreaElement) {
                             params.onFileDraftChange(entry().name, e.currentTarget.value);

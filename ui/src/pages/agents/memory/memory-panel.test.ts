@@ -18,7 +18,7 @@ import { createApplicationContextProvider } from "../../../test-helpers/applicat
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
-import type { DreamDiaryActionMethod, DreamingState } from "./dreaming.ts";
+import type { DreamDiaryActionMethod, DreamingState, WikiOverview } from "./dreaming.ts";
 import { AgentMemoryState } from "./memory-panel-state.ts";
 import { AgentMemoryPanel, AgentMemoryView } from "./memory-panel.tsx";
 import type { DreamingViewState } from "./view.tsx";
@@ -462,7 +462,7 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
       questions: [],
       contradictions: [],
     };
-    const wikiCluster = {
+    const wikiCluster: WikiOverview["clusters"][number] = {
       key: "synthesis",
       label: "Syntheses",
       itemCount: 1,

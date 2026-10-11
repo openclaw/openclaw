@@ -251,7 +251,7 @@ export function AgentOverview(
                   <input
                     type="text"
                     maxlength="64"
-                    prop:value={identityName()}
+                    value={identityName()}
                     placeholder={t("agents.identity.namePlaceholder")}
                     disabled={identityBusy()}
                     onInput={(event) =>
@@ -266,7 +266,7 @@ export function AgentOverview(
                       type="text"
                       maxlength="64"
                       aria-label={t("agents.identity.emoji")}
-                      prop:value={identityEmoji()}
+                      value={identityEmoji()}
                       disabled={identityBusy()}
                       onInput={(event: Event) => {
                         if (event.currentTarget instanceof HTMLInputElement) {
@@ -382,8 +382,9 @@ export function AgentOverview(
           title={primaryModelLabel()}
           control={
             <LitContent
-              content={() =>
-                renderModelPicker({
+              content={() => {
+                const inherited = defaultPrimary();
+                return renderModelPicker({
                   label: primaryModelLabel(),
                   value: selectedPrimary() ?? "",
                   options: [
@@ -391,9 +392,9 @@ export function AgentOverview(
                       value: "",
                       label: isDefault()
                         ? t("agents.overview.notSet")
-                        : defaultPrimary()
+                        : inherited
                           ? t("agents.overview.inheritDefaultModel", {
-                              model: defaultPrimary(),
+                              model: inherited,
                             })
                           : t("agents.overview.inheritDefault"),
                     },
@@ -407,8 +408,8 @@ export function AgentOverview(
                   disabled: disabled(),
                   onChange: (value) => params.onModelChange(params.agent.id, value || null),
                   onOpen: params.onModelCatalogOpen,
-                })
-              }
+                });
+              }}
             />
           }
         />
@@ -417,25 +418,25 @@ export function AgentOverview(
           description={t("chat.modelControls.decisionAgentHelp")}
           control={
             <LitContent
-              content={() =>
-                renderDecisionModelPicker({
+              content={() => {
+                const agentConfig = config();
+                const decisionModel = agentConfig.entry?.decisionModel;
+                const inheritedDecisionModel = agentConfig.defaults?.decisionModel;
+                return renderDecisionModelPicker({
                   id: "agent-decision-model",
                   models: params.decisionModels,
-                  value:
-                    typeof config().entry?.decisionModel === "string"
-                      ? config().entry.decisionModel
-                      : undefined,
+                  value: typeof decisionModel === "string" ? decisionModel : undefined,
                   inherit: {
                     model:
-                      typeof config().defaults?.decisionModel === "string"
-                        ? config().defaults.decisionModel
+                      typeof inheritedDecisionModel === "string"
+                        ? inheritedDecisionModel
                         : undefined,
                   },
                   disabled: disabled(),
                   onChange: (value) => params.onDecisionModelChange(params.agent.id, value),
                   onOpen: params.onModelCatalogOpen,
-                })
-              }
+                });
+              }}
             />
           }
         />

@@ -2,19 +2,9 @@ import type { JSX as SolidJSX } from "@solidjs/web";
 import { Show } from "solid-js";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import type { OpenClawModalDialog } from "../modal-dialog.ts";
 import { Icon } from "./icon.tsx";
 import { LoadingState } from "./loading-state.tsx";
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-modal-dialog": HTMLAttributes<HTMLElement> & {
-        label: string;
-        "onModal-cancel"?: (event: Event) => void;
-      };
-    }
-  }
-}
 
 export function AgentStartupState() {
   return (
@@ -27,8 +17,13 @@ export function AgentStartupState() {
 }
 
 export type LazyElementState =
-  | { status: "loading"; element: { label: string } }
-  | { status: "error"; element: { label: string }; error: unknown; stale: boolean };
+  | { status: "loading"; element: Pick<OpenClawModalDialog, "label"> }
+  | {
+      status: "error";
+      element: Pick<OpenClawModalDialog, "label">;
+      error: unknown;
+      stale: boolean;
+    };
 
 export function LazyElementStateView(props: {
   state: LazyElementState;

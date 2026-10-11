@@ -275,7 +275,7 @@ describe("renderAgents", () => {
   it("renders Memory after Automations and scopes the panel to the selected agent", () => {
     const container = document.createElement("div");
     const context = {
-      gateway: createApplicationGateway(),
+      gateway: createApplicationGateway().gateway,
       runtimeConfig: {
         state: { configForm: null, configSnapshot: null },
         subscribe: () => () => undefined,
@@ -301,7 +301,7 @@ describe("renderAgents", () => {
     expect(panel?.agentId).toBe("beta");
   });
 
-  it("selects the configured primary model on initial render", async () => {
+  it("updates the configured primary model selection when the active agent changes", async () => {
     const container = document.createElement("div");
     const configForm = {
       agents: {
@@ -341,7 +341,6 @@ describe("renderAgents", () => {
     );
 
     await updatePickers(container);
-    expect(primaryModelPicker(container)).not.toBe(defaultPicker);
     const inheritedSelection = primaryModelPicker(container)?.querySelector(
       '[role="option"][aria-selected="true"]',
     );
