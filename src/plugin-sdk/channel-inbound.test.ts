@@ -125,6 +125,77 @@ describe("channel-inbound public helpers", () => {
     },
   );
 
+  it("preserves frozen class adapter receivers while stripping event custody", async () => {
+    const calls: string[] = [];
+    const callback = vi.fn();
+    const replyOptions = {
+      isHeartbeat: true,
+      internalEventExecution: { onStarted: callback },
+      onReplyOperationOwned: callback,
+    };
+    const turn = {
+      cfg: {},
+      channel: "test",
+      agentId: "main",
+      routeSessionKey: "agent:main:test:peer",
+      storePath: "unused",
+      ctxPayload: { Body: "hello", CommandAuthorized: false },
+      recordInboundSession: async () => {},
+      delivery: { deliver: async () => {} },
+      replyOptions,
+      dispatchReplyWithBufferedBlockDispatcher: async (
+        params: Parameters<
+          Parameters<
+            typeof dispatchChannelInboundReply
+          >[0]["dispatchReplyWithBufferedBlockDispatcher"]
+        >[0],
+      ) => {
+        calls.push("dispatch");
+        expect(params.replyOptions).not.toHaveProperty("internalEventExecution");
+        expect(params.replyOptions).not.toHaveProperty("onReplyOperationOwned");
+        expect(params.replyOptions?.isHeartbeat).toBe(true);
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+      },
+    };
+    class Adapter {
+      #turn = turn;
+      ingest(raw: string) {
+        expect(this.#turn).toBe(turn);
+        calls.push("ingest");
+        return { id: "event-1", rawText: raw };
+      }
+      classify() {
+        expect(this.#turn).toBe(turn);
+        calls.push("classify");
+        return { kind: "message" as const, canStartAgentTurn: true };
+      }
+      preflight() {
+        expect(this.#turn).toBe(turn);
+        calls.push("preflight");
+        return { kind: "dispatch" as const };
+      }
+      resolveTurn() {
+        calls.push("resolve");
+        return this.#turn;
+      }
+      onFinalize(result: { dispatched: boolean }) {
+        expect(this.#turn).toBe(turn);
+        expect(result.dispatched).toBe(true);
+        calls.push("finalize");
+      }
+    }
+    const result = await runChannelInboundEvent({
+      channel: "test",
+      raw: "hello",
+      adapter: Object.freeze(new Adapter()),
+    });
+    expect(result.dispatched).toBe(true);
+    expect(calls).toEqual(["ingest", "classify", "preflight", "resolve", "dispatch", "finalize"]);
+    expect(replyOptions.internalEventExecution.onStarted).toBe(callback);
+    expect(replyOptions.onReplyOperationOwned).toBe(callback);
+    expect(callback).not.toHaveBeenCalled();
+  });
+
   it("runs a lifecycle-less prepared turn through the published entry point", async () => {
     const events: string[] = [];
     const result = await runChannelInboundEvent({
