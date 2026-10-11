@@ -24,11 +24,8 @@ import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { readSqliteSessionParticipantProjection } from "./session-accessor.sqlite-participant-projection.js";
 import { recordSessionParticipantFromWorker } from "./session-accessor.sqlite-participants.native.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import {
-  applySessionGroupCategoryMutation,
-  assertSessionGroupCategoryDestination,
-  prepareSessionGroupCategoryMutation,
-} from "./session-group-categories.kernel.js";
+import { applySessionGroupCategoryMutation } from "./session-group-categories.kernel.js";
+import { readSessionGroupCategoryKeys } from "./session-group-categories.read.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
 import type {
   MembershipPublication,
@@ -57,7 +54,7 @@ export function bindSqliteWorkerBackend(
     | {
         from: string;
         storePath: string;
-        rows: ReturnType<typeof prepareSessionGroupCategoryMutation>;
+        keys: string[];
       }
     | undefined;
   const workerDatabase = (scope: SessionAccessScope) => {
@@ -86,9 +83,9 @@ export function bindSqliteWorkerBackend(
             categoryPlan = {
               from: command.input.from,
               storePath: database.path,
-              rows: prepareSessionGroupCategoryMutation(database, command.input.from),
+              keys: readSessionGroupCategoryKeys(database, command.input.from),
             };
-            return [...categoryPlan.rows.keys()];
+            return categoryPlan.keys;
           }),
         );
       }
@@ -149,10 +146,11 @@ export function bindSqliteWorkerBackend(
                 ) {
                   throw new Error("Session group category mutation has no matching prepared rows");
                 }
-                keys = [...categoryPlan.rows.keys()];
+                keys = categoryPlan.keys;
                 return applySessionGroupCategoryMutation(
                   database,
-                  categoryPlan.rows,
+                  categoryPlan.keys,
+                  command.input.from,
                   command.input.to,
                   scope.env ?? process.env,
                 );
@@ -250,15 +248,6 @@ export function bindSqliteWorkerBackend(
             operationLabel: `sessions.${command.type}`,
             busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
             databaseLabel: context.databasePath,
-            withCommit(commit) {
-              if (command.type === "category.apply") {
-                assertSessionGroupCategoryDestination(
-                  command.input.to,
-                  command.input.scope.env ?? process.env,
-                );
-              }
-              commit();
-            },
           },
         ),
       );

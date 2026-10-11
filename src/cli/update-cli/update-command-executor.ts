@@ -71,7 +71,6 @@ export async function withUpdateCommandExecutor<T>(
   return await activation.run(() =>
     withCommandProcessScope(async () => {
       let active = true;
-      let entering = false;
       let databasePath: string | undefined;
       let store: ReturnType<typeof createManagedHandoffLeaseStore> | undefined;
       using readConnections = new DisposableStack();
@@ -226,7 +225,7 @@ export async function withUpdateCommandExecutor<T>(
           if (active || activation.failure) {
             activation.assertCurrent();
           }
-          if (!active || entering) {
+          if (!active) {
             throw new UpdateCommandRecoveryPendingError(
               "Update executor admission is closed or busy.",
             );
@@ -266,185 +265,174 @@ export async function withUpdateCommandExecutor<T>(
             }
             return finishAdmission();
           }
-          entering = true;
-          try {
-            databasePath =
-              options?.existingAuthority?.databasePath ?? resolveManagedUpdateLeaseDatabasePath();
-            let existingIdentity =
-              options?.existingAuthority ??
-              (options?.legacyPackageHandoff
-                ? captureManagedUpdateLeaseDatabaseIdentity(databasePath)
-                : undefined);
-            databasePath = existingIdentity?.databasePath ?? databasePath;
-            const initialDatabasePath = databasePath;
-            const openStore = async (
-              identity: typeof existingIdentity,
-              originalUpdateKey?: string,
-            ) => {
-              const prepared = await prepareManagedHandoffLeaseStore({
-                databasePath: identity?.databasePath ?? initialDatabasePath,
-                serviceManagerEnv: resolveServiceManagerEnv(),
-                existingIdentity: identity,
-                originalUpdateKey,
-                onProcessIdentityWarning: identityWarnings.warn,
-              });
-              activation.assertCurrent();
-              if (!active) {
-                throw new UpdateCommandRecoveryPendingError("Update executor admission is closed.");
-              }
-              return prepared;
-            };
-            store = await openStore(
-              existingIdentity,
-              !options?.legacyManagedParent && !options?.legacyPackageParent ? key : undefined,
-            );
-            const found = store.read(key);
-            if (found.kind === "unreadable" && !options?.legacyPackageParent) {
-              throw new UpdateCommandRecoveryPendingError("Update executor state is unreadable.");
-            }
-            const legacyParent: LegacyUpdateExecutorParent | undefined =
-              options?.legacyManagedParent
-                ? { kind: "managed", ...options.legacyManagedParent }
-                : options?.legacyPackageParent
-                  ? {
-                      kind: "package",
-                      identity: options.legacyPackageParent,
-                      handoff: options.legacyPackageHandoff,
-                    }
-                  : undefined;
-            if (legacyParent) {
-              const admitted = acquireLegacyUpdateExecutorParent({
-                store,
-                key,
-                runId,
-                parent: legacyParent,
-                childName: randomUUID(),
-              });
-              lease = admitted.lease;
-              borrowed = admitted.borrowed;
-              legacyChild = admitted.child;
-              legacyTarget = admitted.target;
-            } else if (
-              found.kind === "current" &&
-              !options?.existingAuthority &&
-              found.lease.helper.pid !== process.pid &&
-              found.lease.executor.pid === process.pid
-            ) {
-              const { isCurrentManagedServiceUpdateHandoffProcess } =
-                await import("../../infra/update-managed-service-handoff-current.js");
-              const handoff = { root: key, runId, store };
-              const handedOff = await isCurrentManagedServiceUpdateHandoffProcess(handoff);
-              // Retain the exact row observed before the await. Matching the run in
-              // a later metadata read cannot authorize a different lease generation.
-              if (
-                !active ||
-                !handedOff ||
-                found.lease.action.kind !== "update" ||
-                (!store.owns(found.lease, "executor") &&
-                  !(process.connected && store.acceptParentBoundExecutor(found.lease)))
-              ) {
-                throw new UpdateCommandRecoveryPendingError(
-                  "Managed update executor changed during admission.",
-                );
-              }
-              lease = found.lease;
-              borrowed = true;
-              managedHandoff = true;
-            } else {
-              const acquired = requireUpdateCommandAcquisition(
-                store.acquire(key, randomUUID(), { kind: "update" }),
-                "Another update executor owns this installation.",
-              );
-              lease = acquired.lease;
-              if (acquired.originalDatabaseIdentity) {
-                existingIdentity = acquired.originalDatabaseIdentity;
-                databasePath = existingIdentity.databasePath;
-                store = await openStore(existingIdentity);
-              }
-            }
-            serviceKey = distinctServiceKey;
-            if (serviceKey) {
-              serviceLease = requireUpdateCommandAcquisition(
-                store.acquire(serviceKey, randomUUID(), { kind: "update" }),
-                "Another update executor owns the managed service installation.",
-              ).lease;
-            }
-            admissionComplete = true;
-            assertCurrent();
-            const authority = Object.freeze({
-              ...(existingIdentity ?? captureManagedUpdateLeaseDatabaseIdentity(databasePath)),
-              installKey: lease.key,
-              owner: lease.owner,
+          databasePath =
+            options?.existingAuthority?.databasePath ?? resolveManagedUpdateLeaseDatabasePath();
+          let existingIdentity =
+            options?.existingAuthority ??
+            (options?.legacyPackageHandoff
+              ? captureManagedUpdateLeaseDatabaseIdentity(databasePath)
+              : undefined);
+          databasePath = existingIdentity?.databasePath ?? databasePath;
+          const initialDatabasePath = databasePath;
+          const openStore = async (
+            identity: typeof existingIdentity,
+            originalUpdateKey?: string,
+          ) => {
+            const prepared = await prepareManagedHandoffLeaseStore({
+              databasePath: identity?.databasePath ?? initialDatabasePath,
+              serviceManagerEnv: resolveServiceManagerEnv(),
+              existingIdentity: identity,
+              originalUpdateKey,
+              onProcessIdentityWarning: identityWarnings.warn,
             });
-            // Switch the live owner too: capture, later child admission and final
-            // release must not recreate a database lost after initial admission.
-            databasePath = authority.databasePath;
-            store = await openStore(authority);
-            readConnections.use(store.retainReadConnection());
+            activation.assertCurrent();
+            if (!active) {
+              throw new UpdateCommandRecoveryPendingError("Update executor admission is closed.");
+            }
+            return prepared;
+          };
+          store = await openStore(
+            existingIdentity,
+            !options?.legacyManagedParent && !options?.legacyPackageParent ? key : undefined,
+          );
+          const found = store.read(key);
+          if (found.kind === "unreadable" && !options?.legacyPackageParent) {
+            throw new UpdateCommandRecoveryPendingError("Update executor state is unreadable.");
+          }
+          const legacyParent: LegacyUpdateExecutorParent | undefined = options?.legacyManagedParent
+            ? { kind: "managed", ...options.legacyManagedParent }
+            : options?.legacyPackageParent
+              ? {
+                  kind: "package",
+                  identity: options.legacyPackageParent,
+                  handoff: options.legacyPackageHandoff,
+                }
+              : undefined;
+          if (legacyParent) {
+            const admitted = acquireLegacyUpdateExecutorParent({
+              store,
+              key,
+              runId,
+              parent: legacyParent,
+              childName: randomUUID(),
+            });
+            lease = admitted.lease;
+            borrowed = admitted.borrowed;
+            legacyChild = admitted.child;
+            legacyTarget = admitted.target;
+          } else if (
+            found.kind === "current" &&
+            !options?.existingAuthority &&
+            found.lease.helper.pid !== process.pid &&
+            found.lease.executor.pid === process.pid
+          ) {
+            const { isCurrentManagedServiceUpdateHandoffProcess } =
+              await import("../../infra/update-managed-service-handoff-current.js");
+            const handoff = { root: key, runId, store };
+            const handedOff = await isCurrentManagedServiceUpdateHandoffProcess(handoff);
+            // Retain the exact row observed before the await. Matching the run in
+            // a later metadata read cannot authorize a different lease generation.
             if (
-              borrowed &&
-              !legacyChild &&
-              (lease.version === 1 || !store.owns(lease, "executor")) &&
-              !(lease.version !== 1 && process.connected && store.acceptParentBoundExecutor(lease))
+              !active ||
+              !handedOff ||
+              found.lease.action.kind !== "update" ||
+              (!store.owns(found.lease, "executor") &&
+                !(process.connected && store.acceptParentBoundExecutor(found.lease)))
             ) {
               throw new UpdateCommandRecoveryPendingError(
                 "Managed update executor changed during admission.",
               );
             }
-            assertCurrent();
-            admittedAuthorities.set(fence, {
-              authority,
-              assertCurrent: assertBase,
-              managedHandoff,
-              runId,
-              retainedRoot: serviceLease?.key,
-            });
-            const originalOwner =
-              !borrowed &&
-              !legacyParent &&
-              lease.version === 2 &&
-              !lease.key.includes("/.openclaw-update-child-");
-            if (originalOwner) {
-              originalFence = fence;
-              cancellation.register(fence);
+            lease = found.lease;
+            borrowed = true;
+            managedHandoff = true;
+          } else {
+            const acquired = requireUpdateCommandAcquisition(
+              store.acquire(key, randomUUID(), { kind: "update" }),
+              "Another update executor owns this installation.",
+            );
+            lease = acquired.lease;
+            if (acquired.originalDatabaseIdentity) {
+              existingIdentity = acquired.originalDatabaseIdentity;
+              databasePath = existingIdentity.databasePath;
+              store = await openStore(existingIdentity);
             }
-            if (enterOptions?.preflight && !borrowed) {
-              preflightReleases.set(fence, () => {
-                assertCurrent();
-                if (!store || !lease || children.pending || slotLease) {
-                  throw new UpdateCommandRecoveryPendingError("Preflight executor release failed.");
-                }
-                retireFence();
-                children.close();
-                if (serviceLease && !store.release(serviceLease)) {
-                  throw new UpdateCommandRecoveryPendingError(
-                    "Preflight service owner release failed.",
-                  );
-                }
-                serviceLease = undefined;
-                if (lease.version === 1 || !store.release(lease)) {
-                  throw new UpdateCommandRecoveryPendingError("Preflight executor release failed.");
-                }
-                lease = undefined;
-                readConnections.dispose();
-              });
-            }
-            return finishAdmission();
-          } finally {
-            entering = false;
           }
+          serviceKey = distinctServiceKey;
+          if (serviceKey) {
+            serviceLease = requireUpdateCommandAcquisition(
+              store.acquire(serviceKey, randomUUID(), { kind: "update" }),
+              "Another update executor owns the managed service installation.",
+            ).lease;
+          }
+          admissionComplete = true;
+          assertCurrent();
+          const authority = Object.freeze({
+            ...(existingIdentity ?? captureManagedUpdateLeaseDatabaseIdentity(databasePath)),
+            installKey: lease.key,
+            owner: lease.owner,
+          });
+          // Switch the live owner too: capture, later child admission and final
+          // release must not recreate a database lost after initial admission.
+          databasePath = authority.databasePath;
+          store = await openStore(authority);
+          readConnections.use(store.retainReadConnection());
+          if (
+            borrowed &&
+            !legacyChild &&
+            (lease.version === 1 || !store.owns(lease, "executor")) &&
+            !(lease.version !== 1 && process.connected && store.acceptParentBoundExecutor(lease))
+          ) {
+            throw new UpdateCommandRecoveryPendingError(
+              "Managed update executor changed during admission.",
+            );
+          }
+          assertCurrent();
+          admittedAuthorities.set(fence, {
+            authority,
+            assertCurrent: assertBase,
+            managedHandoff,
+            runId,
+            retainedRoot: serviceLease?.key,
+          });
+          const originalOwner =
+            !borrowed &&
+            !legacyParent &&
+            lease.version === 2 &&
+            !lease.key.includes("/.openclaw-update-child-");
+          if (originalOwner) {
+            originalFence = fence;
+            cancellation.register(fence);
+          }
+          if (enterOptions?.preflight && !borrowed) {
+            preflightReleases.set(fence, () => {
+              assertCurrent();
+              if (!store || !lease || children.pending || slotLease) {
+                throw new UpdateCommandRecoveryPendingError("Preflight executor release failed.");
+              }
+              retireFence();
+              children.close();
+              if (serviceLease && !store.release(serviceLease)) {
+                throw new UpdateCommandRecoveryPendingError(
+                  "Preflight service owner release failed.",
+                );
+              }
+              serviceLease = undefined;
+              if (lease.version === 1 || !store.release(lease)) {
+                throw new UpdateCommandRecoveryPendingError("Preflight executor release failed.");
+              }
+              lease = undefined;
+              readConnections.dispose();
+            });
+          }
+          return finishAdmission();
         },
       };
       const operationOutcome = await runUpdateCommandExecutorOperation({
         operation: () => operation(executor),
         children,
-        assertCurrent: () => {
-          if (lease) {
-            assertCurrent();
-          }
-          identityWarnings.flush();
-        },
       });
+      identityWarnings.flush();
       const outcome = cancellation.mergeOutcome(operationOutcome);
       retireFence();
       if ("error" in outcome && hasCommandProcessCleanupError(outcome.error)) {

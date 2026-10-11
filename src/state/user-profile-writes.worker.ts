@@ -17,6 +17,7 @@ import {
   USER_PROFILE_AVATAR_MIME_TYPES,
 } from "../shared/avatar-limits.js";
 import { CHANNEL_IDENTITY_PROVIDER } from "./user-channel-identities.js";
+import type { UserGitHubConnectionCommit } from "./user-github-connections.types.js";
 import { ensureUserPreferencesSchema } from "./user-preferences.store.js";
 import { normalizeProfileEmail as normalizeEmail } from "./user-profile-email.kernel.js";
 import { publishUserProfileAuthorityChange } from "./user-profile-events.js";
@@ -80,7 +81,7 @@ type PendingPublication = {
   display: Set<string>;
   profiles: Set<string>;
   identities: Set<string>;
-  retiredGitHubProfileIds: string[];
+  githubConnections: UserGitHubConnectionCommit;
 };
 
 function selectUserProfileListItemById(db: DatabaseSync, profileId: string): UserProfileListItem {
@@ -142,7 +143,11 @@ export function createUserProfileWriteOperation<Input, Output>(
           display: new Set(),
           profiles: new Set(),
           identities: new Set(),
-          retiredGitHubProfileIds: [],
+          githubConnections: {
+            kind: "user-github-connection",
+            changedOwners: [],
+            retiredProfileIds: [],
+          },
         };
         pending = current;
         try {
@@ -199,7 +204,10 @@ export function createUserProfileWriteOperation<Input, Output>(
             }),
             after: ids.map((id) => [id, after.get(id)]),
             emailBindings,
-            retiredGitHubProfileIds: current.retiredGitHubProfileIds,
+            ...(current.githubConnections.changedOwners.length ||
+            current.githubConnections.retiredProfileIds.length
+              ? { githubConnections: current.githubConnections }
+              : {}),
           };
           requestSqliteWorkerOperationAdmission({ stage: "commit", facts: publication });
           deferSqlitePostCommitPublication(db, () => committed.push(publication));
@@ -231,7 +239,10 @@ export function createUserProfileWriteOperation<Input, Output>(
       authority: (...ids) => ids.forEach((id) => pending?.profiles.add(id)),
       identity: (...ids) => ids.forEach((id) => pending?.identities.add(id)),
       publish: (...ids) => ids.forEach((id) => pending?.display.add(id)),
-      retireGitHubProfiles: (ids) => pending?.retiredGitHubProfileIds.push(...ids),
+      publishGitHubConnections: (receipt) => {
+        pending?.githubConnections.changedOwners.push(...receipt.changedOwners);
+        pending?.githubConnections.retiredProfileIds.push(...receipt.retiredProfileIds);
+      },
     };
     const owned = { ...options, mutation };
     try {
