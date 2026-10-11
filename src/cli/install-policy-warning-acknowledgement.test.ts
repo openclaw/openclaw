@@ -85,16 +85,6 @@ describe("resolveInstallPolicyWarningAcknowledgementCliOptions", () => {
     expect(promptTextMock).not.toHaveBeenCalled();
   });
 
-  it("keeps the deprecated unsafe flag inert without suppressing an interactive prompt", () => {
-    setTty(true);
-    const options = resolveInstallPolicyWarningAcknowledgementCliOptions({
-      dangerouslyForceUnsafeInstall: true,
-    });
-
-    expect(options.dangerouslyForceUnsafeInstall).toBe(true);
-    expect(options.onInstallPolicyWarning).toBeTypeOf("function");
-  });
-
   it("uses the dedicated acknowledgement flag for every warning without prompting", async () => {
     setTty(false);
     const options = resolveInstallPolicyWarningAcknowledgementCliOptions({

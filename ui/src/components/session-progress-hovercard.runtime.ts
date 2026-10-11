@@ -1,8 +1,9 @@
 import type { ProgressCard, ProgressCardGetParams } from "@openclaw/gateway-protocol";
 import { nothing, ReactiveElement, render } from "lit";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { resolveControlUiAuthCandidates } from "../app/control-ui-auth.ts";
+import { resolveControlUiAvatarAuth } from "../app/control-ui-auth.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
 import {
@@ -33,11 +34,7 @@ const EXIT_DURATION_MS = 100;
 let nextHovercardId = 0;
 
 function sessionHovercardMenuOpen(owner: ParentNode): boolean {
-  return (
-    owner.querySelector(
-      '[data-session-menu][aria-expanded="true"], [data-catalog-session-menu][aria-expanded="true"]',
-    ) !== null
-  );
+  return owner.querySelector("openclaw-session-menu, openclaw-catalog-session-menu") !== null;
 }
 
 export class SessionProgressHovercardProvider extends ReactiveElement {
@@ -65,7 +62,6 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       ? scopedSessionArtifactKey(this.activeSession.sessionKey, this.activeSession.agentId)
       : null;
   }
-  private suppressFocusOpen = false;
   private open = false;
   private delayed = true;
   private animateNextOpen = true;
@@ -74,6 +70,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   private readonly hovercard = new PortaledHovercardController(
     () => this.close(true),
     CLOSE_DELAY_MS,
+    () => this.close(),
   );
   private readonly sessionLinkTitler = new SessionLinkTitler(this);
   private loadGeneration = 0;
@@ -95,8 +92,14 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   }
 
   set client(value: GatewayBrowserClient | null) {
+    if (value === this.applicationClient) {
+      return;
+    }
     this.applicationClient = value;
     this.sessionLinkTitler.client = value;
+    if (this.isConnected) {
+      this.sessionLinkTitler.refresh();
+    }
   }
 
   get context(): ApplicationContext | null {
@@ -141,7 +144,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     this.addEventListener("pointerout", this.handlePointerOut);
     this.addEventListener("focusin", this.handleFocusIn);
     this.addEventListener("focusout", this.handleFocusOut);
-    this.addEventListener("keydown", this.handleKeyDown);
+    this.addEventListener("keydown", this.hovercard.handleTriggerKeyDown);
     this.addEventListener("click", this.handleClick);
     this.addEventListener(SESSION_MENU_OPEN_EVENT, this.handleSessionMenuOpen);
     this.sessionLinkTitler.connect();
@@ -153,7 +156,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     this.removeEventListener("pointerout", this.handlePointerOut);
     this.removeEventListener("focusin", this.handleFocusIn);
     this.removeEventListener("focusout", this.handleFocusOut);
-    this.removeEventListener("keydown", this.handleKeyDown);
+    this.removeEventListener("keydown", this.hovercard.handleTriggerKeyDown);
     this.removeEventListener("click", this.handleClick);
     this.removeEventListener(SESSION_MENU_OPEN_EVENT, this.handleSessionMenuOpen);
     this.sessionLinkTitler.disconnect();
@@ -177,7 +180,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       return;
     }
     this.progressCards = sessionProgressCardsForGateway(this.applicationGateway);
-    this.stopProgressCardUpdates = this.progressCards.subscribe(this.handleProgressCardUpdate);
+    this.stopProgressCardUpdates = this.progressCards.subscribe(this.handleCardUpdate);
   }
 
   private disconnectStore(): void {
@@ -190,26 +193,12 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     this.releasePullRequestStore();
   }
 
-  private readonly handleProgressCardUpdate = () => {
-    const session = this.activeSession;
-    if (!session || !this.open || !this.hovercard.held) {
-      return;
-    }
-    const card = this.progressCards?.get(session);
-    if (card !== undefined) {
-      this.lastProgressCard = card;
-    }
-    this.showCurrent();
-  };
-
   private readonly handleSessionUpdate = () => {
     this.sessionLinkTitler.refresh();
-    if (this.open && this.hovercard.held) {
-      this.showCurrent();
-    }
+    this.handleCardUpdate();
   };
 
-  private readonly handlePullRequestUpdate = () => {
+  private readonly handleCardUpdate = () => {
     if (this.open && this.hovercard.held) {
       this.showCurrent();
     }
@@ -240,7 +229,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   };
 
   private readonly handleFocusIn = (event: FocusEvent) => {
-    if (this.suppressFocusOpen) {
+    if (this.hovercard.restoringFocus) {
       return;
     }
     const target = sessionProgressHoverTargetFromEvent(event);
@@ -264,21 +253,6 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     }
     this.hovercard.focusInside = false;
     this.hovercard.scheduleClose();
-  };
-
-  private readonly handleKeyDown = (event: KeyboardEvent) => {
-    if (event.key === "Escape") {
-      this.close();
-      return;
-    }
-    if (event.key !== "Tab" || event.shiftKey || event.target !== this.activeTrigger) {
-      return;
-    }
-    const first = this.cardFocusables()[0];
-    if (first) {
-      event.preventDefault();
-      first.focus();
-    }
   };
 
   private readonly handleClick = (event: Event) => {
@@ -390,7 +364,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     }
     this.releasePullRequestStore();
     this.pullRequests = sessionPullRequestsForGateway(gateway);
-    this.stopPullRequestUpdates = this.pullRequests.subscribe(this.handlePullRequestUpdate);
+    this.stopPullRequestUpdates = this.pullRequests.subscribe(this.handleCardUpdate);
     this.pullRequests.watch(this, [sessionKey], { foreground: true });
   }
 
@@ -419,39 +393,37 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       this.lastProgressCard = currentProgressCard;
     }
     const gateway = this.applicationGateway;
-    const channelAvatarAuth = {
-      authTokens: gateway
-        ? resolveControlUiAuthCandidates({
-            hello: gateway.snapshot.hello,
-            settings: { token: gateway.connection.token },
-            password: gateway.connection.password,
-          })
-        : [],
-      authReady: Boolean(
-        gateway &&
-        (gateway.snapshot.hello ||
-          gateway.connection.token.trim() ||
-          gateway.connection.password.trim()),
-      ),
-    };
+    const channelAvatarAuth = resolveControlUiAvatarAuth({
+      hello: gateway?.snapshot.hello,
+      settings: gateway?.connection,
+      password: gateway?.connection.password,
+    });
     const revision = JSON.stringify({
       progress: this.lastProgressCard?.revision ?? null,
       pullRequests: pullRequests
-        ? { branch: pullRequests.branch, pullRequests: pullRequests.pullRequests }
+        ? {
+            branch: pullRequests.branch,
+            pullRequests: pullRequests.pullRequests,
+            status: pullRequests.status,
+          }
         : null,
       row: sidebarRow
         ? {
             label: sidebarRow.label,
+            color: sidebarRow.color,
+            attention: sidebarRow.attention,
             boardFace: sidebarRow.boardFace,
             hasAutomation: sidebarRow.hasAutomation,
             hasActiveRun: sidebarRow.hasActiveRun,
             channelAvatarUrl: sidebarRow.channelAvatarUrl,
+            channelPresentation: sidebarRow.channelPresentation,
             lastMessagePreview: sidebarRow.lastMessagePreview,
             createdActor: sidebarRow.createdActor,
             participants: sidebarRow.participants,
             expandedParticipants: sidebarRow.expandedParticipants,
             participantCount: sidebarRow.participantCount,
             workContext: sidebarRow.workContext,
+            placementMachine: sidebarRow.placementMachine,
             createdAt: sidebarRow.createdAt,
             startedAt: sidebarRow.startedAt,
             updatedAt: sidebarRow.updatedAt,
@@ -469,7 +441,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
         ? document.activeElement
         : null;
     const focusedCardIndex = focusedCardElement
-      ? this.cardFocusables().indexOf(focusedCardElement)
+      ? this.hovercard.focusables().indexOf(focusedCardElement)
       : -1;
     const focusedHref =
       focusedCardElement instanceof HTMLAnchorElement ? focusedCardElement.href : null;
@@ -496,6 +468,18 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
         selfUserId: this.applicationContext?.gateway.snapshot.selfUser?.id,
         avatarAuth: channelAvatarAuth,
         personActivity: this.personActivity(),
+        automationLink: this.applicationContext
+          ? {
+              href: `${pathForRoute("cron", this.applicationContext.basePath)}?${new URLSearchParams({ session: sessionKey, agent: session.agentId! })}`,
+              navigate: () => {
+                const context = this.applicationContext;
+                this.close();
+                context?.navigate("cron", {
+                  search: `?${new URLSearchParams({ session: sessionKey, agent: session.agentId! })}`,
+                });
+              },
+            }
+          : undefined,
         pullRequests,
         progressCard: this.lastProgressCard,
       }),
@@ -509,7 +493,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     }
     if (mountedCard) {
       if (focusedCardElement && !card.contains(document.activeElement)) {
-        const focusables = this.cardFocusables();
+        const focusables = this.hovercard.focusables();
         const nextFocused =
           (focusedHref
             ? focusables.find(
@@ -520,20 +504,14 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
           nextFocused.focus({ preventScroll: true });
         } else {
           this.hovercard.cardFocusInside = false;
-          this.suppressFocusOpen = true;
-          this.activeTrigger?.focus({ preventScroll: true });
-          this.suppressFocusOpen = false;
+          this.hovercard.returnFocus(this.activeTrigger);
           this.hovercard.focusInside = document.activeElement === this.activeTrigger;
         }
       }
       this.hovercard.position();
       return;
     }
-    card.addEventListener("pointerenter", this.handleCardPointerEnter);
-    card.addEventListener("pointerleave", this.handleCardPointerLeave);
-    card.addEventListener("focusin", this.handleCardFocusIn);
-    card.addEventListener("focusout", this.handleCardFocusOut);
-    card.addEventListener("keydown", this.handleCardKeyDown);
+    card.addEventListener("pointerleave", this.hovercard.handleCardPointerLeave);
     this.hovercard.mount(target, card, sessionProgressHoverPlacementForTarget(target), false, () =>
       render(nothing, card),
     );
@@ -545,50 +523,6 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
         }
       }, 0);
     }
-  }
-
-  private readonly handleCardPointerEnter = () => {
-    this.hovercard.pointerOverCard = true;
-    this.hovercard.clearClose();
-  };
-
-  private readonly handleCardPointerLeave = () => {
-    this.hovercard.pointerOverCard = false;
-    this.hovercard.scheduleClose();
-  };
-
-  private readonly handleCardFocusIn = () => {
-    this.hovercard.cardFocusInside = true;
-    this.hovercard.clearClose();
-  };
-
-  private readonly handleCardFocusOut = (event: FocusEvent) => {
-    if (event.relatedTarget instanceof Node && this.hovercard.card?.contains(event.relatedTarget)) {
-      return;
-    }
-    this.hovercard.cardFocusInside = false;
-    this.hovercard.scheduleClose();
-  };
-
-  private readonly handleCardKeyDown = (event: KeyboardEvent) => {
-    if (event.key !== "Escape" && event.key !== "Tab") {
-      return;
-    }
-    const focusables = this.cardFocusables();
-    const edge = event.shiftKey ? focusables[0] : focusables.at(-1);
-    if (event.key === "Tab" && document.activeElement !== edge) {
-      return;
-    }
-    event.preventDefault();
-    const trigger = this.activeTrigger;
-    this.close();
-    this.suppressFocusOpen = true;
-    trigger?.focus({ preventScroll: true });
-    this.suppressFocusOpen = false;
-  };
-
-  private cardFocusables(): HTMLElement[] {
-    return this.hovercard.focusables();
   }
 
   private personActivity(): PersonActivityRouting | undefined {

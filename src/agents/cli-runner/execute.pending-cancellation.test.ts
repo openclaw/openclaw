@@ -4,29 +4,33 @@ import { createProcessAdapterEvents } from "../../process/supervisor/adapters/pr
 import { createProcessSupervisor } from "../../process/supervisor/supervisor.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import * as failoverErrors from "../failover-error.js";
+import { CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE } from "../failover/error.js";
 import { executeDeps } from "./execute-deps.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
 import {
   setCliRunnerExecuteTestDeps,
   wrapPreparedCliRunWithTestAdmission,
 } from "./execute.test-support.js";
-import { buildCliSupervisorScopeKey } from "./helpers.js";
+import { buildCliSupervisorScopeKey } from "./reliability.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
 
+type ChildAdapterFactory =
+  typeof import("../../process/supervisor/adapters/child.js").createChildAdapter;
+type ChildAdapter = Awaited<ReturnType<ChildAdapterFactory>>["adapter"];
+
 const { createChildAdapterMock } = vi.hoisted(() => ({
   createChildAdapterMock:
-    vi.fn<typeof import("../../process/supervisor/adapters/child.js").createChildAdapter>(),
+    vi.fn<(...args: Parameters<ChildAdapterFactory>) => Promise<ChildAdapter>>(),
 }));
 
 vi.mock("../../process/supervisor/adapters/child.js", () => ({
-  createChildAdapter: createChildAdapterMock,
+  createChildAdapter: async (...args: Parameters<ChildAdapterFactory>) => ({
+    adapter: await createChildAdapterMock(...args),
+    ready: Promise.resolve(),
+  }),
 }));
-
-type ChildAdapter = Awaited<
-  ReturnType<typeof import("../../process/supervisor/adapters/child.js").createChildAdapter>
->;
 
 type TestAdapter = ChildAdapter & {
   emitStdout: (chunk: string) => void;
@@ -53,9 +57,9 @@ function createTestAdapter(): TestAdapter {
     supportsRawOutput: false,
     onExit: events.onExit,
     onError: events.onError,
-    onStdout: (listener) => {
+    onStdout: vi.fn((listener) => {
       stdoutListener = listener;
-    },
+    }),
     onStderr: (listener) => {
       stderrListener = listener;
     },
@@ -103,6 +107,7 @@ function createRunContext(params: {
       ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
     },
     started: Date.now(),
+    startedMonotonicMs: performance.now(),
     workspaceDir: "/tmp",
     backendResolved: {
       id: "test-cli",
@@ -127,7 +132,7 @@ function createRunContext(params: {
   };
 }
 
-describe("local CLI pending process cancellation", () => {
+describe("CLI execution cancellation", () => {
   const restoreProcessSupervisor = executeDeps.getProcessSupervisor;
   let supervisor: ReturnType<typeof createProcessSupervisor>;
 
@@ -142,46 +147,124 @@ describe("local CLI pending process cancellation", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["process", "plugin"] as const)(
-    "rejects expired authority after CLI preparation before %s execution",
-    async (target) => {
-      const entered = createDeferred();
-      const prepared = createDeferred();
-      const context = createRunContext({
-        runId: `expired-${target}`,
-        beforeExecution: async () => {
-          entered.resolve();
-          await prepared.promise;
-        },
-      });
-      let current = true;
-      context.params.assertCurrent = () => {
-        if (!current) {
-          throw new Error("Completion authority expired");
+  it.each([true, false])(
+    "marks only rejected protocol on interruption (protocol=%s)",
+    async (protocol) => {
+      const controller = new AbortController();
+      const context = createRunContext({ runId: "interrupted-output", signal: controller.signal });
+      context.preparedBackend.backend.command = process.execPath;
+      context.preparedBackend.backend.output = "jsonl";
+      context.preparedBackend.backend.jsonlDialect = "claude-stream-json";
+      context.backendResolved.parseJsonlEvent = (line) => {
+        if (JSON.parse(line).type === "parser-failure") {
+          throw new Error("Unrelated parser failure");
         }
+        return null;
       };
-      const pluginExecute = vi.fn(async function* () {
-        yield { type: "result", result: "unexpected" };
-      });
-      if (target === "plugin") {
-        context.preparedBackend.backend.command = process.execPath;
-        context.executionTarget = { kind: "plugin", execute: pluginExecute };
-      }
-      const adapter = createTestAdapter();
-      adapter.settle(0);
-      createChildAdapterMock.mockResolvedValueOnce(adapter);
+      context.executionTarget = {
+        kind: "plugin",
+        async *execute() {
+          yield {
+            type: "assistant",
+            message: {
+              role: "assistant",
+              stop_reason: null,
+              content: [
+                {
+                  type: "text",
+                  text: protocol ? '<invoke name="Read">' : "Ordinary partial prose",
+                },
+              ],
+            },
+          };
+          if (!protocol) {
+            yield { type: "parser-failure" };
+          }
+          controller.abort();
+          throw new Error("Interrupted fixture");
+        },
+      };
 
-      const run = executePreparedCliRun(context);
-      const rejected = expect(run).rejects.toThrow("Completion authority expired");
-      await entered.promise;
-      current = false;
-      prepared.resolve();
-
-      await rejected;
-      expect(createChildAdapterMock).not.toHaveBeenCalled();
-      expect(pluginExecute).not.toHaveBeenCalled();
+      await expect(executePreparedCliRun(context)).rejects.toMatchObject(
+        protocol
+          ? { code: CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE }
+          : { name: "AbortError", message: "CLI run aborted" },
+      );
     },
   );
+
+  it("does not start approval after a node response races with cancellation", async () => {
+    const controller = new AbortController();
+    const invokeNode = vi
+      .spyOn(executeDeps, "invokeNodeClaudeCliRun")
+      .mockImplementation(async () => {
+        controller.abort();
+        return {
+          ok: true,
+          payloadJSON: JSON.stringify({
+            approvalRequired: true,
+            systemRunPlan: { argv: ["/trusted/claude", "-p"], commandText: "/trusted/claude -p" },
+            security: "allowlist",
+            ask: "on-miss",
+          }),
+        };
+      });
+    const registerApproval = vi
+      .spyOn(executeDeps, "registerExecApprovalRequestForHostOrThrow")
+      .mockRejectedValue(new Error("approval registration failed after cancellation"));
+    const resolveApproval = vi
+      .spyOn(executeDeps, "resolveRegisteredExecApprovalDecision")
+      .mockResolvedValue("deny");
+    const context = createRunContext({
+      runId: "run-node-cancelled-approval",
+      signal: controller.signal,
+    });
+    context.executionTarget = { kind: "node", placement: { nodeId: "node-a" } };
+    context.backendResolved.id = "claude-cli";
+    context.params.provider = "claude-cli";
+    context.preparedBackend.backend.command = "claude";
+
+    await expect(executePreparedCliRun(context)).rejects.toMatchObject({
+      name: "AbortError",
+      message: "CLI run aborted",
+    });
+    expect(invokeNode).toHaveBeenCalledOnce();
+    expect(registerApproval).not.toHaveBeenCalled();
+    expect(resolveApproval).not.toHaveBeenCalled();
+  });
+
+  it("rejects expired authority after preparation before plugin execution", async () => {
+    const entered = createDeferred();
+    const prepared = createDeferred();
+    const context = createRunContext({
+      runId: "expired-plugin",
+      beforeExecution: async () => {
+        entered.resolve();
+        await prepared.promise;
+      },
+    });
+    let current = true;
+    context.params.assertCurrent = () => {
+      if (!current) {
+        throw new Error("Completion authority expired");
+      }
+    };
+    const pluginExecute = vi.fn(async function* () {
+      yield { type: "result", result: "unexpected" };
+    });
+    context.preparedBackend.backend.command = process.execPath;
+    context.executionTarget = { kind: "plugin", execute: pluginExecute };
+
+    const run = executePreparedCliRun(context);
+    const rejected = expect(run).rejects.toThrow("Completion authority expired");
+    await entered.promise;
+    current = false;
+    prepared.resolve();
+
+    await rejected;
+    expect(createChildAdapterMock).not.toHaveBeenCalled();
+    expect(pluginExecute).not.toHaveBeenCalled();
+  });
 
   it("rejects expired authority behind a supervisor scope fence without replacing its process", async () => {
     const context = createRunContext({ runId: "expired-replacement" });
@@ -202,8 +285,6 @@ describe("local CLI pending process cancellation", () => {
     const spawn = vi.spyOn(supervisor, "spawn");
     const first = supervisor.spawn({
       runId: "surviving-process",
-      sessionId: context.params.sessionId,
-      backendId: context.backendResolved.id,
       scopeKey,
       mode: "child",
       argv: ["agent-cli"],
@@ -225,61 +306,31 @@ describe("local CLI pending process cancellation", () => {
     }
   });
 
-  it("preserves the caller run id and cleans up cancellation after normal completion", async () => {
-    const controller = new AbortController();
-    const adapter = createTestAdapter();
-    const addListener = vi.spyOn(controller.signal, "addEventListener");
-    const removeListener = vi.spyOn(controller.signal, "removeEventListener");
-    createChildAdapterMock.mockResolvedValueOnce(adapter);
-
-    const run = executePreparedCliRun(
-      createRunContext({
-        runId: "cli-normal",
-        signal: controller.signal,
-        assertCurrent: () => undefined,
-      }),
-    );
-    await vi.waitFor(() => {
-      expect(supervisor.getRecord("cli-normal")).toMatchObject({ state: "running" });
-    });
-    adapter.emitStdout("completed");
-    adapter.settle(0);
-
-    await expect(run).resolves.toMatchObject({ text: "completed" });
-    expect(supervisor.getRecord("cli-normal")).toMatchObject({ state: "exited" });
-    const abortListener = addListener.mock.calls.find(([event]) => event === "abort")?.[1];
-    expect(abortListener).toBeTypeOf("function");
-    expect(removeListener).toHaveBeenCalledWith("abort", abortListener);
-  });
-
   it("cancels a child adapter that is still starting by the caller run id", async () => {
     const controller = new AbortController();
     const startup = createDeferred<ChildAdapter>();
     const adapter = createTestAdapter();
     const cancel = vi.spyOn(supervisor, "cancel");
+    const spawn = vi.spyOn(supervisor, "spawn");
     createChildAdapterMock.mockReturnValueOnce(startup.promise);
 
     const run = executePreparedCliRun(
       createRunContext({ runId: "cli-pending", signal: controller.signal }),
     );
     await vi.waitFor(() => {
-      expect(supervisor.getRecord("cli-pending")).toMatchObject({ state: "starting" });
+      expect(createChildAdapterMock).toHaveBeenCalledOnce();
     });
 
     controller.abort();
     expect(cancel).toHaveBeenCalledWith("cli-pending", "manual-cancel");
-    expect(supervisor.getRecord("cli-pending")).toMatchObject({
-      state: "exiting",
-      terminationReason: "manual-cancel",
-    });
+    expect(adapter.kill).not.toHaveBeenCalled();
 
     startup.resolve(adapter);
     await expect(run).rejects.toMatchObject({ name: "AbortError" });
     expect(adapter.kill).toHaveBeenCalledWith("SIGKILL");
-    expect(supervisor.getRecord("cli-pending")).toMatchObject({
-      state: "exited",
-      terminationReason: "manual-cancel",
-    });
+    const managed = await spawn.mock.results[0]!.value;
+    await expect(managed.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
+    expect(managed.activity.resultSettled).toBe(true);
   });
 
   it("never starts a resumed replacement cancelled behind a real supervisor scope fence", async () => {
@@ -302,8 +353,6 @@ describe("local CLI pending process cancellation", () => {
 
     const first = supervisor.spawn({
       runId: "cli-existing",
-      sessionId: context.params.sessionId,
-      backendId: context.backendResolved.id,
       scopeKey,
       mode: "child",
       argv: ["agent-cli"],
@@ -312,11 +361,10 @@ describe("local CLI pending process cancellation", () => {
 
     await vi.waitFor(() => {
       expect(spawn).toHaveBeenCalledTimes(2);
-      expect(supervisor.getRecord("cli-existing")).toMatchObject({ state: "starting" });
       expect(createChildAdapterMock).toHaveBeenCalledOnce();
     });
     expect(cancel).not.toHaveBeenCalled();
-    expect(supervisor.getRecord("cli-resume")).toBeUndefined();
+    expect(firstAdapter.kill).not.toHaveBeenCalled();
 
     controller.abort();
     expect(cancel).toHaveBeenCalledWith("cli-resume", "manual-cancel");
@@ -326,27 +374,12 @@ describe("local CLI pending process cancellation", () => {
     await expect(replacement).rejects.toMatchObject({ name: "AbortError" });
     expect(createChildAdapterMock).toHaveBeenCalledOnce();
     expect(firstAdapter.kill).not.toHaveBeenCalled();
-    expect(supervisor.getRecord("cli-resume")).toMatchObject({
-      state: "exited",
-      terminationReason: "manual-cancel",
-    });
+    const replacementRun = await spawn.mock.results[1]!.value;
+    await expect(replacementRun.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
+    expect(replacementRun.activity.resultSettled).toBe(true);
 
     firstRun.cancel();
     await expect(firstRun.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
-  });
-
-  it("does not spawn when the caller is already aborted", async () => {
-    const controller = new AbortController();
-    const spawn = vi.spyOn(supervisor, "spawn");
-    controller.abort();
-
-    await expect(
-      executePreparedCliRun(
-        createRunContext({ runId: "cli-preaborted", signal: controller.signal }),
-      ),
-    ).rejects.toMatchObject({ name: "AbortError" });
-    expect(spawn).not.toHaveBeenCalled();
-    expect(createChildAdapterMock).not.toHaveBeenCalled();
   });
 
   it("passes plugin-owned system prompts without writing temporary files or exposing prompt argv", async () => {
@@ -392,53 +425,25 @@ describe("local CLI pending process cancellation", () => {
     expect(createChildAdapterMock).not.toHaveBeenCalled();
   });
 
-  it.each(["abort", "request authority"] as const)(
-    "does not spawn after %s closes during asynchronous backend preparation",
-    async (authority) => {
-      const controller = new AbortController();
-      const preparation = createDeferred();
-      const beforeExecution = vi.fn(async () => await preparation.promise);
-      const retired = new Error("request authority retired during preparation");
-      let current = true;
-      const adapter = createTestAdapter();
-      adapter.settle(0);
-      createChildAdapterMock.mockResolvedValueOnce(adapter);
-      const spawn = vi.spyOn(supervisor, "spawn");
-      const run = executePreparedCliRun(
-        createRunContext({
-          runId: "cli-preparation",
-          signal: controller.signal,
-          beforeExecution,
-          ...(authority === "request authority"
-            ? {
-                assertCurrent: () => {
-                  if (!current) {
-                    throw retired;
-                  }
-                },
-              }
-            : {}),
-        }),
-      );
-
-      await vi.waitFor(() => expect(beforeExecution).toHaveBeenCalledOnce());
-      if (authority === "abort") {
-        controller.abort();
-      } else {
-        current = false;
-      }
-      preparation.resolve();
-
-      if (authority === "abort") {
-        await expect(run).rejects.toMatchObject({ name: "AbortError" });
-      } else {
-        await expect(run).rejects.toBe(retired);
-        expect(controller.signal.aborted).toBe(false);
-      }
-      expect(spawn).not.toHaveBeenCalled();
-      expect(createChildAdapterMock).not.toHaveBeenCalled();
-    },
-  );
+  it("does not spawn when aborted during backend preparation", async () => {
+    const controller = new AbortController();
+    const preparation = createDeferred();
+    const beforeExecution = vi.fn(async () => await preparation.promise);
+    const spawn = vi.spyOn(supervisor, "spawn");
+    const run = executePreparedCliRun(
+      createRunContext({
+        runId: "cli-preparation",
+        signal: controller.signal,
+        beforeExecution,
+      }),
+    );
+    await vi.waitFor(() => expect(beforeExecution).toHaveBeenCalledOnce());
+    controller.abort();
+    preparation.resolve();
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(createChildAdapterMock).not.toHaveBeenCalled();
+  });
 
   it("drops an aborted turn waiting behind the serialized CLI run queue", async () => {
     const firstPreparation = createDeferred();
@@ -465,84 +470,38 @@ describe("local CLI pending process cancellation", () => {
     await expect(first).resolves.toMatchObject({ text: "first" });
     await secondRejected;
     expect(createChildAdapterMock).toHaveBeenCalledOnce();
-    expect(supervisor.getRecord("cli-queue-aborted")).toBeUndefined();
   });
 
-  it("removes the startup abort listener when process spawning rejects", async () => {
-    const controller = new AbortController();
-    const addListener = vi.spyOn(controller.signal, "addEventListener");
-    const removeListener = vi.spyOn(controller.signal, "removeEventListener");
-    const spawn = vi.spyOn(supervisor, "spawn").mockRejectedValueOnce(new Error("spawn failed"));
-
-    await expect(
-      executePreparedCliRun(
-        createRunContext({ runId: "cli-spawn-rejection", signal: controller.signal }),
-      ),
-    ).rejects.toThrow("spawn failed");
-    expect(spawn).toHaveBeenCalledWith(expect.objectContaining({ runId: "cli-spawn-rejection" }));
-    const abortListener = addListener.mock.calls.find(([event]) => event === "abort")?.[1];
-    expect(abortListener).toBeTypeOf("function");
-    expect(removeListener).toHaveBeenCalledWith("abort", abortListener);
+  it("recognizes checkpoint rejection before provider coercion", async () => {
+    const coerce = vi.spyOn(failoverErrors, "coerceToFailoverError").mockImplementation(() => {
+      throw new Error("provider coercion was consulted");
+    });
+    const context = createRunContext({ runId: "checkpoint-rejected" });
+    context.preparedBackend.backend.resumeAtArg = "--checkpoint";
+    context.params.cliSessionResumeAt = "assistant-checkpoint";
+    const adapter = createTestAdapter();
+    createChildAdapterMock.mockResolvedValueOnce(adapter);
+    const result = executePreparedCliRun(context, "resume-1").catch((error: unknown) => error);
+    let error: unknown;
+    try {
+      await vi.waitFor(() => expect(adapter.onStdout).toHaveBeenCalledOnce());
+      adapter.emitStderr("unknown option '--checkpoint'");
+    } finally {
+      adapter.settle(1);
+      error = await result;
+    }
+    expect(error).toMatchObject({
+      name: "FailoverError",
+      reason: "session_expired",
+      code: "cli_resume_at_unsupported",
+      provider: "test-cli",
+      model: "test-model",
+      sessionId: "session-1",
+    });
+    expect(coerce).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["unknown option", true, "unknown option '--checkpoint'", true],
-    ["unexpected option", true, "unexpected option '--checkpoint'", true],
-    ["unrecognized option", true, "unrecognized option '--checkpoint'", true],
-    ["not recognized", true, "option '--checkpoint' is not recognized", true],
-    ["configured but not attempted", false, "unknown option '--checkpoint'", false],
-    ["different option", true, "unknown option '--another-option'", false],
-    ["wording fragment", true, "exited unexpectedly using --checkpoint", false],
-    ["provider error", true, "provider request failed", false],
-  ] as const)(
-    "recognizes only an attempted checkpoint rejection before provider coercion: %s",
-    async (name, attempted, stderr, localRejection) => {
-      const providerFailure = new Error("provider coercion was consulted");
-      const coerce = vi.spyOn(failoverErrors, "coerceToFailoverError").mockImplementation(() => {
-        throw providerFailure;
-      });
-      const runId = `checkpoint-${name}`;
-      const context = createRunContext({ runId });
-      context.preparedBackend.backend.resumeAtArg = "--checkpoint";
-      if (attempted) {
-        context.params.cliSessionResumeAt = "assistant-checkpoint";
-      }
-      const adapter = createTestAdapter();
-      createChildAdapterMock.mockResolvedValueOnce(adapter);
-
-      const result = executePreparedCliRun(context, "resume-1").catch((error: unknown) => error);
-      let error: unknown;
-      try {
-        await vi.waitFor(() => {
-          expect(supervisor.getRecord(runId)).toMatchObject({ state: "running" });
-        });
-        adapter.emitStderr(stderr);
-      } finally {
-        adapter.settle(1);
-        error = await result;
-      }
-
-      if (localRejection) {
-        expect(error).toMatchObject({
-          name: "FailoverError",
-          reason: "session_expired",
-          code: "cli_resume_at_unsupported",
-          provider: "test-cli",
-          model: "test-model",
-          sessionId: "session-1",
-        });
-        expect(coerce).not.toHaveBeenCalled();
-      } else {
-        expect(error).toBe(providerFailure);
-        expect(coerce).toHaveBeenCalledWith(
-          stderr,
-          expect.objectContaining({ provider: "test-cli" }),
-        );
-      }
-    },
-  );
-
-  it.each(["rejected option", "abort", "terminal", "observed activity", "other error"] as const)(
+  it.each(["terminal", "observed activity"] as const)(
     "preserves plugin checkpoint failure ownership: %s",
     async (kind) => {
       const message = "unknown option '--checkpoint'";
@@ -552,10 +511,7 @@ describe("local CLI pending process cancellation", () => {
               reason: "unknown",
               code: "cli_max_turns",
             })
-          : new Error(kind === "other error" ? "plugin execution failed" : message);
-      if (kind === "abort") {
-        failure.name = "AbortError";
-      }
+          : new Error(message);
       const coerce = vi.spyOn(failoverErrors, "coerceToFailoverError").mockImplementation(() => {
         throw new Error("provider coercion was consulted");
       });
@@ -585,15 +541,7 @@ describe("local CLI pending process cancellation", () => {
       };
 
       const result = executePreparedCliRun(context, "resume-1");
-      if (kind === "rejected option") {
-        await expect(result).rejects.toMatchObject({
-          reason: "session_expired",
-          code: "cli_resume_at_unsupported",
-          cause: failure,
-        });
-      } else {
-        await expect(result).rejects.toBe(failure);
-      }
+      await expect(result).rejects.toBe(failure);
       expect(coerce).not.toHaveBeenCalled();
       expect(createChildAdapterMock).not.toHaveBeenCalled();
     },

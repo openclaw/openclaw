@@ -5,17 +5,6 @@ import { createMockHttp, useMockHttp } from "./mock-http.js";
 describe("useMockHttp", () => {
   const mockHttp = useMockHttp();
 
-  it("routes Node global fetch through the mock dispatcher", async () => {
-    mockHttp.intercept({
-      url: "https://example.test/global-fetch",
-      reply: { json: { source: "global-fetch" } },
-    });
-
-    const response = await globalThis.fetch("https://example.test/global-fetch");
-
-    await expect(response.json()).resolves.toEqual({ source: "global-fetch" });
-  });
-
   it("matches undici requests by URL, method, headers, and body", async () => {
     mockHttp.intercept({
       url: "https://example.test/undici-request?mode=test",

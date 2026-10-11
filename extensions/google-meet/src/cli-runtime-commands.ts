@@ -1,11 +1,16 @@
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import type { GoogleMeetCliCommandContext } from "./cli-command-context.js";
+import {
+  callGoogleMeetRuntime,
+  resolveCliMeetingInput as resolveMeetingInput,
+  type GoogleMeetCliCommandContext,
+} from "./cli-command-context.js";
 import {
   callGoogleMeetGateway,
   parseGoogleMeetBrowserTransport,
   parseGoogleMeetMode,
   parseGoogleMeetTransport,
   parsePositiveNumber,
+  resolveCliJoinRequest,
   type JoinOptions,
   type RecoverTabOptions,
   type SetupOptions,
@@ -15,11 +20,9 @@ import {
   writeStdoutJson,
   writeStdoutLine,
 } from "./cli-shared.js";
-import type { GoogleMeetRuntime } from "./runtime.js";
 
 export function registerGoogleMeetProbeCommands(context: GoogleMeetCliCommandContext): void {
-  const params = context;
-  const { root, callGateway, operationTimeoutMs, resolveMeetingInput } = context;
+  const { root, operationTimeoutMs } = context;
 
   root
     .command("join")
@@ -31,17 +34,8 @@ export function registerGoogleMeetProbeCommands(context: GoogleMeetCliCommandCon
     .option("--pin <pin>", "Meet phone PIN; # is appended if omitted")
     .option("--dtmf-sequence <sequence>", "Explicit Twilio DTMF sequence")
     .action(async (url: string | undefined, options: JoinOptions) => {
-      const payload = {
-        url: resolveMeetingInput(params.config, url),
-        transport: parseGoogleMeetTransport(options.transport),
-        mode: parseGoogleMeetMode(options.mode),
-        message: options.message,
-        dialInNumber: options.dialInNumber,
-        pin: options.pin,
-        dtmfSequence: options.dtmfSequence,
-      };
+      const payload = resolveCliJoinRequest(resolveMeetingInput(context.config, url), options);
       const delegated = await callGoogleMeetGateway({
-        callGateway,
         method: "googlemeet.join",
         payload,
         timeoutMs: operationTimeoutMs,
@@ -51,7 +45,7 @@ export function registerGoogleMeetProbeCommands(context: GoogleMeetCliCommandCon
         writeStdoutJson(result.session ?? delegated.payload);
         return;
       }
-      const rt = await params.ensureRuntime();
+      const rt = await context.ensureRuntime();
       const result = await rt.join(payload);
       writeStdoutJson(result.session);
     });
@@ -68,23 +62,20 @@ export function registerGoogleMeetProbeCommands(context: GoogleMeetCliCommandCon
     )
     .action(async (url: string | undefined, options: JoinOptions) => {
       const payload = {
-        url: resolveMeetingInput(params.config, url),
+        url: resolveMeetingInput(context.config, url),
         transport: parseGoogleMeetTransport(options.transport),
         mode: parseGoogleMeetMode(options.mode),
         message: options.message,
       };
-      const delegated = await callGoogleMeetGateway({
-        callGateway,
-        method: "googlemeet.testSpeech",
-        payload,
-        timeoutMs: operationTimeoutMs,
-      });
-      if (delegated.ok) {
-        writeStdoutJson(delegated.payload);
-        return;
-      }
-      const rt = await params.ensureRuntime();
-      writeStdoutJson(await rt.testSpeech(payload));
+      writeStdoutJson(
+        await callGoogleMeetRuntime(
+          context,
+          "googlemeet.testSpeech",
+          payload,
+          (rt) => rt.testSpeech(payload),
+          operationTimeoutMs,
+        ),
+      );
     });
 
   root
@@ -94,45 +85,35 @@ export function registerGoogleMeetProbeCommands(context: GoogleMeetCliCommandCon
     .option("--timeout-ms <ms>", "How long to wait for fresh captions/transcript movement")
     .action(async (url: string | undefined, options: JoinOptions) => {
       const payload = {
-        url: resolveMeetingInput(params.config, url),
+        url: resolveMeetingInput(context.config, url),
         transport: parseGoogleMeetBrowserTransport(options.transport),
         timeoutMs: parsePositiveNumber(options.timeoutMs, "timeout-ms"),
       };
-      const delegated = await callGoogleMeetGateway({
-        callGateway,
-        method: "googlemeet.testListen",
-        payload,
-        timeoutMs: operationTimeoutMs,
-      });
-      if (delegated.ok) {
-        writeStdoutJson(delegated.payload);
-        return;
-      }
-      const rt = await params.ensureRuntime();
-      writeStdoutJson(await rt.testListen(payload));
+      writeStdoutJson(
+        await callGoogleMeetRuntime(
+          context,
+          "googlemeet.testListen",
+          payload,
+          (rt) => rt.testListen(payload),
+          operationTimeoutMs,
+        ),
+      );
     });
 }
 
 export function registerGoogleMeetSessionCommands(context: GoogleMeetCliCommandContext): void {
-  const params = context;
-  const { root, callGateway } = context;
+  const { root } = context;
 
   root
     .command("status")
     .argument("[session-id]", "Meet session ID")
     .option("--json", "Print JSON output", false)
     .action(async (sessionId?: string) => {
-      const delegated = await callGoogleMeetGateway({
-        callGateway,
-        method: "googlemeet.status",
-        payload: { sessionId },
-      });
-      if (delegated.ok) {
-        writeStdoutJson(delegated.payload);
-        return;
-      }
-      const rt = await params.ensureRuntime();
-      writeStdoutJson(await rt.status(sessionId));
+      writeStdoutJson(
+        await callGoogleMeetRuntime(context, "googlemeet.status", { sessionId }, (rt) =>
+          rt.status(sessionId),
+        ),
+      );
     });
 
   root
@@ -146,16 +127,12 @@ export function registerGoogleMeetSessionCommands(context: GoogleMeetCliCommandC
       if (options.since !== undefined && sinceIndex === undefined) {
         throw new Error("--since must be a non-negative safe integer");
       }
-      const delegated = await callGoogleMeetGateway({
-        callGateway,
-        method: "googlemeet.transcript",
-        payload: { sessionId, ...(sinceIndex === undefined ? {} : { sinceIndex }) },
-      });
-      const result = delegated.ok
-        ? (delegated.payload as Awaited<ReturnType<GoogleMeetRuntime["transcript"]>>)
-        : await (
-            await params.ensureRuntime()
-          ).transcript(sessionId, sinceIndex === undefined ? {} : { sinceIndex });
+      const result = await callGoogleMeetRuntime(
+        context,
+        "googlemeet.transcript",
+        { sessionId, ...(sinceIndex === undefined ? {} : { sinceIndex }) },
+        (rt) => rt.transcript(sessionId, sinceIndex === undefined ? {} : { sinceIndex }),
+      );
       if (!result.found) {
         throw new Error("session not found");
       }
@@ -181,8 +158,7 @@ export function registerGoogleMeetSessionCommands(context: GoogleMeetCliCommandC
 }
 
 export function registerGoogleMeetLifecycleCommands(context: GoogleMeetCliCommandContext): void {
-  const params = context;
-  const { root, callGateway } = context;
+  const { root } = context;
 
   root
     .command("recover-tab")
@@ -191,7 +167,7 @@ export function registerGoogleMeetLifecycleCommands(context: GoogleMeetCliComman
     .option("--transport <transport>", "Transport to inspect: chrome or chrome-node")
     .option("--json", "Print JSON output", false)
     .action(async (url: string | undefined, options: RecoverTabOptions) => {
-      const rt = await params.ensureRuntime();
+      const rt = await context.ensureRuntime();
       const result = await rt.recoverCurrentTab({
         url,
         transport: parseGoogleMeetBrowserTransport(options.transport),
@@ -210,19 +186,16 @@ export function registerGoogleMeetLifecycleCommands(context: GoogleMeetCliComman
     .option("--mode <mode>", "Mode to check: agent, bidi, or transcribe")
     .option("--json", "Print JSON output", false)
     .action(async (options: SetupOptions) => {
-      const rt = await params.ensureRuntime();
+      const rt = await context.ensureRuntime();
       const status = await rt.setupStatus({
         transport: parseGoogleMeetTransport(options.transport),
         mode: parseGoogleMeetMode(options.mode),
       });
       if (options.json) {
         writeStdoutJson(status);
-        if (!status.ok) {
-          process.exitCode = 1;
-        }
-        return;
+      } else {
+        writeSetupStatus(status);
       }
-      writeSetupStatus(status);
       if (!status.ok) {
         process.exitCode = 1;
       }
@@ -232,21 +205,9 @@ export function registerGoogleMeetLifecycleCommands(context: GoogleMeetCliComman
     .command("leave")
     .argument("<session-id>", "Meet session ID")
     .action(async (sessionId: string) => {
-      const delegated = await callGoogleMeetGateway({
-        callGateway,
-        method: "googlemeet.leave",
-        payload: { sessionId },
-      });
-      if (delegated.ok) {
-        const result = delegated.payload as { found?: boolean; browserLeft?: boolean };
-        if (!result.found) {
-          throw new Error("session not found");
-        }
-        writeLeaveResult(sessionId, result);
-        return;
-      }
-      const rt = await params.ensureRuntime();
-      const result = await rt.leave(sessionId);
+      const result = await callGoogleMeetRuntime(context, "googlemeet.leave", { sessionId }, (rt) =>
+        rt.leave(sessionId),
+      );
       if (!result.found) {
         throw new Error("session not found");
       }
@@ -258,27 +219,12 @@ export function registerGoogleMeetLifecycleCommands(context: GoogleMeetCliComman
     .argument("<session-id>", "Meet session ID")
     .argument("[message]", "Realtime instructions to speak now")
     .action(async (sessionId: string, message?: string) => {
-      const delegated = await callGoogleMeetGateway({
-        callGateway,
-        method: "googlemeet.speak",
-        payload: { sessionId, message },
-      });
-      if (delegated.ok) {
-        const result = delegated.payload as Awaited<ReturnType<GoogleMeetRuntime["speak"]>>;
-        if (!result.found) {
-          throw new Error("session not found");
-        }
-        if (!result.spoken) {
-          throw new Error(
-            result.session?.chrome?.health?.speechBlockedMessage ??
-              "session has no active realtime audio bridge",
-          );
-        }
-        writeStdoutLine("speaking on %s", sessionId);
-        return;
-      }
-      const rt = await params.ensureRuntime();
-      const result = await rt.speak(sessionId, message);
+      const result = await callGoogleMeetRuntime(
+        context,
+        "googlemeet.speak",
+        { sessionId, message },
+        (rt) => rt.speak(sessionId, message),
+      );
       if (!result.found) {
         throw new Error("session not found");
       }

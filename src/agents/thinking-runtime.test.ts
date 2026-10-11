@@ -35,6 +35,28 @@ describe("hasResolvedThinkingCatalogEntry", () => {
       }),
     ).toBe(true);
   });
+
+  it.each([
+    { nativeRuntime: undefined, agentRuntime: undefined, resolved: true },
+    { nativeRuntime: "native-test", agentRuntime: undefined, resolved: true },
+    { nativeRuntime: undefined, agentRuntime: "openclaw", resolved: true },
+    { nativeRuntime: "openclaw", agentRuntime: "openclaw", resolved: true },
+    { nativeRuntime: "native-test", agentRuntime: "openclaw", resolved: false },
+    { nativeRuntime: "native-test", agentRuntime: "native-test", resolved: true },
+  ])(
+    "keeps observed=$nativeRuntime capabilities scoped to selected=$agentRuntime",
+    ({ nativeRuntime, agentRuntime, resolved }) => {
+      const catalog = [{ provider: "fixture", id: "model", reasoning: true, nativeRuntime }];
+      expect(
+        hasResolvedThinkingCatalogEntry({
+          catalog,
+          provider: "fixture",
+          model: "model",
+          agentRuntime,
+        }),
+      ).toBe(resolved);
+    },
+  );
 });
 
 function openAIConfig(runtime: string): OpenClawConfig {
@@ -267,7 +289,7 @@ describe("resolveEffectiveAgentRuntime", () => {
     ).toBe("medium");
   });
 
-  it("clamps an unsupported candidate level without changing the requested value", () => {
+  it("preserves logical Ultra across candidate fallback", () => {
     const requested = "ultra" as const;
 
     expect(
@@ -277,7 +299,7 @@ describe("resolveEffectiveAgentRuntime", () => {
         modelId: "demo-model",
         level: requested,
       }),
-    ).toBe("high");
+    ).toBe("ultra");
     expect(requested).toBe("ultra");
   });
 
@@ -301,7 +323,7 @@ describe("resolveEffectiveAgentRuntime", () => {
         modelId: "gpt-5.6-luna",
         level: requested,
       }),
-    ).toBe("max");
+    ).toBe("ultra");
     expect(
       resolveCandidateThinkingLevel({
         cfg,

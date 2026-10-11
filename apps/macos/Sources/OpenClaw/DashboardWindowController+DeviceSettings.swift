@@ -31,7 +31,8 @@ extension DashboardWindowController {
             replyHandler(NSNull(), nil)
             return
         }
-        guard Self.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL) else {
+        guard ControlUIDocumentHost.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL)
+        else {
             replyHandler(nil, "The device settings document is no longer available.")
             return
         }
@@ -39,27 +40,30 @@ extension DashboardWindowController {
             request, sourceID: self.notificationSourceID, replyHandler: replyHandler)
     }
 
-    func applyDeviceSettingsRequest(_ request: DeviceSettingsRequest) async {
+    func applyDeviceSettingsRequest(_ request: DeviceSettingsRequest) async throws {
+        // Publish even a failed transition: recovery may have changed the hosting state.
+        defer { NotificationCenter.default.post(name: .openclawDeviceSettingsChanged, object: nil) }
         switch request {
         case .status:
             await self.publishDeviceSettings()
             await BrowserProfileImportModel.shared.refreshAvailability()
         case let .set(key, value):
-            await self.setDeviceSetting(key, value: value)
+            try await self.setDeviceSetting(key, value: value)
         case let .requestPermission(id):
-            _ = await PermissionManager.ensure([id.capability], interactive: true)
-            await PermissionMonitor.shared.refreshNow()
+            if let capability = id.capability {
+                _ = await PermissionManager.ensure([capability], interactive: true)
+            }
         case let .openSystemSettings(id):
-            SystemSettingsURLSupport.openFirst(SystemSettingsURLSupport.settingsCandidates(for: id.capability))
+            if let capability = id.capability {
+                SystemSettingsURLSupport.openFirst(SystemSettingsURLSupport.settingsCandidates(for: capability))
+            }
         case let .open(panel):
             await self.openDeviceSettingsPanel(panel)
         case .checkForUpdates:
             if self.updater?.isAvailable == true { self.updater?.checkForUpdates(nil) }
-        case .installChromeExtension:
-            break // The queued handler returns the installer result directly.
+        case .chromeExtensionSetup, .chromeExtensionStatus, .installChromeExtension:
+            break // The queued handler returns the canonical setup result directly.
         }
-        // All Gateway windows show settings for this Mac; mutations must update each open view.
-        NotificationCenter.default.post(name: .openclawDeviceSettingsChanged, object: nil)
     }
 
     private func requiredDeviceSettingConsent(
@@ -80,6 +84,7 @@ extension DashboardWindowController {
 
     private static let booleanStateSettings: [DeviceSettingKey: ReferenceWritableKeyPath<AppState, Bool>] = [
         .showDockIcon: \.showDockIcon,
+        .nativeExperienceEnabled: \.nativeExperienceEnabled,
         .iconAnimationsEnabled: \.iconAnimationsEnabled,
         .debugPaneEnabled: \.debugPaneEnabled,
         .peekabooBridgeEnabled: \.peekabooBridgeEnabled,
@@ -92,7 +97,7 @@ extension DashboardWindowController {
         .realtimeRelayEnabled: \.talkRealtimeRelayEnabled,
     ]
 
-    private func setDeviceSetting(_ key: DeviceSettingKey, value: DeviceSettingValue) async {
+    private func setDeviceSetting(_ key: DeviceSettingKey, value: DeviceSettingValue) async throws {
         let sourceID = self.notificationSourceID
         let consent = self.requiredDeviceSettingConsent(key, value: value)
         if let consent {
@@ -103,6 +108,10 @@ extension DashboardWindowController {
         guard self.canUseDeviceSettings(sourceID: sourceID),
               self.requiredDeviceSettingConsent(key, value: value) == consent else { return }
         switch (key, value) {
+        case let (.keepGatewayRunning, .boolean(enabled)):
+            try await GatewayProcessManager.shared.setKeepGatewayRunning(enabled) {
+                self.canUseDeviceSettings(sourceID: sourceID)
+            }
         case let (.wakeEnabled, .boolean(enabled)):
             await AppStateStore.shared.setVoiceWakeEnabled(enabled) { self.canUseDeviceSettings(sourceID: sourceID) }
         case let (.locationMode, .string(value)):
@@ -148,9 +157,14 @@ extension DashboardWindowController {
             if !enabled { CanvasManager.shared.hideAll() }
         case .cameraEnabled:
             defaults.set(enabled, forKey: cameraEnabledKey)
+        case .desktopSharingEnabled:
+            defaults.set(enabled, forKey: desktopSharingEnabledKey)
+            NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
         case .computerControlEnabled:
             defaults.set(enabled, forKey: computerControlEnabledKey)
             state.applyComputerControlHostState()
+        case .unattendedDesktopEnabled:
+            MacDesktopAvailabilityCoordinator.shared.setUnattendedEnabled(enabled)
         case .locationPrecise:
             defaults.set(enabled, forKey: locationPreciseKey)
         case .triggerChime:
@@ -183,9 +197,8 @@ extension DashboardWindowController {
             state.cookieSyncIntoProfile = value.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? "imported"
         case .microphone:
             let devices = VoiceWakeDeviceOptions.microphones()
-            guard devices.contains(where: { $0.id == value }) else { return }
-            state.voiceWakeMicName = MicRefreshSupport.selectedMicName(
-                selectedID: value, in: devices, uid: \.id, name: \.name)
+            guard let device = devices.first(where: { $0.id == value }) else { return }
+            state.voiceWakeMicName = value.isEmpty ? "" : device.name
             state.voiceWakeMicID = value
         case .localePrimary:
             guard VoiceWakeDeviceOptions.locales().contains(where: { $0.id == value }) else { return }
@@ -216,6 +229,7 @@ extension DashboardWindowController {
             guard !Task.isCancelled, self.isWindowOpen else { return }
             switch outcome {
             case .offering: self.show()
+            case .superseded: break
             case let .unavailable(title, message):
                 let alert = NSAlert()
                 alert.messageText = title
@@ -223,6 +237,8 @@ extension DashboardWindowController {
                 alert.addButton(withTitle: String(localized: "OK"))
                 if let window = self.window { alert.beginSheetModal(for: window, completionHandler: nil) }
             }
+        case .diagnostics, .licenses, .about, .watch:
+            break
         case .connection: AppNavigationActions.openConnection()
         case .gateways: AppNavigationActions.openConnection(tab: .gateways)
         case .debug:

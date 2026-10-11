@@ -1,40 +1,61 @@
 import { spawnSync } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { isProcessAlive, waitForDead, waitForPidFile } from "../../../test/helpers/process-wait.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../../test/helpers/fixture-receipts.js";
+import { isProcessAlive } from "../../../test/helpers/process-wait.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import { createWindowsOutputDecoder } from "../../infra/windows-encoding.js";
 import { getWindowsCmdExePath } from "../../infra/windows-install-roots.js";
 import { killPidIfAlive } from "../../test-utils/process-tree.js";
+import { processProbeEntrypoints } from "../process-probes-runtime.test-support.js";
 import { createProcessSupervisor } from "./supervisor.js";
 import type { ManagedRun } from "./types.js";
 
 const activePids = new Set<number>();
+const activeSupervisors = new Set<ReturnType<typeof createProcessSupervisor>>();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 
 afterEach(async () => {
   for (const pid of activePids) {
     killPidIfAlive(pid);
   }
-  await Promise.all([...activePids].map((pid) => waitForDead(pid, 5_000).catch(() => {})));
+  await Promise.all([...activeSupervisors].map((supervisor) => supervisor.shutdown()));
   activePids.clear();
+  activeSupervisors.clear();
 });
 
 async function createDescendantScope(
   options: { inheritLineage?: boolean; oneShot?: boolean; ignoreTerm?: boolean } = {},
 ) {
   const cwd = tempDirs.make("openclaw-anchored-shell-");
-  const descendantPath = path.join(cwd, "descendant.cjs");
+  const descendantPath = path.join(cwd, "descendant.mjs");
   const descendantPidPath = path.join(cwd, "descendant.pid");
   const releasePath = path.join(cwd, "descendant.release");
   const rootPath = path.join(cwd, "root.cjs");
   await writeFile(
     descendantPath,
     `
-      const { existsSync, writeFileSync } = require("node:fs");
+      import { existsSync, writeFileSync } from "node:fs";
+      ${fixtureReceiptClientSource(receipts.endpoint)}
       ${options.ignoreTerm ? 'process.on("SIGTERM", () => {});' : ""}
       const releaseTimer = setInterval(() => {
         if (existsSync(process.argv[2])) {
@@ -42,6 +63,8 @@ async function createDescendantScope(
         }
       }, 20);
       writeFileSync(process.argv[3], String(process.pid));
+      sendReceipt(process.argv[3], "ready");
+      process.send?.("ready");
     `,
     "utf8",
   );
@@ -96,21 +119,21 @@ async function createDescendantScope(
       `
         const { spawn } = require("node:child_process");
         const child = spawn(process.execPath, [${JSON.stringify(descendantPath)}, ${JSON.stringify(releasePath)}, ${JSON.stringify(descendantPidPath)}], {
-          stdio: ${JSON.stringify(options.inheritLineage === false ? ["ignore", "ignore", "ignore"] : ["ignore", "ignore", "ignore", 3])},
+          stdio: ${JSON.stringify(options.inheritLineage === false ? ["ignore", "ignore", "ignore", "ipc"] : ["ignore", "ignore", "ignore", 3, "ipc"])},
         });
-        child.unref();
-        const ready = setInterval(() => {
-          if (!require("node:fs").existsSync(${JSON.stringify(descendantPidPath)})) return;
-          clearInterval(ready);
+        child.once("message", () => {
+          child.disconnect();
+          child.unref();
           ${fragmentedOutputFixture()}
-        }, 10);
+        });
       `,
       "utf8",
     );
   }
   const supervisor = createProcessSupervisor();
+  activeSupervisors.add(supervisor);
   const scopeKey = `anchored-shell:${cwd}`;
-  const cleanup = supervisor.acquireScopeCleanup(scopeKey, { requireProcessTree: true });
+  const cleanup = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
   const run = await supervisor.spawn({
     ...(options.oneShot
       ? {
@@ -119,8 +142,6 @@ async function createDescendantScope(
           stdinMode: "pipe-closed" as const,
         }
       : { mode: "anchored-shell" as const, command: "node root.cjs" }),
-    sessionId: "anchored-shell-real",
-    backendId: "anchored-shell-real",
     scopeKey,
     cwd,
     env:
@@ -137,7 +158,31 @@ async function createDescendantScope(
     supervisor,
     scopeKey,
     cleanup,
-    readPid: () => waitForPidFile(descendantPidPath, 5_000),
+    readPid: async (signal: AbortSignal) => {
+      // The Windows root may exit before native child boot; readiness belongs to the descendant.
+      const ready = receipts.waitFor(descendantPidPath, "ready");
+      await withinTest(
+        process.platform === "win32"
+          ? ready
+          : Promise.race([
+              ready,
+              run.wait().then(
+                () => {
+                  if (!existsSync(descendantPidPath)) {
+                    throw new Error(`timeout waiting for pid in ${descendantPidPath}`);
+                  }
+                },
+                (error: unknown) => {
+                  if (!existsSync(descendantPidPath)) {
+                    throw error;
+                  }
+                },
+              ),
+            ]),
+        signal,
+      );
+      return Number(await readFile(descendantPidPath, "utf8"));
+    },
     release: () => writeFile(releasePath, "", "utf8"),
   };
 }
@@ -155,7 +200,7 @@ function fragmentedOutputFixture(): string {
   `;
 }
 
-async function expectPending(promise: Promise<void>) {
+async function expectPending<T>(promise: Promise<T>) {
   const settled = await Promise.race([
     promise.then(() => true),
     new Promise<false>((resolve) => {
@@ -166,81 +211,115 @@ async function expectPending(promise: Promise<void>) {
 }
 
 describe("supervisor anchored shell real process ownership", () => {
-  it.skipIf(process.platform === "win32").each([
-    { oneShot: false, ignoreTerm: false },
-    { oneShot: true, ignoreTerm: false },
-    { oneShot: true, ignoreTerm: true },
-  ])(
-    "observes children that closed inherited descriptors (oneShot=$oneShot, ignores TERM=$ignoreTerm)",
-    async ({ oneShot, ignoreTerm }) => {
-      const fixture = await createDescendantScope({ inheritLineage: false, oneShot, ignoreTerm });
-      const pid = await fixture.readPid();
-      activePids.add(pid);
+  it.skipIf(process.platform === "win32")(
+    "keeps the root command alive when it closes its inherited lineage descriptor",
+    async () => {
+      const supervisor = createProcessSupervisor();
+      const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+        'require("node:fs").closeSync(3); setTimeout(() => process.stdout.write("SURVIVED\\n"), 300)',
+      )}`;
+      const run = await supervisor.spawn({ mode: "anchored-shell", command });
       try {
-        await expect(fixture.run.wait()).resolves.toMatchObject({ exitCode: 0, exitSignal: null });
-        const cleanup = fixture.cleanup();
-        if (ignoreTerm) {
-          await expect(cleanup).rejects.toThrow("cleanup identity lost");
-        } else {
-          await cleanup;
-          expect(isProcessAlive(pid)).toBe(false);
-        }
-        await waitForDead(pid, 5_000);
+        await expect(run.wait()).resolves.toMatchObject({
+          exitCode: 0,
+          exitSignal: null,
+          stdout: "SURVIVED\n",
+        });
+        await run.waitForExtinction!();
       } finally {
-        await fixture.release();
-        killPidIfAlive(pid);
-        await waitForDead(pid, 5_000);
-        if (ignoreTerm) {
-          await expect(fixture.supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
-        } else {
-          await fixture.supervisor.shutdown();
-        }
+        await supervisor.shutdown();
       }
     },
   );
-  it.each(["inherited", "replacement", "empty"] as const)(
-    "completes an otherwise idle host with %s command environment",
-    async (environment) => {
-      const cwd = tempDirs.make("openclaw-anchored-shell-idle-");
-      const hostPath = path.join(cwd, "host.mts");
-      const supervisorUrl = new URL("./supervisor.ts", import.meta.url).href;
-      let command =
-        'printf "%s\\n" "${OPENCLAW_TEST_PARENT_ENV-absent}" "${OPENCLAW_TEST_CHILD_ENV-absent}"';
-      if (process.platform === "win32") {
-        const commandPath = path.join(cwd, "environment.cmd");
-        await writeFile(
-          commandPath,
-          "@echo off\r\nif defined OPENCLAW_TEST_PARENT_ENV (echo parent) else (echo absent)\r\nif defined OPENCLAW_TEST_CHILD_ENV (echo child) else (echo absent)\r\n",
-        );
-        command = `"${commandPath}"`;
-      }
+
+  it.skipIf(process.platform !== "win32")(
+    "keeps anchored Windows commands console-free",
+    async () => {
+      const cwd = tempDirs.make("openclaw-anchored-shell-console-");
+      const koffiPath = createRequire(import.meta.url).resolve("koffi");
       await writeFile(
-        hostPath,
+        path.join(cwd, "console.cjs"),
         `
-          const { createProcessSupervisor } = await import(${JSON.stringify(supervisorUrl)});
-          const supervisor = createProcessSupervisor();
-          const environment = ${JSON.stringify(environment)};
-          const run = await supervisor.spawn({
-            mode: "anchored-shell",
-            command: ${JSON.stringify(command)},
-            sessionId: "idle-host",
-            backendId: "idle-host",
-            ...(environment === "inherited" ? {} : {
-              env: environment === "empty" ? {} : { OPENCLAW_TEST_CHILD_ENV: "child" },
-            }),
-          });
-          try {
-            const result = await run.wait();
-            await run.waitForExtinction();
-            console.log(JSON.stringify(result));
-          } finally {
-            await supervisor.shutdown();
-          }
-        `,
+        const koffi = require(${JSON.stringify(koffiPath)});
+        const kernel32 = koffi.load("kernel32.dll");
+        const getConsoleWindow = kernel32.func("__stdcall", "GetConsoleWindow", "void *", []);
+        process.stdout.write(JSON.stringify({ hasConsole: Boolean(getConsoleWindow()) }));
+        process.stderr.write("owned-console-stderr");
+        process.exitCode = 23;
+      `,
         "utf8",
       );
-      // A separate host has no Vitest timers or IPC keeping admission alive.
-      const host = spawnSync(process.execPath, ["--import", "tsx", hostPath], {
+      const supervisor = createProcessSupervisor();
+      try {
+        const run = await supervisor.spawn({
+          mode: "anchored-shell",
+          command: `"${process.execPath}" console.cjs`,
+          cwd,
+        });
+        const result = await run.wait();
+        await run.waitForExtinction!();
+        expect(result).toMatchObject({
+          reason: "exit",
+          exitCode: 23,
+          stderr: "owned-console-stderr",
+        });
+        expect(JSON.parse(result.stdout), "PR138751_UNEXPECTED_CONSOLE").toEqual({
+          hasConsole: false,
+        });
+      } finally {
+        await supervisor.shutdown();
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32").for([
+    { oneShot: false, ignoreTerm: false },
+    { oneShot: true, ignoreTerm: true },
+  ])(
+    "observes children that closed inherited descriptors (oneShot=$oneShot, ignores TERM=$ignoreTerm)",
+    async ({ oneShot, ignoreTerm }, { signal }) => {
+      const fixture = await createDescendantScope({ inheritLineage: false, oneShot, ignoreTerm });
+      const pid = await fixture.readPid(signal);
+      activePids.add(pid);
+      try {
+        await expect(withinTest(fixture.run.wait(), signal)).resolves.toMatchObject({
+          exitCode: 0,
+          exitSignal: null,
+        });
+        const cleanup = fixture.cleanup();
+        await withinTest(cleanup, signal);
+        expect(isProcessAlive(pid)).toBe(false);
+      } finally {
+        await fixture.release();
+        killPidIfAlive(pid);
+        await fixture.run.waitForExtinction!();
+        await fixture.supervisor.shutdown();
+      }
+    },
+  );
+  it("completes an otherwise idle host with a replacement command environment", async () => {
+    const cwd = tempDirs.make("openclaw-anchored-shell-idle-");
+    let command =
+      'printf "%s\\n" "${OPENCLAW_TEST_PARENT_ENV-absent}" "${OPENCLAW_TEST_CHILD_ENV-absent}"';
+    if (process.platform === "win32") {
+      const commandPath = path.join(cwd, "environment.cmd");
+      await writeFile(
+        commandPath,
+        "@echo off\r\nif defined OPENCLAW_TEST_PARENT_ENV (echo parent) else (echo absent)\r\nif defined OPENCLAW_TEST_CHILD_ENV (echo child) else (echo absent)\r\n",
+      );
+      command = `"${commandPath}"`;
+    }
+    // A separate host has no Vitest timers or IPC keeping admission alive.
+    const host = spawnSync(
+      process.execPath,
+      [
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(processProbeEntrypoints.idleSupervisor),
+        ),
+        "replacement",
+        command,
+      ],
+      {
         env: {
           ...process.env,
           OPENCLAW_TEST_PARENT_ENV: "parent",
@@ -248,108 +327,90 @@ describe("supervisor anchored shell real process ownership", () => {
         },
         encoding: "utf8",
         timeout: 10_000,
-      });
-      expect(host.error).toBeUndefined();
-      expect(host.status, host.stderr).toBe(0);
-      const result = JSON.parse(host.stdout);
-      expect({ ...result, stdout: result.stdout.replaceAll("\r\n", "\n") }).toMatchObject({
-        reason: "exit",
-        exitCode: 0,
-        stdout:
-          environment === "inherited"
-            ? "parent\nabsent\n"
-            : environment === "replacement"
-              ? "absent\nchild\n"
-              : "absent\nabsent\n",
-      });
-    },
-  );
+      },
+    );
+    expect(host.error).toBeUndefined();
+    expect(host.status, host.stderr).toBe(0);
+    const result = JSON.parse(host.stdout);
+    expect({ ...result, stdout: result.stdout.replaceAll("\r\n", "\n") }).toMatchObject({
+      reason: "exit",
+      exitCode: 0,
+      stdout: "absent\nchild\n",
+    });
+  });
 
-  it.each(["exit", "cancel"] as const)(
-    "keeps a replacement's status independent of an older live child's %s",
-    async (completion) => {
-      const supervisor = createProcessSupervisor();
-      const runs: ManagedRun[] = [];
-      const oldOutput = createDeferred();
-      const spawn = async (backendId: string) => {
-        const ready = createDeferred();
-        const run = await supervisor.spawn({
-          mode: "child",
-          runId: "shared-correlation",
-          sessionId: "overlapping-children",
-          backendId,
-          scopeKey: backendId,
-          argv: [
-            process.execPath,
-            "-e",
-            `
+  it("keeps a replacement's status independent of an older live child's exit", async () => {
+    const supervisor = createProcessSupervisor();
+    const runs: ManagedRun[] = [];
+    const oldOutput = createDeferred();
+    const spawn = async (scopeKey: string) => {
+      const ready = createDeferred();
+      const run = await supervisor.spawn({
+        mode: "child",
+        runId: "shared-correlation",
+        scopeKey,
+        argv: [
+          process.execPath,
+          "-e",
+          `
               process.stdout.write("ready\\n");
               process.stdin.on("data", (data) => {
                 if (data.toString() === "emit") process.stdout.write("older-output\\n");
                 else process.exit(Number(data.toString()));
               });
             `,
-          ],
-          stdinMode: "pipe-open",
-          onStdout: (chunk) => {
-            if (chunk.includes("ready")) {
-              ready.resolve();
-            }
-            if (chunk.includes("older-output")) {
-              oldOutput.resolve();
-            }
-          },
-        });
-        runs.push(run);
-        activePids.add(run.pid!);
-        await Promise.race([
-          ready.promise,
-          run.wait().then(() => {
-            throw new Error("child exited before readiness");
-          }),
-        ]);
-        return run;
-      };
-      try {
-        const older = await spawn("older-backend");
-        const replacement = await spawn("replacement-backend");
-        const snapshot = supervisor.getRecord(replacement.runId);
-        older.stdin!.write("emit");
-        await oldOutput.promise;
-        expect(supervisor.getRecord(replacement.runId)).toEqual(snapshot);
+        ],
+        stdinMode: "pipe-open",
+        onStdout: (chunk) => {
+          if (chunk.includes("ready")) {
+            ready.resolve();
+          }
+          if (chunk.includes("older-output")) {
+            oldOutput.resolve();
+          }
+        },
+      });
+      runs.push(run);
+      activePids.add(run.pid!);
+      await Promise.race([
+        ready.promise,
+        run.wait().then(() => {
+          throw new Error("child exited before readiness");
+        }),
+      ]);
+      return run;
+    };
+    try {
+      const older = await spawn("older-backend");
+      const replacement = await spawn("replacement-backend");
+      const snapshot = { ...replacement.activity };
+      older.stdin!.write("emit");
+      await oldOutput.promise;
+      expect(replacement.activity).toEqual(snapshot);
 
-        if (completion === "exit") {
-          older.stdin!.write("23");
-        } else {
-          older.cancel();
-        }
-        expect(supervisor.getRecord(replacement.runId)).toEqual(snapshot);
-        await older.wait();
-        expect(isProcessAlive(replacement.pid!)).toBe(true);
-        expect(supervisor.getRecord(replacement.runId)).toEqual(snapshot);
+      older.stdin!.write("23");
+      expect(replacement.activity).toEqual(snapshot);
+      await older.wait();
+      expect(isProcessAlive(replacement.pid!)).toBe(true);
+      expect(replacement.activity).toEqual(snapshot);
 
-        replacement.stdin!.write("0");
-        await expect(replacement.wait()).resolves.toMatchObject({ reason: "exit", exitCode: 0 });
-        expect(supervisor.getRecord(replacement.runId)).toMatchObject({
-          backendId: "replacement-backend",
-          state: "exited",
-          terminationReason: "exit",
-          exitCode: 0,
-          exitSignal: null,
-        });
-      } finally {
-        for (const run of runs) {
-          run.cancel();
-        }
-        await Promise.all(runs.map((run) => run.wait()));
-        await supervisor.shutdown();
+      replacement.stdin!.write("0");
+      await expect(replacement.wait()).resolves.toMatchObject({ reason: "exit", exitCode: 0 });
+      expect(replacement.activity.resultSettled).toBe(true);
+    } finally {
+      for (const run of runs) {
+        run.cancel();
       }
-    },
-  );
+      await Promise.all(runs.map((run) => run.wait()));
+      await supervisor.shutdown();
+    }
+  });
 
-  it("keeps a replacement supervised after an older tree with the same run ID becomes extinct", async () => {
+  it("keeps a replacement supervised after an older tree with the same run ID becomes extinct", async ({
+    signal,
+  }) => {
     const first = await createDescendantScope();
-    const descendantPid = await first.readPid();
+    const descendantPid = await first.readPid(signal);
     activePids.add(descendantPid);
     let replacement: Awaited<ReturnType<typeof first.supervisor.spawn>> | undefined;
     try {
@@ -359,8 +420,6 @@ describe("supervisor anchored shell real process ownership", () => {
       replacement = await first.supervisor.spawn({
         mode: "child",
         runId: first.run.runId,
-        sessionId: "fallback-real",
-        backendId: "fallback-real",
         scopeKey: "fallback-real",
         argv: [process.execPath, "-e", "process.stdout.write('ready');setInterval(() => {}, 1000)"],
         stdinMode: "pipe-closed",
@@ -371,11 +430,7 @@ describe("supervisor anchored shell real process ownership", () => {
       await ready.promise;
       await first.release();
       await first.run.waitForExtinction!();
-      expect(first.supervisor.getRecord(replacement.runId)).toMatchObject({
-        pid: replacementPid,
-        backendId: "fallback-real",
-        state: "running",
-      });
+      expect(replacement.activity.resultSettled).toBe(false);
       await first.supervisor.shutdown();
 
       expect(isProcessAlive(replacementPid)).toBe(false);
@@ -389,12 +444,11 @@ describe("supervisor anchored shell real process ownership", () => {
     }
   });
 
-  it.each([
-    { name: "cancels retained descendants idempotently", cancel: true },
-    { name: "releases ownership after descendants exit naturally", cancel: false },
-  ])("$name after root settlement and fragmented output flush", async ({ cancel }) => {
-    const { run, supervisor, scopeKey, cleanup, readPid, release } = await createDescendantScope();
-    const result = await run.wait();
+  it("cancels retained descendants idempotently after root settlement and fragmented output flush", async ({
+    signal,
+  }) => {
+    const { run, supervisor, scopeKey, cleanup, readPid } = await createDescendantScope();
+    const result = await withinTest(run.wait(), signal);
     const decoder = createWindowsOutputDecoder();
     const finalTail = decoder.decode(Buffer.from([0xe2, 0x82])) + decoder.flush();
 
@@ -406,24 +460,16 @@ describe("supervisor anchored shell real process ownership", () => {
     expect(result.stderr.replaceAll("\r\n", "\n")).toBe(
       `owned-stderr-one\nowned-stderr-two\n😀${finalTail}`,
     );
-    const descendantPid = await readPid();
+    const descendantPid = await readPid(signal);
     activePids.add(descendantPid);
     expect(descendantPid).toBeGreaterThan(0);
     expect(isProcessAlive(descendantPid)).toBe(true);
     await expectPending(run.waitForExtinction!());
 
-    if (cancel) {
-      supervisor.cancelScope(scopeKey);
-      supervisor.cancelScope(scopeKey);
-    } else {
-      await release();
-    }
-    await Promise.all([run.waitForExtinction!(), cleanup(), cleanup()]);
-    expect(supervisor.getRecord(run.runId)).toMatchObject({
-      state: "exited",
-      terminationReason: "exit",
-      exitCode: 0,
-    });
-    await waitForDead(descendantPid, 5_000);
+    supervisor.cancelScope(scopeKey);
+    supervisor.cancelScope(scopeKey);
+    await withinTest(Promise.all([run.waitForExtinction!(), cleanup(), cleanup()]), signal);
+    await expect(run.wait()).resolves.toMatchObject({ reason: "exit", exitCode: 0 });
+    expect(isProcessAlive(descendantPid)).toBe(false);
   });
 });

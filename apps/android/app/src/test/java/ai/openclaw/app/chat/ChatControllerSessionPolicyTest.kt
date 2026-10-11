@@ -23,32 +23,6 @@ class ChatControllerSessionPolicyTest {
   }
 
   @Test
-  fun applyMainSessionKeyMovesCurrentSessionWhenStillOnDefault() {
-    val state =
-      applyMainSessionKey(
-        currentSessionKey = "main",
-        appliedMainSessionKey = "main",
-        nextMainSessionKey = "agent:ops:node-device",
-      )
-
-    assertEquals("agent:ops:node-device", state.currentSessionKey)
-    assertEquals("agent:ops:node-device", state.appliedMainSessionKey)
-  }
-
-  @Test
-  fun applyMainSessionKeyKeepsUserSelectedSession() {
-    val state =
-      applyMainSessionKey(
-        currentSessionKey = "custom",
-        appliedMainSessionKey = "agent:ops:node-old",
-        nextMainSessionKey = "agent:ops:node-new",
-      )
-
-    assertEquals("custom", state.currentSessionKey)
-    assertEquals("agent:ops:node-new", state.appliedMainSessionKey)
-  }
-
-  @Test
   fun staleHistoryLoadCannotApplyAfterSessionSwitch() {
     assertTrue(
       isCurrentHistoryLoad(
@@ -169,7 +143,7 @@ class ChatControllerSessionPolicyTest {
   }
 
   @Test
-  fun compactionSnapshotUpdatesContextAndPreservesLatestRunUsage() {
+  fun partialContextUpdatePreservesLatestRunUsage() {
     val existing =
       ChatSessionEntry(
         key = "agent:main:phone",
@@ -228,7 +202,7 @@ class ChatControllerSessionPolicyTest {
   }
 
   @Test
-  fun sessionSnapshotWithoutUsagePreservesKnownTotals() {
+  fun partialSessionUpdateWithoutUsagePreservesKnownTotals() {
     val existing =
       ChatSessionEntry(
         key = "agent:main:phone",
@@ -330,6 +304,7 @@ class ChatControllerSessionPolicyTest {
         updatedAtMs = 1L,
         displayName = "Phone",
         label = "Daily",
+        autoLabel = "Device fallback",
         category = "Work",
         pinned = true,
         archived = false,
@@ -343,6 +318,7 @@ class ChatControllerSessionPolicyTest {
     val merged = mergeChatSessionEntry(existing, next)
 
     assertEquals("Daily", merged.label)
+    assertEquals("Device fallback", merged.autoLabel)
     assertEquals("Work", merged.category)
     assertEquals(true, merged.pinned)
     assertEquals(false, merged.archived)

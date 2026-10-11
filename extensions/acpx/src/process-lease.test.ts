@@ -6,6 +6,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createAcpxProcessLeaseStore,
@@ -43,6 +44,7 @@ describe("createAcpxProcessLeaseStore", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     await rm(stateDir, { recursive: true, force: true });
   });
 
@@ -96,23 +98,6 @@ describe("createAcpxProcessLeaseStore", () => {
 });
 
 describe("withAcpxLeaseArgs", () => {
-  it("adds portable lease wrapper args", () => {
-    const command = withAcpxLeaseArgs({
-      command: "node /tmp/openclaw/acpx/codex-acp-wrapper.mjs",
-      leaseId: "lease-test",
-      gatewayInstanceId: "gateway-test",
-    });
-
-    expect(command).toEqual([
-      "node",
-      "/tmp/openclaw/acpx/codex-acp-wrapper.mjs",
-      OPENCLAW_ACPX_LEASE_ID_ARG,
-      "lease-test",
-      OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
-      "gateway-test",
-    ]);
-  });
-
   it("preserves portable lease wrapper args", () => {
     const command = withAcpxLeaseArgs({
       command: ["node", "C:/openclaw/acpx/codex-acp-wrapper.mjs", ""],

@@ -1,3 +1,4 @@
+import type { AgentDeletionOperation } from "../agents/agent-lifecycle-registry.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { removeClawWorkspaceFile, type RemovedWorkspaceFile } from "./lifecycle-delete-support.js";
 import type { ClawRemovePlanAction } from "./lifecycle-remove-contract.js";
@@ -39,6 +40,7 @@ export function planClawBootstrapRemoval(
 
 export async function removeClawBootstrap(
   record: ClawStatusRecord,
+  deletion: Pick<AgentDeletionOperation, "assertCurrentFinal">,
 ): Promise<RemovedWorkspaceFile | undefined> {
   if (!record.install.bootstrap) {
     return undefined;
@@ -51,6 +53,7 @@ export async function removeClawBootstrap(
         contentDigest: record.install.bootstrap.contentDigest,
         state: "unchanged",
       },
+      deletion,
       MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
     );
   }

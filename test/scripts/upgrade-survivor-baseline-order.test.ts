@@ -1,12 +1,183 @@
-import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { execFile, spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import http from "node:http";
+import path, { delimiter, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
+import { cronOwnerHardeningEntrypoints } from "../../src/cron/owner-hardening-runtime.test-support.js";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { readUpgradeSurvivorPaths } from "./upgrade-survivor-paths.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const runner = path.resolve("scripts/e2e/lib/upgrade-survivor/run.sh");
+
+it("owns the model endpoint before authoring legacy operator configuration", async () => {
+  const root = tempDirs.make("survivor-model-endpoint-");
+  const competitor = http.createServer((request, response) => {
+    response.writeHead(request.method === "GET" ? 200 : 405);
+    response.end(request.method === "GET" ? "registry metadata" : "method not allowed");
+  });
+  await new Promise<void>((done) => {
+    competitor.listen(0, "127.0.0.1", done);
+  });
+  const address = competitor.address();
+  if (!address || typeof address === "string") {
+    throw new Error("fixture did not bind a TCP listener");
+  }
+  const source = readFileSync(runner, "utf8");
+  const setup = source.slice(
+    source.indexOf("apply_baseline_config_recipe()"),
+    source.indexOf("\nprepare_schema_expectation()"),
+  );
+  const phases = source.slice(
+    source.indexOf('if [ "$SCENARIO" = "abandoned-update" ]'),
+    source.indexOf("\nrun_missing_load_path_fixture seed"),
+  );
+  try {
+    const result = await promisify(execFile)(
+      "bash",
+      [
+        "-c",
+        `set -euo pipefail
+source scripts/lib/openclaw-e2e-instance.sh
+mock_openai_pid=""
+trap 'openclaw_e2e_stop_process "$mock_openai_pid"' EXIT
+${setup}
+phase() { shift; "$@"; }
+node() {
+  if [ "$1" != scripts/e2e/lib/upgrade-survivor/assertions.mjs ]; then
+    command node "$@"
+    return
+  fi
+  test "$2" = seed-legacy-operator
+  command node --input-type=module -e '
+    import assert from "node:assert/strict";
+    const port = Number(process.env.OPENCLAW_UPGRADE_SURVIVOR_MOCK_PORT);
+    assert(port > 0 && port !== Number(process.env.COMPETITOR_PORT));
+    const response = await fetch("http://127.0.0.1:" + port + "/v1/chat/completions", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "ownership proof" }] }),
+    });
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /OPENCLAW_E2E_OK/);
+    console.log("owned endpoint configured");
+  '
+}
+${phases}
+`,
+      ],
+      {
+        env: {
+          PATH: process.env.PATH,
+          HOME: root,
+          ARTIFACT_ROOT: root,
+          SCENARIO: "legacy-operator-state",
+          COMPETITOR_PORT: String(address.port),
+          OPENCLAW_UPGRADE_SURVIVOR_MOCK_PORT: String(address.port),
+        },
+      },
+    );
+    expect(result.stdout.trim()).toBe("owned endpoint configured");
+  } finally {
+    await new Promise<void>((done, reject) => {
+      competitor.close((error) => (error ? reject(error) : done()));
+    });
+  }
+});
+
+it.each([
+  { scenario: "legacy-operator-state", mode: "auto-auth" },
+  { scenario: "legacy-operator-state", mode: "manual" },
+  { scenario: "base", mode: "auto-auth" },
+  { scenario: "mobile-pairing-reconnect", mode: "auto-auth" },
+])("binds the current registry before $scenario service start ($mode)", ({ scenario, mode }) => {
+  const nativeEnabled = scenario === "legacy-operator-state" && mode === "manual";
+  const source = readFileSync(runner, "utf8");
+  const routing = source.slice(
+    source.indexOf("companion_survivor_scenario()"),
+    source.indexOf("\npackage_root()"),
+  );
+  const orchestration = source.slice(
+    source.indexOf("phase seed-state seed_state"),
+    source.indexOf("phase update-candidate update_candidate_for_install_mode"),
+  );
+  const result = spawnSync(
+    "bash",
+    [
+      "-c",
+      `set -eu
+source scripts/e2e/lib/upgrade-survivor/missing-load-path.sh
+SCENARIO="$1"
+UPDATE_RESTART_MODE="$2"
+baseline_version=${nativeEnabled ? "2026.9.4" : "2026.8.1"}
+native_assignment_enabled=${nativeEnabled ? "1" : "0"}
+legacy_seeded=0
+CANDIDATE_SPEC=synthetic-candidate.tgz
+package_root() { printf /synthetic/published-package; }
+COMMAND_TIMEOUT=1
+plugin_registry_pid=synthetic
+NPM_CONFIG_REGISTRY=initial-registry
+manager_registry="$NPM_CONFIG_REGISTRY"
+${routing}
+openclaw_e2e_stop_process() { :; }
+configure_plugin_registry() {
+  NPM_CONFIG_REGISTRY="\${1:-candidate}-registry"
+  printf 'registry=%s\\n' "$NPM_CONFIG_REGISTRY"
+}
+seed_legacy_operator_gateway() { legacy_seeded=1; }
+start_native_assignment_fixture() {
+  if [ "$legacy_seeded" != "1" ]; then
+    echo "native agent makes the ownerless Cron roster ambiguous" >&2
+    return 92
+  fi
+  [ "$NPM_CONFIG_REGISTRY" = baseline-registry ]
+}
+prepare_schema_expectation() { printf 'schema-snapshot\\n'; }
+install_update_restart_systemctl_shim() {
+  manager_registry="$NPM_CONFIG_REGISTRY"
+  printf 'manager=%s\\n' "$manager_registry"
+}
+run_update_restart_probe_gateway() {
+  [ "$#" -eq 3 ] && [ "$1" = start ] && [ "$2" = 18789 ] && [ "$3" = "$COMMAND_TIMEOUT" ] || return 97
+  if [ "$manager_registry" != "$NPM_CONFIG_REGISTRY" ]; then
+    printf 'manager retained stale registry: %s, current: %s\\n' "$manager_registry" "$NPM_CONFIG_REGISTRY" >&2
+    return 91
+  fi
+  printf 'service=%s\\n' "$manager_registry"
+}
+phase() {
+  shift
+  case "$1" in
+    configure_plugin_registry|prepare_schema_expectation|install_update_restart_systemctl_shim|run_update_restart_probe_gateway|seed_legacy_operator_gateway|start_native_assignment_fixture) "$@" ;;
+    *) : ;;
+  esac
+}
+${orchestration}
+`,
+      "survivor-manager-registry-order",
+      scenario,
+      mode,
+    ],
+    { encoding: "utf8" },
+  );
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+  expect(result.stdout.trim().split("\n").filter(Boolean)).toEqual(
+    scenario === "legacy-operator-state"
+      ? [
+          "registry=baseline-registry",
+          "registry=candidate-registry",
+          "schema-snapshot",
+          ...(mode === "auto-auth"
+            ? ["manager=candidate-registry", "service=candidate-registry"]
+            : []),
+        ]
+      : scenario === "base"
+        ? ["registry=candidate-registry"]
+        : [],
+  );
+});
 
 it.each([
   { scenario: "base", mode: "manual" },
@@ -15,6 +186,27 @@ it.each([
   { scenario: "sqlite-volume", mode: "auto-auth" },
 ])("preserves all $scenario migration rows after $mode baseline setup", ({ scenario, mode }) => {
   const root = tempDirs.make("openclaw-survivor-baseline-order-");
+  const paths = readUpgradeSurvivorPaths(root, {
+    OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
+  });
+  if (scenario === "sqlite-volume") {
+    mkdirSync(paths.packageRoot, { recursive: true });
+    writeFileSync(
+      path.join(paths.packageRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.8.1",
+        type: "module",
+        exports: { "./plugin-sdk/cron-store-runtime": "./cron-store-runtime.js" },
+      }),
+    );
+    // Keep real SQLite persistence behind the fixture's installed SDK boundary.
+    symlinkSync(
+      fileURLToPath(resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.store)),
+      path.join(paths.packageRoot, "cron-store-runtime.js"),
+      "file",
+    );
+  }
   const authoredPath = path.join(root, "authored.json");
   const resultPath = path.join(root, "result.json");
   const probePath = path.join(root, "probe.mjs");
@@ -46,22 +238,26 @@ it.each([
           token: { source: "env", provider: "default", id: "GATEWAY_AUTH_TOKEN_REF" },
         },
       },
-      plugins: { enabled: true },
+      plugins: { enabled: true, allow: [], entries: {} },
       channels: { discord: { enabled: true } },
     }),
   );
   const startupModule = pathToFileURL(path.resolve("src/config/sessions/startup-migration.ts"));
+  const legacyStoreModule = pathToFileURL(
+    path.resolve("src/config/sessions/legacy-store-inspection.ts"),
+  );
   writeFileSync(
     probePath,
     `import assert from "node:assert/strict";
 import fs from "node:fs";
-import path from "node:path";
+import path, { delimiter, join, resolve } from "node:path";
 import { assertSessionStoreMigrationComplete } from ${JSON.stringify(startupModule.href)};
+import { readLegacySessionStoreEntries } from ${JSON.stringify(legacyStoreModule.href)};
 const state = process.env.OPENCLAW_STATE_DIR;
 const volume = process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO === "sqlite-volume";
 const stores = volume
   ? ["agents/main/sessions/sessions.json", "agents/ops/sessions/sessions.json"]
-  : ["sessions/sessions.json"];
+  : ["agents/main/sessions/sessions.json"];
 const checkStartup = () => assertSessionStoreMigrationComplete({
   cfg: {}, env: process.env, targets: stores.map(file => ({ storePath: path.join(state, file) })),
 });
@@ -79,9 +275,18 @@ if (process.argv[2] === "startup") {
     assert.equal(fs.existsSync(process.env.PROBE_LIVE), false, "baseline must be offline before specimens and initial update");
   }
   assert.throws(checkStartup, /Legacy session store requires migration/);
-  const rows = stores.flatMap(file => Object.values(JSON.parse(fs.readFileSync(path.join(state, file), "utf8"))));
+  const rows = stores.flatMap(file => {
+    const issues = [];
+    const { entries } = readLegacySessionStoreEntries({ storePath: path.join(state, file) }, issues);
+    assert.deepEqual(issues, []);
+    return entries.map(({ entry }) => entry);
+  });
   assert.equal(rows.length, volume ? 15 : 3);
   assert.equal(new Set(rows.map(row => row.sessionId)).size, rows.length);
+  for (const row of rows) {
+    assert.equal(row.modelProvider, "openai");
+    assert.equal(row.model, "gpt-5.5");
+  }
   for (const id of ["upgrade-main-session", "upgrade-direct-session", "upgrade-group-session"]) {
     const row = rows.find(row => row.sessionId === id);
     assert.ok(row, "missing original session " + id);
@@ -120,7 +325,7 @@ phase() {
   shift
   case "$name" in
     install-baseline) baseline_version=2026.8.1 ;;
-    initialize-state|seed-state|seed-migration-state|seed-volume-state|prepare-update-restart-probe) "$@" ;;
+    initialize-state|missing-load-path-seed|seed-state|seed-migration-state|seed-volume-state|prepare-update-restart-probe) "$@" ;;
     update-candidate)
       node --import "$TSX_IMPORT" "$PROBE_SCRIPT" update
       exit "$?"
@@ -130,7 +335,10 @@ phase() {
 }
 ${phases}
 `;
-  const result = spawnSync("bash", ["-c", script], {
+  // The Darwin Bash guard must be able to replay this injected runner.
+  const scriptPath = path.join(root, "runner.sh");
+  writeFileSync(scriptPath, script);
+  const result = spawnSync("bash", [scriptPath], {
     encoding: "utf8",
     env: {
       ...process.env,
@@ -146,9 +354,7 @@ ${phases}
       OPENCLAW_TEST_STATE_FUNCTION_B64: "Og==",
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.8.1",
       OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: mode,
-      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
-      OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: path.join(root, "runtime"),
-      OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: path.join(root, "artifacts", "summary.json"),
+      ...paths.env,
       OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS: "12",
       OPENCLAW_UPGRADE_SURVIVOR_VOLUME_EVENTS_PER_SESSION: "3",
       OPENCLAW_UPGRADE_SURVIVOR_VOLUME_CRON_JOBS: "6",
@@ -160,4 +366,140 @@ ${phases}
     rows: scenario === "sqlite-volume" ? 15 : 3,
     volume: scenario === "sqlite-volume",
   });
+});
+
+const assertions = resolve("scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+
+it.each(["2026.9.2", "2026.9.4"])("preserves Cron ownership on %s", (version) => {
+  const root = tempDirs.make("survivor-operator-lifecycle-");
+  const bin = join(root, "bin");
+  const artifacts = join(root, "artifacts");
+  const workspace = join(root, "workspace");
+  const state = join(root, "state");
+  const configPath = join(root, "openclaw.json");
+  const ledgerPath = join(artifacts, "legacy-operator-baseline.json");
+  mkdirSync(bin);
+  mkdirSync(artifacts);
+  mkdirSync(state);
+  writeFileSync(configPath, "{}");
+  if (version === "2026.9.4") {
+    writeFileSync(
+      join(artifacts, "native-assignment-eligibility.json"),
+      JSON.stringify({ status: "required" }),
+    );
+  }
+  const cliPath = join(bin, "openclaw");
+  // Model the shipped API boundary: ownerless creation needs an unambiguous
+  // roster, an explicit owner must exist, and global listing may fail later.
+  writeFileSync(
+    cliPath,
+    `#!${process.execPath}
+const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+const configPath = process.env.OPENCLAW_CONFIG_PATH;
+const cfg = JSON.parse(fs.readFileSync(configPath, "utf8"));
+const approvalPath = path.join(process.env.OPENCLAW_STATE_DIR, "exec-approvals.json");
+if (args[0] === "--help") {
+  process.stdout.write("  approvals Manage exec approvals\\n");
+} else if (args[0] === "setup" && args[1] === "--help") {
+  process.stdout.write("  --baseline Create baseline state\\n");
+} else if (args[0] === "setup") {
+  cfg.agents = { entries: { main: {} }, defaults: {} };
+  fs.writeFileSync(configPath, JSON.stringify(cfg));
+} else if (args[0] === "plugins" && args[1] === "list") {
+  process.stdout.write(JSON.stringify({ plugins: [
+    { id: "device-pair", enabled: true }, { id: "webhooks", enabled: false },
+  ] }));
+} else if (args[0] === "config" && args[1] === "set") {
+  const keys = args[2].split(".");
+  let target = cfg;
+  for (const key of keys.slice(0, -1)) target = target[key] ??= {};
+  target[keys.at(-1)] = JSON.parse(args[3]);
+  fs.writeFileSync(configPath, JSON.stringify(cfg));
+} else if (args[0] === "approvals" && args[1] === "set") {
+  fs.copyFileSync(args[args.indexOf("--file") + 1], approvalPath);
+} else if (args[0] === "approvals" && args[1] === "allowlist") {
+  const agent = args[args.indexOf("--agent") + 1];
+  assert(cfg.agents.entries[agent], "baseline approvals reject unknown agents");
+  const policy = JSON.parse(fs.readFileSync(approvalPath, "utf8"));
+  policy.agents[agent] = { allowlist: [{ pattern: args[args.indexOf("--agent") + 2] }] };
+  fs.writeFileSync(approvalPath, JSON.stringify(policy));
+} else if (args[0] === "approvals" && args[1] === "get") {
+  const file = JSON.parse(fs.readFileSync(approvalPath, "utf8"));
+  for (const agent of Object.values(file.agents)) {
+    for (const entry of agent.allowlist ?? []) entry.id ??= crypto.randomUUID();
+  }
+  process.stdout.write(JSON.stringify({ file }));
+} else if (args[0] === "cron" && args[1] === "add") {
+  const explicitAgent = args.includes("--agent") ? args[args.indexOf("--agent") + 1] : undefined;
+  assert(explicitAgent ? cfg.agents.entries[explicitAgent] : Object.keys(cfg.agents.entries).length === 1,
+    "baseline cannot resolve the requested cron owner");
+  const name = args[args.indexOf("--name") + 1];
+  process.stdout.write(JSON.stringify({ id: "native-" + name, name, ...(explicitAgent ? { agentId: explicitAgent } : {}) }));
+} else if (args[0] === "agents" && args[1] === "add") {
+  cfg.agents.entries[args[2]] = {};
+  cfg.agents.defaults.systemAgent = { agentId: "main" };
+  fs.writeFileSync(configPath, JSON.stringify(cfg));
+} else if (args[0] === "config" && args[1] === "unset") {
+  delete cfg.agents.defaults.systemAgent;
+  fs.writeFileSync(configPath, JSON.stringify(cfg));
+} else {
+  throw new Error("baseline global cron reads are unavailable with unresolved owners");
+}
+`,
+  );
+  chmodSync(cliPath, 0o755);
+  const run = (command: string) =>
+    spawnSync(process.execPath, [assertions, command], {
+      encoding: "utf8",
+      timeout: 10_000,
+      env: {
+        PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "legacy-operator-state",
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION: version,
+        OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifacts,
+        OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: "baseline",
+        OPENCLAW_UPGRADE_SURVIVOR_MOCK_PORT: "44081",
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_TEST_WORKSPACE_DIR: workspace,
+        OPENCLAW_STATE_DIR: state,
+        GATEWAY_AUTH_TOKEN_REF: "survivor-test-token",
+      },
+    });
+  const initialized = run("seed-legacy-operator");
+  expect(initialized.status, initialized.stderr).toBe(0);
+  const earlyAgent = run("seed-legacy-operator-agent");
+  expect(earlyAgent.status).toBe(1);
+  expect(earlyAgent.stderr).toContain("create the default-owner cron job before adding ops");
+  for (const command of [
+    "seed-legacy-operator-default-cron",
+    "seed-legacy-operator-agent",
+    "seed-legacy-operator-gateway",
+    "assert-exec-approvals",
+  ]) {
+    const result = run(command);
+    expect(result.status, result.stderr).toBe(0);
+  }
+  expect(JSON.parse(readFileSync(ledgerPath, "utf8")).jobs).toEqual([
+    { id: "native-survivor-default-owner", name: "survivor-default-owner" },
+    { id: "native-survivor-ops-owner", name: "survivor-ops-owner", agentId: "ops" },
+  ]);
+  expect(JSON.parse(readFileSync(ledgerPath, "utf8"))).toMatchObject({
+    approvalsJsonEra: true,
+    approvals: {
+      agents: {
+        main: { allowlist: [{ pattern: "/usr/bin/uname" }] },
+        ops: { allowlist: [{ pattern: "/usr/bin/date" }] },
+      },
+    },
+  });
+  const approvals = JSON.parse(readFileSync(ledgerPath, "utf8")).approvals;
+  expect(approvals.defaults).toEqual({ security: "allowlist", ask: "off", askFallback: "deny" });
+  expect(approvals.agents["native-proof"]).toEqual(
+    version === "2026.9.4" ? { security: "full", ask: "off", askFallback: "deny" } : undefined,
+  );
+  expect(JSON.parse(readFileSync(configPath, "utf8")).agents.defaults.systemAgent).toBeUndefined();
 });

@@ -1,0 +1,32 @@
+openclaw-agent-row-chip {
+  display: inline-flex;
+  max-width: 100%;
+  vertical-align: middle;
+}
+
+.agent-row-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--muted);
+  font: 400 11px/1.4 var(--font-body);
+}
+
+.agent-row-chip__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  object-fit: cover;
+}
+
+.agent-row-chip__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

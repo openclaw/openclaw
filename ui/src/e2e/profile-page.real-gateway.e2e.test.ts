@@ -4,7 +4,8 @@ import path from "node:path";
 import { createServer, type ViteDevServer } from "vite";
 import { expect, it } from "vitest";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
-import { ensureProfileForEmail, setDisplayName } from "../../../src/state/user-profiles.ts";
+import { setDisplayName } from "../../../src/state/user-profile-writes.worker.ts";
+import { ensureProfileForEmail } from "../../../src/state/user-profiles.ts";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -56,12 +57,20 @@ suite.define(() => {
       };
       await state.writeConfig({
         agents: {
-          defaults: { workspace: state.workspaceDir },
+          ownership: "explicit",
+          defaults: {
+            workspace: state.workspaceDir,
+            systemAgent: { agentId: "clipper" },
+            heartbeat: { agentId: "clipper" },
+            authInheritance: { agentId: "clipper" },
+            sessionStore: { agentId: "clipper" },
+          },
           entries: {
             main: { name: "Main", workspace: state.workspaceDir },
-            clipper: { default: true, name: "Clipper", workspace: clipperWorkspace },
+            clipper: { name: "Clipper", workspace: clipperWorkspace },
           },
         },
+        talk: { agentId: "clipper" },
         gateway: {
           auth: { mode: "trusted-proxy", trustedProxy },
           controlUi: {
@@ -128,7 +137,9 @@ suite.define(() => {
           expect(response?.status()).toBe(200);
           const confirmation = page.locator("openclaw-gateway-url-confirmation");
           await confirmation.waitFor();
-          await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
+          await confirmation
+            .getByRole("button", { name: `Switch to ${gatewayUrl.host}`, exact: true })
+            .click();
           await expect
             .poll(() => page.locator(".profile-hero__name").textContent())
             .toBe("Test Person");

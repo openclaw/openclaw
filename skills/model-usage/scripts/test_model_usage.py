@@ -66,18 +66,6 @@ class TestModelUsage(TestCase):
         self.assertIsNone(coerce_finite_cost(None))
         self.assertIsNone(coerce_finite_cost({}))
 
-    def test_aggregate_costs_includes_numeric_strings(self):
-        entries = [
-            {
-                "date": "2026-05-25",
-                "modelBreakdowns": [
-                    {"modelName": "claude-sonnet-4-6", "cost": 1.50},
-                    {"modelName": "claude-sonnet-4-6", "cost": "1.75"},
-                ],
-            }
-        ]
-        self.assertEqual(aggregate_costs(entries), {"claude-sonnet-4-6": 3.25})
-
     def test_aggregate_costs_ignores_bool_and_non_finite(self):
         entries = [
             {

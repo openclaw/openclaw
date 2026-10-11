@@ -1,10 +1,10 @@
-// Msteams plugin module implements feedback reflection behavior.
 import {
   DEFAULT_CHANNEL_FEEDBACK_REFLECTION_COOLDOWN_MS,
   runChannelFeedbackReflection,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
+import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
@@ -14,48 +14,15 @@ import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import type { MSTeamsApp } from "./sdk.js";
 
-type FeedbackEvent = {
-  type: "custom";
-  event: "feedback";
-  ts: number;
-  messageId: string;
-  value: "positive" | "negative";
-  comment?: string;
-  sessionKey: string;
-  agentId: string;
-  conversationId: string;
-};
-
-export function buildFeedbackEvent(params: {
-  messageId: string;
-  value: "positive" | "negative";
-  comment?: string;
-  sessionKey: string;
-  agentId: string;
-  conversationId: string;
-}): FeedbackEvent {
-  return {
-    type: "custom",
-    event: "feedback",
-    ts: Date.now(),
-    messageId: params.messageId,
-    value: params.value,
-    comment: params.comment,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    conversationId: params.conversationId,
-  };
-}
-
 type RunFeedbackReflectionParams = {
   cfg: OpenClawConfig;
   app: MSTeamsApp;
+  accountId: string;
   conversationRef: StoredConversationReference;
   sessionKey: string;
   agentId: string;
   conversationId: string;
   conversationKind: "direct" | "group" | "channel";
-  thumbedDownResponse?: string;
   userComment?: string;
   log: MSTeamsMonitorLogger;
 };
@@ -66,9 +33,9 @@ type RunFeedbackReflectionParams = {
  */
 export async function runFeedbackReflection(params: RunFeedbackReflectionParams): Promise<void> {
   const { cfg, log, sessionKey } = params;
+  const msteamsCfg = resolveMSTeamsAccountConfig(cfg, params.accountId);
   const cooldownMs =
-    cfg.channels?.msteams?.feedbackReflectionCooldownMs ??
-    DEFAULT_CHANNEL_FEEDBACK_REFLECTION_COOLDOWN_MS;
+    msteamsCfg.feedbackReflectionCooldownMs ?? DEFAULT_CHANNEL_FEEDBACK_REFLECTION_COOLDOWN_MS;
   let reflection;
   try {
     reflection = await runChannelFeedbackReflection({
@@ -79,7 +46,6 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
       sessionKey,
       conversationId: params.conversationId,
       conversationKind: params.conversationKind,
-      thumbedDownResponse: params.thumbedDownResponse,
       userComment: params.userComment,
       cooldownMs,
       onRecordError: (err) =>
@@ -135,7 +101,10 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
       params.app,
       buildConversationReference(params.conversationRef),
       { type: "message", text: reflection.userMessage! },
-      { serviceUrlBoundary: resolveMSTeamsSdkCloudOptions(cfg.channels?.msteams) },
+      {
+        accountId: params.accountId,
+        serviceUrlBoundary: resolveMSTeamsSdkCloudOptions(msteamsCfg),
+      },
     );
     log.info("sent reflection follow-up", { sessionKey });
   } catch (err) {

@@ -7,12 +7,18 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "openclaw/plugin-sdk/process-runtime";
+import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspace,
   type TempWorkspace,
 } from "openclaw/plugin-sdk/temp-path";
 import { stopChildProcess } from "openclaw/plugin-sdk/test-env";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
+import { packagingEntrypoints } from "./install-runtime-entrypoints.test-support.mts";
 
 const execFileAsync = promisify(execFile);
 const packageName = "@openclaw/diagnostics-prometheus";
@@ -88,9 +94,9 @@ function isolatedEnv(params: {
   return env;
 }
 
-async function runCli(args: string[], env: NodeJS.ProcessEnv, build = false): Promise<string> {
-  const entry = build ? "scripts/run-node.mjs" : "openclaw.mjs";
-  const result = await execFileAsync(process.execPath, [entry, ...args], {
+async function runCli(args: string[], env: NodeJS.ProcessEnv): Promise<string> {
+  // E2E setup owns shared dist; a child rebuild can delete running siblings' chunks.
+  const result = await execFileAsync(process.execPath, ["openclaw.mjs", ...args], {
     cwd: repoRoot,
     env,
     maxBuffer: 4 * 1024 * 1024,
@@ -115,15 +121,22 @@ async function packPlugin(
       return topLevel !== "dist" && topLevel !== "node_modules";
     },
   });
-  await execFileAsync(process.execPath, ["scripts/lib/plugin-npm-runtime-build.mjs", stagingDir], {
-    cwd: repoRoot,
-    maxBuffer: 2 * 1024 * 1024,
-    timeout: 60_000,
-  });
   await execFileAsync(
     process.execPath,
     [
-      "scripts/lib/plugin-npm-package-manifest.mjs",
+      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(packagingEntrypoints.runtimeBuild)),
+      stagingDir,
+    ],
+    {
+      cwd: repoRoot,
+      maxBuffer: 2 * 1024 * 1024,
+      timeout: 60_000,
+    },
+  );
+  await execFileAsync(
+    process.execPath,
+    [
+      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(packagingEntrypoints.packageManifest)),
       "--run",
       stagingDir,
       "--",
@@ -171,32 +184,11 @@ async function readPluginVersion(): Promise<string> {
   return manifest.version.trim();
 }
 
-async function waitForFile(
-  filePath: string,
-  child: ChildProcess,
-  timeoutMs: number,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      throw new Error("local npm registry exited before publishing its port");
-    }
-    try {
-      if ((await fs.stat(filePath)).size > 0) {
-        return;
-      }
-    } catch {
-      // The registry writes the port file only after the listener is ready.
-    }
-    await delay(50);
-  }
-  throw new Error("timed out waiting for local npm registry");
-}
-
 async function startRegistry(params: {
   root: string;
   tarballPath: string;
   version: string;
+  signal: AbortSignal;
 }): Promise<string> {
   const portFile = path.join(params.root, "registry-port");
   const logPath = path.join(params.root, "registry.log");
@@ -217,13 +209,24 @@ async function startRegistry(params: {
         home: params.root,
         stateDir: path.join(params.root, "unused-state"),
       }),
-      stdio: ["ignore", logHandle.fd, logHandle.fd],
+      stdio: ["ignore", logHandle.fd, logHandle.fd, "ipc"],
     },
   );
   children.push(child);
+  const listening = once(child, "message", { signal: params.signal });
+  const closed = once(child, "close", { signal: params.signal });
+  const ready = withinTest(
+    awaitGateBeforeSettlement(
+      listening,
+      closed,
+      "local npm registry exited before publishing its port",
+    ),
+    params.signal,
+  );
+  void ready.catch(() => {});
   await logHandle.close();
-  await waitForFile(portFile, child, 10_000);
-  const port = (await fs.readFile(portFile, "utf8")).trim();
+  const [port] = await ready;
+  expect(port).toEqual(expect.any(Number));
   return `http://127.0.0.1:${port}`;
 }
 
@@ -268,7 +271,7 @@ describe("diagnostics-prometheus managed install runtime", () => {
     const stateDir = path.join(root, "state");
     const configPath = path.join(stateDir, "openclaw.json");
     const gatewayLog = path.join(root, "gateway.log");
-    const gatewayToken = "prometheus-managed-install-test-token";
+    const gatewayPassword = "prometheus-managed-install-test-password";
     const gatewayPort = await reservePort();
     await fs.mkdir(home, { recursive: true });
     await fs.mkdir(stateDir, { recursive: true });
@@ -279,9 +282,30 @@ describe("diagnostics-prometheus managed install runtime", () => {
           diagnostics: { enabled: true },
           gateway: {
             mode: "local",
+            controlUi: { enabled: false },
             bind: "loopback",
             port: gatewayPort,
-            auth: { mode: "token", token: gatewayToken },
+            trustedProxies: ["127.0.0.1"],
+            auth: {
+              mode: "trusted-proxy",
+              password: gatewayPassword,
+              trustedProxy: {
+                allowLoopback: true,
+                allowUsers: ["restricted-scraper@example.com"],
+                requiredHeaders: ["x-forwarded-proto"],
+                userHeader: "x-forwarded-user",
+              },
+            },
+            roles: {
+              default: "metrics-denied",
+              definitions: {
+                "metrics-denied": {
+                  agents: "*",
+                  scopes: ["operator.approvals"],
+                  sessions: { others: "none" },
+                },
+              },
+            },
           },
         },
         null,
@@ -299,6 +323,7 @@ describe("diagnostics-prometheus managed install runtime", () => {
       root,
       tarballPath: packedPlugin.tarballPath,
       version: pluginVersion,
+      signal,
     });
     const env = isolatedEnv({
       configPath,
@@ -310,7 +335,6 @@ describe("diagnostics-prometheus managed install runtime", () => {
     await runCli(
       ["plugins", "install", `npm:${packageName}@${pluginVersion}`, "--accept-capabilities"],
       env,
-      true,
     );
     const inspect = JSON.parse(
       await runCli(["plugins", "inspect", pluginId, "--runtime", "--json"], env),
@@ -368,7 +392,7 @@ describe("diagnostics-prometheus managed install runtime", () => {
     const unauthenticated = await fetch(url);
     expect([401, 403]).toContain(unauthenticated.status);
     const authenticated = await fetch(url, {
-      headers: { authorization: `Bearer ${gatewayToken}` },
+      headers: { authorization: `Bearer ${gatewayPassword}` },
     });
     const body = await authenticated.text();
     expect(authenticated.status).toBe(200);
@@ -376,9 +400,28 @@ describe("diagnostics-prometheus managed install runtime", () => {
     expect(body).toContain(
       'openclaw_telemetry_exporter_total{exporter="diagnostics-prometheus",reason="configured",signal="metrics",status="started"} 1',
     );
+    const restrictedHeaders = {
+      "x-forwarded-for": "203.0.113.25",
+      "x-forwarded-proto": "https",
+      "x-forwarded-user": "restricted-scraper@example.com",
+    };
+    const restricted = await fetch(url, { headers: restrictedHeaders });
+    const restrictedBody = await restricted.text();
+    expect(restricted.status).toBe(403);
+    expect(restricted.headers.get("cache-control")).toBe("no-store");
+    expect(restrictedBody).toBe("missing scope: operator.read");
+    expect(restrictedBody).not.toContain("openclaw_telemetry_exporter_total");
+
+    const restrictedHead = await fetch(url, { headers: restrictedHeaders, method: "HEAD" });
+    expect(restrictedHead.status).toBe(403);
+    expect(restrictedHead.headers.get("cache-control")).toBe("no-store");
+    expect(restrictedHead.headers.get("content-length")).not.toBe(
+      authenticated.headers.get("content-length"),
+    );
+    expect(await restrictedHead.text()).toBe("");
     const scrapeEventLoopMetrics = async () => {
       const response = await fetch(url, {
-        headers: { authorization: `Bearer ${gatewayToken}` },
+        headers: { authorization: `Bearer ${gatewayPassword}` },
       });
       expect(response.status).toBe(200);
       const lines = (await response.text())
@@ -402,7 +445,7 @@ describe("diagnostics-prometheus managed install runtime", () => {
       // Healthy monitor windows complete after one second; readiness owns this read.
       await delay(1_100);
       const response = await fetch(`http://127.0.0.1:${gatewayPort}/readyz`, {
-        headers: { authorization: `Bearer ${gatewayToken}` },
+        headers: { authorization: `Bearer ${gatewayPassword}` },
       });
       expect(response.status).toBe(200);
       const readiness = (await response.json()) as {
@@ -416,14 +459,13 @@ describe("diagnostics-prometheus managed install runtime", () => {
     };
 
     await readCompletedWindow();
-    await expect.poll(async () => (await scrapeEventLoopMetrics()).count).toBeGreaterThan(0);
+    // Sampling readiness owns the wait; an HTTP scrape must not race a polling deadline.
     const firstWindow = await scrapeEventLoopMetrics();
+    expect(firstWindow.count).toBeGreaterThan(0);
     expect(firstWindow.observed).toBeGreaterThan(0);
     const nextWindow = await readCompletedWindow();
-    await expect
-      .poll(async () => (await scrapeEventLoopMetrics()).count)
-      .toBeGreaterThan(firstWindow.count);
     const retainedWindows = await scrapeEventLoopMetrics();
+    expect(retainedWindows.count).toBeGreaterThan(firstWindow.count);
     // Prometheus renders 12 significant digits; tolerate only serialization rounding.
     expect(retainedWindows.observed).toBeGreaterThanOrEqual(
       firstWindow.observed + nextWindow.intervalMs / 1_000 - 1e-9,

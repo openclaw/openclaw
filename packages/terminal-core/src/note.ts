@@ -1,90 +1,27 @@
-// Terminal Core module implements note behavior.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { note as clackNote } from "@clack/prompts";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { splitGraphemes, visibleWidth } from "./ansi.js";
+import { iterateGraphemes, visibleWidth } from "./ansi.js";
+import { resolveNoteOutput } from "./note-output.js";
 import { stylePromptTitle } from "./prompt-style.js";
 
 const MIN_NOTE_COLUMNS = 80;
-const URL_PREFIX_RE = /^(https?:\/\/|file:\/\/)/i;
-const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
 const FILE_LIKE_RE = /^[a-zA-Z0-9._-]+$/;
 const suppressNotesStorage = new AsyncLocalStorage<boolean>();
 
 function isSuppressedByEnv(value: string | undefined): boolean {
-  if (!value) {
-    return false;
-  }
   const normalized = normalizeLowercaseStringOrEmpty(value);
-  if (!normalized) {
-    return false;
-  }
-  return normalized !== "0" && normalized !== "false" && normalized !== "off";
-}
-
-function splitLongWord(word: string, maxLen: number): string[] {
-  if (maxLen <= 0) {
-    return [word];
-  }
-  // maxLen is a visible-column budget, so accumulate grapheme visible width (CJK/emoji count as 2
-  // columns) instead of code-point count; otherwise a wide-char run overflows the line by up to 2x.
-  const parts: string[] = [];
-  let current = "";
-  let currentWidth = 0;
-  for (const grapheme of splitGraphemes(word)) {
-    const width = visibleWidth(grapheme);
-    if (current && currentWidth + width > maxLen) {
-      parts.push(current);
-      current = "";
-      currentWidth = 0;
-    }
-    current += grapheme;
-    currentWidth += width;
-  }
-  if (current) {
-    parts.push(current);
-  }
-  return parts.length > 0 ? parts : [word];
+  return (
+    Boolean(normalized) && normalized !== "0" && normalized !== "false" && normalized !== "off"
+  );
 }
 
 function isCopySensitiveToken(word: string): boolean {
-  if (!word) {
-    return false;
-  }
-  if (URL_PREFIX_RE.test(word)) {
-    return true;
-  }
-  if (
-    word.startsWith("/") ||
-    word.startsWith("~/") ||
-    word.startsWith("./") ||
-    word.startsWith("../")
-  ) {
-    return true;
-  }
-  if (WINDOWS_DRIVE_RE.test(word) || word.startsWith("\\\\")) {
-    return true;
-  }
   if (word.includes("/") || word.includes("\\")) {
     return true;
   }
   // Preserve common file-like tokens (for example administrators_authorized_keys).
   return word.includes("_") && FILE_LIKE_RE.test(word);
-}
-
-function pushWrappedWordSegments(params: {
-  word: string;
-  available: number;
-  firstPrefix: string;
-  continuationPrefix: string;
-  lines: string[];
-}) {
-  const parts = splitLongWord(params.word, params.available);
-  const first = parts.shift() ?? "";
-  params.lines.push(params.firstPrefix + first);
-  for (const part of parts) {
-    params.lines.push(params.continuationPrefix + part);
-  }
 }
 
 function wrapLine(line: string, maxWidth: number): string[] {
@@ -125,13 +62,22 @@ function wrapLine(line: string, maxWidth: number): string[] {
       (isPrintableAscii ? word.length : visibleWidth(word)) > available &&
       !isCopySensitiveToken(word)
     ) {
-      pushWrappedWordSegments({
-        word,
-        available,
-        firstPrefix: prefix,
-        continuationPrefix: nextPrefix,
-        lines,
-      });
+      // Measure whole graphemes in visible columns so CJK/emoji do not overflow.
+      // Keep this word's initial budget for all fragments, even when the next prefix differs.
+      let currentWidth = 0;
+      for (const grapheme of iterateGraphemes(word)) {
+        const width = visibleWidth(grapheme);
+        if (current && currentWidth + width > available) {
+          lines.push(prefix + current);
+          prefix = nextPrefix;
+          current = "";
+          currentWidth = 0;
+        }
+        current += grapheme;
+        currentWidth += width;
+      }
+      lines.push(prefix + current);
+      current = "";
       prefix = nextPrefix;
       available = nextWidth;
       continue;
@@ -149,9 +95,6 @@ function wrapLine(line: string, maxWidth: number): string[] {
 function coerceNoteMessage(message: unknown): string {
   if (typeof message === "string") {
     return message;
-  }
-  if (message == null) {
-    return "";
   }
   if (typeof message === "number" || typeof message === "boolean" || typeof message === "bigint") {
     return String(message);
@@ -221,7 +164,7 @@ export function noteToStream(
 }
 
 export function note(message: unknown, title?: string) {
-  noteToStream(message, title, process.stdout);
+  noteToStream(message, title, resolveNoteOutput());
 }
 
 export function withSuppressedNotes<T>(callback: () => T): T {

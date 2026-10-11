@@ -7,6 +7,7 @@ import {
   fetchCatalogIconBlobUrl,
   fetchLinkFaviconBlobUrl,
   fetchPluginIconBlobUrl,
+  fetchPluginThemeArtworkBlobUrl,
 } from "./icon-loader.ts";
 
 const auth = {
@@ -111,6 +112,32 @@ describe("catalog icon loader", () => {
       fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("Authorization")),
     ).toEqual(["Bearer test-token", "Bearer test-token", "Bearer test-token"]);
     expect(fetchMock.mock.calls.some(([url]) => url === iconUrl)).toBe(false);
+  });
+
+  it("retries theme artwork misses while deduplicating concurrent callers and refusing non-resource URLs", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => imageResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const params = {
+      auth,
+      resourceBasePath: "/openclaw",
+      gatewayUrl: window.location.origin,
+      url: "/__openclaw__/plugin-theme-art/test/theme/hat/beret?v=miss",
+    };
+    await expect(
+      Promise.all([fetchPluginThemeArtworkBlobUrl(params), fetchPluginThemeArtworkBlobUrl(params)]),
+    ).resolves.toEqual([null, null]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await expect(fetchPluginThemeArtworkBlobUrl(params)).resolves.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(`/openclaw${params.url}`);
+    await expect(
+      fetchPluginThemeArtworkBlobUrl({ ...params, url: "https://other.test/art.svg" }),
+    ).resolves.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await expect(
+      fetchPluginThemeArtworkBlobUrl({ ...params, url: params.url.replace("miss", "new") }),
+    ).resolves.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("refuses proxy loading when the configured gateway is cross-origin", async () => {

@@ -1,22 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
 import { resolveAgentRuntimePrompt } from "./runtime-prompt.js";
 
 const {
-  buildSystemPromptParamsMock,
-  collectRuntimeChannelCapabilitiesMock,
+  resolveChannelCapabilitiesMock,
   getMachineDisplayNameMock,
-  listChannelSupportedActionsMock,
   resolveChannelMessageToolHintsMock,
   resolveChannelReactionGuidanceMock,
 } = vi.hoisted(() => ({
-  buildSystemPromptParamsMock: vi.fn((params: { runtime: Record<string, unknown> }) => ({
-    runtimeInfo: params.runtime,
-    userTimezone: "UTC",
-    userDate: "2026-08-28",
-  })),
-  collectRuntimeChannelCapabilitiesMock: vi.fn(() => ["voice"]),
+  resolveChannelCapabilitiesMock: vi.fn(() => ["voice"]),
   getMachineDisplayNameMock: vi.fn(async () => "test-host"),
-  listChannelSupportedActionsMock: vi.fn(() => ["send", "react"]),
   resolveChannelMessageToolHintsMock: vi.fn(() => ["Use the message tool."]),
   resolveChannelReactionGuidanceMock: vi.fn(() => ({
     level: "minimal" as const,
@@ -24,9 +17,10 @@ const {
   })),
 }));
 
-vi.mock("./channel-tools.js", () => ({
-  listChannelSupportedActions: listChannelSupportedActionsMock,
+vi.mock("./channel-tools.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./channel-tools.js")>()),
   resolveChannelMessageToolHints: resolveChannelMessageToolHintsMock,
+  resolveChannelPromptCapabilities: vi.fn(() => []),
   resolveChannelReactionGuidance: resolveChannelReactionGuidanceMock,
 }));
 
@@ -34,16 +28,17 @@ vi.mock("./model-selection.js", () => ({
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-default" })),
 }));
 
-vi.mock("./runtime-capabilities.js", () => ({
-  collectRuntimeChannelCapabilities: collectRuntimeChannelCapabilitiesMock,
+vi.mock("../config/channel-capabilities.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/channel-capabilities.js")>()),
+  resolveChannelCapabilities: resolveChannelCapabilitiesMock,
 }));
 
 vi.mock("./shell-utils.js", () => ({
   detectRuntimeShell: vi.fn(() => "zsh"),
 }));
 
-vi.mock("./system-prompt-params.js", () => ({
-  buildSystemPromptParams: buildSystemPromptParamsMock,
+vi.mock("./git-coauthor-prompt.js", () => ({
+  resolveSessionGitCoauthorPrompt: vi.fn(),
 }));
 
 vi.mock("../infra/machine-name.js", () => ({
@@ -55,8 +50,13 @@ vi.mock("../infra/os-summary.js", () => ({
 }));
 
 describe("resolveAgentRuntimePrompt", () => {
+  const gitCoauthorPrompt =
+    "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
+    "Co-authored-by: ada <20+ada@users.noreply.github.com>";
+
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(resolveSessionGitCoauthorPrompt).mockResolvedValue(gitCoauthorPrompt);
   });
 
   it("resolves shared runtime and channel prompt facts", async () => {
@@ -72,46 +72,30 @@ describe("resolveAgentRuntimePrompt", () => {
       channel: "Telegram",
       accountId: "work",
       chatType: "group",
-      currentChannelId: "telegram:-1001:topic:928",
-      currentThreadTs: "928",
-      currentMessageId: "message-1",
-      senderId: "sender-1",
-      senderIsOwner: true,
     });
 
     const channelContext = { cfg: config, channel: "telegram", accountId: "work" };
-    expect(collectRuntimeChannelCapabilitiesMock).toHaveBeenCalledWith(channelContext);
+    expect(resolveChannelCapabilitiesMock).toHaveBeenCalledWith(channelContext);
     expect(resolveChannelReactionGuidanceMock).toHaveBeenCalledWith(channelContext);
     expect(resolveChannelMessageToolHintsMock).toHaveBeenCalledWith(channelContext);
-    expect(listChannelSupportedActionsMock).toHaveBeenCalledWith({
-      ...channelContext,
-      chatType: "group",
-      currentChannelId: "telegram:-1001:topic:928",
-      currentThreadTs: "928",
-      currentMessageId: "message-1",
+    expect(resolveSessionGitCoauthorPrompt).toHaveBeenCalledExactlyOnceWith({
+      config,
+      agentId: "main",
       sessionKey: "agent:main:telegram:direct:123",
       sessionId: "session-1",
-      agentId: "main",
-      requesterSenderId: "sender-1",
-      senderIsOwner: true,
     });
-    expect(buildSystemPromptParamsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config,
-        agentId: "main",
-        runtime: expect.objectContaining({
-          host: "test-host",
-          os: "TestOS 1.0",
-          model: "openai/gpt-test",
-          defaultModel: "openai/gpt-default",
-          shell: "zsh",
-          channel: "telegram",
-          chatType: "group",
-          capabilities: ["voice"],
-          channelActions: ["send", "react"],
-        }),
-      }),
-    );
+    expect(result.runtimeInfo).toMatchObject({
+      agentId: "main",
+      host: "test-host",
+      os: "TestOS 1.0",
+      model: "openai/gpt-test",
+      defaultModel: "openai/gpt-default",
+      shell: "zsh",
+      channel: "telegram",
+      chatType: "group",
+      capabilities: ["voice"],
+      gitCoauthorPrompt,
+    });
     expect(result).toEqual(
       expect.objectContaining({
         runtimeChannel: "telegram",
@@ -122,29 +106,20 @@ describe("resolveAgentRuntimePrompt", () => {
     );
   });
 
-  it("normalizes absent message-action targets", async () => {
-    await resolveAgentRuntimePrompt({
+  it.each([
+    { name: "prepared credit", preparedGitCoauthorPrompt: gitCoauthorPrompt },
+    { name: "explicit undefined", preparedGitCoauthorPrompt: undefined },
+    { name: "explicit null", preparedGitCoauthorPrompt: null },
+  ])("retains $name without refreshing session credit", async ({ preparedGitCoauthorPrompt }) => {
+    const result = await resolveAgentRuntimePrompt({
       config: {},
       agentId: "main",
+      sessionKey: "agent:main:main",
       model: "openai/gpt-test",
-      channel: "telegram",
-      accountId: null,
-      currentChannelId: null,
-      currentThreadTs: null,
-      currentMessageId: null,
-      senderId: null,
-      senderIsOwner: null,
+      preparedGitCoauthorPrompt,
     });
 
-    expect(listChannelSupportedActionsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        currentChannelId: undefined,
-        currentThreadTs: undefined,
-        currentMessageId: undefined,
-        accountId: undefined,
-        requesterSenderId: undefined,
-        senderIsOwner: undefined,
-      }),
-    );
+    expect(result.runtimeInfo.gitCoauthorPrompt).toBe(preparedGitCoauthorPrompt ?? undefined);
+    expect(resolveSessionGitCoauthorPrompt).not.toHaveBeenCalled();
   });
 });

@@ -1,14 +1,13 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
-import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
-import type { CodexDynamicToolCallParams, CodexDynamicToolCallResponse } from "./protocol.js";
-import { sanitizeCodexToolResponse } from "./tool-progress-normalization.js";
+import type { CodexDynamicToolCallResponse } from "./protocol.js";
+import { sanitizeCodexAgentEventRecord } from "./tool-progress-normalization.js";
 
 export function toTranscriptToolResult(
   response: CodexDynamicToolCallResponse,
 ): Record<string, unknown> {
-  const sanitized = sanitizeCodexToolResponse(response);
+  const sanitized = sanitizeCodexAgentEventRecord({ ...response });
   const contentItems = Array.isArray(sanitized.contentItems) ? sanitized.contentItems : [];
   const result: Record<string, unknown> = {
     ...sanitized,
@@ -29,64 +28,30 @@ function toTranscriptToolResultContentItem(item: unknown): Record<string, unknow
   if (record.type === "inputText") {
     return { type: "text", text: typeof record.text === "string" ? record.text : "" };
   }
-  if (record.type === "inputImage") {
-    return typeof record.imageUrl === "string"
-      ? { type: "image", url: record.imageUrl }
-      : { type: "text", text: formatUnsupportedCodexDynamicToolOutput(record.type) };
+  if (record.type === "inputImage" && typeof record.imageUrl === "string") {
+    return { type: "image", url: record.imageUrl };
   }
-  return { type: "text", text: formatUnsupportedCodexDynamicToolOutput(record.type) };
-}
-
-function formatUnsupportedCodexDynamicToolOutput(type: unknown): string {
-  const rawType = typeof type === "string" ? type.replace(/\s+/g, " ").trim() : "";
+  const rawType = typeof record.type === "string" ? record.type.replace(/\s+/g, " ").trim() : "";
   const label = rawType ? truncateUtf16Safe(rawType, 80) : "unknown";
   const suffix = rawType.length > 80 ? "..." : "";
-  return `[Unsupported Codex dynamic tool output: ${label}${suffix}]`;
-}
-
-type CodexDynamicToolExecutionIdentity = Pick<
-  CodexDynamicToolCallParams,
-  "threadId" | "turnId" | "callId"
->;
-
-export function createCodexDynamicToolExecutionRegistry() {
-  const executions = new Map<string, Promise<CodexDynamicToolRuntimeResponse>>();
-  const keyFor = (call: CodexDynamicToolExecutionIdentity) =>
-    JSON.stringify([call.threadId, call.turnId, call.callId]);
-
-  return {
-    get(call: CodexDynamicToolExecutionIdentity) {
-      return executions.get(keyFor(call));
-    },
-    claim(
-      call: CodexDynamicToolExecutionIdentity,
-      start: () => Promise<CodexDynamicToolRuntimeResponse>,
-    ) {
-      const existing = executions.get(keyFor(call));
-      if (existing) {
-        return { execution: existing, replayed: true } as const;
-      }
-      const execution = start();
-      executions.set(keyFor(call), execution);
-      return { execution, replayed: false } as const;
-    },
-  };
+  return { type: "text", text: `[Unsupported Codex dynamic tool output: ${label}${suffix}]` };
 }
 
 export function resolveCodexDynamicToolDirectNames(
   params: EmbeddedRunAttemptParams,
+  registeredTools: readonly { name: string }[],
   hostSystemAgentActive = false,
 ): string[] {
   // Tools with catalogMode=direct-only use the model-only namespace. This list
   // remains for control tools that intentionally live at the dynamic-tool root.
-  const names: string[] = [];
-  // OpenClaw is the run's only tool and must stay callable when Codex tool
-  // search is unavailable. Exact toolsAllow is the public harness contract.
-  if (hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow)) {
-    names.push("openclaw");
-  }
-  if (params.sourceReplyDeliveryMode === "message_tool_only") {
-    names.push("message");
-  }
-  return names;
+  return [
+    // OpenClaw is the run's only tool and must stay callable when Codex tool
+    // search is unavailable. Exact toolsAllow is the public harness contract.
+    ...(hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow)
+      ? ["openclaw"]
+      : []),
+    // Registration owns persistent layout; a turn may narrow execution without
+    // moving this tool into a namespace and changing the thread fingerprint.
+    ...(registeredTools.some((tool) => tool.name === "message") ? ["message"] : []),
+  ];
 }

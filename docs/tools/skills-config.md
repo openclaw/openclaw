@@ -5,7 +5,7 @@ summary: "Full reference for the skills.* config schema, agent allowlists, works
 read_when:
   - Configuring skill loading, install, or gating behavior
   - Setting per-agent skill visibility
-  - Adjusting Skill Workshop limits or approval policy
+  - Adjusting Skill Workshop learning mode or size limits
 ---
 
 Most skills configuration lives under `skills` in
@@ -17,8 +17,8 @@ Most skills configuration lives under `skills` in
   skills: {
     allowBundled: ["gemini", "peekaboo"],
     load: {
-      extraDirs: ["~/Projects/agent-scripts/skills"],
-      allowSymlinkTargets: ["~/Projects/manager/skills"],
+      extraDirs: ["~/path/to/agent-scripts/skills"],
+      allowSymlinkTargets: ["~/path/to/skills"],
       watch: true,
     },
     install: {
@@ -28,8 +28,6 @@ Most skills configuration lives under `skills` in
     },
     workshop: {
       autonomous: { mode: "auto" },
-      approvalPolicy: "auto",
-      maxPending: 50,
       maxSkillBytes: 40000,
     },
     entries: {
@@ -62,8 +60,8 @@ Most skills configuration lives under `skills` in
   Trusted real target directories that symlinked skill folders may resolve
   into, even when the symlink lives outside the configured root. Use this for
   intentional sibling-repo layouts such as
-  `<workspace>/skills/manager -> ~/Projects/manager/skills`. Keep this list
-  narrow — do not point at broad roots like `~` or `~/Projects`.
+  `<workspace>/skills/manager -> ~/path/to/skills`. Keep this list
+  narrow — do not point at broad roots like `~` or a whole projects directory.
 </ParamField>
 
 <ParamField path="skills.load.watch" type="boolean" default="true">
@@ -214,7 +212,7 @@ fails closed.
 OpenClaw does not execute install policy during normal Gateway startup.
 Installs and updates fail closed when policy is enabled but unavailable.
 `openclaw doctor` performs static validation; `openclaw doctor --deep`
-executes a synthetic install probe against the configured command.
+executes a synthetic install check against the configured command.
 
 Bulk updates apply policy per target: a blocked skill or plugin update fails
 that target without disabling the policy or skipping later targets in the
@@ -322,15 +320,20 @@ different visible skill set per agent.
 ```json5
 {
   agents: {
+    ownership: "explicit",
     defaults: {
       skills: ["github", "weather"], // shared baseline
+      heartbeat: { agentId: "writer" },
+      systemAgent: { agentId: "writer" },
+      authInheritance: { agentId: "writer" },
     },
     entries: {
-      writer: { default: true }, // inherits github, weather
+      writer: { workspace: "~/.openclaw/workspace" }, // inherits github, weather
       docs: { skills: ["docs-search"] }, // replaces defaults entirely
       "locked-down": { skills: [] }, // no skills
     },
   },
+  talk: { agentId: "writer" },
 }
 ```
 
@@ -360,35 +363,31 @@ different visible skill set per agent.
 
 ## Workshop (`skills.workshop`)
 
-<ParamField path="skills.workshop.autonomous.mode" type='"off" | "propose" | "auto"' default='"auto"'>
-  `off` disables autonomous capture while keeping the durable-instruction
-  suggestion nudge. `propose` creates pending proposals from corrections and
-  substantial completed work. `auto` sends the same captures through the normal
-  scanner-gated Workshop apply path and runs weekly collection cleanup that can
-  rewrite or drop eligible writable skills. User-prompted skill creation,
-  `/learn`, and manual history scan continue to work in every mode.
+<ParamField path="skills.workshop.autonomous.mode" type='"off" | "auto"' default='"auto"'>
+  `auto` lets agents save and update Workshop skills: a background review runs
+  after substantial work, and learned skills unused for 30 days are archived.
+  Review changes are announced in the conversation, and every change can be
+  undone. `off` disables the background review and unused-skill cleanup.
+  User-prompted skill creation, `/learn`, and manual learning sessions work in
+  both modes.
 </ParamField>
 
 See [Self-learning](/tools/self-learning) for eligibility, privacy, cost,
-proposal-only permissions, and troubleshooting.
-
-<ParamField path="skills.workshop.approvalPolicy" type='"pending" | "auto"' default='"auto"'>
-  `auto` allows agent-initiated apply, reject, or quarantine without an
-  additional approval prompt. `pending` requires operator approval.
-</ParamField>
-
-<ParamField path="skills.workshop.maxPending" type="number" default="50">
-  Maximum pending and quarantined proposals retained per agent (allowed
-  range: 1-200).
-</ParamField>
+and troubleshooting.
 
 <ParamField path="skills.workshop.maxSkillBytes" type="number" default="40000">
-  Maximum proposal body size in bytes (allowed range: 1024-200000). Proposal
-  descriptions are hard-capped at 160 bytes separately, because they appear
-  in discovery and listing output.
+  Maximum `SKILL.md` size in bytes for Workshop skills (allowed range:
+  1024-200000). Skill descriptions are capped at 1024 bytes separately; keep
+  them near 160 bytes because they appear in discovery and listing output.
 </ParamField>
 
-See [Skill Workshop](/tools/skill-workshop) for the proposal lifecycle, CLI
+`openclaw doctor --fix` migrates configs from the removed proposal flow: it
+changes `autonomous.mode: "propose"` to `"off"` and deletes
+`skills.workshop.approvalPolicy` and `skills.workshop.maxPending`. Run
+`openclaw config set skills.workshop.autonomous.mode auto` to turn automatic
+learning back on.
+
+See [Skill Workshop](/tools/skill-workshop) for the skill lifecycle, CLI
 commands, agent tool parameters, and Gateway methods this config controls.
 
 ## Symlinked skill roots
@@ -403,14 +402,14 @@ To allow an intentional symlink layout, declare the trusted target:
 {
   skills: {
     load: {
-      extraDirs: ["~/Projects/manager/skills"],
-      allowSymlinkTargets: ["~/Projects/manager/skills"],
+      extraDirs: ["~/path/to/skills"],
+      allowSymlinkTargets: ["~/path/to/skills"],
     },
   },
 }
 ```
 
-With this config, `<workspace>/skills/manager -> ~/Projects/manager/skills`
+With this config, `<workspace>/skills/manager -> ~/path/to/skills`
 is accepted after realpath resolution. `extraDirs` scans the sibling repo
 directly; `allowSymlinkTargets` preserves the symlinked path for existing
 layouts.
@@ -458,22 +457,9 @@ Pass secrets into a Docker sandbox with:
 
 ## Loading order reminder
 
-```text
-workspace/skills      (highest)
-workspace/.agents/skills
-~/.agents/skills
-~/.openclaw/skills
-bundled + Custodian skills
-skills.load.extraDirs (lowest)
-```
-
-Custodian skills share bundled precedence but load only for the agent selected
-by `agents.defaults.systemAgent.agentId` (or the existing sole-agent fallback).
-See [Custodian skills](/tools/custodian-skills).
-
-Changes to skills and config take effect on the next new session when the
-watcher is enabled, or on the next agent turn when the watcher detects a
-change.
+See [Loading order](/tools/skills#loading-order) for source precedence, including
+the per-agent Workshop tier, and [Snapshots and refresh](/tools/skills#snapshots-and-refresh)
+for when changes become visible.
 
 ## Related
 
@@ -485,10 +471,10 @@ change.
     Authoring custom workspace skills.
   </Card>
   <Card title="Skill Workshop" href="/tools/skill-workshop" icon="flask">
-    Proposal queue for agent-drafted skills.
+    Agent-learned skills, change history, and undo.
   </Card>
   <Card title="Self-learning" href="/tools/self-learning" icon="brain">
-    Conservative, opt-in proposals from completed work.
+    Automatic, undoable skill learning from completed work.
   </Card>
   <Card title="Slash commands" href="/tools/slash-commands" icon="terminal">
     Native slash-command catalog and chat directives.

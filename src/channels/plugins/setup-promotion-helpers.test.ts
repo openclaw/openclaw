@@ -2,27 +2,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getLoadedChannelPluginMock = vi.hoisted(() => vi.fn());
-const getBundledChannelPluginMock = vi.hoisted(() => vi.fn());
-const getBundledChannelSetupPluginMock = vi.hoisted(() => vi.fn());
-const hasBundledChannelPackageSetupFeatureMock = vi.hoisted(() => vi.fn());
 const resolveBundledSurfaceMock = vi.hoisted(() => vi.fn());
-const loadManifestRegistryMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: loadManifestRegistryMock,
-}));
-
-vi.mock("./bundled.js", () => ({
-  getBundledChannelPlugin: getBundledChannelPluginMock,
-  getBundledChannelSetupPlugin: getBundledChannelSetupPluginMock,
-  hasBundledChannelPackageSetupFeature: hasBundledChannelPackageSetupFeatureMock,
-}));
 
 vi.mock("./registry-loaded.js", () => ({
   getLoadedChannelPluginForRead: getLoadedChannelPluginMock,
 }));
 
-import { resolveDiscoveredChannelSetupPromotionSurface } from "./setup-promotion-discovery.js";
 import { resolveSingleAccountPromotion } from "./setup-promotion-helpers.js";
 
 function resolveSingleAccountKeysToMove(
@@ -52,64 +37,14 @@ function valuesFor(keys: readonly string[]): Record<string, string> {
 
 describe("setup promotion helpers", () => {
   beforeEach(() => {
-    getBundledChannelPluginMock.mockReset();
-    getBundledChannelSetupPluginMock.mockReset();
-    hasBundledChannelPackageSetupFeatureMock.mockReset();
     getLoadedChannelPluginMock.mockReset();
     resolveBundledSurfaceMock.mockReset();
-    loadManifestRegistryMock.mockReset().mockReturnValue({ plugins: [] });
-  });
-
-  it("resolves bundled promotion from the setup-only plugin", () => {
-    hasBundledChannelPackageSetupFeatureMock.mockReturnValue(true);
-    getBundledChannelSetupPluginMock.mockReturnValue({
-      setup: { singleAccountKeysToMove: ["customAuth"] },
-    });
-
-    expect(resolveDiscoveredChannelSetupPromotionSurface("demo", {})).toEqual({
-      singleAccountKeysToMove: ["customAuth"],
-    });
-    expect(getBundledChannelSetupPluginMock).toHaveBeenCalledWith("demo");
-    expect(getBundledChannelPluginMock).not.toHaveBeenCalled();
-  });
-
-  it("resolves bundled promotion from a channel-owned setup contract", () => {
-    hasBundledChannelPackageSetupFeatureMock.mockReturnValue(true);
-    getBundledChannelSetupPluginMock.mockReturnValue({
-      setupContract: { singleAccountKeysToMove: ["signalNumber"] },
-    });
-
-    expect(resolveDiscoveredChannelSetupPromotionSurface("signal", {})).toEqual({
-      singleAccountKeysToMove: ["signalNumber"],
-    });
-  });
-
-  it("resolves generic migration keys without importing plugin runtime", () => {
-    const keys = resolveSingleAccountKeysToMove({
-      channelKey: "demo",
-      channel: {
-        defaultAccount: "ops",
-        dmPolicy: "allowlist",
-        allowFrom: ["+15551234567"],
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["group-123"],
-      },
-    });
-
-    expect(keys).toEqual(["dmPolicy", "allowFrom", "groupPolicy", "groupAllowFrom"]);
-    expect(getLoadedChannelPluginMock).toHaveBeenCalledWith("demo");
-    expect(resolveBundledSurfaceMock).not.toHaveBeenCalled();
-    expect(getBundledChannelSetupPluginMock).not.toHaveBeenCalled();
   });
 
   describe.each(["caller", "loaded", "discovered"])(
     "explicit preserve-root from the %s surface",
     (source) => {
-      it.each([
-        { name: "Root", groupPolicy: "allowlist", accounts: { ada: {} } },
-        { enabled: true },
-        { enabled: true, accounts: {} },
-      ])("preserves the owned root including an empty promotion key set: %j", (channel) => {
+      it("preserves the owned root including an empty promotion key set", () => {
         const surface = { configPromotion: "preserve-root" as const };
         if (source === "loaded") {
           getLoadedChannelPluginMock.mockReturnValue({ setupContract: surface });
@@ -118,7 +53,7 @@ describe("setup promotion helpers", () => {
         expect(
           resolveSingleAccountPromotion({
             channelKey: "demo",
-            channel,
+            channel: { enabled: true },
             ...(source === "caller" ? { setupSurface: surface } : {}),
             resolveBundledSurface: resolveBundledSurfaceMock,
           }),

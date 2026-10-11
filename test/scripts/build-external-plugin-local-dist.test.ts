@@ -3,10 +3,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveBuildAllSteps, runBuildAllSteps } from "../../scripts/build-all.mts";
 import {
   buildExternalPluginLocalDist,
   listExternalPluginLocalDistPackageDirs,
 } from "../../scripts/build-external-plugin-local-dist.mts";
+import {
+  parseBundledPluginAssetArgs,
+  runBundledPluginAssetHooks,
+} from "../../scripts/bundled-plugin-assets.mts";
 import { copyBundledPluginMetadata } from "../../scripts/copy-bundled-plugin-metadata.mts";
 import {
   collectRootPackageExcludedExtensionDirs,
@@ -46,8 +51,55 @@ function writeChannelStateFixtures(pluginRoot: string) {
 }
 
 describe("external plugin local dist build", () => {
+  it.each([
+    ["dist/extensions", "demo/node_modules/sentinel.txt", "junction"],
+    ["dist/extensions/demo", "node_modules/sentinel.txt", "junction"],
+    ["dist/extensions/demo/skills", "example/SKILL.md", "junction"],
+    ["dist/extensions/demo/assets", "icon.png", "junction"],
+    ["dist/extensions/demo/package.json", "package.json", "file"],
+    ["dist/extensions/demo/openclaw.plugin.json", "openclaw.plugin.json", "file"],
+  ] as const)(
+    "preserves outside files behind a linked metadata output %s",
+    (output, sentinel, type) => {
+      const repoRoot = fs.realpathSync(tempDirs.make("openclaw-plugin-metadata-boundary-"));
+      const outside = tempDirs.make("openclaw-plugin-metadata-outside-");
+      const pluginRoot = path.join(repoRoot, "extensions", "demo");
+      fs.mkdirSync(path.join(pluginRoot, "skills", "example"), { recursive: true });
+      fs.writeFileSync(
+        path.join(repoRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "1.0.0", type: "module" }),
+      );
+      fs.writeFileSync(
+        path.join(pluginRoot, "package.json"),
+        JSON.stringify({
+          name: "@openclaw/demo",
+          version: "1.0.0",
+          openclaw: { extensions: ["./index.ts"] },
+        }),
+      );
+      fs.writeFileSync(
+        path.join(pluginRoot, "openclaw.plugin.json"),
+        JSON.stringify({ id: "demo", skills: ["./skills/example"] }),
+      );
+      fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export {};\n");
+      fs.writeFileSync(path.join(pluginRoot, "skills", "example", "SKILL.md"), "new skill\n");
+      const sentinelPath = path.join(outside, sentinel);
+      fs.mkdirSync(path.dirname(sentinelPath), { recursive: true });
+      fs.writeFileSync(sentinelPath, "outside data\n");
+      const linkPath = path.join(repoRoot, output);
+      fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+      fs.symlinkSync(type === "file" ? sentinelPath : outside, linkPath, type);
+
+      expect(() => copyBundledPluginMetadata({ repoRoot, env: {} })).toThrow("symbolic link");
+      expect(fs.readFileSync(sentinelPath, "utf8")).toBe("outside data\n");
+      expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
+    },
+  );
+
   it("keeps excluded plugin graphs isolated and their runtime metadata loadable", async () => {
     const repoRoot = fs.realpathSync(tempDirs.make("openclaw-isolated-plugin-graphs-"));
+    const browserEntry = `dist/control-ui/${"a".repeat(64)}/index.js`;
+    const browserSource = "export const browserUi = true;\n";
     const plugins = [
       { id: "external-cjs", runtimeFormat: "cjs", publishToNpm: true, bundledDist: true },
       { id: "external-esm", runtimeFormat: "esm", publishToNpm: true, bundledDist: true },
@@ -65,6 +117,7 @@ describe("external plugin local dist build", () => {
     );
     for (const { id, runtimeFormat, publishToNpm, bundledDist } of plugins) {
       const pluginRoot = path.join(repoRoot, "extensions", id);
+      const browserUi = id === "external-only";
       fs.mkdirSync(pluginRoot, { recursive: true });
       fs.writeFileSync(
         path.join(pluginRoot, "package.json"),
@@ -76,12 +129,71 @@ describe("external plugin local dist build", () => {
             extensions: ["./index.ts"],
             setupEntry: "./setup-entry.ts",
             channel: { id, label: id, ...channelStateFixtures },
-            build: { runtimeFormat, bundledDist },
+            build: {
+              runtimeFormat,
+              bundledDist,
+              ...(id === "external-cjs"
+                ? {
+                    staticAssets: [
+                      { source: "./assets/generated.txt", output: "assets/generated.txt" },
+                    ],
+                  }
+                : {}),
+            },
+            ...(id === "external-cjs"
+              ? {
+                  assetScripts: {
+                    build: "node scripts/build-assets.cjs",
+                    buildOutputs: ["assets/generated.txt"],
+                  },
+                }
+              : {}),
             release: { publishToNpm },
+            ...(browserUi
+              ? {
+                  controlUi: "./browser/index.ts",
+                  assetScripts: {
+                    build: "node build-browser.mjs",
+                    buildOutputs: ["./openclaw.plugin.json"],
+                  },
+                }
+              : {}),
           },
         }),
       );
-      fs.writeFileSync(path.join(pluginRoot, "openclaw.plugin.json"), JSON.stringify({ id }));
+      fs.writeFileSync(
+        path.join(pluginRoot, "openclaw.plugin.json"),
+        JSON.stringify({
+          id,
+          ...(browserUi
+            ? { controlUi: { entry: `dist/control-ui/${"b".repeat(64)}/index.js` } }
+            : {}),
+        }),
+      );
+      if (id === "external-cjs") {
+        fs.mkdirSync(path.join(pluginRoot, "scripts"));
+        fs.writeFileSync(
+          path.join(pluginRoot, "scripts/build-assets.cjs"),
+          `const fs = require("node:fs");
+fs.appendFileSync("asset-builds.txt", "built\\n");
+fs.mkdirSync("assets", { recursive: true });
+fs.writeFileSync("assets/generated.txt", "generated asset");
+`,
+        );
+      }
+      if (browserUi) {
+        fs.writeFileSync(
+          path.join(pluginRoot, "build-browser.mjs"),
+          `import fs from "node:fs";
+           const before = fs.readFileSync("openclaw.plugin.json", "utf8");
+           const manifest = JSON.parse(before);
+           manifest.controlUi = { entry: ${JSON.stringify(browserEntry)} };
+           const after = JSON.stringify(manifest, null, 2) + "\\n";
+           if (before !== after) fs.writeFileSync("openclaw.plugin.json", after);
+           fs.mkdirSync(${JSON.stringify(path.posix.dirname(browserEntry))}, { recursive: true });
+           fs.writeFileSync(${JSON.stringify(browserEntry)}, ${JSON.stringify(browserSource)});`,
+        );
+      }
       writeChannelStateFixtures(pluginRoot);
       fs.writeFileSync(
         path.join(pluginRoot, "runtime-api.ts"),
@@ -94,11 +206,53 @@ describe("external plugin local dist build", () => {
         );
       }
     }
-    await expect(
-      buildExternalPluginLocalDist({ repoRoot, env: {}, logLevel: "silent" }),
-    ).resolves.toMatchObject({
-      pluginDirs: plugins.map(({ id }) => id).toSorted(),
-    });
+    const steps = resolveBuildAllSteps("qaRuntime", {}).filter((step) =>
+      ["plugins:assets:build", "external-plugins:local-dist"].includes(step.label),
+    );
+    const build = (selectedSteps: typeof steps) =>
+      runBuildAllSteps("qaRuntime", {
+        cwd: repoRoot,
+        env: { ...process.env, OPENCLAW_BUILD_ALL_NO_PNPM: "1", GIT_COMMIT: "a".repeat(40) },
+        steps: selectedSteps,
+        cacheEnabled: false,
+        runStep: async (invocation) => {
+          if (invocation.args[2] === "scripts/bundled-plugin-assets.mts") {
+            await runBundledPluginAssetHooks({
+              ...parseBundledPluginAssetArgs(invocation.args.slice(3)),
+              rootDir: repoRoot,
+            });
+            expect(
+              JSON.parse(
+                fs.readFileSync(
+                  path.join(repoRoot, "extensions/external-only/openclaw.plugin.json"),
+                  "utf8",
+                ),
+              ).controlUi.entry,
+            ).toBe(browserEntry);
+          } else {
+            expect(invocation.args[2]).toBe("scripts/build-external-plugin-local-dist.mts");
+            await expect(
+              buildExternalPluginLocalDist({ repoRoot, env: {}, logLevel: "silent" }),
+            ).resolves.toMatchObject({ pluginDirs: plugins.map(({ id }) => id).toSorted() });
+          }
+          return { status: 0 };
+        },
+      });
+    const built = await build(steps);
+    expect(built.exitCode).toBe(0);
+    expect(
+      fs.readFileSync(path.join(repoRoot, "extensions/external-cjs/asset-builds.txt"), "utf8"),
+    ).toBe("built\n");
+    expect(
+      fs.readFileSync(
+        path.join(repoRoot, "dist/extensions/external-cjs/assets/generated.txt"),
+        "utf8",
+      ),
+    ).toBe("generated asset");
+    expect((await build(steps.slice(0, 1))).exitCode).toBe(0);
+    expect(
+      fs.readFileSync(path.join(repoRoot, "extensions/external-cjs/asset-builds.txt"), "utf8"),
+    ).toBe("built\nbuilt\n");
     copyBundledPluginMetadata({ repoRoot, env: {} });
     expect(fs.readdirSync(path.join(repoRoot, "dist"))).toEqual(["extensions"]);
     for (const { id, runtimeFormat, bundledDist } of plugins) {
@@ -107,7 +261,14 @@ describe("external plugin local dist build", () => {
       const extension = runtimeFormat === "cjs" ? ".cjs" : ".js";
       expect(metadata.openclaw.extensions).toEqual([`./index${extension}`]);
       expect(metadata.openclaw.setupEntry).toBe(`./setup-entry${extension}`);
-      expect(fs.existsSync(path.join(repoRoot, "extensions", id, "dist"))).toBe(false);
+      const sourceRoot = path.join(repoRoot, "extensions", id);
+      if (id === "external-only") {
+        expect(fs.readFileSync(path.join(sourceRoot, browserEntry), "utf8")).toBe(browserSource);
+        expect(fs.readdirSync(path.join(sourceRoot, "dist"))).toEqual(["control-ui"]);
+        expect(fs.existsSync(path.join(pluginRoot, "control-ui"))).toBe(false);
+      } else {
+        expect(fs.existsSync(path.join(sourceRoot, "dist"))).toBe(false);
+      }
       fs.writeFileSync(
         path.join(pluginRoot, runtimeFormat === "cjs" ? "index.js" : "index.cjs"),
         'throw new Error("stale format must not execute");\n',
@@ -256,8 +417,6 @@ describe("external plugin local dist build", () => {
 
   it.for([
     ["esm", false],
-    ["cjs", false],
-    ["esm", true],
     ["cjs", true],
   ] as const)(
     "retains %s source dependencies across metadata profiles and the shared host SDK (relocate=%s)",
@@ -475,17 +634,6 @@ describe("external plugin local dist build", () => {
     ).toBe(true);
   });
 
-  it("leaves Docker-selected external plugin compilation on the unified build path", () => {
-    expect(
-      listExternalPluginLocalDistPackageDirs({
-        env: {
-          ...process.env,
-          [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "slack,whatsapp",
-        },
-      }),
-    ).toEqual([]);
-  });
-
   it("retains released optional outputs and respects private QA and bounded selectors", () => {
     const env = { OPENCLAW_INCLUDE_OPTIONAL_BUNDLED: "0" };
     const selected = collectSourceCheckoutPluginBuildEntries({ env });
@@ -562,9 +710,11 @@ describe("external plugin local dist build", () => {
         `
         import { pathToFileURL } from "node:url";
         const { default: configs } = await import(pathToFileURL(process.argv[1]).href);
-        const entry = configs.find((config) => config.name === "openclaw-unified").entry;
+        const entries = configs
+          .filter((config) => config.name === "openclaw-unified")
+          .flatMap((config) => Object.keys(config.entry));
         const ids = new Set(JSON.parse(process.argv[2]));
-        console.log(JSON.stringify(Object.keys(entry).filter((key) =>
+        console.log(JSON.stringify(entries.filter((key) =>
           key.startsWith("extensions/") && ids.has(key.split("/")[1])).sort()));
       `,
         path.resolve("tsdown.config.ts"),

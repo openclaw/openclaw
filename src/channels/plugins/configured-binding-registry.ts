@@ -1,68 +1,32 @@
-/**
- * Configured binding registry.
- *
- * Primes, counts, and resolves compiled binding records from config and conversation facts.
- */
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { parseConfiguredAcpSessionKey } from "../../acp/persistent-bindings.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ConversationRef } from "../../infra/outbound/session-binding-service.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import type {
+  CompiledConfiguredBinding,
   ConfiguredBindingRecordResolution,
   ConfiguredBindingResolution,
 } from "./binding-types.js";
-import { ensureConfiguredBindingBuiltinsRegistered } from "./configured-binding-builtins.js";
 import { resolveCompiledBindingRegistry } from "./configured-binding-compiler.js";
-import {
-  materializeConfiguredBindingRecord,
-  resolveMatchingConfiguredBinding,
-  toConfiguredBindingConversationRef,
-} from "./configured-binding-match.js";
-import { resolveConfiguredBindingRecordBySessionKeyFromRegistry } from "./configured-binding-session-lookup.js";
+import type { ChannelConfiguredBindingMatch } from "./types.adapters.js";
 
-function resolveMaterializedConfiguredBinding(params: {
-  cfg: OpenClawConfig;
-  conversation: ConversationRef;
-}) {
-  const conversation = toConfiguredBindingConversationRef(params.conversation);
-  if (!conversation) {
-    return null;
+function resolveAccountMatchPriority(match: string | undefined, actual: string): 0 | 1 | 2 {
+  if (!match) {
+    return actual === DEFAULT_ACCOUNT_ID ? 2 : 0;
   }
-  const rules = resolveCompiledBindingRegistry(params.cfg).rulesByChannel.get(conversation.channel);
-  if (!rules || rules.length === 0) {
-    return null;
+  if (match === "*") {
+    return 1;
   }
-  const resolved = resolveMatchingConfiguredBinding({
-    rules,
-    conversation,
-  });
-  if (!resolved) {
-    return null;
-  }
-  // Matching returns provider-specific target facts; materialization turns them into the
-  // persisted session binding record and stateful target descriptor used at runtime.
-  return {
-    conversation,
-    resolved,
-    materializedTarget: materializeConfiguredBindingRecord({
-      rule: resolved.rule,
-      accountId: conversation.accountId,
-      conversation: resolved.match,
-    }),
-  };
+  return normalizeAccountId(match) === actual ? 2 : 0;
 }
 
-/**
- * Warms and counts the compiled configured binding registry for a config snapshot.
- */
-export function primeConfiguredBindingRegistry(params: { cfg: OpenClawConfig }): {
-  bindingCount: number;
-  channelCount: number;
-} {
-  ensureConfiguredBindingBuiltinsRegistered();
-  const { rulesByChannel } = resolveCompiledBindingRegistry(params.cfg);
-  return {
-    bindingCount: [...rulesByChannel.values()].reduce((sum, rules) => sum + rules.length, 0),
-    channelCount: rulesByChannel.size,
-  };
+/** Compile plugin binding rules before publishing a config or plugin generation. */
+export function validateConfiguredBindings(cfg: OpenClawConfig): void {
+  resolveCompiledBindingRegistry(cfg);
 }
 
 /**
@@ -75,18 +39,11 @@ export function resolveConfiguredBindingRecord(params: {
   conversationId: string;
   parentConversationId?: string;
 }): ConfiguredBindingRecordResolution | null {
-  ensureConfiguredBindingBuiltinsRegistered();
-  return (
-    resolveMaterializedConfiguredBinding({
-      cfg: params.cfg,
-      conversation: {
-        channel: params.channel,
-        accountId: params.accountId,
-        conversationId: params.conversationId,
-        parentConversationId: params.parentConversationId,
-      },
-    })?.materializedTarget ?? null
-  );
+  const resolved = resolveConfiguredBinding({
+    cfg: params.cfg,
+    conversation: params,
+  });
+  return resolved ? { record: resolved.record, statefulTarget: resolved.statefulTarget } : null;
 }
 
 /**
@@ -96,16 +53,62 @@ export function resolveConfiguredBinding(params: {
   cfg: OpenClawConfig;
   conversation: ConversationRef;
 }): ConfiguredBindingResolution | null {
-  ensureConfiguredBindingBuiltinsRegistered();
-  const resolved = resolveMaterializedConfiguredBinding(params);
-  if (!resolved) {
+  const channel = normalizeOptionalLowercaseString(params.conversation.channel);
+  const conversationId = params.conversation.conversationId.trim();
+  if (!channel || !conversationId) {
+    return null;
+  }
+  const conversation = {
+    channel,
+    accountId: normalizeAccountId(params.conversation.accountId),
+    conversationId,
+    parentConversationId: normalizeOptionalString(params.conversation.parentConversationId),
+  };
+  const rules = resolveCompiledBindingRegistry(params.cfg).get(channel);
+  let bestMatch: { rule: CompiledConfiguredBinding; match: ChannelConfiguredBindingMatch } | null =
+    null;
+  let bestAccountPriority = 0;
+  let bestMatchPriority = 0;
+  for (const rule of rules ?? []) {
+    const accountMatchPriority = resolveAccountMatchPriority(
+      rule.accountPattern,
+      conversation.accountId,
+    );
+    if (accountMatchPriority === 0) {
+      continue;
+    }
+    const match = rule.provider.matchInboundConversation({
+      binding: rule.binding,
+      compiledBinding: rule.target,
+      conversationId,
+      parentConversationId: conversation.parentConversationId,
+    });
+    if (!match) {
+      continue;
+    }
+    const matchPriority = match.matchPriority ?? 0;
+    // Exact accounts outrank wildcards, then the channel's conversation priority decides.
+    if (
+      !bestMatch ||
+      accountMatchPriority > bestAccountPriority ||
+      (accountMatchPriority === bestAccountPriority && matchPriority > bestMatchPriority)
+    ) {
+      bestMatch = { rule, match };
+      bestAccountPriority = accountMatchPriority;
+      bestMatchPriority = matchPriority;
+    }
+  }
+  if (!bestMatch) {
     return null;
   }
   return {
-    conversation: resolved.conversation,
-    compiledBinding: resolved.resolved.rule,
-    match: resolved.resolved.match,
-    ...resolved.materializedTarget,
+    conversation,
+    compiledBinding: bestMatch.rule,
+    match: bestMatch.match,
+    ...bestMatch.rule.targetFactory.materialize({
+      accountId: conversation.accountId,
+      conversation: bestMatch.match,
+    }),
   };
 }
 
@@ -116,9 +119,37 @@ export function resolveConfiguredBindingRecordBySessionKey(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
 }): ConfiguredBindingRecordResolution | null {
-  ensureConfiguredBindingBuiltinsRegistered();
-  return resolveConfiguredBindingRecordBySessionKeyFromRegistry({
-    registry: resolveCompiledBindingRegistry(params.cfg),
-    sessionKey: params.sessionKey,
-  });
+  const registry = resolveCompiledBindingRegistry(params.cfg);
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    return null;
+  }
+  const parsed = parseConfiguredAcpSessionKey(sessionKey);
+  if (!parsed) {
+    return null;
+  }
+  const rules = registry.get(parsed.channel);
+  if (!rules) {
+    return null;
+  }
+  let wildcardMatch: ConfiguredBindingRecordResolution | null = null;
+  for (const rule of rules) {
+    const accountMatchPriority = resolveAccountMatchPriority(rule.accountPattern, parsed.accountId);
+    if (accountMatchPriority === 0) {
+      continue;
+    }
+    // Wildcard rules derive their target session key from the parsed account.
+    const materializedTarget = rule.targetFactory.materialize({
+      accountId: parsed.accountId,
+      conversation: rule.target,
+    });
+    if (materializedTarget.record.targetSessionKey === sessionKey) {
+      if (accountMatchPriority === 2) {
+        // Exact account matches outrank wildcard account bindings for the same session key.
+        return materializedTarget;
+      }
+      wildcardMatch = materializedTarget;
+    }
+  }
+  return wildcardMatch;
 }

@@ -1,4 +1,4 @@
-import { projectRuntimeToolInputSchema } from "@openclaw/ai/internal/openai";
+import { projectRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 /**
  * Projects agent tool schemas into JSON-safe runtime shapes and diagnostics.
  * Provider/runtime dispatch uses this module to drop incompatible tools before
@@ -6,11 +6,11 @@ import { projectRuntimeToolInputSchema } from "@openclaw/ai/internal/openai";
  */
 import type { AnyAgentTool } from "./tools/common.js";
 
-export { projectRuntimeToolInputSchema } from "@openclaw/ai/internal/openai";
+export { projectRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 export type {
   RuntimeToolInputSchemaJson,
   RuntimeToolInputSchemaProjection,
-} from "@openclaw/ai/internal/openai";
+} from "@openclaw/ai/internal/tool-schema";
 
 /** Diagnostic for one incompatible runtime tool schema. */
 export type RuntimeToolSchemaDiagnostic = {
@@ -26,14 +26,6 @@ type RuntimeToolSchemaInspection<TTool extends Pick<AnyAgentTool, "name" | "para
 };
 
 type ToolSchemaInspectionMode = "runtime" | "provider-normalizable";
-
-function unreadableRuntimeToolDiagnostic(toolIndex: number): RuntimeToolSchemaDiagnostic {
-  return {
-    toolName: `tool[${toolIndex}]`,
-    toolIndex,
-    violations: [`tool[${toolIndex}] is unreadable`],
-  };
-}
 
 function readRuntimeToolEntries<TTool extends Pick<AnyAgentTool, "name" | "parameters">>(
   tools: readonly TTool[],
@@ -56,12 +48,10 @@ function readRuntimeToolEntries<TTool extends Pick<AnyAgentTool, "name" | "param
   return entries;
 }
 
-function readToolProjectionField<TField extends "name" | "parameters">(
+function readToolProjectionField(
   tool: Pick<AnyAgentTool, "name" | "parameters">,
-  field: TField,
-):
-  | { readable: true; value: Pick<AnyAgentTool, "name" | "parameters">[TField] }
-  | { readable: false } {
+  field: "name" | "parameters",
+): { readable: true; value: unknown } | { readable: false } {
   try {
     return { readable: true, value: tool[field] };
   } catch {
@@ -119,7 +109,11 @@ function inspectToolEntries<TTool extends Pick<AnyAgentTool, "name" | "parameter
   for (let toolIndex = 0; toolIndex < entries.length; toolIndex += 1) {
     const tool = entries[toolIndex];
     if (tool === undefined) {
-      diagnostics.push(unreadableRuntimeToolDiagnostic(toolIndex));
+      diagnostics.push({
+        toolName: `tool[${toolIndex}]`,
+        toolIndex,
+        violations: [`tool[${toolIndex}] is unreadable`],
+      });
       continue;
     }
     const diagnostic = inspectToolSchema(tool, toolIndex, mode);

@@ -113,6 +113,104 @@ describe("context-window-guard", () => {
     });
   });
 
+  it.each([
+    ["caps custom input by its native window", "custom", "tiny", 3_000, 16_000, 3_000],
+    ["keeps authored input above lower discovery", "custom", "tiny", 32_000, 16_000, 16_000],
+    [
+      "keeps a native-window override without an input cap",
+      "custom",
+      "tiny",
+      32_000,
+      undefined,
+      32_000,
+    ],
+    [
+      "ignores stale native metadata for fixed models",
+      "anthropic",
+      "claude-sonnet-4-6",
+      200_000,
+      350_000,
+      350_000,
+    ],
+    [
+      "caps input by the fixed provider window",
+      "anthropic",
+      "claude-sonnet-4-6",
+      200_000,
+      2_000_000,
+      1_000_000,
+    ],
+    [
+      "ignores a non-finite cap before fixed-window clamping",
+      "anthropic",
+      "claude-sonnet-4-6",
+      200_000,
+      Infinity,
+      200_000,
+    ],
+    ["ignores a sub-token native window", "custom", "tiny", 0.5, 16_000, 16_000],
+    ["keeps whole-token guard normalization", "custom", "tiny", 32_000.9, 16_000.9, 16_000],
+  ] as const)(
+    "resolves configured context limits (%s)",
+    (_case, provider, modelId, contextWindow, contextTokens, expected) => {
+      const configured = openRouterModelConfig({ contextWindow, contextTokens });
+      const providerConfig = configured.models.providers.openrouter;
+      const cfg = {
+        models: {
+          providers: {
+            [provider]: {
+              ...providerConfig,
+              models: providerConfig.models.map((model) =>
+                Object.assign({}, model, { id: modelId }),
+              ),
+            },
+          },
+        },
+      } satisfies OpenClawConfig;
+
+      expect(
+        resolveContextWindowInfo({
+          cfg,
+          provider,
+          modelId,
+          modelContextTokens: 8_000,
+          modelContextWindow: 8_000,
+          defaultTokens: 200_000,
+        }),
+      ).toEqual({ source: "modelsConfig", tokens: expected });
+    },
+  );
+
+  it.each([false, true])("uses the exact row's context window (exact first=%s)", (exactFirst) => {
+    const models = openRouterModelConfig({
+      contextWindow: 128_000,
+    }).models.providers.openrouter.models.flatMap((model) => [
+      { ...model, id: "custom/model", contextWindow: 2_000 },
+      { ...model, id: "model", contextWindow: 128_000 },
+    ]);
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://example.invalid",
+            models: exactFirst ? models.toReversed() : models,
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "custom",
+      modelId: "model",
+      modelContextWindow: 128_000,
+      defaultTokens: 200_000,
+    });
+
+    expect(info).toEqual({ source: "modelsConfig", tokens: 128_000 });
+    expect(evaluateContextWindowGuard({ info }).shouldBlock).toBe(false);
+  });
+
   it("matches bare provider model config ids against provider-scoped runtime model ids", () => {
     const cfg = openRouterModelConfig({ contextWindow: 1_000_000, contextTokens: 936_000 });
 

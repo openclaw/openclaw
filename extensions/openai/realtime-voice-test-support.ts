@@ -2,10 +2,10 @@ import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceBrowserSession,
-  RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
+import type { InternalRealtimeVoiceProviderApi } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expect, vi, type Mock } from "vitest";
 
@@ -81,6 +81,31 @@ export function createOpenAIRealtimeMockState() {
   };
 }
 
+/** Native workers do not inherit Vitest's ws mock. Keep registered GPT-Live
+ * provider tests on the real media owner with fake wire I/O, without changing
+ * the legacy FakeWebSocket behavior relied on by the GA suites. */
+export async function createTestMediaSocketFactory(
+  FakeWebSocket: ReturnType<typeof createOpenAIRealtimeMockState>["FakeWebSocket"],
+) {
+  const [{ EventEmitter }, { fakeQuicksilverMediaSocket }] = await Promise.all([
+    import("node:events"),
+    import("./realtime-quicksilver-socket.test-support.js"),
+  ]);
+  return fakeQuicksilverMediaSocket((url, options) => {
+    const wire = new FakeWebSocket(url, options);
+    const socket = Object.assign(new EventEmitter(), {
+      readyState: wire.readyState,
+      send: (payload: string) => wire.send(payload),
+      close: (code?: number, reason?: string) => wire.close(code, reason),
+    });
+    Object.defineProperty(socket, "readyState", { get: () => wire.readyState });
+    for (const event of ["open", "message", "error", "close"]) {
+      wire.on(event, (...args) => socket.emit(event, ...args));
+    }
+    return socket;
+  });
+}
+
 type FakeWebSocketLike = {
   sent: string[];
   readyState: number;
@@ -93,46 +118,9 @@ type FakeWebSocketConstructor<T extends FakeWebSocketLike> = {
   instances: T[];
 };
 
-type InternalRealtimeVoiceProviderApi = {
-  isBrowserSessionConfigured: (ctx: {
-    cfg?: object;
-    providerConfig: Record<string, unknown>;
-    agentId?: string;
-  }) => boolean;
-  isGatewayRelayConfigured: (ctx: {
-    cfg?: object;
-    providerConfig: Record<string, unknown>;
-    agentId?: string;
-  }) => boolean | undefined;
-  resolveBrowserSessionCapabilities: (ctx: {
-    cfg?: object;
-    providerConfig: Record<string, unknown>;
-    agentId?: string;
-    model?: string;
-    clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
-  }) => {
-    handlesAgentConsult?: boolean;
-    supportsToolCalls?: boolean;
-    supportsVideoFrames?: boolean;
-    supportsGatewayControl?: boolean;
-    transports?: string[];
-  };
-  resolveGatewayRelayCapabilities: (ctx: {
-    cfg?: object;
-    providerConfig: Record<string, unknown>;
-    model?: string;
-  }) => {
-    handlesAgentConsult?: boolean;
-    supportsToolCalls?: boolean;
-    transports?: string[];
-  };
-  validateGatewayRelayLaunch: (ctx: {
-    cfg?: object;
-    providerConfig: Record<string, unknown>;
-    model?: string;
-    autoRespondToAudio?: boolean;
-  }) => string | undefined;
-};
+type OpenAIInternalRealtimeVoiceProviderApi = Required<
+  Omit<InternalRealtimeVoiceProviderApi, "cancelBrowserSession">
+>;
 
 const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-voice-provider.v1");
 const OPENAI_REALTIME_REJECTED_KEY_MESSAGE =
@@ -217,11 +205,11 @@ export function createOpenAIRealtimeTestSupport<T extends FakeWebSocketLike>(dep
 
   function readInternalRealtimeVoiceProviderApi(
     provider: object,
-  ): InternalRealtimeVoiceProviderApi {
+  ): OpenAIInternalRealtimeVoiceProviderApi {
     return Reflect.get(
       provider,
       INTERNAL_REALTIME_VOICE_PROVIDER,
-    ) as InternalRealtimeVoiceProviderApi;
+    ) as OpenAIInternalRealtimeVoiceProviderApi;
   }
 
   function createNativeBridge(

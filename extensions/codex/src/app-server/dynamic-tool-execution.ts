@@ -1,7 +1,3 @@
-/**
- * Timeout, terminal-release, and diagnostic helpers for Codex dynamic tool
- * calls.
- */
 import {
   embeddedAgentLog,
   formatToolExecutionErrorMessage,
@@ -10,18 +6,19 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  hasPendingInternalDiagnosticEvent,
-  type DiagnosticEventPayload,
-} from "openclaw/plugin-sdk/diagnostic-runtime";
+  copyInternalToolResultState,
+  runWithAsyncWorkResources,
+} from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import {
+  addSafeTimeoutDelayGraceMs,
   addTimerTimeoutGraceMs,
   parseStrictNonNegativeInteger,
 } from "openclaw/plugin-sdk/number-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   createFailedDynamicToolResponse,
+  failedToolResult,
   type CodexDynamicToolRuntimeResponse,
-  withDynamicToolTerminalResolution,
 } from "./dynamic-tool-response-state.js";
 import type { CodexDynamicToolBridge } from "./dynamic-tools.js";
 import {
@@ -33,11 +30,7 @@ import {
 } from "./protocol.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
-export { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
-
-/** Default timeout for Codex dynamic tool calls. */
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
-/** Hard cap for per-call Codex dynamic tool timeout overrides. */
 const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
 // timeoutSeconds is an inner tool budget. Keep enough outer-watchdog headroom
 // for bounded setup RPCs and the tool's structured timeout result to complete.
@@ -45,9 +38,7 @@ const CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS = 30_000;
 const CODEX_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS = 120_000;
 const CODEX_DYNAMIC_COMPUTER_GATEWAY_TIMEOUT_MS = 30_000;
 const CODEX_DYNAMIC_COMPUTER_COMPLETION_GRACE_MS = 30_000;
-/** Timeout for image-understanding style dynamic tool calls. */
 const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
-/** Timeout for message-delivery dynamic tool calls. */
 const CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS = 600_000;
 /** Outer default for collector waits: full swarm budget plus completion grace. */
 const CODEX_DYNAMIC_AGENTS_WAIT_TOOL_TIMEOUT_MS =
@@ -84,9 +75,7 @@ function readNumericTimeoutMs(value: unknown): number | undefined {
   }
   if (typeof value === "string") {
     const parsed = parseStrictNonNegativeInteger(value);
-    if (parsed !== undefined) {
-      return Math.max(0, Math.floor(parsed));
-    }
+    return parsed === undefined ? undefined : Math.max(0, parsed);
   }
   return undefined;
 }
@@ -145,7 +134,7 @@ function formatDynamicToolTimeoutDetails(params: {
  * Runs a dynamic tool call with run-abort and the budget prepared by
  * resolveDynamicToolCallTimeoutMs, preserving tool-specific completion grace.
  */
-export async function handleDynamicToolCallWithTimeout(params: {
+type DynamicToolCallExecutionParams = {
   call: CodexDynamicToolCallParams;
   toolBridge: Pick<CodexDynamicToolBridge, "handleToolCall" | "consumeToolExecutionSnapshot"> &
     Partial<Pick<CodexDynamicToolBridge, "sideEffectOwnerKeyForTool">>;
@@ -157,162 +146,204 @@ export async function handleDynamicToolCallWithTimeout(params: {
   onFallbackSelected?: () => void;
   onTimeout?: () => void;
   observeToolTerminal?: EmbeddedRunAttemptParams["observeToolTerminal"];
-}): Promise<CodexDynamicToolRuntimeResponse> {
-  // Timeout or run abort can win while a tool ignores cancellation. Keep the
-  // private observer terminal result exactly once across those competing paths.
-  let didNotifyAgentToolResult = false;
-  const conservativeRaceResponses = new WeakSet<CodexDynamicToolRuntimeResponse>();
-  const finalizeTerminal = (response: CodexDynamicToolRuntimeResponse) => {
-    const executionSnapshot = params.toolBridge.consumeToolExecutionSnapshot?.(params.call.callId);
-    const ownerKey = params.toolBridge.sideEffectOwnerKeyForTool?.(params.call.tool);
-    // The host observer owns active wrapper state. A bridge snapshot is only needed
-    // after that wrapper settles while result post-processing remains pending.
-    const observedExecutionStarted =
-      executionSnapshot?.executionStarted ??
-      (conservativeRaceResponses.has(response) ? undefined : response.executionStarted);
-    const terminalResolution = params.observeToolTerminal?.({
-      toolCallId: params.call.callId,
-      toolName: params.call.tool,
-      result: response,
-      arguments:
-        response.executedArguments ?? executionSnapshot?.executedArguments ?? params.call.arguments,
-      ...(params.toolMeta ? { meta: params.toolMeta } : {}),
-      ...(ownerKey ? { ownerMutation: { ownerKey } } : {}),
-      ...(observedExecutionStarted !== undefined
-        ? { executionStarted: observedExecutionStarted }
-        : {}),
-      outcome: response.success ? "success" : "failure",
-      ...(!response.success ? { failure: { error: readDynamicToolResponseText(response) } } : {}),
-    });
-    return withDynamicToolTerminalResolution(response, terminalResolution);
-  };
-  // The host observer replaces these conservative facts with exact boundary evidence.
-  // Direct/older callers without one must still treat a raced terminal as dispatched.
-  const createFailedAfterPossibleDispatch = (
-    message: string,
-    terminalReason: CodexDynamicToolDiagnosticTerminalReason,
-  ) => {
-    const response = createFailedDynamicToolResponse(message, {
-      executionStarted: true,
-      sideEffectEvidence: true,
-      terminalReason,
-    });
-    conservativeRaceResponses.add(response);
-    return response;
-  };
-  const notifyAgentToolResult = (
-    event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentToolResult"]>>[0],
-  ) => {
-    if (didNotifyAgentToolResult) {
-      return;
-    }
-    didNotifyAgentToolResult = true;
-    try {
-      params.onAgentToolResult?.(event);
-    } catch (error) {
-      embeddedAgentLog.warn(
-        `onAgentToolResult handler failed: tool=${params.call.tool} error=${String(error)}`,
-      );
-    }
-  };
-  const notifyFailedToolResult = (
-    message: string,
-    terminalReason: "failed" | "cancelled" | "timed_out" = "failed",
-  ) => {
-    notifyAgentToolResult({
-      toolName: params.call.tool,
-      result: {
-        content: [{ type: "text", text: message }],
-        details: { status: terminalReason, error: message },
-      },
-      isError: true,
-    });
-  };
-  if (params.signal.aborted) {
-    const message = "OpenClaw dynamic tool call aborted before execution.";
-    const terminalReason = resolveCodexToolAbortTerminalReason(params.signal);
-    params.onFallbackSelected?.();
-    notifyFailedToolResult(message, terminalReason);
-    return finalizeTerminal(
-      createFailedDynamicToolResponse(message, {
-        executionStarted: false,
-        terminalReason,
-      }),
-    );
-  }
+};
 
-  const controller = new AbortController();
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  let timedOut = false;
-  let resolveAbort: ((response: CodexDynamicToolRuntimeResponse) => void) | undefined;
-  const abortFromRun = () => {
-    const message = "OpenClaw dynamic tool call aborted.";
-    const terminalReason = resolveCodexToolAbortTerminalReason(params.signal);
-    params.onFallbackSelected?.();
-    controller.abort(params.signal.reason ?? new Error(message));
-    notifyFailedToolResult(message, terminalReason);
-    resolveAbort?.(createFailedAfterPossibleDispatch(message, terminalReason));
-  };
-  const abortPromise = new Promise<CodexDynamicToolRuntimeResponse>((resolve) => {
-    resolveAbort = resolve;
-  });
-  const timeoutPromise = new Promise<CodexDynamicToolRuntimeResponse>((resolve) => {
-    const { timeoutMs } = params;
-    timeout = setTimeout(() => {
-      timedOut = true;
-      const timeoutDetails = formatDynamicToolTimeoutDetails({ call: params.call, timeoutMs });
-      params.onFallbackSelected?.();
-      controller.abort(new Error(timeoutDetails.responseMessage));
-      params.onTimeout?.();
-      embeddedAgentLog.warn("codex dynamic tool call timed out", {
-        ...timeoutDetails.meta,
-        consoleMessage: timeoutDetails.consoleMessage,
+export async function handleDynamicToolCallWithTimeout(
+  params: DynamicToolCallExecutionParams,
+): Promise<CodexDynamicToolRuntimeResponse> {
+  return await runWithAsyncWorkResources(async (onAcquired) => {
+    // Timeout or run abort can win while a tool ignores cancellation. Keep the
+    // private observer terminal result exactly once across those competing paths.
+    let didNotifyAgentToolResult = false;
+    const conservativeRaceResponses = new WeakSet<CodexDynamicToolRuntimeResponse>();
+    const finalizeTerminal = (response: CodexDynamicToolRuntimeResponse) => {
+      const executionSnapshot = params.toolBridge.consumeToolExecutionSnapshot?.(
+        params.call.callId,
+      );
+      const ownerKey = params.toolBridge.sideEffectOwnerKeyForTool?.(params.call.tool);
+      // The host observer owns active wrapper state. A bridge snapshot is only needed
+      // after that wrapper settles while result post-processing remains pending.
+      const observedExecutionStarted =
+        executionSnapshot?.executionStarted ??
+        (conservativeRaceResponses.has(response) ? undefined : response.executionStarted);
+      const terminalResolution = params.observeToolTerminal?.({
+        toolCallId: params.call.callId,
+        toolName: params.call.tool,
+        result: copyInternalToolResultState(response, {
+          ...response,
+          details: response.transcriptDetails,
+        }),
+        arguments:
+          response.executedArguments ??
+          executionSnapshot?.executedArguments ??
+          params.call.arguments,
+        ...(params.toolMeta ? { meta: params.toolMeta } : {}),
+        ...(ownerKey ? { ownerMutation: { ownerKey } } : {}),
+        replaySafe: ownerKey ? false : response.replaySafe,
+        ...(observedExecutionStarted !== undefined
+          ? { executionStarted: observedExecutionStarted }
+          : {}),
+        outcome: response.success ? "success" : "failure",
+        ...(!response.success ? { failure: { error: readDynamicToolResponseText(response) } } : {}),
       });
-      notifyFailedToolResult(timeoutDetails.responseMessage, "timed_out");
-      resolve(createFailedAfterPossibleDispatch(timeoutDetails.responseMessage, "timed_out"));
-    }, timeoutMs);
-    timeout.unref?.();
-  });
-
-  try {
-    params.signal.addEventListener("abort", abortFromRun, { once: true });
+      if (terminalResolution) {
+        response.terminalResolution = terminalResolution;
+        response.executionStarted = terminalResolution.executionStarted;
+        response.executedArguments =
+          terminalResolution.executedArguments ?? response.executedArguments;
+        response.sideEffectEvidence = terminalResolution.sideEffectEvidence || undefined;
+      }
+      return response;
+    };
+    // The host observer replaces these conservative facts with exact boundary evidence.
+    // Direct/older callers without one must still treat a raced terminal as dispatched.
+    const createFailedAfterPossibleDispatch = (
+      message: string,
+      terminalReason: CodexDynamicToolDiagnosticTerminalReason,
+    ) => {
+      const response = createFailedDynamicToolResponse(message, {
+        executionStarted: true,
+        sideEffectEvidence: true,
+        terminalReason,
+      });
+      conservativeRaceResponses.add(response);
+      return response;
+    };
+    const notifyAgentToolResult = (
+      event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentToolResult"]>>[0],
+    ) => {
+      if (didNotifyAgentToolResult) {
+        return;
+      }
+      didNotifyAgentToolResult = true;
+      try {
+        params.onAgentToolResult?.(event);
+      } catch (error) {
+        const message = formatToolExecutionErrorMessage(error, "Unknown error");
+        embeddedAgentLog.warn(
+          `onAgentToolResult handler failed: tool=${params.call.tool} error=${message}`,
+        );
+      }
+    };
+    const notifyFailedToolResult = (
+      message: string,
+      terminalReason: "failed" | "cancelled" | "timed_out" = "failed",
+    ) => {
+      notifyAgentToolResult({
+        toolName: params.call.tool,
+        result: failedToolResult(message, terminalReason),
+        isError: true,
+      });
+    };
     if (params.signal.aborted) {
-      abortFromRun();
-    }
-    const response = await Promise.race([
-      params.toolBridge.handleToolCall(params.call, {
-        signal: controller.signal,
-        onAgentToolResult: notifyAgentToolResult,
-        toolCallOrdinal: params.toolCallOrdinal,
-        retainExecutionSnapshot: true,
-      }),
-      abortPromise,
-      timeoutPromise,
-    ]);
-    if (!response.success && !didNotifyAgentToolResult) {
-      notifyFailedToolResult(
-        readDynamicToolResponseText(response),
-        response.diagnosticTerminalReason ?? "failed",
+      const message = "OpenClaw dynamic tool call aborted before execution.";
+      const terminalReason = resolveCodexToolAbortTerminalReason(params.signal);
+      params.onFallbackSelected?.();
+      notifyFailedToolResult(message, terminalReason);
+      return finalizeTerminal(
+        createFailedDynamicToolResponse(message, {
+          executionStarted: false,
+          terminalReason,
+        }),
       );
     }
-    return finalizeTerminal(response);
-  } catch (error) {
-    const terminalReason = params.signal.aborted
-      ? resolveCodexToolAbortTerminalReason(params.signal)
-      : resolveToolExecutionErrorKind(error);
-    const message = formatToolExecutionErrorMessage(error, "OpenClaw dynamic tool call failed.");
-    notifyFailedToolResult(message, terminalReason);
-    return finalizeTerminal(createFailedAfterPossibleDispatch(message, terminalReason));
-  } finally {
-    if (timeout) {
+
+    const controller = new AbortController();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+    let toolCallSettled = false;
+    let completedSuccessfully = false;
+    let operationReleased = false;
+    let resolveAbort: ((response: CodexDynamicToolRuntimeResponse) => void) | undefined;
+    const abortFromRun = () => {
+      const message = "OpenClaw dynamic tool call aborted.";
+      const terminalReason = resolveCodexToolAbortTerminalReason(params.signal);
+      controller.abort(params.signal.reason ?? new Error(message));
+      // Accepted queued admission can retain cancellation after the tool result;
+      // cancellation must not publish a second outcome for that completed call.
+      if (toolCallSettled) {
+        return;
+      }
+      params.onFallbackSelected?.();
+      notifyFailedToolResult(message, terminalReason);
+      resolveAbort?.(createFailedAfterPossibleDispatch(message, terminalReason));
+    };
+    const releaseOperation = () => {
+      if (operationReleased) {
+        return;
+      }
+      operationReleased = true;
+      params.signal.removeEventListener("abort", abortFromRun);
+      if (!controller.signal.aborted) {
+        controller.abort(new Error("OpenClaw dynamic tool call finished."));
+      }
+    };
+    // The same signal stays live only through host-owned tracked admission work.
+    // No permission is transferred: run/scope/expiry guards still revalidate it.
+    onAcquired({ release: releaseOperation, releaseBeforeResultWhenIdle: true });
+    const abortPromise = new Promise<CodexDynamicToolRuntimeResponse>((resolve) => {
+      resolveAbort = resolve;
+    });
+    const timeoutPromise = new Promise<CodexDynamicToolRuntimeResponse>((resolve) => {
+      const { timeoutMs } = params;
+      timeout = setTimeout(() => {
+        timedOut = true;
+        const timeoutDetails = formatDynamicToolTimeoutDetails({ call: params.call, timeoutMs });
+        params.onFallbackSelected?.();
+        controller.abort(new Error(timeoutDetails.responseMessage));
+        params.onTimeout?.();
+        embeddedAgentLog.warn("codex dynamic tool call timed out", {
+          ...timeoutDetails.meta,
+          consoleMessage: timeoutDetails.consoleMessage,
+        });
+        notifyFailedToolResult(timeoutDetails.responseMessage, "timed_out");
+        resolve(createFailedAfterPossibleDispatch(timeoutDetails.responseMessage, "timed_out"));
+      }, timeoutMs);
+      timeout.unref?.();
+    });
+
+    try {
+      params.signal.addEventListener("abort", abortFromRun, { once: true });
+      if (params.signal.aborted) {
+        abortFromRun();
+      }
+      const response = await Promise.race([
+        params.toolBridge.handleToolCall(params.call, {
+          signal: controller.signal,
+          onAgentToolResult: notifyAgentToolResult,
+          toolCallOrdinal: params.toolCallOrdinal,
+          retainExecutionSnapshot: true,
+        }),
+        abortPromise,
+        timeoutPromise,
+      ]);
+      if (!response.success && !didNotifyAgentToolResult) {
+        notifyFailedToolResult(
+          readDynamicToolResponseText(response),
+          response.diagnosticTerminalReason ?? "failed",
+        );
+      }
+      const terminal = finalizeTerminal(response);
+      completedSuccessfully = terminal.success;
+      return terminal;
+    } catch (error) {
+      const terminalReason = params.signal.aborted
+        ? resolveCodexToolAbortTerminalReason(params.signal)
+        : resolveToolExecutionErrorKind(error);
+      const message = formatToolExecutionErrorMessage(error, "OpenClaw dynamic tool call failed.");
+      notifyFailedToolResult(message, terminalReason);
+      return finalizeTerminal(createFailedAfterPossibleDispatch(message, terminalReason));
+    } finally {
       clearTimeout(timeout);
+      toolCallSettled = true;
+      resolveAbort = undefined;
+      if (!completedSuccessfully || timedOut || controller.signal.aborted) {
+        // Failure/cancellation does not retain an operation merely because its
+        // accepted continuation has not observed the authority failure yet.
+        releaseOperation();
+      }
     }
-    params.signal.removeEventListener("abort", abortFromRun);
-    resolveAbort = undefined;
-    if (!timedOut && !controller.signal.aborted) {
-      controller.abort(new Error("OpenClaw dynamic tool call finished."));
-    }
-  }
+  });
 }
 
 function readDynamicToolResponseText(response: CodexDynamicToolCallResponse): string {
@@ -335,7 +366,6 @@ export function toCodexDynamicToolProtocolResponse(
   };
 }
 
-/** Adds async-started progress details when a tool result continues out of band. */
 export function toCodexDynamicToolProgressResponse(
   response: CodexDynamicToolRuntimeResponse,
   protocolResponse: CodexDynamicToolCallResponse,
@@ -348,165 +378,36 @@ export function toCodexDynamicToolProgressResponse(
   const mcpAppPreview = isJsonObject(transcriptDetails?.mcpAppPreview)
     ? transcriptDetails.mcpAppPreview
     : undefined;
-  const progressDetails = mcpAppPreview ? { mcpAppPreview } : undefined;
-  if (response.asyncStarted !== true && progressDetails === undefined) {
+  if (response.asyncStarted !== true && !mcpAppPreview) {
     return protocolResponse;
   }
   return {
     ...protocolResponse,
-    ...(progressDetails ? { details: progressDetails } : {}),
-    ...(response.asyncStarted === true
-      ? {
-          details: {
-            ...progressDetails,
-            async: true as const,
-            status: "started" as const,
-          },
-        }
-      : {}),
+    details:
+      response.asyncStarted === true
+        ? { ...(mcpAppPreview ? { mcpAppPreview } : {}), async: true, status: "started" }
+        : { mcpAppPreview },
   };
 }
 
-type TerminalToolExecutionDiagnostic = Extract<
-  DiagnosticEventPayload,
-  { type: "tool.execution.blocked" | "tool.execution.completed" | "tool.execution.error" }
->;
-
-type TerminalDynamicToolReleaseState = {
-  completed: boolean;
-  aborted: boolean;
-  responseSuccess: boolean;
-  currentTurnHadNonTerminalDynamicToolResult: boolean;
-  activeAppServerTurnRequests: number;
-  activeTurnItemIdsCount: number;
-  pendingOpenClawDynamicToolCompletionIdsCount: number;
-};
-
-/** Decides whether a terminal dynamic tool response can release the Codex turn. */
-export function shouldReleaseTurnAfterTerminalDynamicTool(
-  state: TerminalDynamicToolReleaseState,
-): boolean {
-  return (
-    !state.completed &&
-    !state.aborted &&
-    state.responseSuccess &&
-    !state.currentTurnHadNonTerminalDynamicToolResult &&
-    state.activeAppServerTurnRequests === 0 &&
-    state.activeTurnItemIdsCount === 0 &&
-    state.pendingOpenClawDynamicToolCompletionIdsCount === 0
-  );
-}
-
-/** Returns true when a non-async result should block terminal-release shortcuts. */
-export function shouldBlockTerminalReleaseForNonTerminalDynamicToolResult(
-  response: CodexDynamicToolCallResponse,
-): boolean {
-  return response.asyncStarted !== true;
-}
-
-/** Action chosen after checking terminal dynamic-tool diagnostics. */
-type TerminalDynamicToolBatchAction =
-  | "idle"
-  | "wait"
-  | "clear-nonterminal-batch"
-  | "release-pending-terminal";
-
-type TerminalDynamicToolBatchState = {
-  activeAppServerTurnRequests: number;
-  activeTurnItemIdsCount: number;
-  pendingOpenClawDynamicToolCompletionIdsCount: number;
-  currentTurnHadNonTerminalDynamicToolResult: boolean;
-  hasPendingTerminalDynamicToolRelease: boolean;
-};
-
-/** Resolves whether terminal diagnostic state should release, wait, or stay idle. */
-export function resolveTerminalDynamicToolBatchAction(
-  state: TerminalDynamicToolBatchState,
-): TerminalDynamicToolBatchAction {
-  if (
-    state.activeAppServerTurnRequests > 0 ||
-    state.activeTurnItemIdsCount > 0 ||
-    state.pendingOpenClawDynamicToolCompletionIdsCount > 0
-  ) {
-    return "wait";
-  }
-  if (state.currentTurnHadNonTerminalDynamicToolResult) {
-    return "clear-nonterminal-batch";
-  }
-  if (state.hasPendingTerminalDynamicToolRelease) {
-    return "release-pending-terminal";
-  }
-  return "idle";
-}
-
-/** Returns true for diagnostic events that terminate a dynamic tool call. */
-export function isDynamicToolTerminalDiagnosticEvent(
-  event: DiagnosticEventPayload,
-): event is TerminalToolExecutionDiagnostic {
-  return (
-    event.type === "tool.execution.completed" ||
-    event.type === "tool.execution.error" ||
-    event.type === "tool.execution.blocked"
-  );
-}
-
-/** Matches terminal diagnostics to a specific dynamic tool call id/name. */
-export function isMatchingDynamicToolTerminalDiagnostic(params: {
-  event: TerminalToolExecutionDiagnostic;
-  call: CodexDynamicToolCallParams;
-  runId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-}): boolean {
-  if (
-    params.event.toolCallId !== params.call.callId ||
-    params.event.toolName !== params.call.tool
-  ) {
-    return false;
-  }
-  if (params.runId !== undefined) {
-    return params.event.runId === params.runId;
-  }
-  if (params.sessionId !== undefined) {
-    return params.event.sessionId === params.sessionId;
-  }
-  if (params.sessionKey !== undefined) {
-    return params.event.sessionKey === params.sessionKey;
-  }
-  return (
-    params.event.runId === undefined &&
-    params.event.sessionId === undefined &&
-    params.event.sessionKey === undefined
-  );
-}
-
-/** Checks pending diagnostics for a terminal event matching a tool call. */
-export function hasPendingDynamicToolTerminalDiagnostic(params: {
-  call: CodexDynamicToolCallParams;
-  runId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-}): boolean {
-  return hasPendingInternalDiagnosticEvent((event) => {
-    if (!isDynamicToolTerminalDiagnosticEvent(event)) {
-      return false;
-    }
-    return isMatchingDynamicToolTerminalDiagnostic({
-      event,
-      call: params.call,
-      runId: params.runId,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-    });
-  });
-}
-
-/** Resolves per-tool timeout, applying media/message defaults and hard caps. */
 export function resolveDynamicToolCallTimeoutMs(params: {
   call: CodexDynamicToolCallParams;
   config: EmbeddedRunAttemptParams["config"];
+  toolBridge?: Pick<CodexDynamicToolBridge, "availableTools">;
 }): number {
   const args = isJsonObject(params.call.arguments) ? params.call.arguments : undefined;
+  if (params.call.tool === "node_exec") {
+    const executionTimeoutMs = params.toolBridge?.availableTools
+      .find((tool) => tool.name === params.call.tool)
+      ?.getExecutionTimeoutMs?.(params.call.arguments);
+    if (executionTimeoutMs !== undefined) {
+      // Foreground node execution owns its command and transport budgets.
+      return addSafeTimeoutDelayGraceMs(
+        executionTimeoutMs,
+        CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS,
+      );
+    }
+  }
   if (
     params.call.tool === "openclaw" ||
     params.call.tool === "ask_user" ||
@@ -534,28 +435,13 @@ export function resolveDynamicToolCallTimeoutMs(params: {
   if (params.call.tool === "message") {
     return CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS;
   }
-  if (params.call.tool === "agents_wait") {
-    // Collector waits default to the full swarm budget, but an operator's
-    // configured per-tool timeout still wins over that default. The outer
-    // watchdog must outlive the tool's own 600s deadline (cap + grace) so a
-    // full-budget wait returns its structured timeout result instead of
-    // being aborted by the harness first.
-    const requestedMs =
-      readDynamicToolCallTimeoutMs(params.call.arguments) ??
-      readConfiguredDynamicToolTimeoutMs(params.call.tool, params.config) ??
-      CODEX_DYNAMIC_AGENTS_WAIT_TOOL_TIMEOUT_MS;
-    return Math.max(
-      1,
-      Math.min(
-        CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS + CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS,
-        Math.floor(requestedMs),
-      ),
-    );
-  }
+  // Collector waits need the full swarm budget plus grace for their structured timeout.
+  const isCollectorWait = params.call.tool === "agents_wait";
   return clampDynamicToolTimeoutMs(
     readDynamicToolCallTimeoutMs(params.call.arguments) ??
       readConfiguredDynamicToolTimeoutMs(params.call.tool, params.config) ??
-      CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+      (isCollectorWait ? CODEX_DYNAMIC_AGENTS_WAIT_TOOL_TIMEOUT_MS : CODEX_DYNAMIC_TOOL_TIMEOUT_MS),
+    isCollectorWait ? CODEX_DYNAMIC_AGENTS_WAIT_TOOL_TIMEOUT_MS : CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS,
   );
 }
 
@@ -635,10 +521,6 @@ function readConfiguredDynamicToolTimeoutMs(
     );
   }
 
-  if (toolName === "message") {
-    return CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS;
-  }
-
   return undefined;
 }
 
@@ -667,6 +549,9 @@ function readPositiveFiniteTimeoutMs(value: unknown): number | undefined {
     : undefined;
 }
 
-function clampDynamicToolTimeoutMs(timeoutMs: number): number {
-  return Math.max(1, Math.min(CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS, Math.floor(timeoutMs)));
+function clampDynamicToolTimeoutMs(
+  timeoutMs: number,
+  maximum = CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS,
+): number {
+  return Math.max(1, Math.min(maximum, Math.floor(timeoutMs)));
 }

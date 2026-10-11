@@ -296,7 +296,8 @@ defineDiscordVoiceTests(
           throw new Error("AGENT_SELECTION_REQUIRED: expected routed agent molty");
         }
         return {
-          provider: { id: "openai", capabilities: { supportsActivationNameGating: true } },
+          provider: { id: "openai" },
+          capabilities: { supportsActivationNameGating: true },
           providerConfig: { model: "gpt-realtime-2", voice: "cedar" },
         };
       });
@@ -313,7 +314,7 @@ defineDiscordVoiceTests(
           realtime: { provider: "openai" },
         }),
         undefined,
-        { agents: { list: [{ id: "helper" }, { id: "molty" }] } },
+        { agents: { entries: { helper: {}, molty: {} } } },
       );
 
       await manager.autoJoin();

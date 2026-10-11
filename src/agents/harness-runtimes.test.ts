@@ -1,7 +1,7 @@
 // Covers config scanning for agent harness runtime requirements.
 import { describe, expect, it } from "vitest";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { collectConfiguredAgentHarnessRuntimes as collectConfiguredAgentHarnessRuntimesBase } from "./harness-runtimes.js";
 
 function countRosterReads(config: OpenClawConfig): () => number {
@@ -20,29 +20,37 @@ function countRosterReads(config: OpenClawConfig): () => number {
 }
 
 function collectConfiguredAgentHarnessRuntimes(
-  config: OpenClawConfig,
+  config: unknown,
   options?: Parameters<typeof collectConfiguredAgentHarnessRuntimesBase>[1],
 ) {
   return collectConfiguredAgentHarnessRuntimesBase(
-    migratePersistedImplicitMainRoster(config).config as OpenClawConfig,
+    createCanonicalAgentConfigFixture(config).config,
     options,
   );
 }
 
 describe("collectConfiguredAgentHarnessRuntimes", () => {
-  it("requires Codex for selectable default OpenAI agent models", () => {
-    const config = {
+  it("preloads explicit picker alternatives without changing an OpenClaw default", () => {
+    const config: OpenClawConfig = {
       agents: {
         defaults: {
-          model: { primary: "anthropic/claude-sonnet-4-6" },
+          model: "openai/gpt-5.6-sol",
           models: {
-            "openai/gpt-5.5": {},
+            "openai/gpt-5.6-sol": {
+              agentRuntime: { id: "openclaw" },
+              pickerRuntimes: ["codex", "codex", "openclaw"],
+            },
           },
         },
+        entries: { ops: { models: { "fixture/model": { pickerRuntimes: ["fixture-harness"] } } } },
       },
-    } as OpenClawConfig;
-
-    expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual(["codex"]);
+    };
+    expect(
+      collectConfiguredAgentHarnessRuntimes(config, { includeImplicitRuntimePreferences: false }),
+    ).toEqual(["codex", "fixture-harness"]);
+    expect(config.agents?.defaults?.models?.["openai/gpt-5.6-sol"]?.agentRuntime?.id).toBe(
+      "openclaw",
+    );
   });
 
   it("requires Codex when OpenAI is only a default model fallback", () => {
@@ -79,41 +87,6 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
     ).toEqual(["codex"]);
   });
 
-  it("requires Codex for selectable per-agent OpenAI models", () => {
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-sonnet-4-6" },
-        },
-        list: [
-          {
-            id: "worker",
-            models: {
-              "openai/gpt-5.5": {},
-            },
-          },
-        ],
-      },
-    } as OpenClawConfig;
-
-    expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual(["codex"]);
-  });
-
-  it("respects explicit OpenClaw runtime policy on selectable OpenAI agent models", () => {
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-sonnet-4-6" },
-          models: {
-            "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual([]);
-  });
-
   it("does not infer Codex for custom OpenAI-compatible base URLs", () => {
     // OpenAI provider id alone is not enough: custom compatible endpoints may
     // not support Codex runtime assumptions or model contracts.
@@ -138,31 +111,6 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
     expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual([]);
   });
 
-  it("ignores a malformed legacy list when canonical entries are available", () => {
-    // Runtime collection is diagnostic/setup support, so malformed optional
-    // agent lists should not hide valid defaults-level runtime requirements.
-    const config = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-opus-4-6": {
-              agentRuntime: { id: "claude" },
-            },
-          },
-        },
-        entries: { main: { default: true } },
-        list: {
-          ops: {
-            id: "ops",
-            agentRuntime: { id: "codex" },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual(["claude"]);
-  });
-
   it("bounds roster reads per collection batch on large fleets (#135743)", () => {
     // The collector must not multiply full-roster reads by model-reference count.
     const agentCount = 300;
@@ -183,7 +131,7 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    const migrated = migratePersistedImplicitMainRoster(config).config as OpenClawConfig;
+    const migrated = createCanonicalAgentConfigFixture(config).config;
     const rosterReads = countRosterReads(migrated);
 
     const runtimes = collectConfiguredAgentHarnessRuntimesBase(migrated);
@@ -194,7 +142,7 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
 
   it("observes roster mutations made between collection batches (#135743)", () => {
     const config = { agents: { entries: { main: {} } } } as unknown as OpenClawConfig;
-    const migrated = migratePersistedImplicitMainRoster(config).config as OpenClawConfig;
+    const migrated = createCanonicalAgentConfigFixture(config).config;
 
     expect(collectConfiguredAgentHarnessRuntimesBase(migrated)).toEqual([]);
 

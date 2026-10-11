@@ -1,11 +1,32 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import type { GatewaySessionRow } from "../../../api/types.ts";
 import { toolIcons } from "../../../components/icons-tools.ts";
 import { icons } from "../../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
+import { formatSessionArchiveReason } from "../../../lib/sessions/session-archive-reason.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
+import "./chat-skill-learned-notice.ts";
+
+export function buildChatArchiveNotice(activeSession: GatewaySessionRow | null | undefined) {
+  const archiveActor = activeSession?.archivedBy;
+  const archiveLabel = archiveActor?.id
+    ? t("sessionsView.archivedBy", { name: archiveActor.label ?? archiveActor.id })
+    : activeSession?.archiveReason
+      ? formatSessionArchiveReason(activeSession.archiveReason)
+      : undefined;
+  return activeSession?.archived && activeSession.archivedAt !== undefined && archiveLabel
+    ? ({
+        kind: "notice",
+        key: `archive:${activeSession.sessionId ?? activeSession.key}:${activeSession.archivedAt}`,
+        label: archiveLabel,
+        text: "",
+        timestamp: activeSession.archivedAt,
+      } satisfies Extract<ChatItem, { kind: "notice" }>)
+    : undefined;
+}
 
 function renderSystemLine(params: {
   icon?: keyof typeof toolIcons;
@@ -53,14 +74,7 @@ function renderSystemLine(params: {
   `;
 }
 
-export function renderChatDivider(
-  item: Extract<ChatItem, { kind: "divider" }>,
-  onOpenSessionCheckpoints?: () => void | Promise<void>,
-) {
-  const action =
-    item.action?.kind === "session-checkpoints" && onOpenSessionCheckpoints
-      ? item.action
-      : undefined;
+export function renderChatDivider(item: Extract<ChatItem, { kind: "divider" }>) {
   return html`
     <div
       class="chat-divider ${
@@ -71,34 +85,10 @@ export function renderChatDivider(
     >
       ${renderSystemLine(item)}
       ${
-        item.description || action
+        item.description
           ? html`
               <div class="chat-divider__details">
-                ${
-                  item.description
-                    ? html`<span class="chat-divider__description">${item.description}</span>`
-                    : nothing
-                }
-                ${
-                  item.description && action
-                    ? html`<span class="chat-divider__details-separator" aria-hidden="true"
-                        >·</span
-                      >`
-                    : nothing
-                }
-                ${
-                  action
-                    ? html`
-                        <button
-                          type="button"
-                          class="chat-divider__action"
-                          @click=${() => onOpenSessionCheckpoints?.()}
-                        >
-                          ${action.label}
-                        </button>
-                      `
-                    : nothing
-                }
+                <span class="chat-divider__description">${item.description}</span>
               </div>
             `
           : nothing
@@ -108,6 +98,15 @@ export function renderChatDivider(
 }
 
 export function renderChatNotice(item: Extract<ChatItem, { kind: "notice" }>) {
+  if (item.skillChanges) {
+    return html`
+      <div data-chat-row-key=${item.key} data-ts=${String(item.timestamp)}>
+        <openclaw-chat-skill-learned-notice
+          .notice=${item.skillChanges}
+        ></openclaw-chat-skill-learned-notice>
+      </div>
+    `;
+  }
   const body = item.text
     ? html`
         <div class="chat-text chat-notice__body" dir=${detectTextDirection(item.text)}>

@@ -1,5 +1,5 @@
 // Respawns the CLI with adjusted process flags when startup requires it.
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import path from "node:path";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { resolveNodeStartupTlsEnvironment } from "./bootstrap/node-startup-env.js";
@@ -29,7 +29,7 @@ type CliRespawnPlan = {
 };
 
 type CliRespawnRuntime = RespawnChildRuntime & {
-  writeError: (message: string, error?: unknown) => void;
+  writeError: (message: string, error?: unknown) => void | Promise<void>;
 };
 
 function pathModuleForPlatform(platform: NodeJS.Platform): typeof path.posix {
@@ -162,25 +162,24 @@ export function buildCliRespawnPlan(
   };
 }
 
-export function runCliRespawnPlan(
+export async function runCliRespawnPlan(
   plan: CliRespawnPlan,
   runtime?: CliRespawnRuntime,
   writeError: CliRespawnRuntime["writeError"] = (message, error) => console.error(message, error),
-): ChildProcess {
+): Promise<void> {
   const resolvedRuntime: CliRespawnRuntime = runtime ?? {
     spawn,
     attachChildProcessBridge,
-    exit: process.exit.bind(process) as (code?: number) => never,
     writeError,
   };
-  return runRespawnChildWithSignalBridge({
+  process.exitCode = await runRespawnChildWithSignalBridge({
     command: plan.command,
     args: plan.argv,
     env: plan.env,
     detachForProcessTree: plan.detachForProcessTree,
     runtime: resolvedRuntime,
     onError: (error) => {
-      resolvedRuntime.writeError(
+      return resolvedRuntime.writeError(
         "[openclaw] Failed to respawn CLI:",
         error instanceof Error ? (error.stack ?? error.message) : error,
       );

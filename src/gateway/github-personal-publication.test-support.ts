@@ -1,15 +1,20 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { stringify as stringifyYaml } from "yaml";
 import { resolveManagedGitHubProfileDir } from "../agents/github-tool-identity.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { updateUserGitHubConnection } from "../state/user-github-connections.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { personalGitHubStatus } from "./github-personal-oauth.js";
+import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
+import {
+  createPersonalGitHubOAuthLifecycle,
+  personalGitHubStatus,
+} from "./github-personal-oauth.js";
 import {
   SESSION_ID,
   SESSION_KEY,
@@ -26,9 +31,66 @@ export const personalPublicationAccount = { accountId: 101, login: "personal-ali
 const account = personalPublicationAccount;
 const profileId = "ghp_22222222222222222222222222222222";
 
+export function readPersonalPublicationFixtureStatus(
+  fixture: Pick<
+    Awaited<ReturnType<typeof createPersonalPublicationFixture>>,
+    "coordinator" | "action"
+  >,
+  requestId: string,
+) {
+  return fixture.coordinator.personalStatus(
+    fixture.action,
+    { sessionKey: SESSION_KEY, agentId: "main", sessionId: SESSION_ID },
+    requestId,
+    undefined,
+  );
+}
+
+export async function expectPersonalPublicationReplay(
+  {
+    generation,
+    coordinator,
+    action,
+  }: Pick<
+    Awaited<ReturnType<typeof createPersonalPublicationFixture>>,
+    "coordinator" | "action"
+  > & { generation: string },
+  capture: (requestId: string) => unknown,
+) {
+  const selection = { source: "personal" as const, generation, account };
+  const request = { sessionKey: SESSION_KEY, idempotencyKey: "personal-replay", selection };
+  const published = await coordinator.requestPersonalForSession(request, action);
+  expect(published.status).toBe("published");
+  const before = capture(published.requestId);
+  await expect(
+    coordinator.requestPersonalForSession(
+      {
+        ...request,
+        selection: { ...selection, account: { ...account, login: account.login.toUpperCase() } },
+      },
+      action,
+    ),
+  ).resolves.toEqual(published);
+  for (const changed of [
+    { ...request, selection: { ...selection, generation: `${generation}-changed` } },
+    {
+      ...request,
+      selection: { ...selection, account: { ...account, accountId: account.accountId + 1 } },
+    },
+    { ...request, selection: { ...selection, account: { ...account, login: "different-user" } } },
+    { ...request, title: "Different title" },
+    { ...request, body: "Different body" },
+  ]) {
+    await expect(coordinator.requestPersonalForSession(changed, action)).rejects.toThrow(
+      "My GitHub publication idempotency key was reused with a different selection.",
+    );
+  }
+  expect(capture(published.requestId)).toEqual(before);
+}
+
 export async function createPersonalPublicationFixture() {
-  const owner = ensureProfileForEmail("alice@example.test").id;
-  const otherOwner = ensureProfileForEmail("bob@example.test").id;
+  const owner = (await ensureCanonicalUserProfileForEmail("alice@example.test")).id;
+  const otherOwner = (await ensureCanonicalUserProfileForEmail("bob@example.test")).id;
   const generation = randomUUID();
   const personalToken = `synthetic-personal-credential-${generation}`;
   updateUserGitHubConnection(
@@ -138,22 +200,52 @@ export async function callPersonalPublicationRpc(
   >,
   method: string,
   params: Record<string, unknown> = { sessionKey: SESSION_KEY },
+  hooks?: { duringPersonalStatus?: () => unknown },
 ) {
   const respond = vi.fn();
-  await handleGatewayRequest({
-    req: { type: "req", id: randomUUID(), method, params },
-    client,
-    context: {
-      ...context,
-      githubPublicationService: coordinator,
-      githubOAuthService: {
-        personal: { status: async (statusAction) => personalGitHubStatus(statusAction) },
-      } as GatewayRequestContext["githubOAuthService"],
-    },
-    respond,
-    isWebchatConnect: () => false,
-  });
-  return respond.mock.calls[0]!;
+  const personal = createPersonalGitHubOAuthLifecycle();
+  try {
+    await handleGatewayRequest({
+      req: { type: "req", id: randomUUID(), method, params },
+      client,
+      context: {
+        ...context,
+        githubPublicationService: coordinator,
+        githubOAuthService: {
+          personal: {
+            ...personal,
+            status: async (statusAction) => {
+              // Tests inject archive/restore interleavings here, inside the awaited
+              // options work that follows the request-start session snapshot.
+              await hooks?.duringPersonalStatus?.();
+              return personalGitHubStatus(statusAction);
+            },
+          },
+        } as GatewayRequestContext["githubOAuthService"],
+      },
+      respond,
+      isWebchatConnect: () => false,
+    });
+    return respond.mock.calls[0]!;
+  } finally {
+    await personal.stop();
+  }
+}
+
+export async function restartPersonalPublicationFixture(
+  fixture: Awaited<ReturnType<typeof createPersonalPublicationFixture>>,
+) {
+  const previous = fixture.placements;
+  resetGatewayWorkAdmission();
+  await closeOpenClawAgentDatabasesAsync();
+  fixture.placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
+  await fixture.placements.recoverWorkerSessionToolOperationsAfterRestart();
+  fixture.placements.clearLocalTurnClaimsAfterRestart();
+  expect(fixture.placements.workspaceResultInstanceId()).not.toBe(
+    previous.workspaceResultInstanceId(),
+  );
+  fixture.coordinator = createTestGitHubPublicationCoordinator({ placements: fixture.placements });
+  fixture.action = preparePersonalGitHubSessionAction(fixture, { sessionKey: SESSION_KEY });
 }
 
 export async function createForeignPublicationSession(otherOwner: string, incognito = false) {

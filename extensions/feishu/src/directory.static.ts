@@ -1,11 +1,10 @@
-// Feishu plugin module implements directory.static behavior.
 import {
   applyDirectoryQueryAndLimit,
   listDirectoryGroupEntriesFromMapKeysAndAllowFrom,
   listDirectoryUserEntriesFromAllowFrom,
   listDirectoryUserEntriesFromAllowFromAndMapKeys,
+  type DirectoryConfigParams,
 } from "openclaw/plugin-sdk/directory-runtime";
-import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { isFeishuGroupReadAllowed } from "./read-policy.js";
 import { normalizeFeishuTarget } from "./targets.js";
@@ -22,20 +21,9 @@ export type FeishuDirectoryGroup = {
   name?: string;
 };
 
-function toFeishuDirectoryPeers(ids: string[]): FeishuDirectoryPeer[] {
-  return ids.map((id) => ({ kind: "user", id }));
-}
-
-function toFeishuDirectoryGroups(ids: string[]): FeishuDirectoryGroup[] {
-  return ids.map((id) => ({ kind: "group", id }));
-}
-
-export async function listFeishuDirectoryPeers(params: {
-  cfg: ClawdbotConfig;
-  query?: string;
-  limit?: number;
-  accountId?: string;
-}): Promise<FeishuDirectoryPeer[]> {
+export async function listFeishuDirectoryPeers(
+  params: DirectoryConfigParams,
+): Promise<FeishuDirectoryPeer[]> {
   const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
   const entries = listDirectoryUserEntriesFromAllowFromAndMapKeys({
     allowFrom: account.config.allowFrom,
@@ -45,15 +33,12 @@ export async function listFeishuDirectoryPeers(params: {
     normalizeAllowFromId: (entry) => normalizeFeishuTarget(entry) ?? entry,
     normalizeMapKeyId: (entry) => normalizeFeishuTarget(entry) ?? entry,
   });
-  return toFeishuDirectoryPeers(entries.map((entry) => entry.id));
+  return entries.map(({ id }) => ({ kind: "user", id }));
 }
 
-export async function listFeishuDirectoryGroups(params: {
-  cfg: ClawdbotConfig;
-  query?: string;
-  limit?: number;
-  accountId?: string;
-}): Promise<FeishuDirectoryGroup[]> {
+export async function listFeishuDirectoryGroups(
+  params: DirectoryConfigParams,
+): Promise<FeishuDirectoryGroup[]> {
   const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
   const entries = listDirectoryGroupEntriesFromMapKeysAndAllowFrom({
     groups: account.config.groups,
@@ -61,15 +46,12 @@ export async function listFeishuDirectoryGroups(params: {
     query: params.query,
     limit: params.limit,
   });
-  return toFeishuDirectoryGroups(entries.map((entry) => entry.id));
+  return entries.map(({ id }) => ({ kind: "group", id }));
 }
 
-export async function listAuthorizedFeishuDirectoryPeers(params: {
-  cfg: ClawdbotConfig;
-  query?: string;
-  limit?: number;
-  accountId?: string;
-}): Promise<FeishuDirectoryPeer[]> {
+export async function listAuthorizedFeishuDirectoryPeers(
+  params: DirectoryConfigParams,
+): Promise<FeishuDirectoryPeer[]> {
   const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
   const entries = listDirectoryUserEntriesFromAllowFrom({
     allowFrom: account.config.allowFrom,
@@ -77,15 +59,12 @@ export async function listAuthorizedFeishuDirectoryPeers(params: {
     limit: params.limit,
     normalizeId: (entry) => normalizeFeishuTarget(entry) ?? entry,
   });
-  return toFeishuDirectoryPeers(entries.map((entry) => entry.id));
+  return entries.map(({ id }) => ({ kind: "user", id }));
 }
 
-export async function listAuthorizedFeishuDirectoryGroups(params: {
-  cfg: ClawdbotConfig;
-  query?: string;
-  limit?: number;
-  accountId?: string;
-}): Promise<FeishuDirectoryGroup[]> {
+export async function listAuthorizedFeishuDirectoryGroups(
+  params: DirectoryConfigParams,
+): Promise<FeishuDirectoryGroup[]> {
   const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
   const enabledGroups = Object.fromEntries(
     Object.entries(account.config.groups ?? {}).filter(([, group]) => group?.enabled !== false),
@@ -97,10 +76,8 @@ export async function listAuthorizedFeishuDirectoryGroups(params: {
   const authorizedEntries = entries.filter((entry) =>
     isFeishuGroupReadAllowed(params.cfg, account, entry.id, false),
   );
-  return toFeishuDirectoryGroups(
-    applyDirectoryQueryAndLimit(
-      authorizedEntries.map((entry) => entry.id),
-      params,
-    ),
-  );
+  return applyDirectoryQueryAndLimit(
+    authorizedEntries.map((entry) => entry.id),
+    params,
+  ).map((id) => ({ kind: "group", id }));
 }

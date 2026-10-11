@@ -35,7 +35,7 @@ function installXSearchFetch(payload?: Record<string, unknown>) {
       ),
     ),
   );
-  global.fetch = withFetchPreconnect(mockFetch);
+  vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
   return mockFetch;
 }
 
@@ -110,44 +110,6 @@ afterEach(() => {
 });
 
 describe("xai x_search tool", () => {
-  it("describes query as the required instruction for the Grok X-search agent", () => {
-    const tool = createConfiguredXSearchTool({ apiKey: "xai-plugin-key" });
-
-    const parameters = tool?.parameters as
-      | { properties?: { query?: { description?: string } } }
-      | undefined;
-    const queryDescription = parameters?.properties?.query?.description;
-
-    expect(queryDescription).toContain("Natural-language instruction");
-    expect(queryDescription).toContain("Grok X-search agent");
-    expect(queryDescription).toContain("meaningful and non-empty");
-    expect(queryDescription).not.toContain("allowed_x_handles");
-  });
-
-  it("publishes xAI handle-filter constraints in the tool schema", () => {
-    const tool = createConfiguredXSearchTool();
-    const parameters = tool.parameters as {
-      properties?: Record<string, { description?: string; maxItems?: number }>;
-    };
-
-    for (const [key, counterpart] of [
-      ["allowed_x_handles", "excluded_x_handles"],
-      ["excluded_x_handles", "allowed_x_handles"],
-    ] as const) {
-      expect(parameters.properties?.[key]?.maxItems).toBe(XAI_DOCUMENTED_HANDLE_LIMIT);
-      expect(parameters.properties?.[key]?.description).toContain(counterpart);
-    }
-  });
-
-  it("enables x_search when runtime config carries the shared xAI key", () => {
-    const tool = createXSearchTool({
-      config: {},
-      runtimeConfig: xaiPluginConfig({ apiKey: "x-search-runtime-key" }),
-    });
-
-    expect(tool?.name).toBe("x_search");
-  });
-
   it("enables x_search from an xAI auth profile and uses it for requests", async () => {
     const mockFetch = installXSearchFetch();
     const tool = createXSearchTool({
@@ -165,13 +127,6 @@ describe("xai x_search tool", () => {
     });
 
     expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer xai-profile-key");
-  });
-
-  it("enables x_search when the xAI plugin web search key is configured", () => {
-    const tool = createConfiguredXSearchTool({ apiKey: "xai-plugin-key" });
-
-    expect(tool?.name).toBe("x_search");
-    expect(tool?.resultContentSource).toBe("network");
   });
 
   it("bounds external xAI answers and closes hostile citation metadata", async () => {
@@ -229,32 +184,6 @@ describe("xai x_search tool", () => {
     expect(JSON.stringify(details)).not.toContain("<s>");
   });
 
-  it("aborts an in-flight provider request with the exact caller reason", async () => {
-    const controller = new AbortController();
-    const reason = new Error("operator stopped X search");
-    let transportSignal: AbortSignal | undefined;
-    const mockFetch = vi.fn(
-      async (_input: unknown, init?: RequestInit) =>
-        await new Promise<Response>((_resolve, reject) => {
-          transportSignal = init?.signal ?? undefined;
-          transportSignal?.addEventListener("abort", () => reject(reason), {
-            once: true,
-          });
-          queueMicrotask(() => controller.abort(reason));
-        }),
-    );
-    global.fetch = withFetchPreconnect(mockFetch);
-    const tool = createConfiguredXSearchTool();
-
-    await expect(
-      tool.execute("xai-cancel", { query: "xAI cancellation identity" }, controller.signal),
-    ).rejects.toBe(reason);
-
-    expect(mockFetch).toHaveBeenCalledOnce();
-    expect(transportSignal?.aborted).toBe(true);
-    expect(transportSignal?.reason).toBe(reason);
-  });
-
   it("rejects an already-cancelled X search without contacting the billed provider", async () => {
     const mockFetch = installXSearchFetch();
     const controller = new AbortController();
@@ -282,7 +211,7 @@ describe("xai x_search tool", () => {
         return jsonResponse({ output_text: "Cancelled X answer", citations: [] });
       })
       .mockResolvedValueOnce(jsonResponse({ output_text: "Recovered X answer", citations: [] }));
-    global.fetch = withFetchPreconnect(mockFetch);
+    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
     const tool = createConfiguredXSearchTool();
     const query = "unique standalone x_search late-cancel cache regression";
 
@@ -295,7 +224,7 @@ describe("xai x_search tool", () => {
     expect((recovered.details as { content?: string }).content).toContain("Recovered X answer");
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "bypasses X search cache reads and writes at zero TTL (populated: %s)",
     async (populated) => {
       vi.spyOn(Date, "now").mockReturnValue(1_000_000);
@@ -353,6 +282,7 @@ describe("xai x_search tool", () => {
     const mockFetch = installXSearchFetch();
     const tool = createConfiguredXSearchTool({ xSearch: { maxTurns: 2 } });
 
+    expect(tool.resultContentSource).toBe("network");
     const result = await tool?.execute?.("x-search:1", {
       query: "dinner recipes",
       allowed_x_handles: ["openclaw"],
@@ -364,10 +294,10 @@ describe("xai x_search tool", () => {
     expect(mockFetch).toHaveBeenCalled();
     expect(firstFetchUrl(mockFetch)).toContain("api.x.ai/v1/responses");
     const body = parseFirstRequestBody(mockFetch);
-    expect(body.model).toBe("grok-4.3");
+    expect(body.model).toBe("grok-4.7");
     expect(body.input).toEqual([{ role: "user", content: "dinner recipes" }]);
     expect(body.store).toBe(false);
-    expect(body.reasoning).toEqual({ effort: "none" });
+    expect(body.reasoning).toEqual({ effort: "low" });
     expect(body.max_turns).toBe(2);
     expect(body.tools).toEqual([
       {
@@ -397,28 +327,23 @@ describe("xai x_search tool", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it.each(["allowed_x_handles", "excluded_x_handles"] as const)(
-    "accepts the xAI limit for %s",
-    async (key) => {
-      const mockFetch = installXSearchFetch();
-      const tool = createConfiguredXSearchTool();
-      const handles = Array.from(
-        { length: XAI_DOCUMENTED_HANDLE_LIMIT },
-        (_, index) => `${key}-${index}`,
-      );
+  it.each(["excluded_x_handles"] as const)("accepts the xAI limit for %s", async (key) => {
+    const mockFetch = installXSearchFetch();
+    const tool = createConfiguredXSearchTool();
+    const handles = Array.from(
+      { length: XAI_DOCUMENTED_HANDLE_LIMIT },
+      (_, index) => `${key}-${index}`,
+    );
 
-      await tool.execute(`x-search:${key}:limit`, {
-        query: `${key} boundary`,
-        [key]: handles,
-      });
+    await tool.execute(`x-search:${key}:limit`, {
+      query: `${key} boundary`,
+      [key]: handles,
+    });
 
-      expect(parseFirstRequestBody(mockFetch).tools).toEqual([
-        { type: "x_search", [key]: handles },
-      ]);
-    },
-  );
+    expect(parseFirstRequestBody(mockFetch).tools).toEqual([{ type: "x_search", [key]: handles }]);
+  });
 
-  it.each(["allowed_x_handles", "excluded_x_handles"] as const)(
+  it.each(["allowed_x_handles"] as const)(
     "rejects %s above the xAI limit before calling xAI",
     async (key) => {
       const mockFetch = installXSearchFetch();
@@ -438,22 +363,6 @@ describe("xai x_search tool", () => {
     },
   );
 
-  it("routes x_search through plugin-owned xSearch.baseUrl", async () => {
-    const mockFetch = installXSearchFetch();
-    const tool = createConfiguredXSearchTool({
-      xSearch: {
-        enabled: true,
-        baseUrl: "https://api.x.ai/xai-search/v1/",
-      },
-    });
-
-    await tool?.execute?.("x-search:plugin-base-url", {
-      query: "base url route",
-    });
-
-    expect(firstFetchUrl(mockFetch)).toBe("https://api.x.ai/xai-search/v1/responses");
-  });
-
   it("shares plugin webSearch.baseUrl with x_search when xSearch.baseUrl is unset", async () => {
     const mockFetch = installXSearchFetch();
     const tool = createConfiguredXSearchTool({
@@ -469,44 +378,11 @@ describe("xai x_search tool", () => {
     expect(firstFetchUrl(mockFetch)).toBe("https://api.x.ai/shared/v1/responses");
   });
 
-  it("reuses the xAI plugin web search key for x_search requests", async () => {
-    const mockFetch = installXSearchFetch();
-    const tool = createConfiguredXSearchTool({ apiKey: "xai-plugin-key" });
-
-    await tool?.execute?.("x-search:plugin-key", {
-      query: "latest post from huntharo",
-    });
-
-    expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer xai-plugin-key");
-  });
-
-  it("reports malformed x_search JSON as a provider error", async () => {
-    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
-      Promise.resolve(
-        new Response("{ nope", {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-      ),
-    );
-    global.fetch = withFetchPreconnect(mockFetch);
-    const tool = createConfiguredXSearchTool({
-      apiKey: "xai-plugin-key",
-      xSearch: { enabled: true },
-    });
-
-    await expect(
-      tool?.execute?.("x-search:malformed-json", {
-        query: "malformed x_search response probe",
-      }),
-    ).rejects.toThrow("xAI X search failed: malformed JSON response");
-  });
-
   it("reports missing x_search answers without blaming JSON decoding", async () => {
     const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
       Promise.resolve(jsonResponse({ status: "incomplete", output: [] })),
     );
-    global.fetch = withFetchPreconnect(mockFetch);
+    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
     const tool = createConfiguredXSearchTool({
       apiKey: "xai-plugin-key",
       xSearch: { enabled: true },

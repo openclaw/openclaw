@@ -114,7 +114,7 @@ function optionArgs(options: PathCommandOptions): string[] {
 
 async function invokePathCli(args: string[], runtime: TestRuntime): Promise<void> {
   const previousExitCode = process.exitCode;
-  process.exitCode = undefined;
+  process.exitCode = 0;
   const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
     runtime.writeStdout(String(chunk));
     return true;
@@ -141,7 +141,9 @@ async function invokePathCli(args: string[], runtime: TestRuntime): Promise<void
   } finally {
     stdoutWrite.mockRestore();
     stderrWrite.mockRestore();
-    process.exitCode = previousExitCode;
+    // oxlint-disable-next-line no-warning-comments -- replace the pending link after Bun ships the fix.
+    // TODO(bun#42607): Assign undefined once Bun clears a nonzero process.exitCode.
+    process.exitCode = previousExitCode ?? 0;
   }
 }
 
@@ -286,6 +288,25 @@ describe("openclaw path CLI", () => {
       expect(out.resolved).toBe(false);
     });
 
+    it("CLI-R05 keeps reading a file whose undecodable byte is outside the resolved leaf", async () => {
+      // Strict admission is limited to the editing verb, so read-only inspection
+      // keeps its existing contract for files that are not valid UTF-8.
+      const workspaceDir = tempDirs.make("oc-path-cli-");
+      const filePath = join(workspaceDir, "gateway.jsonc");
+      const before = Buffer.concat([
+        Buffer.from('{ "version": "1.0", "note": "a'),
+        Buffer.from([0xff]),
+        Buffer.from('b" }'),
+      ]);
+      writeFileSync(filePath, before);
+      const rt = createTestRuntime();
+      await pathResolveCommand("oc://gateway.jsonc/version", { cwd: workspaceDir, json: true }, rt);
+
+      expect(rt.exitCode).toBe(0);
+      expect(JSON.parse(stdoutText(rt)).match.valueText).toBe("1.0");
+      expect(readFileSync(filePath)).toEqual(before);
+    });
+
     it("CLI-R03 missing argument is rejected by Commander", async () => {
       const rt = createTestRuntime();
       await pathResolveCommand(undefined, { json: true }, rt);
@@ -398,6 +419,48 @@ describe("openclaw path CLI", () => {
       expect(rt.exitCode).toBe(0);
       const after = readFileSync(filePath, "utf-8");
       expect(after).toContain('"2.0"');
+    });
+
+    it("CLI-S09 refuses an undecodable file instead of rewriting untouchable bytes", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
+      const filePath = join(workspaceDir, "gateway.jsonc");
+      // The invalid byte sits in a leaf the edit never touches.
+      const before = Buffer.concat([
+        Buffer.from('{ "version": "1.0", "note": "a'),
+        Buffer.from([0xff]),
+        Buffer.from('b" }'),
+      ]);
+      writeFileSync(filePath, before);
+      const rt = createTestRuntime();
+      await pathSetCommand(
+        "oc://gateway.jsonc/version",
+        "2.0",
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
+
+      expect(rt.exitCode).toBe(2);
+      expect(stderrText(rt)).toContain("OC_PATH_INPUT_NOT_UTF8");
+      expect(stderrText(rt)).toContain("the file was left unchanged");
+      expect(readFileSync(filePath)).toEqual(before);
+    });
+
+    it("CLI-S10 still writes valid non-ASCII values including a literal replacement character", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
+      const filePath = join(workspaceDir, "gateway.jsonc");
+      writeFileSync(filePath, '{ "version": "1.0", "note": "合法 😀 �" }', "utf8");
+      const rt = createTestRuntime();
+      await pathSetCommand(
+        "oc://gateway.jsonc/version",
+        "2.0",
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
+
+      expect(rt.exitCode).toBe(0);
+      const after = readFileSync(filePath, "utf-8");
+      expect(after).toContain('"version": "2.0"');
+      expect(after).toContain("合法 😀 �");
     });
 
     it("CLI-S02 --dry-run does not write to disk", async () => {
@@ -549,7 +612,7 @@ describe("openclaw path CLI", () => {
       const filePath = join(workspaceDir, "openclaw.json");
       writeFileSync(
         filePath,
-        '{ "agents": { "list": [{ "tools": { "exec": { "security": "deny" } } }] }, "gateway": { "auth": { "token": "${TOKEN}" } } }\n',
+        '{ "agents": { "entries": { "main": { "tools": { "exec": { "security": "deny" } } } } }, "gateway": { "auth": { "token": "${TOKEN}" } } }\n',
         "utf-8",
       );
       const rt = createTestRuntime();
@@ -570,17 +633,60 @@ describe("openclaw path CLI", () => {
 
       const rt2 = createTestRuntime();
       await pathSetCommand(
-        "oc://openclaw.json/agents/list/0/tools/exec/security",
+        "oc://openclaw.json/agents/entries/main/tools/exec/security",
         "allowlist",
         { cwd: workspaceDir, json: true },
         rt2,
       );
 
       expect(rt2.exitCode).toBe(0);
-      expect(JSON.parse(readFileSync(filePath, "utf8")).agents.list[0].tools.exec.security).toBe(
-        "allowlist",
+      expect(
+        JSON.parse(readFileSync(filePath, "utf8")).agents.entries.main.tools.exec.security,
+      ).toBe("allowlist");
+    });
+
+    it("writes literal dollar replacement text through the registered Markdown command", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
+      const filePath = join(workspaceDir, "AGENTS.md");
+      writeFileSync(filePath, "## Tools\n\n- command: old\n- keep: stable\n", "utf-8");
+      const value = "literal $$ $& $1 $` $' $HOME";
+      const rt = createTestRuntime();
+
+      await pathSetCommand(
+        "oc://AGENTS.md/tools/command/command",
+        value,
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
+
+      expect(rt.exitCode).toBe(0);
+      expect(readFileSync(filePath, "utf-8")).toBe(
+        `## Tools\n\n- command: ${value}\n- keep: stable\n`,
       );
     });
+
+    it.each([false, true])(
+      "refuses sentinel-bearing Markdown insertion in the CLI (dry-run=%s)",
+      async (dryRun) => {
+        const workspaceDir = tempDirs.make("oc-path-cli-");
+        const filePath = join(workspaceDir, "AGENTS.md");
+        const before = "---\nname: x\n---\n";
+        writeFileSync(filePath, before, "utf-8");
+        const rt = createTestRuntime();
+
+        await pathSetCommand(
+          "oc://AGENTS.md/[frontmatter]/+note",
+          "before__OPENCLAW_REDACTED__after",
+          { cwd: workspaceDir, json: true, dryRun },
+          rt,
+        );
+
+        expect(rt.exitCode).toBe(1);
+        expect(stderrText(rt)).toContain("OC_EMIT_SENTINEL");
+        expect(stderrText(rt)).toContain("oc://AGENTS.md/[frontmatter]/+note");
+        expect(readFileSync(filePath, "utf-8")).toBe(before);
+      },
+    );
 
     it("CLI-S03 sentinel-bearing value is refused at emit", async () => {
       const workspaceDir = tempDirs.make("oc-path-cli-");
@@ -660,10 +766,12 @@ describe("openclaw path CLI", () => {
   });
 
   describe("emit", () => {
-    it("CLI-E01 round-trips jsonc bytes verbatim (byte-fidelity proof)", async () => {
+    it.each([
+      ["comments", '// keep this comment\n{\n  "v": 1\n}\n'],
+      ["empty file", ""],
+    ])("CLI-E01 round-trips jsonc bytes verbatim: %s", async (_label, before) => {
       const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "gateway.jsonc");
-      const before = '// keep this comment\n{\n  "v": 1\n}\n';
       writeFileSync(filePath, before, "utf-8");
       const rt = createTestRuntime();
       await pathEmitCommand(filePath, { json: true }, rt);
@@ -673,10 +781,13 @@ describe("openclaw path CLI", () => {
       expect(out.bytes).toBe(before);
     });
 
-    it("CLI-E02 round-trips md verbatim", async () => {
+    it.each([
+      ["sections", "## Tools\n- gh\n## Boundaries\n- never rm -rf\n"],
+      ["CRLF", "## Heading\r\n\r\n- item\r\n"],
+      ["unstructured prose", "Just preamble. No structure.\n"],
+    ])("CLI-E02 round-trips md verbatim: %s", async (_label, before) => {
       const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "AGENTS.md");
-      const before = "## Tools\n- gh\n## Boundaries\n- never rm -rf\n";
       writeFileSync(filePath, before, "utf-8");
       const rt = createTestRuntime();
       await pathEmitCommand(filePath, { json: true }, rt);

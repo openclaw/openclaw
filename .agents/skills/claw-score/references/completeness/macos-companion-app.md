@@ -5,7 +5,7 @@ Use this rubric when assigning category Completeness scores for the
 
 ## Category Scope
 
-- Canvas: Canvas panel open/hide/navigate/eval/snapshot, Local custom URL scheme, A2UI host auto-navigation, Canvas enable/disable setting
+- Canvas: Widget panel open/hide/navigate, Local custom URL scheme, Canvas enable/disable setting
 - Local Setup: Local mode Gateway attach/start/stop, LaunchAgent install/update/restart/uninstall, Existing-listener detection, Native first-run onboarding flow, CLI discovery, Local workspace selection, Onboarding WebChat session separation
 - Status and Settings: Menu-bar status, Activity state ingestion, Settings navigation, Health polling, Channels settings
 - Native Capabilities: Mac node session connection, system.run, Exec approval policy, Permission requests, TCC persistence

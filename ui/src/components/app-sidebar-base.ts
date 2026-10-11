@@ -1,56 +1,78 @@
 import { consume } from "@lit/context";
-import { property } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
 import { DEFAULT_SIDEBAR_ENTRIES, type NavigationRouteId } from "../app-navigation.ts";
-import type { RouteId } from "../app-route-paths.ts";
+import type { ApplicationRouter } from "../app-routes.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
 import {
   applicationContext,
   type ApplicationContext,
-  type ApplicationGatewaySnapshot,
   type ApplicationNavigationOptions,
 } from "../app/context.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
-import { readSessionMethodAccess, type SessionMethodAccess } from "../lib/session-method-access.ts";
+import type { SidebarOutboxSummary } from "../lib/chat/outbox-store-projection.ts";
+import type { GatewayStatus } from "../lib/gateway-status.ts";
+import {
+  readSessionMethodAccess,
+  type SessionMethodAccess,
+  type SessionMethodAccessRequest,
+} from "../lib/session-method-access.ts";
 import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
 import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
+import type { SessionOwnerFilterController } from "./session-owner-filter-controller.ts";
+import type { ContextualSidebar } from "./sidebar-context-state.ts";
+import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 /** Stable custom-element inputs. Behavior is layered in focused sidebar modules. */
 export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) basePath = "";
   @property({ attribute: false }) activeRouteId?: NavigationRouteId;
+  @property({ attribute: false }) router?: Pick<
+    ApplicationRouter,
+    "getState" | "subscribeSelector"
+  >;
+  @state() contextualSidebar?: ContextualSidebar;
   @property({ attribute: false }) activePluginTabId = "";
   @property({ attribute: false }) enabledRouteIds?: readonly NavigationRouteId[];
   @property({ attribute: false }) connected = false;
-  @property({ attribute: false }) offline = false;
-  @property({ attribute: false }) restartPending = false;
-  @property({ attribute: false }) suspensionPhase: ApplicationGatewaySnapshot["suspensionPhase"];
-  @property({ attribute: false }) queuedOutboxCount = 0;
+  @property({ attribute: false }) connectionStatus: GatewayStatus | null = null;
   @property({ attribute: false }) lastError: string | null = null;
-  @property({ attribute: false }) outboxAttentionCountForSession = (_sessionKey: string) => 0;
-  @property({ attribute: false }) hasSessionDraft: (sessionKey: string) => boolean = () => false;
+  @property({ attribute: false }) storedOutboxes: SidebarOutboxSummary | undefined;
   @property({ attribute: false }) terminalAvailable = false;
   @property({ attribute: false }) catalogOpenTarget: CatalogOpenTarget = "viewer";
   @property({ attribute: false }) canPairDevice = false;
   @property({ attribute: false }) preferencesBrowserOnly = false;
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) sidebarEntries: readonly string[] = DEFAULT_SIDEBAR_ENTRIES;
+  @property({ attribute: false }) navigationVisible = true;
+  @property({ attribute: false }) navigationScope: "mine" | "all" = "all";
+  @property({ type: Boolean }) navigationCollapsed = false;
+  @property({ attribute: false }) onUpdateNavigationScope?: (scope: "mine" | "all") => void;
+  @state() navigationView: "pages" | "sessions" | "online" = "sessions";
+  personalNavigationEpoch = 0;
+  sidebarSnapshot: SidebarSnapshotModel | null = null;
+  sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null = null;
+  private liveSidebarAgentsMode: "chip" | "roster" = "chip";
+  @property({ attribute: false })
+  get sidebarAgentsMode(): "chip" | "roster" {
+    return this.sidebarSnapshot?.mode ?? this.liveSidebarAgentsMode;
+  }
+  set sidebarAgentsMode(mode: "chip" | "roster") {
+    this.liveSidebarAgentsMode = mode;
+  }
   @property({ attribute: false }) sidebarLiveActivity = true;
   /** Agents surfaced first in the chip quick switcher when many exist. */
   @property({ attribute: false }) pinnedAgentIds: readonly string[] = [];
   @property({ attribute: false }) themeMode: ThemeMode = "system";
-  @property({ attribute: false }) lobsterPetVisits = true;
-  @property({ attribute: false }) lobsterPetSounds = false;
   @property({ attribute: false }) gatewayVersion: string | null = null;
   @property({ attribute: false }) devGitBranch: string | null = null;
   @property({ attribute: false }) watchUpdateProgress:
     | ((listener: (progress: UpdateProgress) => void) => () => void)
     | undefined = undefined;
-  @property({ attribute: false }) onOpenApprovals?: () => void;
   @property({ attribute: false }) onOpenPalette?: () => void;
   @property({ attribute: false }) onRetryConnect?: () => void;
   @property({ attribute: false }) onToggleSidebar?: () => void;
@@ -65,7 +87,28 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
 
   @consume({ context: applicationContext, subscribe: true })
-  protected context?: ApplicationContext<RouteId>;
+  protected context?: ApplicationContext;
+
+  abstract readonly sessionOwnerFilter: SessionOwnerFilterController;
+
+  get effectiveNavigationScope(): "mine" | "all" {
+    const snapshot = this.context?.gateway.snapshot;
+    // The Gateway retains resolved profileless identity only within the same connection scope.
+    // Pending and retired identities stay private, including while reconnecting.
+    return snapshot?.selfUser === null ? "all" : this.navigationScope;
+  }
+
+  setNavigationScope(scope: "mine" | "all"): void {
+    this.navigationScope = scope;
+    this.sessionOwnerFilter.markUserIntent();
+    this.onUpdateNavigationScope?.(scope);
+  }
+
+  setSessionOwnerFilter = (ownerId: string | null, involvingMe = false) => {
+    this.navigationScope = "all";
+    this.onUpdateNavigationScope?.("all");
+    this.sessionOwnerFilter.set(ownerId, involvingMe);
+  };
 
   pluginNavigation() {
     return this.context?.plugins?.registrations("navigation") ?? [];
@@ -108,18 +151,21 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   }
 
   readNewSessionAccess(): SessionMethodAccess {
-    return readSessionMethodAccess(this.connected ? this.context?.gateway.snapshot : null, {
-      method: "sessions.create",
-      params: {},
-    });
+    return readSessionMethodAccess(
+      this.connected && !this.sidebarSnapshot ? this.context?.gateway.snapshot : null,
+      {
+        method: "sessions.create",
+        params: {},
+        sessionScope: true,
+      },
+    );
   }
 
-  readSessionMutationAccess(request: {
-    method: string;
-    params?: unknown;
-    requiredScope?: "operator.write" | "operator.admin";
-  }): SessionMethodAccess {
-    return readSessionMethodAccess(this.connected ? this.context?.gateway.snapshot : null, request);
+  readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess {
+    return readSessionMethodAccess(
+      this.connected && !this.sidebarSnapshot ? this.context?.gateway.snapshot : null,
+      request,
+    );
   }
 
   requestOpenNewSession(agentId: string, target?: NewSessionTarget): void {

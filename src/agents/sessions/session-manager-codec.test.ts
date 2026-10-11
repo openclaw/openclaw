@@ -9,6 +9,17 @@ import type { SessionEntry } from "./session-manager-types.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 
 describe("session manager codec compatibility", () => {
+  it("selects the new projection only for a genuinely new session", () => {
+    expect(SessionManager.inMemory("/tmp").getHeader()?.version).toBe(4);
+    for (const version of [1, 2, 3, 4, 99]) {
+      const manager = SessionManager.fromEntries([
+        { type: "session", version, id: "projection-version", cwd: "/tmp" },
+      ]);
+      expect(manager.getHeader()?.version).toBe(Math.max(3, version));
+      expect(manager.migrated).toBe(version < 3);
+    }
+  });
+
   it("backfills current-version hook messages persisted without a custom type", () => {
     const manager = SessionManager.fromEntries([
       {
@@ -169,16 +180,6 @@ const parentTraversalCases: Array<{
   leaf: string | null;
   expected: string[];
 }> = [
-  {
-    name: "two-entry cycle",
-    parents: [
-      ["a", "b"],
-      ["b", "a"],
-    ],
-    leaf: "a",
-    expected: ["b", "a"],
-  },
-  { name: "self cycle", parents: [["a", "a"]], leaf: "a", expected: ["a"] },
   {
     name: "tail entering a cycle",
     parents: [

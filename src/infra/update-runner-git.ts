@@ -1,31 +1,48 @@
-import fs from "node:fs/promises";
-import path from "node:path";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import { readPackageVersion } from "./package-json.js";
-import { resolveStableNodePath } from "./stable-node-path.js";
 import { DEV_BRANCH, type UpdateChannel } from "./update-channels.js";
-import { readBuiltGatewayBuildId, verifyGitUpdateRecovery } from "./update-git-runtime.js";
-import { runStep } from "./update-runner-command.js";
+import { getUpdateDoctorConfigFailureReason } from "./update-doctor-config.js";
+import { createUpdateErrorFact } from "./update-failure-facts.js";
 import {
-  buildUpdateDoctorEnv,
-  resolveUpdateDoctorExecutionPolicy,
-} from "./update-runner-doctor.js";
+  readBuiltGatewayBuildId,
+  readBuiltRuntimeCommit,
+  readGitRuntimeArtifactIdentity,
+  verifyGitUpdateRecovery,
+} from "./update-git-runtime.js";
+import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
+import { isFailedUpdateStep } from "./update-run-step.js";
+import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
 import { gitCleanCheckArgs } from "./update-runner-git-commands.js";
-import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
-import { readCurrentGitUpdateRecovery } from "./update-runner-git-recovery.js";
-import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
 import {
+  readCurrentGitUpdateRecovery,
+  recordGitRollbackOutcome,
+} from "./update-runner-git-recovery.js";
+import {
+  createGitRuntimeTransaction,
+  prepareGitRuntimePromotion,
+} from "./update-runner-git-runtime.js";
+import {
+  runGitActivationBranchCheckStep,
+  runGitCleanCheckStep,
+  runGitRollbackSteps,
+  runGitUpstreamStep,
+} from "./update-runner-git-steps.js";
+import {
+  fetchGitUpdateTarget,
   prepareGitMutation,
   readBranchName,
-  resolveChannelTag,
+  selectGitInspectionTarget,
+  withGitTargetInspectionRoot,
 } from "./update-runner-git-target.js";
+import { prepareGitCandidateTransfer } from "./update-runner-git-transfer.js";
 import type {
   CommandRunner,
   RunStepOptions,
   UpdateRunResult,
   UpdateRunnerOptions,
-  UpdateStepResult,
 } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export async function updateGitCheckout(params: {
   opts: UpdateRunnerOptions;
@@ -35,7 +52,14 @@ export async function updateGitCheckout(params: {
   timeoutMs: number;
   startedAt: number;
 }): Promise<UpdateRunResult> {
-  const { opts, gitRoot, runCommand, defaultCommandEnv, timeoutMs, startedAt } = params;
+  const { opts, defaultCommandEnv, timeoutMs, startedAt } = params;
+  let gitRoot = params.gitRoot;
+  const runCommand: CommandRunner = (argv, options) =>
+    params.runCommand(argv, {
+      ...options,
+      // Read-only status must not refresh the installed index before admission.
+      ...(argv[0] === "git" ? { env: { ...options.env, GIT_OPTIONAL_LOCKS: "0" } } : {}),
+    });
   const channel: UpdateChannel = opts.channel ?? "dev";
   if (channel === "extended-stable") {
     return {
@@ -43,7 +67,7 @@ export async function updateGitCheckout(params: {
       mode: "git",
       root: gitRoot,
       reason: "unsupported_git_channel",
-      recovery: await readCurrentGitUpdateRecovery(gitRoot),
+      recovery: await readCurrentGitUpdateRecovery(gitRoot, timeoutMs),
       steps: [],
       durationMs: Date.now() - startedAt,
     };
@@ -54,9 +78,10 @@ export async function updateGitCheckout(params: {
     timeoutMs,
   });
   const beforeSha = beforeShaResult.stdout.trim() || null;
-  const [beforeVersion, beforeBuildId] = await Promise.all([
+  const [beforeVersion, beforeBuildId, beforeBuiltCommit] = await Promise.all([
     readPackageVersion(gitRoot),
     readBuiltGatewayBuildId(gitRoot),
+    readBuiltRuntimeCommit(gitRoot),
   ]);
   const before = {
     sha: beforeSha,
@@ -66,47 +91,99 @@ export async function updateGitCheckout(params: {
   const branch = await readBranchName(runCommand, gitRoot, timeoutMs);
   const devTarget = channel === "dev" ? opts.devTarget : undefined;
   const hasDevTarget = devTarget !== undefined;
+  const activateBranch = channel === "dev" && !hasDevTarget;
   const needsCheckoutMain = channel === "dev" && !hasDevTarget && branch !== DEV_BRANCH;
   const totalSteps = channel === "dev" ? (needsCheckoutMain ? 12 : 11) : 9;
   const steps: UpdateStepResult[] = [];
-  let stepIndex = 0;
-  const step = (
+  const failureStep = (
     name: string,
-    argv: string[],
-    cwd: string,
-    env?: NodeJS.ProcessEnv,
-  ): RunStepOptions => ({
+    command: string,
+    stderrTail: UpdateStepResult["stderrTail"],
+  ): UpdateStepResult => ({
+    name,
+    command,
+    cwd: gitRoot,
+    durationMs: 0,
+    exitCode: 1,
+    stderrTail,
+  });
+  // Work and probes share ordering, including commands in the private inspection clone.
+  let stepIndex = 0;
+  const forRunner =
+    (runner: CommandRunner, deadline: number | undefined) =>
+    (name: string, argv: string[], cwd: string, env?: NodeJS.ProcessEnv): RunStepOptions => ({
+      runCommand: runner,
+      name,
+      argv,
+      cwd,
+      timeoutMs: deadline,
+      env,
+      progress: opts.progress,
+      stepIndex: stepIndex++,
+      totalSteps,
+      results: steps,
+    });
+  const step = forRunner(runCommand, timeoutMs);
+  // Work can outlive an observation allowance. Only the caller may cap it.
+  const workStep = forRunner(runCommand, opts.timeoutMs);
+  const recoveryStep = (name: string, argv: string[], cwd: string): RunStepOptions => ({
     runCommand,
     name,
     argv,
     cwd,
+    // Recovery retains its finite settlement allowance after work has failed.
     timeoutMs,
-    env,
-    progress: opts.progress,
-    stepIndex: stepIndex++,
-    totalSteps,
+    stepIndex: 0,
+    totalSteps: 1,
     results: steps,
   });
 
-  let allowGatewayServiceRepair = opts.allowGatewayServiceRepair !== false;
-  let allowGatewayActivation = opts.allowGatewayActivation === true;
   let createdDevBranchDuringUpdate = false;
   let mutationPrepared = false;
+  let sourceMutationStarted = false;
   let runtimePromotion: Awaited<ReturnType<typeof prepareGitRuntimePromotion>> | undefined;
+  let runtimeRetained = false;
+  const runtimeCleanups: Partial<Record<"candidate" | "inspection", () => Promise<boolean>>> = {};
+  const cleanupCandidateRuntime = async (assertCurrent = () => {}) => {
+    assertCurrent();
+    // The worktree still needs this private repository until its cleanup settles.
+    for (const kind of ["candidate", "inspection"] as const) {
+      const cleanup = runtimeCleanups[kind];
+      if (cleanup) {
+        const removed = await cleanup();
+        assertCurrent();
+        if (!removed) {
+          return false;
+        }
+        runtimeCleanups[kind] = undefined;
+      }
+    }
+    return true;
+  };
+  let candidateTransfer:
+    | Extract<Awaited<ReturnType<typeof prepareGitCandidateTransfer>>, { status: "ok" }>
+    | undefined;
   let stateMigrationStarted = false;
+  let cleanupUncertain = false;
   let recovery = await verifyGitUpdateRecovery({ root: gitRoot, sha: beforeSha });
-  const prepareMutation = async (revision: string) => {
-    const preparation = await prepareGitMutation({
-      runCommand,
-      root: gitRoot,
+  let rollbackOutcome: NonNullable<UpdateRunResult["rollbackOutcome"]> = {
+    status: "not-needed",
+    reason: "Installed checkout was not changed",
+  };
+  const prepareMutation = async (revision: string, root = gitRoot, runner = runCommand) => {
+    // Remote transport can outlive the earlier service inspection. Recheck
+    // its frozen contexts before checkout without repeating stop/preparation.
+    await prepareGitMutation({
+      runCommand: runner,
+      root,
       revision,
       timeoutMs,
-      beforeGitMutation: opts.beforeGitMutation,
+      beforeGitMutation: mutationPrepared ? opts.inspectGitTarget : opts.beforeGitMutation,
     });
-    mutationPrepared = true;
-    allowGatewayServiceRepair = preparation.allowGatewayServiceRepair ?? allowGatewayServiceRepair;
-    allowGatewayActivation = preparation.allowGatewayActivation ?? allowGatewayActivation;
-    recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+    if (!mutationPrepared) {
+      mutationPrepared = true;
+      recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+    }
   };
   const buildError = (reason: string, status: "error" | "skipped" = "error"): UpdateRunResult => ({
     status,
@@ -115,356 +192,479 @@ export async function updateGitCheckout(params: {
     reason,
     before,
     recovery,
+    rollbackOutcome,
     steps,
     durationMs: Date.now() - startedAt,
   });
-  const appendRecoveryStep = async (name: string, argv: string[]) => {
-    const result = await runStep({
-      runCommand,
-      name,
-      argv,
-      cwd: gitRoot,
-      timeoutMs,
-      stepIndex: 0,
-      totalSteps: 1,
-      results: steps,
-    });
-    return result.exitCode === 0;
-  };
-  const verifyRollbackHead = async () => {
-    if (!beforeSha) {
-      return false;
-    }
-    const result = await runStep({
-      runCommand,
-      name: "git rollback verify HEAD",
-      argv: ["git", "-C", gitRoot, "rev-parse", "HEAD"],
-      cwd: gitRoot,
-      timeoutMs,
-      stepIndex: 0,
-      totalSteps: 1,
-      results: steps,
-    });
-    const verified = result.exitCode === 0 && result.stdoutTail?.trim() === beforeSha;
-    result.exitCode = verified ? 0 : 1;
-    if (!verified) {
-      result.stderrTail = `expected ${beforeSha}, found ${result.stdoutTail?.trim() || "unreadable HEAD"}`;
-    }
-    return verified;
-  };
-  const rollback = async () => {
-    if (!beforeSha) {
-      return false;
-    }
-    let restored = await appendRecoveryStep("git rollback clean", [
-      "git",
-      "-C",
-      gitRoot,
-      "reset",
-      "--hard",
-    ]);
-    // Preflight requires a clean checkout outside generated Control UI assets,
-    // so preserve that excluded directory while removing update-created paths.
-    restored =
-      (await appendRecoveryStep("git rollback clean untracked", [
-        "git",
-        "-C",
-        gitRoot,
-        "clean",
-        "-fd",
-        "-e",
-        "dist/control-ui/",
-      ])) && restored;
-    if (branch && branch !== "HEAD") {
-      const checkedOut = await appendRecoveryStep("git rollback checkout", [
-        "git",
-        "-C",
-        gitRoot,
-        "checkout",
-        "--force",
-        branch,
-      ]);
-      if (checkedOut) {
-        restored =
-          (await appendRecoveryStep("git rollback reset", [
-            "git",
-            "-C",
-            gitRoot,
-            "reset",
-            "--hard",
-            beforeSha,
-          ])) && restored;
-        if (createdDevBranchDuringUpdate) {
-          await appendRecoveryStep(`git rollback delete ${DEV_BRANCH}`, [
-            "git",
-            "-C",
-            gitRoot,
-            "branch",
-            "-D",
-            DEV_BRANCH,
-          ]);
-        }
-      }
-      const verified = await verifyRollbackHead();
-      return restored && checkedOut && verified;
-    }
-    restored =
-      (await appendRecoveryStep("git rollback checkout", [
-        "git",
-        "-C",
-        gitRoot,
-        "checkout",
-        "--detach",
+  const restoreRuntime = async (
+    assertCurrent = () => {},
+    runtimeSha = beforeSha,
+    source?: { sha: string; branch: string | null },
+  ) => {
+    const restoreSource = () =>
+      runGitRollbackSteps({
         beforeSha,
-      ])) && restored;
-    if (createdDevBranchDuringUpdate) {
-      await appendRecoveryStep(`git rollback delete ${DEV_BRANCH}`, [
-        "git",
-        "-C",
+        branch,
         gitRoot,
-        "branch",
-        "-D",
-        DEV_BRANCH,
-      ]);
-    }
-    const verified = await verifyRollbackHead();
-    return restored && verified;
-  };
-  const rollbackError = async (reason: string) => {
-    // Doctor can migrate state before failing. Restoring code cannot undo that boundary.
-    if (stateMigrationStarted) {
-      return buildError(reason);
-    }
-    const sourceRestored = await rollback();
+        createdDevBranchDuringUpdate,
+        sourceTreeStagingPaths: runtimePromotion?.sourceTreeStagingPaths,
+        recoveryStep,
+        checkSourceUnchanged,
+        assertCurrent,
+        activatedSource: source,
+      });
+    // Retained rollback must settle every source/ref fence before changing runtime.
+    let sourceRestored = source ? await restoreSource() : false;
     let runtimeRestored = true;
     try {
-      await runtimePromotion?.restore();
+      await runtimePromotion?.restore(assertCurrent);
     } catch (error) {
+      assertCurrent();
       runtimeRestored = false;
-      steps.push({
-        name: "git runtime rollback",
-        command: "restore previous runtime",
-        cwd: gitRoot,
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail: String(error),
-      });
+      steps.push(failureStep("git-runtime-rollback", "restore previous runtime", String(error)));
+    }
+    // Immediate activation recovery reconstructs tracked output after runtime restoration.
+    if (!source) {
+      sourceRestored = await restoreSource();
     }
     recovery = !sourceRestored
       ? { serviceRestartSafe: false, reason: "source-rollback-failed" }
       : !runtimeRestored
         ? { serviceRestartSafe: false, reason: "runtime-verification-failed" }
-        : await verifyGitUpdateRecovery({ root: gitRoot, sha: beforeSha });
-    return buildError(reason);
+        : await verifyGitUpdateRecovery({ root: gitRoot, sha: runtimeSha });
+    assertCurrent();
+    const restored = sourceRestored && runtimeRestored && recovery.serviceRestartSafe;
+    rollbackOutcome = {
+      status: restored ? "succeeded" : "failed",
+      reason: restored
+        ? "Previous checkout and runtime restored and verified"
+        : "Previous checkout or runtime restoration could not be verified",
+    };
+    return restored;
   };
-  const runRequiredStep = async (name: string, argv: string[], reason: string) => {
-    const result = await runStep(step(name, argv, gitRoot));
-    if (result.exitCode === 0) {
-      return null;
+  const rollbackError = async (reason: string) => {
+    try {
+      // Admission can stop the service before import changes any source or runtime.
+      // Reverify retained artifacts without resetting an untouched checkout.
+      if (!sourceMutationStarted) {
+        if (!(await checkSourceUnchanged())) {
+          recovery = await verifyGitUpdateRecovery({ root: gitRoot, sha: beforeSha });
+        }
+        return buildError(reason);
+      }
+      // Doctor can migrate state before failing. Restoring code cannot undo that boundary.
+      if (stateMigrationStarted) {
+        rollbackOutcome = {
+          status: "not-attempted",
+          reason: "State migration started; restoring code alone cannot restore operator state",
+        };
+        return buildError(reason);
+      }
+      if (!runtimeRetained) {
+        await restoreRuntime();
+      }
+      return buildError(reason);
+    } catch (error) {
+      if (sourceMutationStarted && !stateMigrationStarted) {
+        rollbackOutcome = {
+          status: "failed",
+          reason: "Rollback threw before restoration could be verified",
+        };
+      }
+      throw error;
+    } finally {
+      recordGitRollbackOutcome({
+        outcome: rollbackOutcome,
+        progress: opts.progress,
+        root: gitRoot,
+        steps,
+      });
     }
-    return mutationPrepared ? rollbackError(reason) : buildError(reason);
   };
-
-  const statusCheck = await runStep(step("clean check", gitCleanCheckArgs(gitRoot), gitRoot));
-  if (statusCheck.exitCode !== 0) {
-    return buildError("clean-check-failed");
+  if (beforeShaResult.code !== 0 || !beforeSha) {
+    return buildError("git-root-unresolved");
   }
-  if (statusCheck.stdoutTail?.trim()) {
-    return buildError("dirty", "skipped");
+  const { result: statusCheck, dirty } = await runGitCleanCheckStep(
+    step("clean-check", gitCleanCheckArgs(gitRoot), gitRoot),
+  );
+  if (isFailedUpdateStep(statusCheck)) {
+    return buildError(dirty ? "dirty" : "clean-check-failed");
   }
-
-  try {
-    const fetchFailure = await runRequiredStep(
-      "git fetch",
-      [
-        "git",
-        "-C",
-        gitRoot,
-        "fetch",
-        "--all",
-        "--prune",
-        channel === "dev" ? "--no-tags" : "--tags",
-      ],
-      "fetch-failed",
-    );
-    if (fetchFailure) {
-      return fetchFailure;
-    }
-    const tag =
-      channel === "dev"
-        ? undefined
-        : await resolveChannelTag(runCommand, gitRoot, timeoutMs, channel);
-    if (channel !== "dev" && !tag) {
-      return buildError("no-release-tag");
-    }
-    const preflight = await runGitCandidatePreflight({
+  if (activateBranch && branch !== DEV_BRANCH) {
+    const devBranchRef = `refs/heads/${DEV_BRANCH}`;
+    const branchCheckOptions = step(
+      "git-activation-branch-check",
+      ["git", "-C", gitRoot, "branch", "--force", DEV_BRANCH, devBranchRef],
       gitRoot,
-      devTarget,
-      targetRevision: tag ?? undefined,
-      beforeSha,
-      needsCheckoutMain,
-      runCommand,
-      timeoutMs,
-      defaultCommandEnv,
-      steps,
-      step,
-      validateCandidate: opts.validateCandidate,
-      prepareGitExposure: opts.prepareGitExposure,
-      prepareCandidate: async (root, cleanupRoot) => {
-        runtimePromotion = await prepareGitRuntimePromotion(
-          gitRoot,
-          root,
-          runCommand,
-          timeoutMs,
-          cleanupRoot,
-        );
-      },
-    });
-    if (preflight.status !== "ok") {
-      return buildError(preflight.reason, preflight.status);
+    );
+    const branchCheck = await runGitActivationBranchCheckStep(branchCheckOptions, DEV_BRANCH);
+    if (isFailedUpdateStep(branchCheck)) {
+      return buildError("checkout-failed");
     }
-    // Candidate validation and worktree cleanup finish while the old gateway serves.
-    // Its exact build is retained on this filesystem; activation never installs or builds.
+  }
+  const checkSourceUnchanged = async (
+    expectedSha = beforeSha,
+    expectedBranch = branch,
+    assertCurrent = () => {},
+  ) => {
+    assertCurrent();
     const currentHead = await runCommand(["git", "-C", gitRoot, "rev-parse", "HEAD"], {
       cwd: gitRoot,
       timeoutMs,
     });
-    const currentStatus = await runCommand(gitCleanCheckArgs(gitRoot), { cwd: gitRoot, timeoutMs });
+    assertCurrent();
+    const currentStatus = await runCommand(
+      gitCleanCheckArgs(gitRoot, runtimePromotion?.sourceTreeStagingPaths),
+      { cwd: gitRoot, timeoutMs },
+    );
+    assertCurrent();
     if (currentHead.code !== 0 || currentStatus.code !== 0) {
-      return buildError("clean-check-failed");
+      return { status: "error" as const, reason: "clean-check-failed" as const };
     }
     const currentBranch = await readBranchName(runCommand, gitRoot, timeoutMs);
+    assertCurrent();
     if (
-      currentHead.stdout.trim() !== beforeSha ||
-      currentBranch !== branch ||
+      currentHead.stdout.trim() !== expectedSha ||
+      currentBranch !== expectedBranch ||
       currentStatus.stdout.trim()
     ) {
-      return buildError("dirty", "skipped");
+      return { status: "error" as const, reason: "dirty" as const };
+    }
+    return undefined;
+  };
+
+  try {
+    const inspectAndPrepare = async (
+      inspectionRoot: string,
+      runInspectionCommand: CommandRunner,
+    ) => {
+      let publishedCandidate = false;
+      const inspectionStep = forRunner(runInspectionCommand, timeoutMs);
+      const inspectionWorkStep = forRunner(runInspectionCommand, opts.timeoutMs);
+      const importCandidate = async (candidateSha: string, upstreamRef?: string) => {
+        // Close the pinned pack on every exit, including admission refusal,
+        // before the surrounding inspection checkout is removed.
+        const transfer = await prepareGitCandidateTransfer({
+          candidateSha,
+          beforeSha,
+          installedRoot: gitRoot,
+          installedRunCommand: runCommand,
+          upstreamRef,
+          step: inspectionWorkStep("git-pack-update", [], inspectionRoot),
+          probeTimeoutMs: timeoutMs,
+        });
+        if (!transfer || transfer.status === "error") {
+          return { status: "error" as const, reason: transfer?.reason ?? "fetch-failed" };
+        }
+        await using admittedTransfer = transfer;
+        const sourceChanged = await checkSourceUnchanged();
+        if (sourceChanged) {
+          return sourceChanged;
+        }
+        await prepareMutation(candidateSha, inspectionRoot, runInspectionCommand);
+        candidateTransfer = transfer;
+        const imported = await admittedTransfer.importInto(
+          workStep("git-import-admitted-target", [], gitRoot),
+        );
+        if (!imported) {
+          return { status: "error" as const, reason: "fetch-failed" };
+        }
+        return { status: "ok" as const };
+      };
+      const fetched = await fetchGitUpdateTarget({
+        root: inspectionRoot,
+        step: inspectionStep,
+        workStep: inspectionWorkStep,
+        name: "git-target-inspection-fetch",
+        channel,
+        devTarget,
+        steps,
+      });
+      if (!fetched.ok) {
+        return { status: "error" as const, reason: "fetch-failed" };
+      }
+      const inspectTarget = async (revision: string, root = inspectionRoot) => {
+        await prepareGitMutation({
+          runCommand: runInspectionCommand,
+          root,
+          revision,
+          timeoutMs,
+          beforeGitMutation: opts.inspectGitTarget,
+        });
+      };
+      const selected = await selectGitInspectionTarget({
+        gitRoot: inspectionRoot,
+        // Clone publication moves the repository, so its owner supplies stationary
+        // artifact storage. Existing checkouts keep their durable staging and cache.
+        artifactRoot: opts.gitArtifactStorageRoot ?? gitRoot,
+        runCommand: runInspectionCommand,
+        step: inspectionStep,
+        workStep: inspectionWorkStep,
+        workTimeoutMs: opts.timeoutMs,
+        channel,
+        devTarget,
+        refreshedRemotes: fetched.refreshedRemotes,
+        beforeSha,
+        beforeRuntimeVerified: recovery.serviceRestartSafe,
+        sourceRuntimePrepared: opts.sourceRuntimePrepared,
+        beforeGitStaging: opts.beforeGitStaging,
+        needsCheckoutMain,
+        timeoutMs,
+        defaultCommandEnv,
+        steps,
+        beforeCandidate: inspectTarget,
+        validateCandidate: opts.validateCandidate,
+        prepareGitExposure: opts.prepareGitExposure,
+        retainCleanup: (cleanup) => {
+          runtimeCleanups.candidate = cleanup;
+          return true;
+        },
+        prepareCandidate: async (root, cleanupRoot) => {
+          const candidate = await runInspectionCommand(["git", "-C", root, "rev-parse", "HEAD"], {
+            cwd: root,
+            timeoutMs,
+          });
+          if (candidate.code !== 0 || !candidate.stdout.trim()) {
+            throw new Error("Cannot inspect the validated Git update");
+          }
+          await inspectTarget(candidate.stdout.trim(), root);
+          if (opts.publishGitCheckout) {
+            // A new checkout must settle its destination before runtime relocation
+            // records absolute paths. Candidate build/validation has already finished.
+            if ((await importCandidate(candidate.stdout.trim())).status !== "ok") {
+              throw new Error("Cannot import the admitted Git update");
+            }
+            gitRoot = await opts.publishGitCheckout();
+            publishedCandidate = true;
+          }
+          // Filesystem staging shares command steps' progress, heartbeat, and failure reporting.
+          await runStep({
+            ...inspectionWorkStep("preflight-runtime-stage", [], root),
+            runCommand: async () => {
+              runtimePromotion = await prepareGitRuntimePromotion(
+                gitRoot,
+                root,
+                runInspectionCommand,
+                timeoutMs,
+                cleanupRoot,
+              );
+              return { code: 0, stdout: "", stderr: "" };
+            },
+          });
+        },
+      });
+      if (selected.status !== "ok") {
+        return selected;
+      }
+      if (!publishedCandidate) {
+        const upstreamRef = selected.selectedDevUpstream
+          ? `refs/remotes/${selected.selectedDevUpstream}`
+          : undefined;
+        const imported = await importCandidate(selected.candidateSha, upstreamRef);
+        if (imported.status !== "ok") {
+          return imported;
+        }
+      }
+      return selected;
+    };
+    const preflight = await withGitTargetInspectionRoot(
+      {
+        root: gitRoot,
+        runCommand,
+        timeoutMs,
+        work: { timeoutMs: opts.timeoutMs },
+        onWarning: (warning) => {
+          steps.push(warning);
+          return reportUpdateStepCompletion(opts.progress, { ...warning, index: 0, total: 0 });
+        },
+        retainCleanup: (cleanup) => {
+          if (!runtimeCleanups.candidate) {
+            return false;
+          }
+          runtimeCleanups.inspection = cleanup;
+          return true;
+        },
+      },
+      inspectAndPrepare,
+    );
+    if (preflight.status !== "ok") {
+      if (preflight.status === "skipped" && preflight.reason === "already-current") {
+        return {
+          ...buildError(preflight.reason, preflight.status),
+          sourceRuntimePrepared: opts.sourceRuntimePrepared,
+        };
+      }
+      return mutationPrepared
+        ? await rollbackError(preflight.reason)
+        : buildError(preflight.reason, preflight.status);
+    }
+    // Keep the runnable candidate for configuration rechecks until activation settles.
+    // Its exact build is staged on this filesystem; activation never installs or builds.
+    const sourceChanged = await checkSourceUnchanged();
+    if (sourceChanged) {
+      return buildError(sourceChanged.reason, sourceChanged.status);
     }
     await prepareMutation(preflight.candidateSha);
-    const activateBranch = channel === "dev" && !hasDevTarget;
-    const failure = await runRequiredStep(
-      `git checkout ${activateBranch ? DEV_BRANCH : preflight.candidateSha}`,
-      activateBranch
-        ? ["git", "-C", gitRoot, "checkout", "-B", DEV_BRANCH, preflight.candidateSha]
-        : ["git", "-C", gitRoot, "checkout", "--detach", preflight.candidateSha],
-      "checkout-failed",
+    sourceMutationStarted = true;
+    const checkout = await runStep(
+      workStep(
+        "git-checkout",
+        activateBranch
+          ? ["git", "-C", gitRoot, "checkout", "-B", DEV_BRANCH, preflight.candidateSha]
+          : ["git", "-C", gitRoot, "checkout", "--detach", preflight.candidateSha],
+        gitRoot,
+      ),
     );
-    if (failure) {
-      return failure;
+    if (isFailedUpdateStep(checkout)) {
+      return await rollbackError("checkout-failed");
     }
     createdDevBranchDuringUpdate = activateBranch && preflight.localDevBranchExists === false;
     if (createdDevBranchDuringUpdate && preflight.selectedDevUpstream) {
-      const upstreamFailure = await runRequiredStep(
-        `git branch --set-upstream-to ${preflight.selectedDevUpstream} ${DEV_BRANCH}`,
-        [
-          "git",
-          "-C",
-          gitRoot,
-          "branch",
-          "--set-upstream-to",
-          preflight.selectedDevUpstream,
-          DEV_BRANCH,
-        ],
-        "checkout-failed",
-      );
-      if (upstreamFailure) {
-        return upstreamFailure;
+      const upstreamArgs = [
+        "git",
+        "-C",
+        gitRoot,
+        "branch",
+        "--set-upstream-to",
+        preflight.selectedDevUpstream,
+        DEV_BRANCH,
+      ];
+      const upstreamOptions = workStep("git-set-upstream", upstreamArgs, gitRoot);
+      const upstreamStep = await runGitUpstreamStep(upstreamOptions);
+      if (isFailedUpdateStep(upstreamStep)) {
+        return await rollbackError("checkout-failed");
       }
     }
-    if (!runtimePromotion) {
+    const promotedRuntime = runtimePromotion;
+    if (!promotedRuntime) {
       return await rollbackError("runtime-verification-failed");
     }
     try {
-      await runtimePromotion.activate();
-    } catch (error) {
-      steps.push({
-        name: "git runtime activation",
-        command: "activate validated runtime",
-        cwd: gitRoot,
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail: String(error),
+      // Timed like other activation work; a thrown activation records the failed step.
+      await runStep({
+        ...workStep("git-runtime-activation", [], gitRoot),
+        runCommand: async () => {
+          await promotedRuntime.activate();
+          return { code: 0, stdout: "", stderr: "" };
+        },
       });
+    } catch {
       return await rollbackError("runtime-verification-failed");
+    }
+
+    if (opts.onTransaction) {
+      const activatedBranch = await readBranchName(runCommand, gitRoot, timeoutMs);
+      const assertRollbackSafe = async () => {
+        if (await checkSourceUnchanged(preflight.candidateSha, activatedBranch)) {
+          throw new Error("Git checkout changed after activation; retained rollback was refused.");
+        }
+      };
+      runtimeRetained = true;
+      const promotion = promotedRuntime;
+      await opts.onTransaction(
+        createGitRuntimeTransaction({
+          root: gitRoot,
+          promotion: {
+            backupRoot: promotion.backupRoot,
+            cleanup: async (assertCurrent) => {
+              if (!(await cleanupCandidateRuntime(assertCurrent))) {
+                return steps.findLast(
+                  (cleanupStep) =>
+                    cleanupStep.advisory?.kind === "recoverable-maintenance" &&
+                    (cleanupStep.name === "preflight-cleanup" ||
+                      cleanupStep.name === "git-target-inspection-cleanup"),
+                );
+              }
+              return await promotion.cleanup(assertCurrent);
+            },
+          },
+          assertRollbackSafe,
+          restoreRuntime: async (assertCurrent) => {
+            const rollbackStart = steps.length;
+            const verified = await restoreRuntime(assertCurrent, beforeBuiltCommit ?? beforeSha, {
+              sha: preflight.candidateSha,
+              branch: activatedBranch,
+            });
+            const rollbackSteps = steps.slice(rollbackStart);
+            const messages = rollbackSteps.flatMap((entry) => entry.advisory?.message ?? []);
+            return {
+              name: "git-runtime-rollback",
+              command: "restore previous Git runtime",
+              cwd: gitRoot,
+              durationMs: 0,
+              exitCode: verified ? 0 : 1,
+              activePackageRoot: gitRoot,
+              advisory:
+                verified && messages.length
+                  ? { kind: "recoverable-maintenance", message: messages.join(" ") }
+                  : undefined,
+              stderrTail: verified ? undefined : rollbackSteps.find(isFailedUpdateStep)?.stderrTail,
+            };
+          },
+        }),
+      );
     }
 
     // Source conversion migrates only after its prepared global exposure is swapped.
     if (!opts.prepareGitExposure) {
-      const doctorEntry = path.join(gitRoot, "openclaw.mjs");
-      const doctorEntryExists = await fs.stat(doctorEntry).then(
-        () => true,
-        () => false,
-      );
-      if (!doctorEntryExists) {
-        steps.push({
-          name: "openclaw doctor entry",
-          command: `verify ${doctorEntry}`,
-          cwd: gitRoot,
-          durationMs: 0,
-          exitCode: 1,
-          stderrTail: `missing ${doctorEntry}`,
-        });
-        return await rollbackError("doctor-entry-missing");
-      }
-      const doctorNodePath = await resolveStableNodePath(process.execPath);
-      const doctorTargetVersion = await readPackageVersion(gitRoot);
-      const doctorPolicy = resolveUpdateDoctorExecutionPolicy({
-        targetVersion: doctorTargetVersion,
-        allowGatewayServiceRepair,
-      });
       stateMigrationStarted = true;
       recovery = { serviceRestartSafe: false, reason: "state-migration-started" };
-      const doctorStep = await runStep(
-        step(
-          "openclaw doctor",
-          [
-            doctorNodePath,
-            doctorEntry,
-            "doctor",
-            "--non-interactive",
-            ...(doctorPolicy.fix ? ["--fix"] : []),
-          ],
-          gitRoot,
-          buildUpdateDoctorEnv({
-            allowGatewayServiceRepair,
-            allowGatewayActivation,
-            serviceRepairPolicy: doctorPolicy.serviceRepairPolicy,
-            deferConfiguredPluginInstallRepair: opts.deferConfiguredPluginInstallRepair,
-          }),
-        ),
+      const doctorSteps: UpdateStepResult[] = [];
+      let doctorStep: UpdateStepResult | null;
+      try {
+        doctorStep = await opts.runGitDoctor(gitRoot, doctorSteps);
+      } catch (error) {
+        steps.push(...doctorSteps);
+        throw error;
+      }
+      steps.push(
+        doctorStep ??
+          failureStep(
+            "openclaw doctor",
+            "run activation doctor",
+            "Required activation Doctor did not produce a result.",
+          ),
       );
-      if (doctorStep.exitCode !== 0) {
-        return await rollbackError("doctor-failed");
+      if (!doctorStep) {
+        // The CLI returns null before any state writes when its entrypoint is missing.
+        stateMigrationStarted = false;
+        return await rollbackError("doctor-entry-missing");
+      }
+      if (isFailedUpdateStep(doctorStep)) {
+        return await rollbackError(
+          getUpdateDoctorConfigFailureReason(doctorStep.configWriteRefusal) ?? "doctor-failed",
+        );
       }
     }
 
     if ((await resolveControlUiAssetHealth({ root: gitRoot })).kind !== "ready") {
-      steps.push({
-        name: "ui assets verify",
-        command: "verify startup assets",
-        cwd: gitRoot,
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail: "Control UI startup assets are missing or incomplete after Doctor",
-      });
+      steps.push(
+        failureStep(
+          "ui-assets-verify",
+          "verify startup assets",
+          "Control UI startup assets are missing or incomplete after Doctor",
+        ),
+      );
       return await rollbackError("ui-assets-missing");
     }
     const afterBuildId = await readBuiltGatewayBuildId(gitRoot);
     const afterShaStep = await runStep(
-      step("git rev-parse HEAD (after)", ["git", "-C", gitRoot, "rev-parse", "HEAD"], gitRoot),
+      step("git-verify-head", ["git", "-C", gitRoot, "rev-parse", "HEAD"], gitRoot),
     );
-    if (afterShaStep.exitCode !== 0) {
+    if (isFailedUpdateStep(afterShaStep)) {
       return await rollbackError("head-verification-failed");
     }
     if (afterShaStep.stdoutTail?.trim() !== preflight.candidateSha) {
       return await rollbackError("target-sha-mismatch");
     }
+    const gitRuntime = await readGitRuntimeArtifactIdentity(gitRoot);
     return {
       status: "ok",
       mode: "git",
       root: gitRoot,
       before,
+      gitRuntime,
+      sourceRuntimePrepared: true,
       after: {
         sha: afterShaStep.stdoutTail?.trim() ?? null,
         version: await readPackageVersion(gitRoot),
@@ -475,19 +675,27 @@ export async function updateGitCheckout(params: {
       durationMs: Date.now() - startedAt,
     };
   } catch (error) {
-    if (!mutationPrepared) {
+    cleanupUncertain = hasCommandProcessCleanupError(error);
+    if (!mutationPrepared || cleanupUncertain) {
       throw error;
     }
+    const fact = createUpdateErrorFact("git update", error, defaultCommandEnv);
     steps.push({
-      name: "git update",
-      command: "update checkout",
-      cwd: gitRoot,
-      durationMs: 0,
-      exitCode: 1,
-      stderrTail: String(error),
+      ...failureStep("git-update", "update checkout", fact.message),
+      failureFacts: [fact],
     });
-    return await rollbackError("unexpected-error");
+    return await rollbackError(
+      error instanceof UpdateRequesterRevokedError ? error.code : "unexpected-error",
+    ).catch((rollbackFailure: unknown) => {
+      cleanupUncertain = hasCommandProcessCleanupError(rollbackFailure);
+      throw rollbackFailure;
+    });
   } finally {
-    await runtimePromotion?.cleanup();
+    if (!cleanupUncertain) {
+      await candidateTransfer?.cleanup(step("git-update-pack-cleanup", [], gitRoot));
+      if (!runtimeRetained && (await cleanupCandidateRuntime())) {
+        await runtimePromotion?.cleanup();
+      }
+    }
   }
 }

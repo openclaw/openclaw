@@ -8,6 +8,7 @@ struct GatewaySettings: View {
         let id = UUID()
         var name = ""
         var address = ""
+        var isReconnecting = false
     }
 
     @State private var profiles: [MacGatewayProfile]
@@ -29,13 +30,30 @@ struct GatewaySettings: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            self.header
-            self.content
-            Spacer(minLength: 0)
+        Form {
+            Section {
+                self.content
+            } header: {
+                HStack {
+                    Text("Saved Gateways")
+                    Spacer()
+                    Button {
+                        guard !self.isRemoving else { return }
+                        self.editorPresentation = EditorPresentation()
+                    } label: {
+                        Label("Add Gateway", systemImage: "plus")
+                    }
+                    .controlSize(.small)
+                    .disabled(self.isRemoving)
+                }
+            } footer: {
+                Text("""
+                Save Gateway connections for chat windows. The primary Gateway under \
+                Connection still owns Mac integrations and Talk Mode.
+                """)
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .settingsDetailContent()
+        .formStyle(.grouped)
         .task {
             guard !self.hasLoaded, !self.isPreview else { return }
             self.hasLoaded = true
@@ -44,7 +62,8 @@ struct GatewaySettings: View {
         .sheet(item: self.$editorPresentation) { presentation in
             GatewayProfileEditor(
                 name: presentation.name,
-                address: presentation.address)
+                address: presentation.address,
+                isReconnecting: presentation.isReconnecting)
             { profile in
                 self.profiles.removeAll { $0.id == profile.id }
                 self.profiles.append(profile)
@@ -93,26 +112,6 @@ struct GatewaySettings: View {
         }
     }
 
-    private var header: some View {
-        HStack(alignment: .top, spacing: 16) {
-            SettingsPageHeader(
-                title: "Gateways",
-                subtitle: """
-                Save Gateway connections for chat windows. The primary Gateway under \
-                Connection still owns Mac integrations and Talk Mode.
-                """)
-            Spacer(minLength: 16)
-            Button {
-                guard !self.isRemoving else { return }
-                self.editorPresentation = EditorPresentation()
-            } label: {
-                Label("Add Gateway", systemImage: "plus")
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(self.isRemoving)
-        }
-    }
-
     @ViewBuilder
     private var content: some View {
         if self.isLoading, self.profiles.isEmpty {
@@ -120,62 +119,49 @@ struct GatewaySettings: View {
                 ProgressView()
                     .controlSize(.small)
                 Text("Loading Gateways…")
-                    .font(.callout)
                     .foregroundStyle(.secondary)
             }
-            .padding(.top, 8)
         } else if self.profiles.isEmpty {
-            SettingsCardGroup("Saved Gateways") {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("No Gateways saved")
-                        .font(.callout.weight(.medium))
-                    Text(
-                        """
-                        Add a Gateway here, then use File → New Gateway Window… (⌘N) whenever \
-                        you want another window for it.
-                        """)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 13)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("No Gateways saved")
+                Text("""
+                Add a Gateway here, then use File → New Gateway Window… (⌘N) whenever you want another window for it.
+                """)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
         } else {
-            ScrollView(.vertical) {
-                SettingsCardGroup("Saved Gateways") {
-                    ForEach(Array(self.profiles.enumerated()), id: \.element.id) { index, profile in
-                        let removalLabel = Text(verbatim: String(
-                            format: String(localized: "Remove %@"), profile.name))
-                        SettingsCardRow(
-                            title: .verbatim(profile.name),
-                            subtitle: .verbatim(profile.url.absoluteString),
-                            showsDivider: index != self.profiles.count - 1)
-                        {
-                            HStack(spacing: 8) {
-                                Button("Open Window") {
-                                    guard !self.isRemoving else { return }
-                                    WebChatManager.shared.openGatewayWindow(profile: profile)
-                                }
-                                .disabled(self.isRemoving)
-                                Button("Reconnect") {
-                                    self.editorPresentation = EditorPresentation(
-                                        name: profile.name,
-                                        address: profile.url.absoluteString)
-                                }
-                                .disabled(self.isRemoving)
-                                Button(role: .destructive) {
-                                    guard !self.isRemoving else { return }
-                                    self.pendingRemoval = profile
-                                } label: {
-                                    Image(systemName: "trash")
-                                }
-                                .accessibilityLabel(removalLabel)
-                                .help(removalLabel)
-                                .disabled(self.isRemoving)
-                            }
+            ForEach(self.profiles) { profile in
+                let removalLabel = Text(verbatim: String(
+                    format: String(localized: "Remove %@"), profile.name))
+                LabeledContent {
+                    HStack(spacing: 8) {
+                        Button("Open Window") {
+                            guard !self.isRemoving else { return }
+                            AppNavigationActions.openGateway(.profile(profile.id), newWindow: true)
                         }
+                        .disabled(self.isRemoving)
+                        Button("Reconnect") {
+                            self.editorPresentation = EditorPresentation(
+                                name: profile.name,
+                                address: profile.url.absoluteString,
+                                isReconnecting: true)
+                        }
+                        .disabled(self.isRemoving)
+                        Button(role: .destructive) {
+                            guard !self.isRemoving else { return }
+                            self.pendingRemoval = profile
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .accessibilityLabel(removalLabel)
+                        .help(removalLabel)
+                        .disabled(self.isRemoving)
                     }
+                } label: {
+                    Text(verbatim: profile.name)
+                    Text(verbatim: profile.url.absoluteString)
                 }
             }
         }
@@ -214,6 +200,8 @@ struct GatewayProfileEditor: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var connectionTask: Task<Void, Never>?
+    @State private var signInProgress = GatewayBrowserSignInProgress()
+    private let isReconnecting: Bool
 
     let onSaved: (MacGatewayProfile) -> Void
     let onCancel: (() -> Void)?
@@ -221,20 +209,27 @@ struct GatewayProfileEditor: View {
     init(
         name: String = "",
         address: String = "",
+        isReconnecting: Bool = false,
         onCancel: (() -> Void)? = nil,
         onSaved: @escaping (MacGatewayProfile) -> Void)
     {
         _name = State(initialValue: name)
         _url = State(initialValue: address)
+        self.isReconnecting = isReconnecting
         self.onCancel = onCancel
         self.onSaved = onSaved
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            SettingsPageHeader(
-                title: "Add Gateway",
-                subtitle: "Enter your Gateway address. Sign in through your browser when requested.")
+            VStack(alignment: .leading, spacing: 5) {
+                Text(self.isReconnecting ? String(localized: "Reconnect") : String(localized: "Add Gateway"))
+                    .font(.title3.weight(.semibold))
+                Text("Enter your Gateway address. Sign in through your browser when requested.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 12) {
                 GridRow {
@@ -273,11 +268,7 @@ struct GatewayProfileEditor: View {
                 .foregroundStyle(.secondary)
 
             if self.isSaving {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("Connecting… Complete sign-in in your browser if it opens.")
-                        .font(.callout)
-                }
+                GatewayBrowserSignInProgressView(progress: self.signInProgress)
             }
 
             if let errorMessage {
@@ -297,7 +288,7 @@ struct GatewayProfileEditor: View {
                     self.dismiss()
                 }
                 .keyboardShortcut(.cancelAction)
-                Button("Connect") {
+                Button(self.isReconnecting ? String(localized: "Reconnect") : String(localized: "Connect")) {
                     self.connectionTask = Task { await self.save() }
                 }
                 .keyboardShortcut(.defaultAction)
@@ -318,10 +309,11 @@ struct GatewayProfileEditor: View {
                 name: self.name,
                 address: self.url,
                 token: self.token,
-                password: self.password)
+                password: self.password,
+                progress: self.signInProgress)
             WebChatManager.shared.gatewayProfileDidSave(profileID: profile.id)
             self.onSaved(profile)
-            DashboardManager.shared.openOrFocusDashboard(for: .profile(profile.id))
+            AppNavigationActions.openGateway(.profile(profile.id))
             self.dismiss()
         } catch is CancellationError {
             return
@@ -344,7 +336,7 @@ struct GatewaySettings_Previews: PreviewProvider {
                 name: "Production",
                 url: URL(string: "wss://gateway.example:443/")!),
         ])
-        .frame(width: 840, height: 620)
+        .frame(width: ConnectionWindow.width, height: 400)
     }
 }
 #endif

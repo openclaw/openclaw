@@ -1,6 +1,8 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { listConnectedNodePluginTools } from "../../gateway/node-plugin-tool-snapshot.js";
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../../infra/node-commands.js";
+import { addSafeTimeoutDelayGraceMs } from "../../utils/timer-delay.js";
+import { readPositiveIntegerParam } from "./common.js";
 import type { GatewayCallOptions } from "./gateway.js";
 import { callGatewayTool } from "./gateway.js";
 
@@ -9,6 +11,31 @@ const DEDICATED_TOOL_INVOKE_COMMANDS = new Map([
   ["mobile.ui.observe", "mobile_ui"],
   ["mobile.ui.act", "mobile_ui"],
 ]);
+
+export function resolveNodesToolInvokeTimeouts(params: {
+  input: Record<string, unknown>;
+  gatewayOpts: GatewayCallOptions;
+  operationTimeoutMs?: number;
+}): { gatewayOpts: GatewayCallOptions; invokeTimeoutMs?: number } {
+  const invokeTimeoutMs =
+    readPositiveIntegerParam(params.input, "invokeTimeoutMs") ??
+    (params.operationTimeoutMs === undefined
+      ? undefined
+      : addSafeTimeoutDelayGraceMs(params.operationTimeoutMs, 30_000));
+  // Transport starts before the node deadline. Explicit overrides remain independent.
+  const transportTimeoutMs =
+    params.gatewayOpts.timeoutMs ??
+    (invokeTimeoutMs === undefined
+      ? undefined
+      : addSafeTimeoutDelayGraceMs(invokeTimeoutMs, 30_000));
+  return {
+    gatewayOpts:
+      transportTimeoutMs === undefined
+        ? params.gatewayOpts
+        : { ...params.gatewayOpts, timeoutMs: transportTimeoutMs },
+    invokeTimeoutMs,
+  };
+}
 
 export async function callNodesToolNodeInvoke<T = Record<string, unknown>>(
   gatewayOpts: GatewayCallOptions,

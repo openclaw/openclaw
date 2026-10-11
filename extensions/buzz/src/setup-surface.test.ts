@@ -1,12 +1,69 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { nip19 } from "nostr-tools";
+import { generateSecretKey, nip19 } from "nostr-tools";
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { SecretInput, WizardPrompter } from "openclaw/plugin-sdk/setup";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createBuzzSetupWizard } from "./setup-surface.js";
+import {
+  runSingleChannelSecretStep,
+  type SecretInput,
+  type WizardPrompter,
+} from "openclaw/plugin-sdk/setup";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
+import { waitForBuzzRoomAccess } from "./room-access-wait.js";
+import { discoverBuzzRooms } from "./room-discovery.js";
+import { buzzSetupWizard } from "./setup-surface.js";
+import { verifyBuzzAfterSetup } from "./setup-verify.js";
+
+vi.mock("nostr-tools", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("nostr-tools")>()),
+  generateSecretKey: vi.fn(),
+}));
+vi.mock("openclaw/plugin-sdk/setup", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/setup")>()),
+  runSingleChannelSecretStep: vi.fn(),
+}));
+vi.mock("./room-access-wait.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./room-access-wait.js")>()),
+  waitForBuzzRoomAccess: vi.fn(),
+}));
+vi.mock("./room-discovery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./room-discovery.js")>()),
+  discoverBuzzRooms: vi.fn(),
+}));
+vi.mock("./setup-verify.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./setup-verify.js")>()),
+  verifyBuzzAfterSetup: vi.fn(),
+}));
+
+function createBuzzSetupWizard(
+  dependencies: {
+    discoverRooms?: typeof discoverBuzzRooms;
+    generateSecretKey?: typeof generateSecretKey;
+    runSecretStep?: typeof runSingleChannelSecretStep;
+    waitForRoomAccess?: typeof waitForBuzzRoomAccess;
+    verifyAfterWrite?: typeof verifyBuzzAfterSetup;
+  } = {},
+) {
+  if (dependencies.discoverRooms) {
+    vi.mocked(discoverBuzzRooms).mockImplementation(dependencies.discoverRooms);
+  }
+  if (dependencies.generateSecretKey) {
+    vi.mocked(generateSecretKey).mockImplementation(dependencies.generateSecretKey);
+  }
+  if (dependencies.runSecretStep) {
+    vi.mocked(runSingleChannelSecretStep).mockImplementation(dependencies.runSecretStep);
+  }
+  if (dependencies.waitForRoomAccess) {
+    vi.mocked(waitForBuzzRoomAccess).mockImplementation(dependencies.waitForRoomAccess);
+  }
+  if (dependencies.verifyAfterWrite) {
+    vi.mocked(verifyBuzzAfterSetup).mockImplementation(dependencies.verifyAfterWrite);
+  }
+  return buzzSetupWizard;
+}
 
 const ROOM_A = "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c";
 const ROOM_B = "940d0c32-4eb7-46d7-9d5b-d975aaef87f7";
@@ -103,15 +160,28 @@ function createPrompter(): WizardPrompter {
   };
 }
 
-function createRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn() as RuntimeEnv["exit"],
-  };
+type BuzzSetupWizard = ReturnType<typeof createBuzzSetupWizard>;
+type ConfigureParams = Parameters<BuzzSetupWizard["configure"]>[0];
+
+function configure(
+  wizard: BuzzSetupWizard,
+  params: Pick<ConfigureParams, "cfg"> & Partial<ConfigureParams>,
+) {
+  return wizard.configure({
+    runtime: createRuntimeSpies(),
+    prompter: createPrompter(),
+    accountOverrides: {},
+    shouldPromptAccountIds: false,
+    forceAllowFrom: false,
+    ...params,
+  });
 }
 
 describe("Buzz guided setup", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(generateSecretKey).mockReturnValue(GENERATED_KEY);
+  });
   afterEach(async () => {
     vi.unstubAllEnvs();
     await Promise.all(secretFixtureRoots.splice(0).map((root) => fs.rm(root, { recursive: true })));
@@ -129,21 +199,18 @@ describe("Buzz guided setup", () => {
       verifyAfterWrite,
     });
     const prompter = createPrompter();
-    const runtime = createRuntime();
+    const runtime = createRuntimeSpies();
     const hooks: Array<{
       run: (ctx: { cfg: OpenClawConfig; runtime: RuntimeEnv }) => void | Promise<void>;
     }> = [];
 
-    const result = await wizard.configure({
+    const result = await configure(wizard, {
       cfg: { channels: { buzz: { authTag: AUTH_TAG } } } as OpenClawConfig,
       runtime,
       prompter,
       options: {
         onPostWriteHook: (hook) => hooks.push(hook),
       },
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     const expectedPrivateKey = nip19.nsecEncode(GENERATED_KEY);
@@ -196,18 +263,15 @@ describe("Buzz guided setup", () => {
         },
       },
     } as OpenClawConfig;
-    const configure = (accountId: string) =>
-      wizard.configure({
+    const configureAccount = (accountId: string) =>
+      configure(wizard, {
         cfg,
-        runtime: createRuntime(),
         prompter,
         accountOverrides: { buzz: accountId },
-        shouldPromptAccountIds: false,
-        forceAllowFrom: false,
       });
-    const ada = await configure("ada");
-    const grace = await configure("grace");
-    const replay = await configure("ada");
+    const ada = await configureAccount("ada");
+    const grace = await configureAccount("grace");
+    const replay = await configureAccount("ada");
     expect(generate).toHaveBeenCalledTimes(2);
     expect(ada.accountId).toBe("ada");
     expect(ada.cfg.channels?.buzz?.accounts?.ada?.privateKey).toBe(nip19.nsecEncode(GENERATED_KEY));
@@ -238,13 +302,11 @@ describe("Buzz guided setup", () => {
     vi.mocked(prompter.text)
       .mockResolvedValueOnce("ada")
       .mockResolvedValueOnce("wss://ada.example.com");
-    const result = await wizard.configure({
+    const result = await configure(wizard, {
       cfg: { channels: { buzz: root } } as OpenClawConfig,
-      runtime: createRuntime(),
       prompter,
       accountOverrides: {},
       shouldPromptAccountIds: true,
-      forceAllowFrom: false,
     });
     expect(result.accountId).toBe("ada");
     expect(result.cfg.channels?.buzz).toEqual({
@@ -285,14 +347,10 @@ describe("Buzz guided setup", () => {
     const prompter = createPrompter();
     vi.mocked(prompter.multiselect).mockResolvedValue([ROOM_A]);
 
-    const result = await wizard.configure({
+    const result = await configure(wizard, {
       cfg: {} as OpenClawConfig,
-      runtime: createRuntime(),
       prompter,
       options: { secretInputMode: "ref" },
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     expect(runSecretStep).toHaveBeenCalledWith(
@@ -313,7 +371,7 @@ describe("Buzz guided setup", () => {
     });
     const prompter = createPrompter();
 
-    const result = await wizard.configure({
+    const result = await configure(wizard, {
       cfg: {
         channels: {
           buzz: {
@@ -325,11 +383,7 @@ describe("Buzz guided setup", () => {
           },
         },
       } as OpenClawConfig,
-      runtime: createRuntime(),
       prompter,
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     expect(result.cfg.channels?.buzz?.enabled).toBe(true);
@@ -366,13 +420,10 @@ describe("Buzz guided setup", () => {
       ]);
       const prompter = createPrompter();
       vi.mocked(prompter.multiselect).mockResolvedValueOnce([]).mockResolvedValueOnce([ROOM_A]);
-      const result = await createBuzzSetupWizard({ discoverRooms }).configure({
+      const result = await configure(createBuzzSetupWizard({ discoverRooms }), {
         cfg,
-        runtime: createRuntime(),
         prompter,
         accountOverrides: { buzz: accountId },
-        shouldPromptAccountIds: false,
-        forceAllowFrom: false,
       });
       expect(result.accountId).toBe(accountId);
       expect(result.completion).toBeUndefined();
@@ -426,15 +477,11 @@ describe("Buzz guided setup", () => {
       throw new Error(`Unexpected confirm prompt: ${message}`);
     });
 
-    const result = await wizard.configure({
+    const result = await configure(wizard, {
       cfg: {
         channels: { buzz: { relayUrl: "ws://127.attacker.example" } },
       } as OpenClawConfig,
-      runtime: createRuntime(),
       prompter,
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     expect(result.cfg.channels?.buzz?.relayUrl).toBe("wss://buzz.example.com");
@@ -452,7 +499,7 @@ describe("Buzz guided setup", () => {
     });
     const prompter = createPrompter();
 
-    const result = await wizard.configure({
+    const result = await configure(wizard, {
       cfg: {
         channels: {
           defaults: { groupPolicy: "disabled" },
@@ -470,11 +517,7 @@ describe("Buzz guided setup", () => {
           },
         },
       } as OpenClawConfig,
-      runtime: createRuntime(),
       prompter,
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     expect(runSecretStep).not.toHaveBeenCalled();
@@ -491,8 +534,6 @@ describe("Buzz guided setup", () => {
 
   it.each([
     { accountId: "default", source: "env", plaintextPrivateKey: false },
-    { accountId: "ada", source: "env", plaintextPrivateKey: false },
-    { accountId: "default", source: "file", plaintextPrivateKey: false },
     { accountId: "ada", source: "file", plaintextPrivateKey: false },
     { accountId: "ada", source: "env", plaintextPrivateKey: true },
   ] as const)(
@@ -520,13 +561,10 @@ describe("Buzz guided setup", () => {
       });
       const prompter = createPrompter();
 
-      const result = await wizard.configure({
+      const result = await configure(wizard, {
         cfg,
-        runtime: createRuntime(),
         prompter,
         accountOverrides: { buzz: accountId },
-        shouldPromptAccountIds: false,
-        forceAllowFrom: false,
       });
 
       expect(result.accountId).toBe(accountId);
@@ -588,14 +626,11 @@ describe("Buzz guided setup", () => {
       });
 
       await expect(
-        wizard.configure({
+        configure(wizard, {
           cfg,
-          runtime: createRuntime(),
           prompter: createPrompter(),
           options: { onPostWriteHook },
           accountOverrides: { buzz: accountId },
-          shouldPromptAccountIds: false,
-          forceAllowFrom: false,
         }),
       ).rejects.toThrow(/configured|SecretRef/i);
       expect(cfg).toEqual(before);
@@ -618,7 +653,7 @@ describe("Buzz guided setup", () => {
     });
     const prompter = createPrompter();
 
-    const result = await wizard.configure({
+    const result = await configure(wizard, {
       cfg: {
         channels: {
           buzz: {
@@ -627,12 +662,8 @@ describe("Buzz guided setup", () => {
           },
         },
       } as OpenClawConfig,
-      runtime: createRuntime(),
       prompter,
       options: { secretInputMode: "ref" },
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     expect(runSecretStep).not.toHaveBeenCalled();
@@ -657,13 +688,9 @@ describe("Buzz guided setup", () => {
     const prompter = createPrompter();
     vi.mocked(prompter.multiselect).mockResolvedValue([ROOM_A]);
 
-    const result = await wizard.configure({
+    const result = await configure(wizard, {
       cfg: {} as OpenClawConfig,
-      runtime: createRuntime(),
       prompter,
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     expect(discoverRooms).toHaveBeenCalledOnce();

@@ -1,11 +1,22 @@
 /**
  * Resolves provider/model prompt-cache retention behavior.
  */
+import { resolveOpenAIPromptCacheKeySupport } from "@openclaw/ai/transports";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveAnthropicCacheRetentionFamily } from "../../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
 import type { OpenAICompletionsCompat } from "../../llm/types.js";
 
 type CacheRetention = "none" | "short" | "long";
+
+export function resolveExplicitCachedContent(extraParams: Record<string, unknown> | undefined) {
+  const raw =
+    typeof extraParams?.cachedContent === "string"
+      ? extraParams.cachedContent
+      : typeof extraParams?.cached_content === "string"
+        ? extraParams.cached_content
+        : undefined;
+  return raw?.trim() || undefined;
+}
 
 export function parseCacheRetention(value: unknown): CacheRetention | undefined {
   return value === "none" || value === "short" || value === "long" ? value : undefined;
@@ -28,6 +39,7 @@ export function resolveCacheRetention(
   modelApi?: string,
   modelId?: string,
   compat?: Pick<OpenAICompletionsCompat, "supportsPromptCacheKey" | "cacheControlFormat">,
+  baseUrl?: string,
 ): CacheRetention | undefined {
   const hasExplicitCacheConfig =
     extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
@@ -37,13 +49,20 @@ export function resolveCacheRetention(
     modelId,
     hasExplicitCacheConfig,
   });
+  const openAIEligible =
+    (modelApi === "openai-responses" ||
+      modelApi === "openai-chatgpt-responses" ||
+      modelApi === "openai-completions") &&
+    resolveOpenAIPromptCacheKeySupport({ provider, api: modelApi, baseUrl, compat });
   const googleEligible = isGooglePromptCacheEligible({ modelApi, modelId });
   // Marker-based caches accept retention without accepting OpenAI cache-key fields.
   // Keep these capabilities independent so explicit "none" can suppress markers.
   const compatEligible =
     compat?.supportsPromptCacheKey === true || compat?.cacheControlFormat === "anthropic";
 
-  if (!family && !googleEligible && !compatEligible) {
+  // Bedrock's provider owner decides model eligibility and checkpoint TTLs.
+  const bedrockEligible = modelApi === "bedrock-converse-stream";
+  if (!family && !googleEligible && !openAIEligible && !compatEligible && !bedrockEligible) {
     return undefined;
   }
 

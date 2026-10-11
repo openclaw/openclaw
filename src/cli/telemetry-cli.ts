@@ -7,6 +7,7 @@ import {
 } from "../infra/telemetry.js";
 import { defaultRuntime } from "../runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
+import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 const TELEMETRY_REASON_LABELS = {
   enabled: "enabled in configuration",
@@ -15,11 +16,11 @@ const TELEMETRY_REASON_LABELS = {
   "config-disabled": "disabled in configuration",
   "never-asked": "consent has not been requested",
   "update-disabled": "update checks are disabled",
-} satisfies Record<ReturnType<typeof resolveTelemetryStatus>["reason"], string>;
+} satisfies Record<Awaited<ReturnType<typeof resolveTelemetryStatus>>["reason"], string>;
 
 async function showTelemetry(options: { json?: boolean }): Promise<void> {
   const config = getRuntimeConfig({ skipPluginValidation: true });
-  const telemetry = resolveTelemetryStatus(config);
+  const telemetry = await resolveTelemetryStatus(config);
   const request =
     telemetry.reason === "update-disabled" || telemetry.reason === "automated-environment"
       ? null
@@ -27,7 +28,7 @@ async function showTelemetry(options: { json?: boolean }): Promise<void> {
           method: telemetry.enabled ? "POST" : "GET",
           userAgent: buildTelemetryUserAgent("gateway"),
           ...(telemetry.enabled
-            ? { payload: buildTelemetryPayload(config, { surface: "gateway" }) }
+            ? { payload: await buildTelemetryPayload(config, { surface: "gateway" }) }
             : {}),
         };
 
@@ -86,19 +87,18 @@ export function registerTelemetryCli(program: Command): void {
 
   telemetry
     .command("show")
-    .description("Show exactly what the daily update request sends")
+    .description("Preview the daily update request from this CLI process")
     .option("--json", "Print the request and payload as JSON")
     .action(async (options: { json?: boolean }) =>
       runCommandWithRuntime(defaultRuntime, () => showTelemetry(options)),
     );
 
-  telemetry
-    .command("on")
-    .description("Enable anonymous feature statistics")
-    .action(async () => runCommandWithRuntime(defaultRuntime, () => setTelemetryEnabled(true)));
-
-  telemetry
-    .command("off")
-    .description("Disable anonymous feature statistics")
-    .action(async () => runCommandWithRuntime(defaultRuntime, () => setTelemetryEnabled(false)));
+  for (const [name, enabled] of Object.entries({ on: true, off: false })) {
+    telemetry
+      .command(name)
+      .description(`${enabled ? "Enable" : "Disable"} anonymous feature statistics`)
+      .action(() => runCommandWithRuntime(defaultRuntime, () => setTelemetryEnabled(enabled)));
+  }
+  // Preserve the shipped help subcommand when adding a parent action.
+  applyParentDefaultHelpAction(telemetry.helpCommand(true));
 }

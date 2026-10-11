@@ -146,6 +146,41 @@ def push_generated_branch(expected_head):
     return code
 
 
+def push_generated_branch_with_timeout_recovery(expected_head):
+    code = push_generated_branch(expected_head)
+    if code != 124:
+        return code
+    published_commit = git("rev-parse", "HEAD", capture=True).rstrip("\n")
+    current_remote_head = read_remote_head()
+    if current_remote_head == published_commit:
+        print(
+            "::notice::Generated branch push timed out after the remote accepted the exact commit.",
+            flush=True,
+        )
+        return 0
+    if current_remote_head != expected_head:
+        print(
+            "::error::Generated branch moved while a timed-out push was being reconciled.",
+            flush=True,
+        )
+        return code
+    print(
+        "::notice::Generated branch push timed out before the remote moved; "
+        "retrying once under the same lease.",
+        flush=True,
+    )
+    code = push_generated_branch(expected_head)
+    if code == 0:
+        return code
+    if read_remote_head() == published_commit:
+        print(
+            "::notice::Generated branch reached the exact commit while its bounded retry was resolving.",
+            flush=True,
+        )
+        return 0
+    return code
+
+
 def report_push_failure():
     text = push_log.read_text(errors="surrogateescape")
     if re.search(r"GH013|repository rule violations|required status check", text, re.I):
@@ -271,7 +306,7 @@ def publish():
         return
     remote_head = read_remote_head()
     gh("ensure_auto_merge_compatible", remote_head)
-    code = push_generated_branch(remote_head)
+    code = push_generated_branch_with_timeout_recovery(remote_head)
     if code:
         current_remote_head = read_remote_head()
         branch_was_deleted = bool(remote_head) and not current_remote_head

@@ -6,17 +6,18 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { isGatewaySuspendControlAvailable } from "../infra/gateway-suspend-coordinator.js";
 import { runHttpConnectionRequest } from "../infra/http-request-lifecycle.js";
 import {
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDraining,
   isGatewayWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   NODE_DESKTOP_ATTACH_PATH,
   NODE_PORTAL_ATTACH_PATH,
 } from "../shared/node-desktop-stream.js";
+import { rejectWebSocketUpgrade } from "../shared/websocket-upgrade-reject.js";
 import { AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION, type AuthRateLimiter } from "./auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "./auth.js";
 import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
@@ -33,13 +34,18 @@ import {
 } from "./ingress-attribution.js";
 import { normalizePluginNodeCapabilityScopedUrl } from "./plugin-node-capability.js";
 import {
+  getHttpAuthUtilsModule,
+  getPluginNodeCapabilityAuthModule,
+  getPluginRouteRuntimeScopesModule,
+} from "./server-http-modules.js";
+import {
   getCachedPluginGatewayAuthBypassPaths,
   shouldEnforceDefaultPluginGatewayAuth,
-  type PluginGatewayDispatchContext,
   type ResolvePluginNodeCapabilityRoute,
 } from "./server-http-plugin-auth.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { rejectGatewayUpgradeServiceUnavailable } from "./server/http-work-admission.js";
+import type { PluginHttpUpgradeHandler } from "./server/plugins-http.js";
 import { resolvePluginRoutePathContext } from "./server/plugins-http/path-context.js";
 import type { PluginRoutePathContext } from "./server/plugins-http/path-context.js";
 import type { PreauthConnectionBudget } from "./server/preauth-connection-budget.js";
@@ -49,22 +55,6 @@ import {
   type GatewayIngressWebSocket,
   type GatewayWsClient,
 } from "./server/ws-types.js";
-
-type PluginHttpUpgradeHandler = (
-  req: IncomingMessage,
-  socket: import("node:stream").Duplex,
-  head: Buffer,
-  pathContext?: PluginRoutePathContext,
-  dispatchContext?: PluginGatewayDispatchContext,
-) => Promise<boolean>;
-
-const getPluginNodeCapabilityAuthModule = createLazyRuntimeModule(
-  () => import("./server/plugin-node-capability-auth.js"),
-);
-const getHttpAuthUtilsModule = createLazyRuntimeModule(() => import("./http-auth-utils.js"));
-const getPluginRouteRuntimeScopesModule = createLazyRuntimeModule(
-  () => import("./server/plugin-route-runtime-scopes.js"),
-);
 
 function rejectUpgradeAuth(socket: Pick<Duplex, "end" | "destroy">, auth: GatewayAuthResult) {
   if (auth.rateLimited) {
@@ -76,18 +66,11 @@ function rejectUpgradeAuth(socket: Pick<Duplex, "end" | "destroy">, auth: Gatewa
         type: "rate_limited",
       },
     });
-    socket.end(
-      [
-        "HTTP/1.1 429 Too Many Requests",
-        ...(retryAfterSeconds ? [`Retry-After: ${retryAfterSeconds}`] : []),
-        "Content-Type: application/json; charset=utf-8",
-        `Content-Length: ${Buffer.byteLength(body, "utf8")}`,
-        "Connection: close",
-        "",
-        body,
-      ].join("\r\n"),
-      () => socket.destroy(),
-    );
+    rejectWebSocketUpgrade(socket, {
+      status: 429,
+      body: { contentType: "application/json; charset=utf-8", text: body },
+      headers: retryAfterSeconds ? { "Retry-After": String(retryAfterSeconds) } : undefined,
+    });
     return;
   }
   if (auth.reason === PROXY_ATTRIBUTION_REQUIRED_REASON) {
@@ -97,20 +80,13 @@ function rejectUpgradeAuth(socket: Pick<Duplex, "end" | "destroy">, auth: Gatewa
         type: PROXY_ATTRIBUTION_REQUIRED_REASON,
       },
     });
-    socket.end(
-      [
-        "HTTP/1.1 403 Forbidden",
-        "Content-Type: application/json; charset=utf-8",
-        `Content-Length: ${Buffer.byteLength(body, "utf8")}`,
-        "Connection: close",
-        "",
-        body,
-      ].join("\r\n"),
-      () => socket.destroy(),
-    );
+    rejectWebSocketUpgrade(socket, {
+      status: 403,
+      body: { contentType: "application/json; charset=utf-8", text: body },
+    });
     return;
   }
-  socket.end("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n", () => socket.destroy());
+  rejectWebSocketUpgrade(socket, { status: 401 });
 }
 
 function handleBudgetedGatewayWebSocketUpgrade(params: {
@@ -133,10 +109,7 @@ function handleBudgetedGatewayWebSocketUpgrade(params: {
   if (
     isGatewayWorkAdmissionClosed() &&
     !allowsRestartStartupPreauth &&
-    (ingressName === "Worker" ||
-      isGatewayRestartDraining() ||
-      (getGatewaySuspendAdmissionPhase() !== "draining" &&
-        getGatewaySuspendAdmissionPhase() !== "prepared"))
+    (ingressName === "Worker" || !isGatewaySuspendControlAvailable())
   ) {
     rejectGatewayUpgradeServiceUnavailable(socket, `${ingressName} websocket admission closed`);
     return;
@@ -288,7 +261,7 @@ export function attachGatewayUpgradeHandler(opts: {
         return;
       }
       if (originalWorkerGatewayRoute !== "outside") {
-        socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n", () => socket.destroy());
+        rejectWebSocketUpgrade(socket, { status: 404 });
         return;
       }
       const scopedNodeCapability = normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
@@ -304,7 +277,7 @@ export function attachGatewayUpgradeHandler(opts: {
       const pathContext = resolvePluginRoutePathContext(requestPath);
       const workerGatewayRoute = classifyWorkerGatewayPath(requestPath);
       if (workerGatewayRoute !== "outside") {
-        socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n", () => socket.destroy());
+        rejectWebSocketUpgrade(socket, { status: 404 });
         return;
       }
       const nodeCapability = resolvePluginNodeCapabilityRoute?.(pathContext);
@@ -354,6 +327,8 @@ export function attachGatewayUpgradeHandler(opts: {
             allowRealIpFallback,
             rateLimiter,
             cfg: configSnapshot,
+            getRuntimeConfig,
+            getResolvedAuth,
           });
           if (!authCheck.ok) {
             rejectUpgradeAuth(socket, authCheck.authResult);
@@ -367,6 +342,10 @@ export function attachGatewayUpgradeHandler(opts: {
             req,
             authCheck.requestAuth,
           );
+        }
+        if (pluginGatewayRequestAuth?.hasCurrentClientAuthority?.() === false) {
+          rejectUpgradeAuth(socket, { ok: false, reason: "unauthorized" });
+          return;
         }
         if (
           await handlePluginUpgrade(req, socket, head, pathContext, {
@@ -383,7 +362,7 @@ export function attachGatewayUpgradeHandler(opts: {
         rejectUpgradeAuth(socket, { ok: false, reason: ingressAttribution.reason });
         return;
       }
-      if (requestPath === "/desktop/observe") {
+      if (requestPath === "/desktop/observe" || requestPath === "/desktop/audio") {
         if (!opts.desktopSessionRegistry) {
           rejectGatewayUpgradeServiceUnavailable(socket, "desktop observe unavailable");
           return;
@@ -393,6 +372,11 @@ export function attachGatewayUpgradeHandler(opts: {
         // drained Gateway would keep accepting new desktop streams.
         if (isGatewayWorkAdmissionClosed()) {
           rejectGatewayUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
+          return;
+        }
+        if (requestPath === "/desktop/audio") {
+          const { handleDesktopAudioUpgrade } = await import("./desktop/audio-bridge.js");
+          handleDesktopAudioUpgrade(req, socket, head);
           return;
         }
         const { handleDesktopObserveUpgrade } = await import("./desktop/observe-bridge.js");
@@ -440,7 +424,7 @@ export function attachGatewayUpgradeHandler(opts: {
       const remoteAddress = (socket as { remoteAddress?: string }).remoteAddress ?? "unknown";
       const errorMessage = err instanceof Error ? err.message : String(err);
       log?.warn(`ws upgrade error from ${remoteAddress}: ${errorMessage}`);
-      socket.destroy();
+      rejectWebSocketUpgrade(socket, { status: 503 });
     });
   });
 }

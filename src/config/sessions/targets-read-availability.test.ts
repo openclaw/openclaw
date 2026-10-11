@@ -1,14 +1,49 @@
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config.js";
 import { replaceSessionEntry } from "./session-accessor.js";
+import * as sessionEntryInventory from "./session-accessor.sqlite-entry-inventory.js";
 import {
   resolveExistingAgentSessionStoreTargetsReadOnlyResult,
   type SessionStoreTargetsReadCache,
 } from "./targets-read-availability.js";
 
 describe("session store availability", () => {
+  it("bounds per-agent availability reads and preserves session-table failures", async () => {
+    await withTempHome(async (home) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
+      await replaceSessionEntry(
+        { agentId: "main", env, sessionKey: "agent:main:existing" },
+        { sessionId: "existing", updatedAt: 1 },
+      );
+      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+      const readKeys = vi.spyOn(sessionEntryInventory, "iterateSessionEntryKeys");
+      try {
+        expect(
+          resolveExistingAgentSessionStoreTargetsReadOnlyResult({}, "main", { env }),
+        ).toMatchObject({ available: true, targets: [{ agentId: "main" }] });
+        const inventoryReads = prepare.mock.calls.filter(
+          ([query]) =>
+            /from\s+"?session_nodes\b/i.test(query) &&
+            !/\bwhere\b|\bexists\s*\(|\blimit\b/i.test(query),
+        );
+        expect(inventoryReads).toEqual([]);
+        readKeys.mockImplementation(() => {
+          throw new Error("synthetic session-table read failure");
+        });
+        expect(resolveExistingAgentSessionStoreTargetsReadOnlyResult({}, "main", { env })).toEqual({
+          available: false,
+          reason: "read-failed",
+        });
+      } finally {
+        readKeys.mockRestore();
+        prepare.mockRestore();
+      }
+    });
+  });
+
   it("reads cross-agent rows from a migrated fixed store", async () => {
     await withTempHome(async (home) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };

@@ -1,4 +1,3 @@
-// Centralizes fetch access, timeout relay, and response parsing helpers.
 import { bindAbortRelay } from "../utils/fetch-timeout.js";
 import { normalizeRequestInitHeadersForFetch } from "./fetch-headers.js";
 
@@ -19,7 +18,7 @@ type FetchWithAbortSignalMarker = typeof fetch & {
 function withDuplex(
   init: RequestInit | undefined,
   input: RequestInfo | URL,
-): RequestInit | undefined {
+): RequestInitWithDuplex | undefined {
   const hasInitBody = init?.body != null;
   const hasRequestBody =
     !hasInitBody &&
@@ -33,9 +32,7 @@ function withDuplex(
     return init;
   }
   // Node requires `duplex: "half"` for streaming request bodies; browsers ignore it.
-  return init
-    ? ({ ...init, duplex: "half" as const } as RequestInitWithDuplex)
-    : ({ duplex: "half" as const } as RequestInitWithDuplex);
+  return { ...init, duplex: "half" };
 }
 
 /**
@@ -50,16 +47,12 @@ export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch 
   const wrapped = ((input: RequestInfo | URL, init?: RequestInit) => {
     const patchedInit = normalizeRequestInitHeadersForFetch(withDuplex(init, input));
     const signal = patchedInit?.signal;
-    if (!signal) {
-      return fetchImpl(input, patchedInit);
-    }
-    if (typeof AbortSignal !== "undefined" && signal instanceof AbortSignal) {
-      return fetchImpl(input, patchedInit);
-    }
-    if (typeof AbortController === "undefined") {
-      return fetchImpl(input, patchedInit);
-    }
-    if (typeof signal.addEventListener !== "function") {
+    if (
+      !signal ||
+      (typeof AbortSignal !== "undefined" && signal instanceof AbortSignal) ||
+      typeof AbortController === "undefined" ||
+      typeof signal.addEventListener !== "function"
+    ) {
       return fetchImpl(input, patchedInit);
     }
     const controller = new AbortController();
@@ -109,7 +102,6 @@ export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch 
   return wrappedFetch;
 }
 
-/** Resolves an optional fetch implementation, wrapping it when fetch is available. */
 export function resolveFetch(fetchImpl?: typeof fetch): typeof fetch | undefined {
   const resolved = fetchImpl ?? globalThis.fetch;
   if (!resolved) {

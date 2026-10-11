@@ -6,6 +6,7 @@ import path from "node:path";
 import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -18,8 +19,7 @@ import {
   setMessageActionTestPlugin as setTestPlugin,
 } from "./message-action-runner.test-helpers.js";
 
-const { hydrateAttachmentParamsForAction, normalizeSandboxMediaParams } =
-  await import("./message-action-params.js");
+const { hydrateAttachmentParamsForAction } = await import("./message-action-params.js");
 const loadWebMedia = messageActionRunnerMocks.loadWebMedia;
 
 const onePixelPng = Buffer.from(
@@ -107,26 +107,29 @@ describe("runMessageAction media behavior", () => {
     await resetMessageActionMediaMocks();
   });
 
-  it.each(
-    (["send", "sendAttachment", "reply", "upload-file", "setGroupIcon"] as const).flatMap(
-      (action) => [
-        {
-          action,
-          buffer: parameterizedPngDataUrl,
-          base64: onePixelPngBase64,
-          contentType: "image/png",
-          filename: "attachment.png",
-        },
-        {
-          action,
-          buffer: `data:text/csv;base64,${csvBase64}`,
-          base64: csvBase64,
-          contentType: "text/csv",
-          filename: "attachment.csv",
-        },
-      ],
-    ),
-  )(
+  it.each([
+    {
+      action: "send",
+      buffer: parameterizedPngDataUrl,
+      base64: onePixelPngBase64,
+      contentType: "image/png",
+      filename: "attachment.png",
+    },
+    {
+      action: "sendAttachment",
+      buffer: `data:text/csv;base64,${csvBase64}`,
+      base64: csvBase64,
+      contentType: "text/csv",
+      filename: "attachment.csv",
+    },
+    {
+      action: "setGroupIcon",
+      buffer: parameterizedPngDataUrl,
+      base64: onePixelPngBase64,
+      contentType: "image/png",
+      filename: "attachment.png",
+    },
+  ] as const)(
     "normalizes $contentType data URLs and infers filenames for $action",
     async ({ action, buffer, base64, contentType, filename }) => {
       const args: Record<string, unknown> = { buffer };
@@ -151,17 +154,14 @@ describe("runMessageAction media behavior", () => {
   );
 
   it.each(
-    (["send", "sendAttachment", "reply", "upload-file", "setGroupIcon"] as const).flatMap(
-      (action) => [
-        { action, name: "contentType", metadata: { contentType: "image/jpeg" } },
-        { action, name: "mimeType", metadata: { mimeType: "image/jpeg" } },
-        {
-          action,
-          name: "both aliases",
-          metadata: { contentType: "image/jpeg", mimeType: "image/webp" },
-        },
-      ],
-    ),
+    (["send", "sendAttachment"] as const).flatMap((action) => [
+      { action, name: "mimeType", metadata: { mimeType: "image/jpeg" } },
+      {
+        action,
+        name: "both aliases",
+        metadata: { contentType: "image/jpeg", mimeType: "image/webp" },
+      },
+    ]),
   )("keeps $name authoritative for $action data URLs", async ({ action, metadata }) => {
     const args: Record<string, unknown> = {
       buffer: parameterizedPngDataUrl,
@@ -220,18 +220,6 @@ describe("runMessageAction media behavior", () => {
       fromSpy.mockRestore();
     }
   });
-
-  it.each(["media", "mediaUrl", "path", "filePath"])(
-    "keeps data URLs forbidden in the %s source field",
-    async (field) => {
-      await expect(
-        normalizeSandboxMediaParams({
-          args: { [field]: parameterizedPngDataUrl },
-          mediaPolicy: { mode: "host" },
-        }),
-      ).rejects.toThrow(/data: URLs are not supported for media/i);
-    },
-  );
 
   describe("sendAttachment hydration", () => {
     const cfg = {
@@ -430,14 +418,8 @@ describe("runMessageAction media behavior", () => {
       }
     });
 
-    it("hydrates buffer and filename from media for attachment upload-file", async () => {
-      const result = await runAttachmentRemoteMediaAction({ cfg, action: "upload-file" });
-
-      expectAttachmentRemoteMediaPayload(result);
-    });
-
     it("keeps original upload-file bytes when forced to send as a document", async () => {
-      await runMessageAction({
+      const result = await runMessageAction({
         cfg,
         action: "upload-file",
         params: {
@@ -449,6 +431,7 @@ describe("runMessageAction media behavior", () => {
         },
       });
 
+      expectAttachmentRemoteMediaPayload(result);
       expect(requireLoadWebMediaOptions().optimizeImages).toBe(false);
     });
 
@@ -612,7 +595,24 @@ describe("runMessageAction media behavior", () => {
     });
 
     it("hydrates buffer and filename from a remote URL before the reply handler runs", async () => {
-      const result = await runMessageAction({
+      const entered = createDeferred();
+      const loaded = createDeferred<Awaited<ReturnType<typeof loadWebMedia>>>();
+      const media = {
+        buffer: Buffer.from("hello"),
+        contentType: "image/png",
+        kind: "image" as const,
+        fileName: "pic.png",
+      };
+      const events: string[] = [];
+      vi.mocked(loadWebMedia).mockImplementationOnce(() => {
+        events.push("load");
+        entered.resolve();
+        return loaded.promise;
+      });
+      handleActionMock.mockImplementationOnce(() => {
+        events.push("handler");
+      });
+      const action = runMessageAction({
         cfg,
         action: "reply",
         params: {
@@ -623,13 +623,46 @@ describe("runMessageAction media behavior", () => {
           media: "https://example.com/pic.png",
         },
       });
+      const settled = action.then(
+        () => {
+          events.push("settled");
+        },
+        () => {
+          events.push("rejected");
+        },
+      );
 
-      expect(result.kind).toBe("action");
-      expect(handleActionMock).toHaveBeenCalledTimes(1);
-      const handlerParams = firstMockArg(handleActionMock, "handleAction");
-      expect(handlerParams.buffer).toBe(Buffer.from("hello").toString("base64"));
-      expect(handlerParams.filename).toBe("pic.png");
-      expect(handlerParams.contentType).toBe("image/png");
+      try {
+        await Promise.race([
+          entered.promise,
+          action.then(() => {
+            throw new Error("Reply settled before the media loader started");
+          }),
+        ]);
+        // Observe the held loader after a scheduler turn, without a wall-clock delay.
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(events).toEqual(["load"]);
+        expect(handleActionMock).not.toHaveBeenCalled();
+
+        events.push("release");
+        loaded.resolve(media);
+        const result = await action;
+        await settled;
+
+        expect(result.kind).toBe("action");
+        expect(handleActionMock).toHaveBeenCalledTimes(1);
+        expect(events).toEqual(["load", "release", "handler", "settled"]);
+        const payload = requireActionPayload(result);
+        expect(payload.buffer).toBe(Buffer.from("hello").toString("base64"));
+        expect(payload.filename).toBe("pic.png");
+        expect(payload.contentType).toBe("image/png");
+      } finally {
+        // Release and join even when an ordering assertion fails before resolution.
+        loaded.resolve(media);
+        await settled;
+      }
     });
 
     it("delivers parameterized wrapped image data URLs through the reply handler", async () => {

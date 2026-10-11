@@ -1,4 +1,3 @@
-// Assertions for release user-journey E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,18 +9,14 @@ import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
+import { assert } from "../fixtures/common.mjs";
 import {
   applyMockOpenAiModelConfig,
   parseMockOpenAiPort,
 } from "../fixtures/mock-openai-config.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
-import { isExplicitPluginDisableMarker } from "../plugin-uninstall-assertions.mjs";
-import {
-  ERROR_DETAIL_TAIL_BYTES,
-  fileContainsText,
-  readJson,
-} from "../release-assertion-files.mjs";
-import { readTextFileTail } from "../text-file-utils.mjs";
+import { hasExpectedPluginUninstallConfigState } from "../plugin-uninstall-assertions.mjs";
+import { assertFileContainsText, readJson } from "../release-assertion-files.mjs";
 
 function clickClackHttpTimeoutMs() {
   return readPositiveInt(
@@ -127,12 +122,6 @@ function configPath() {
   );
 }
 
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
-
 function writeConfig(cfg) {
   fs.writeFileSync(configPath(), `${JSON.stringify(cfg, null, 2)}\n`);
 }
@@ -173,10 +162,7 @@ function assertAgentTurn() {
 function assertFileContains() {
   const file = process.argv[3];
   const needle = process.argv[4];
-  assert(
-    fileContainsText(file, needle),
-    `${file} did not contain ${needle}. Output tail: ${readTextFileTail(file, ERROR_DETAIL_TAIL_BYTES)}`,
-  );
+  assertFileContainsText(file, needle, assert);
 }
 
 function rememberPluginInstallPath() {
@@ -218,7 +204,7 @@ function assertPluginUninstalled() {
   const records = installRecords();
   assert(!records[pluginId], `install record still present for ${pluginId}`);
   assert(
-    isExplicitPluginDisableMarker(cfg, pluginId),
+    hasExpectedPluginUninstallConfigState(cfg, pluginId),
     `exact disabled uninstall marker missing for ${pluginId}`,
   );
   assert(!(cfg.plugins?.allow ?? []).includes(pluginId), `allowlist still contains ${pluginId}`);
@@ -364,10 +350,8 @@ export async function waitForClickClackSocket({
         timeoutMs: Math.min(clickClackHttpTimeoutMs(), remainingMs),
       },
     ).catch(() => undefined);
-    if (state) {
-      if (Number(state.socketGeneration ?? 0) >= minimumSocketGeneration) {
-        return;
-      }
+    if (state && Number(state.socketGeneration ?? 0) >= minimumSocketGeneration) {
+      return;
     }
     await new Promise((resolve) => {
       setTimeout(resolve, Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())));

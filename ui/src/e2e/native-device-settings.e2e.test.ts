@@ -4,9 +4,13 @@ import { expect, it } from "vitest";
 import type { NativeDeviceSettingsSnapshot } from "../app/native-device-settings.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { createNativeDeviceSettingsSnapshot } from "../test-helpers/native-device-settings.ts";
+import {
+  createIosNativeDeviceSettingsSnapshot,
+  createNativeDeviceSettingsSnapshot,
+  createTauriDeviceSettingsSnapshot,
+} from "../test-helpers/native-device-settings.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { installNativeWebChrome } from "./native-nav.test-support.ts";
+import { installNativeEmbed, installNativeWebChrome } from "./native-nav.test-support.ts";
 
 type DeviceSettingsTestWindow = Window & {
   __OPENCLAW_NATIVE_DEVICE_SETTINGS__?: NativeDeviceSettingsSnapshot;
@@ -15,7 +19,9 @@ type DeviceSettingsTestWindow = Window & {
 };
 
 async function installDeviceSettingsBridge(page: Page, snapshot: NativeDeviceSettingsSnapshot) {
-  await installNativeWebChrome(page);
+  if (snapshot.device.platform === "macos") {
+    await installNativeWebChrome(page);
+  }
   await page.addInitScript((initial: NativeDeviceSettingsSnapshot) => {
     const messages: unknown[] = [];
     const replies: Array<(snapshot: NativeDeviceSettingsSnapshot) => void> = [];
@@ -69,6 +75,139 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it("shows the desktop companion setting and reconciles native sharing changes", async () => {
+    const artifactDir = createControlUiE2eArtifactDir("tauri-desktop-sharing");
+    await suite.withPage(
+      { locale: "en-US", colorScheme: "light", viewport: { width: 1440, height: 1000 } },
+      async ({ page }) => {
+        await installMockGateway(page, { operatorScopes: ["operator.read"] });
+        await page.goto(`${suite.server.baseUrl}settings/device`);
+        await page.getByText(/only available inside the OpenClaw app/).waitFor();
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(artifactDir, "before.png"),
+        });
+
+        const snapshot = createTauriDeviceSettingsSnapshot("linux");
+        await installDeviceSettingsBridge(page, snapshot);
+        await page.reload();
+        const devicePage = page.locator("openclaw-device-page");
+        const sharing = devicePage.getByRole("switch", { name: "Desktop sharing", exact: true });
+        await expect.poll(() => sharing.isChecked()).toBe(true);
+        await devicePage.getByText("Running", { exact: true }).waitFor();
+        expect(
+          await page.locator('.settings-sidebar a[href="/settings/device/permissions"]').count(),
+        ).toBe(0);
+        expect(await devicePage.getByText("This computer", { exact: true }).count()).toBe(1);
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(artifactDir, "after.png"),
+        });
+
+        await devicePage
+          .locator(".settings-row__title")
+          .filter({ hasText: /^Desktop sharing$/ })
+          .click();
+        await expect
+          .poll(() =>
+            page.evaluate(() => (window as DeviceSettingsTestWindow).nativeDeviceSettingsMessages),
+          )
+          .toContainEqual({ type: "set", key: "capabilities.desktopSharingEnabled", value: false });
+        await replyToDeviceSetting(page, {
+          ...snapshot,
+          revision: 2,
+          capabilities: { desktopSharingEnabled: false },
+          desktopSharing: { state: "off" },
+        });
+        await expect.poll(() => sharing.isChecked()).toBe(false);
+        await devicePage.getByText("Off", { exact: true }).waitFor();
+      },
+    );
+  });
+
+  for (const colorScheme of ["light", "dark"] as const) {
+    it(`edits this iPhone in embedded settings in ${colorScheme}`, async () => {
+      const artifactDir = createControlUiE2eArtifactDir("ios-device-settings");
+      const viewport = { width: 375, height: 812 };
+      await suite.withPage(
+        { viewport, colorScheme, hasTouch: true, locale: "en-US", serviceWorkers: "block" },
+        async ({ page }) => {
+          const snapshot = createIosNativeDeviceSettingsSnapshot();
+          await installNativeEmbed(page, { platform: "ios", formFactor: "phone" });
+          await installDeviceSettingsBridge(page, snapshot);
+          await installMockGateway(page, { operatorScopes: ["operator.read"] });
+          await page.goto(`${suite.server.baseUrl}settings`);
+          const list = page.locator(".settings-embed-list");
+          await list
+            .locator(".settings-sidebar__group-label")
+            .filter({ hasText: /^This iPhone$/ })
+            .waitFor();
+          await list.getByRole("link", { name: "This iPhone", exact: true }).click();
+          await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/device");
+          await page
+            .locator(".native-embed-header")
+            .getByRole("heading", { name: "This iPhone", exact: true })
+            .waitFor();
+          const devicePage = page.locator("openclaw-device-page");
+          const appearance = devicePage.getByRole("combobox", { name: "Appearance", exact: true });
+          await expect.poll(() => appearance.inputValue()).toBe("system");
+          expect(await devicePage.locator(".settings-row__title").allTextContents()).toEqual([
+            "Appearance",
+            "Notifications",
+            "Allow Camera",
+            "Keep awake",
+            "Health summaries",
+            "Diagnostics",
+            "Licenses",
+            "About",
+            "Apple Watch",
+          ]);
+          expect(
+            await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+          ).toBe(true);
+          const capture = async (stage: string) => {
+            if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+              await page.screenshot({
+                animations: "disabled",
+                fullPage: false,
+                path: path.join(artifactDir, `${stage}-375x812-${colorScheme}.png`),
+              });
+            }
+          };
+          await capture("01-ios-device");
+          await devicePage.getByText("Apple Watch", { exact: true }).scrollIntoViewIfNeeded();
+          await capture("02-ios-device-panels");
+          await appearance.scrollIntoViewIfNeeded();
+          await appearance.selectOption("dark");
+          await expect
+            .poll(() =>
+              page.evaluate(
+                () => (window as DeviceSettingsTestWindow).nativeDeviceSettingsMessages,
+              ),
+            )
+            .toContainEqual({ type: "set", key: "app.appearance", value: "dark" });
+          snapshot.app = { ...snapshot.app, appearance: "dark" };
+          await replyToDeviceSetting(page, snapshot);
+          await expect.poll(() => appearance.inputValue()).toBe("dark");
+          await capture("03-ios-appearance-saved");
+          await page.locator(".native-embed-header__back").click();
+          await list.locator('a[href="/settings/device/permissions"]').click();
+          const permissionsPage = page.locator("openclaw-device-permissions-page");
+          const precise = permissionsPage.locator(".settings-row").filter({
+            has: page.locator(".settings-row__title").filter({ hasText: /^Precise location$/ }),
+          });
+          await precise
+            .getByRole("button", { name: "Open Settings: Precise location", exact: true })
+            .waitFor();
+          expect(await precise.getByRole("switch").count()).toBe(0);
+          await capture("04-ios-permissions");
+          await precise.scrollIntoViewIfNeeded();
+          await capture("05-ios-precise-location");
+        },
+      );
+    });
+  }
+
   it("edits this Mac without Gateway admin scope and hides device settings in browsers", async () => {
     const artifactDir = createControlUiE2eArtifactDir("native-device-settings");
     const viewport = { width: 1440, height: 1800 };
@@ -99,6 +238,35 @@ suite.define(() => {
         const messages = () =>
           page.evaluate(() => (window as DeviceSettingsTestWindow).nativeDeviceSettingsMessages);
         await expect.poll(messages).toContainEqual({ type: "status" });
+
+        const sharing = devicePage.getByRole("switch", { name: "Desktop sharing", exact: true });
+        const computerControl = devicePage.getByRole("switch", {
+          name: "Allow Computer Control",
+          exact: true,
+        });
+        await expect.poll(() => sharing.isChecked()).toBe(true);
+        const sharingLabel = devicePage
+          .locator(".settings-row__title")
+          .filter({ hasText: /^Desktop sharing$/ });
+        await sharingLabel.click();
+        await expect.poll(messages).toContainEqual({
+          type: "set",
+          key: "capabilities.desktopSharingEnabled",
+          value: false,
+        });
+        snapshot.capabilities.desktopSharingEnabled = false;
+        await replyToDeviceSetting(page, snapshot);
+        await expect.poll(() => sharing.isChecked()).toBe(false);
+        expect(await computerControl.isChecked()).toBe(true);
+        await sharingLabel.click();
+        await expect.poll(messages).toContainEqual({
+          type: "set",
+          key: "capabilities.desktopSharingEnabled",
+          value: true,
+        });
+        snapshot.capabilities.desktopSharingEnabled = true;
+        await replyToDeviceSetting(page, snapshot);
+        await expect.poll(() => sharing.isChecked()).toBe(true);
 
         const iconStyle = devicePage.getByRole("combobox", { name: "Dock icon", exact: true });
         await expect.poll(() => iconStyle.inputValue()).toBe("paper");
@@ -139,7 +307,9 @@ suite.define(() => {
         const notifications = permissionsPage.locator(".settings-row").filter({
           has: page.locator(".settings-row__title").filter({ hasText: /^Notifications$/ }),
         });
-        await notifications.getByRole("button", { name: "Grant…", exact: true }).click();
+        await notifications
+          .getByRole("button", { name: "Grant…: Notifications", exact: true })
+          .click();
         await expect
           .poll(messages)
           .toContainEqual({ type: "request-permission", id: "notifications" });
@@ -165,7 +335,7 @@ suite.define(() => {
         });
         for (const route of ["device", "device/permissions"]) {
           expect((await page.goto(`${suite.server.baseUrl}settings/${route}`))?.status()).toBe(200);
-          await page.getByText(/only available inside the OpenClaw Mac app/).waitFor();
+          await page.getByText(/only available inside the OpenClaw app/).waitFor();
           await page.locator('.settings-sidebar__item[href="/settings/devices"]').waitFor();
           expect(
             await page

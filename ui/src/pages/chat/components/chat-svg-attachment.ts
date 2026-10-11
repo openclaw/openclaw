@@ -3,6 +3,7 @@ import { property, state } from "lit/decorators.js";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
 import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
+import { isCrossOriginHttpSource } from "./chat-attachment-href.ts";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
 
@@ -14,17 +15,6 @@ type SvgRenderSource = {
   retainCount: number;
   retired: boolean;
 };
-
-function isCrossOriginHttpSource(source: string): boolean {
-  try {
-    const url = new URL(source, window.location.href);
-    return (
-      (url.protocol === "http:" || url.protocol === "https:") && url.origin !== location.origin
-    );
-  } catch {
-    return false;
-  }
-}
 
 class ChatSvgAttachment extends OpenClawLightDomContentsElement {
   @property() src = "";
@@ -79,10 +69,13 @@ class ChatSvgAttachment extends OpenClawLightDomContentsElement {
     });
   }
 
-  private retireSource(source: SvgRenderSource): void {
-    source.retired = true;
-    if (source.retainCount === 0) {
-      URL.revokeObjectURL(source.url);
+  private retireSource(): void {
+    if (this.renderSource) {
+      this.renderSource.retired = true;
+      if (this.renderSource.retainCount === 0) {
+        URL.revokeObjectURL(this.renderSource.url);
+      }
+      this.renderSource = undefined;
     }
   }
 
@@ -90,10 +83,7 @@ class ChatSvgAttachment extends OpenClawLightDomContentsElement {
     this.loadVersion += 1;
     this.abortController?.abort();
     this.abortController = undefined;
-    if (this.renderSource) {
-      this.retireSource(this.renderSource);
-      this.renderSource = undefined;
-    }
+    this.retireSource();
   }
 
   private retainSource(source: SvgRenderSource): () => void {
@@ -179,10 +169,7 @@ class ChatSvgAttachment extends OpenClawLightDomContentsElement {
   }
 
   private handleImageError = () => {
-    if (this.renderSource) {
-      this.retireSource(this.renderSource);
-      this.renderSource = undefined;
-    }
+    this.retireSource();
     this.showFallback();
   };
 

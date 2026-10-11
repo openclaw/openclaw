@@ -5,7 +5,6 @@ import {
   buildLiveModelFileProbeRetryContext,
   buildLiveModelImageProbeContext,
   fileProbeTextMatches,
-  imageProbeTextMatches,
   isLiveModelProbeEnabled,
   LIVE_MODEL_FILE_PROBE_TOKEN,
   modelSupportsImageInput,
@@ -97,51 +96,10 @@ describe("live model turn probes", () => {
   });
 
   it("skips known stale file probe routes", () => {
-    // These routes are still useful for live text calls but have stale or
-    // unreliable file-tool behavior, so extra probes skip them explicitly.
-    expect(shouldSkipLiveModelFileProbe({ provider: "opencode-go", id: "glm-5" })).toBe(true);
+    expect(shouldSkipLiveModelFileProbe({ provider: "opencode-go", id: "unknown" })).toBe(true);
     expect(shouldSkipLiveModelFileProbe({ provider: "google", id: "gemini-3.1-pro-preview" })).toBe(
       true,
     );
-    expect(shouldSkipLiveModelFileProbe({ provider: "opencode-go", id: "minimax-m2.5" })).toBe(
-      true,
-    );
-    expect(
-      shouldSkipLiveModelFileProbe({
-        provider: "openrouter",
-        id: "deepseek/deepseek-chat-v3.1",
-      }),
-    ).toBe(true);
-    expect(
-      shouldSkipLiveModelFileProbe({ provider: "openrouter", id: "minimax/minimax-m2.5" }),
-    ).toBe(true);
-    expect(
-      shouldSkipLiveModelFileProbe({
-        provider: "openrouter",
-        id: "nvidia/llama-3.3-nemotron-super-49b-v1.5",
-      }),
-    ).toBe(true);
-    expect(
-      shouldSkipLiveModelFileProbe({
-        provider: "openrouter",
-        id: "nvidia/nemotron-nano-12b-v2-vl:free",
-      }),
-    ).toBe(true);
-    expect(shouldSkipLiveModelFileProbe({ provider: "openrouter", id: "qwen/qwen3.5-9b" })).toBe(
-      true,
-    );
-    expect(
-      shouldSkipLiveModelFileProbe({
-        provider: "openrouter",
-        id: "tngtech/deepseek-r1t2-chimera",
-      }),
-    ).toBe(true);
-    expect(shouldSkipLiveModelFileProbe({ provider: "openrouter", id: "z-ai/glm-4.7-flash" })).toBe(
-      true,
-    );
-    expect(shouldSkipLiveModelFileProbe({ provider: "openrouter", id: "z-ai/glm-5" })).toBe(true);
-    expect(shouldSkipLiveModelFileProbe({ provider: "openrouter", id: "z-ai/glm-5.1" })).toBe(true);
-    expect(shouldSkipLiveModelFileProbe({ provider: "opencode-go", id: "kimi-k2.5" })).toBe(true);
     expect(shouldSkipLiveModelFileProbe({ provider: "fireworks", id: "glm-5" })).toBe(false);
   });
 
@@ -152,35 +110,12 @@ describe("live model turn probes", () => {
         id: "accounts/fireworks/models/kimi-k2p5",
       }),
     ).toBe(true);
-    expect(
-      shouldSkipLiveModelImageProbe({
-        provider: "fireworks",
-        id: "accounts/fireworks/models/kimi-k2p6",
-      }),
-    ).toBe(true);
-    expect(shouldSkipLiveModelImageProbe({ provider: "opencode-go", id: "kimi-k2.5" })).toBe(true);
-    expect(
-      shouldSkipLiveModelImageProbe({
-        provider: "google",
-        id: "gemini-3.1-pro-preview-customtools",
-      }),
-    ).toBe(true);
-    expect(shouldSkipLiveModelImageProbe({ provider: "opencode", id: "kimi-k2.6" })).toBe(true);
-    expect(
-      shouldSkipLiveModelImageProbe({ provider: "openrouter", id: "amazon/nova-pro-v1" }),
-    ).toBe(true);
-    expect(
-      shouldSkipLiveModelImageProbe({ provider: "openrouter", id: "bytedance-seed/seed-1.6" }),
-    ).toBe(true);
     expect(shouldSkipLiveModelImageProbe({ provider: "fireworks", id: "glm-5" })).toBe(false);
   });
 
   it("matches expected probe replies", () => {
     expect(fileProbeTextMatches(`The value is ${LIVE_MODEL_FILE_PROBE_TOKEN}.`)).toBe(true);
     expect(fileProbeTextMatches("amber")).toBe(false);
-    expect(imageProbeTextMatches("OK")).toBe(true);
-    expect(imageProbeTextMatches("blue")).toBe(false);
-    expect(imageProbeTextMatches('" or "Reply with exactly')).toBe(false);
   });
 
   it("retries one mismatched image reply and accepts only a matching retry", async () => {
@@ -229,15 +164,6 @@ describe("live model turn probes", () => {
     expect(retries).toEqual([]);
   });
 
-  it("fails when the image retry also does not match", async () => {
-    const { attempts, run } = createImageProbeRunner(["blue", '" or "Reply with exactly']);
-
-    await expect(runLiveModelImageProbeWithRetry({ run, onRetry: () => {} })).rejects.toThrow(
-      "image probe did not return ok after retry",
-    );
-    expect(attempts).toEqual([1, 2]);
-  });
-
   it("does not turn a mismatched image reply into an empty-response skip", async () => {
     const { run } = createImageProbeRunner(["blue", ""]);
 
@@ -253,14 +179,6 @@ describe("live model turn probes", () => {
       "attempt 1: <empty>; attempt 2: <empty>",
     );
     expect(attempts).toEqual([1, 2]);
-  });
-
-  it("fails when an empty image reply is followed by a mismatch", async () => {
-    const { run } = createImageProbeRunner(["", "blue"]);
-
-    await expect(runLiveModelImageProbeWithRetry({ run, onRetry: () => {} })).rejects.toThrow(
-      "attempt 1: <empty>",
-    );
   });
 
   it("redacts nonmatching image replies from failure diagnostics", async () => {

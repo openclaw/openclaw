@@ -1,13 +1,14 @@
-/** Builds prompt body and envelope metadata for reply runs. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
+import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
+import type { RuntimeContextFragment } from "../../agents/internal-runtime-context.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { normalizeMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
-import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../heartbeat.js";
+import { resolveInternalTurnTranscript } from "../internal-turn-source.js";
 import { buildInboundMediaNoteProjection } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { appendChannelPromptContext } from "./channel-prompt-context.js";
@@ -18,84 +19,19 @@ const ROOM_EVENT_PARTICIPATION_RULE =
 const RESUMABLE_ROOM_CONTEXT_OMITTED_PREFIXES = [
   "Conversation context (chronological, selected for current message):",
   "Chat history since last reply:",
+  "Recent chat history:",
 ];
 
-/** Builds command/transcript/queued prompt bodies from inbound context. */
-function buildReplyPromptBodies(params: {
-  ctx: MsgContext;
-  sessionCtx: TemplateContext;
-  effectiveBaseBody: string;
-  prefixedBody?: string;
-  transcriptBody?: string;
-  threadContextNote?: string;
-  systemEventBlocks?: string[];
-  inboundEventKind?: InboundEventKind;
-  /** Facts whose text projection is already present in a body variant. */
-  media?: readonly MediaFact[];
-}): {
+type ReplyPromptEnvelope = ReplyPromptEnvelopeBase & {
   mediaNote?: string;
   media?: MediaFact[];
+  /** Original ctx.media positions; preprojected additions have no inbound index. */
+  inboundMediaIndexes: readonly number[];
   prefixedCommandBody: string;
   queuedBody: string;
   transcriptCommandBody: string;
-} {
-  const combinedEventsBlock = (params.systemEventBlocks ?? []).filter(Boolean).join("\n");
-  const prependEvents = (body: string) =>
-    combinedEventsBlock ? `${combinedEventsBlock}\n\n${body}` : body;
-  const rawPrefixedBody = params.prefixedBody ?? params.effectiveBaseBody;
-  const bodyWithEvents = prependEvents(params.effectiveBaseBody);
-  const prefixedBodyWithEvents = appendChannelPromptContext(
-    prependEvents(rawPrefixedBody),
-    params.sessionCtx.ChannelPromptContext,
-  );
-  const prefixedBody = [params.threadContextNote, prefixedBodyWithEvents]
-    .filter(Boolean)
-    .join("\n\n");
-  const queueBodyBase = [params.threadContextNote, bodyWithEvents].filter(Boolean).join("\n\n");
-  const generatedMedia = buildInboundMediaNoteProjection(params.ctx);
-  const mediaNote = generatedMedia.text;
-  const media = [...generatedMedia.media, ...normalizeMediaFacts(params.media)];
-  const queuedBodyRaw = mediaNote
-    ? [mediaNote, queueBodyBase].filter(Boolean).join("\n").trim()
-    : queueBodyBase;
-  const prefixedCommandBodyRaw = mediaNote
-    ? [mediaNote, prefixedBody].filter(Boolean).join("\n").trim()
-    : prefixedBody;
-  const transcriptBody = params.transcriptBody ?? params.effectiveBaseBody;
-  const includeMediaTranscript = mediaNote && params.inboundEventKind !== "room_event";
-  const transcriptCommandBodyRaw = transcriptBody
-    ? includeMediaTranscript
-      ? [mediaNote, transcriptBody].filter(Boolean).join("\n").trim()
-      : transcriptBody
-    : includeMediaTranscript
-      ? mediaNote
-      : "";
-  return {
-    mediaNote,
-    ...(media.length > 0 ? { media } : {}),
-    prefixedCommandBody: annotateInterSessionPromptText(
-      prefixedCommandBodyRaw,
-      params.sessionCtx.InputProvenance,
-    ),
-    queuedBody: annotateInterSessionPromptText(queuedBodyRaw, params.sessionCtx.InputProvenance),
-    transcriptCommandBody: transcriptCommandBodyRaw,
-  };
-}
-
-/** Startup action associated with a reply prompt envelope. */
-type ReplyPromptEnvelopeStartupAction = "new" | "reset";
-
-/** Full prompt envelope passed into reply run preparation. */
-type ReplyPromptEnvelope = ReturnType<typeof buildReplyPromptBodies> & {
-  /** Model-visible body before media, thread context, and inter-session annotation are applied. */
-  effectiveBaseBody: string;
-  /** User-visible body persisted to transcript before media/inter-session annotation. */
-  transcriptBody: string;
-  /** Runtime-only user context for backends that can carry it outside transcript text. */
-  currentInboundContext?: CurrentInboundPromptContext;
 };
 
-/** Base prompt envelope fields before body variants are added. */
 type ReplyPromptEnvelopeBase = {
   /** Model-visible body before media, thread context, and inter-session annotation are applied. */
   effectiveBaseBody: string;
@@ -114,7 +50,7 @@ type ReplyPromptEnvelopeBaseParams = {
   activeGoalContext?: string;
   inboundUserContextPromptJoiner?: CurrentInboundPromptContext["promptJoiner"];
   isBareSessionReset: boolean;
-  startupAction: ReplyPromptEnvelopeStartupAction;
+  startupAction: "new" | "reset";
   startupContextPrelude?: string | null;
   softResetTail?: string;
   isHeartbeat?: boolean;
@@ -134,7 +70,19 @@ function formatRoomEventLine(ctx: TemplateContext, body: string): string {
 }
 
 function resolveRoomEventBody(params: ReplyPromptEnvelopeBaseParams): string {
+  const hasBaseBody = Boolean(normalizeOptionalString(params.baseBody));
+  const hasCompletedAudioBody =
+    hasBaseBody &&
+    [params.ctx, params.sessionCtx].some(
+      (ctx) =>
+        ctx.MediaUnderstanding?.some((output) => output.kind === "audio.transcription") &&
+        params.baseBody === ctx.agentText,
+    );
+  // Command text intentionally excludes machine transcripts. Prefer the
+  // enriched body only when this event owns an audio output and the body is
+  // still one of its canonical agent-text projections.
   return (
+    (hasCompletedAudioBody ? params.baseBody : undefined) ??
     normalizeOptionalString(params.ctx.commandText) ??
     normalizeOptionalString(params.sessionCtx.commandText) ??
     (params.hasUserBody ? params.baseBody.trim() : undefined) ??
@@ -171,9 +119,8 @@ function resolvePerTurnDeliveryDirective(params: {
 // The current event itself is the user turn body; the context block carries
 // only the marker, the room backlog, and the reply-policy directive so no
 // fact is stated twice in one request.
-function buildRoomEventContext(params: ReplyPromptEnvelopeBaseParams, roomContext: string): string {
+function buildRoomEventContext(roomContext: string, deliveryDirective?: string): string {
   const roomContextBlock = roomContext.trim() ? `Room context:\n${roomContext.trim()}` : "";
-  const deliveryDirective = resolvePerTurnDeliveryDirective(params);
   return [ROOM_EVENT_PROMPT, roomContextBlock, deliveryDirective].filter(Boolean).join("\n\n");
 }
 
@@ -187,19 +134,19 @@ function buildResumableRoomContext(roomContext: string): string {
     .join("\n\n");
 }
 
-/** Builds prompt envelope metadata shared by all body variants. */
 export function buildReplyPromptEnvelopeBase(
   params: ReplyPromptEnvelopeBaseParams,
 ): ReplyPromptEnvelopeBase {
   const softResetTail = params.softResetTail?.trim() ?? "";
   const isRoomEvent = params.inboundEventKind === "room_event";
   const inboundUserContext = params.inboundUserContext.trim();
+  const deliveryDirective = resolvePerTurnDeliveryDirective(params);
   const resumableRoomEventContext = isRoomEvent
-    ? buildRoomEventContext(params, buildResumableRoomContext(inboundUserContext))
+    ? buildRoomEventContext(buildResumableRoomContext(inboundUserContext), deliveryDirective)
     : undefined;
   const currentInboundContextText = isRoomEvent
-    ? buildRoomEventContext(params, inboundUserContext)
-    : [inboundUserContext, resolvePerTurnDeliveryDirective(params)].filter(Boolean).join("\n\n");
+    ? buildRoomEventContext(inboundUserContext, deliveryDirective)
+    : [inboundUserContext, deliveryDirective].filter(Boolean).join("\n\n");
   const resetModelBody = params.isBareSessionReset
     ? [
         params.inboundUserContext,
@@ -219,14 +166,27 @@ export function buildReplyPromptEnvelopeBase(
   const effectiveBaseBody =
     roomEventBody ?? (params.hasUserBody ? resetModelBody : MEDIA_ONLY_USER_TEXT);
   const transcriptBody = params.isHeartbeat
-    ? HEARTBEAT_TRANSCRIPT_PROMPT
+    ? resolveInternalTurnTranscript({
+        InputProvenance: params.ctx.InputProvenance ?? params.sessionCtx.InputProvenance,
+        InternalTurnSource: params.ctx.InternalTurnSource ?? params.sessionCtx.InternalTurnSource,
+      }).text
     : params.isBareSessionReset
       ? softResetTail || `[OpenClaw session ${params.startupAction}]`
-      : (roomEventBody ?? (params.hasUserBody ? params.baseBody : MEDIA_ONLY_USER_TEXT));
+      : effectiveBaseBody;
+  const fragments: RuntimeContextFragment[] = [
+    ...(isRoomEvent ? [{ kind: "runtime-instruction" as const, text: ROOM_EVENT_PROMPT }] : []),
+    ...(inboundUserContext
+      ? [{ kind: "conversation-data" as const, text: inboundUserContext }]
+      : []),
+    ...(deliveryDirective
+      ? [{ kind: "runtime-instruction" as const, text: deliveryDirective }]
+      : []),
+  ];
   const currentInboundContext: CurrentInboundPromptContext | undefined =
     !params.isBareSessionReset && currentInboundContextText
       ? {
           text: currentInboundContextText,
+          fragments,
           ...(resumableRoomEventContext ? { resumableText: resumableRoomEventContext } : {}),
           promptJoiner: params.inboundUserContextPromptJoiner,
           ...(params.activeGoalContext ? { injectedGoalContexts: [params.activeGoalContext] } : {}),
@@ -240,7 +200,6 @@ export function buildReplyPromptEnvelopeBase(
   };
 }
 
-/** Builds the full reply prompt envelope for a prepared run. */
 export function buildReplyPromptEnvelope(
   params: ReplyPromptEnvelopeBaseParams & {
     prefixedBody?: string;
@@ -251,21 +210,39 @@ export function buildReplyPromptEnvelope(
   },
 ): ReplyPromptEnvelope {
   const base = buildReplyPromptEnvelopeBase(params);
-  const prefixedBody = params.prefixedBody ?? base.effectiveBaseBody;
-  const promptBodies = buildReplyPromptBodies({
-    ctx: params.ctx,
-    sessionCtx: params.sessionCtx,
-    effectiveBaseBody: base.effectiveBaseBody,
-    prefixedBody,
-    transcriptBody: base.transcriptBody,
-    threadContextNote: params.threadContextNote,
-    systemEventBlocks: params.systemEventBlocks,
-    inboundEventKind: params.inboundEventKind,
-    media: params.media,
-  });
+  const generatedMedia = buildInboundMediaNoteProjection(params.ctx);
+  const mediaNote = generatedMedia.text;
+  const media = [...generatedMedia.media, ...normalizeMediaFacts(params.media)];
+  const prependMediaNote = (body: string): string =>
+    mediaNote ? [mediaNote, body].filter(Boolean).join("\n").trim() : body;
+  const transcriptCommandBody =
+    mediaNote && params.inboundEventKind !== "room_event"
+      ? base.transcriptBody
+        ? prependMediaNote(base.transcriptBody)
+        : mediaNote
+      : base.transcriptBody;
 
+  const sourceContext = [
+    params.threadContextNote,
+    ...(params.systemEventBlocks ?? []),
+    appendChannelPromptContext("", params.sessionCtx.ChannelPromptContext),
+  ].filter((text): text is string => Boolean(text?.trim()));
+  const currentInboundContext = sourceContext.length
+    ? appendCurrentInboundContext(
+        base.currentInboundContext,
+        sourceContext.map((text) => ({ kind: "conversation-data", text })),
+      )
+    : base.currentInboundContext;
+  const annotateBody = (body: string) =>
+    annotateInterSessionPromptText(prependMediaNote(body), params.sessionCtx.InputProvenance);
   return {
-    ...promptBodies,
+    mediaNote,
+    inboundMediaIndexes: generatedMedia.mediaIndexes,
+    ...(media.length > 0 ? { media } : {}),
+    prefixedCommandBody: annotateBody(params.prefixedBody ?? base.effectiveBaseBody),
+    queuedBody: annotateBody(base.effectiveBaseBody),
+    transcriptCommandBody,
     ...base,
+    currentInboundContext,
   };
 }

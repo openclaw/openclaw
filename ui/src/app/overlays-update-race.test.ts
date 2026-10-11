@@ -1,13 +1,9 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { createUpdateRunFixture as updateRunFixture } from "../test-helpers/update-run.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
-import {
-  client,
-  deferred,
-  flushMicrotasks,
-  type RequestFn,
-} from "./overlays-access.test-support.ts";
+import { client, flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { updateRunHarness } from "./update-run.test-support.ts";
 
@@ -51,7 +47,7 @@ describe("update run response races", () => {
   it.each(["activeRun", "lastRun"] as const)(
     "discovers %s when disconnect wins the admission reply",
     async (field) => {
-      const admission = deferred();
+      const admission = deferred<unknown>();
       const run = updateRunFixture(
         field === "lastRun"
           ? {
@@ -63,8 +59,9 @@ describe("update run response races", () => {
           : {},
       );
       let admitted = false;
-      const request = vi.fn<RequestFn>(async (method) => {
+      const request = vi.fn<RequestFn>(async (method, _params, options) => {
         if (method === "update.run") {
+          options?.onSent?.("update-run-request");
           admitted = true;
           return admission.promise;
         }
@@ -72,6 +69,7 @@ describe("update run response races", () => {
       });
       const harness = updateRunHarness(request);
       const overlays = createApplicationOverlays(harness.gateway);
+      await flushMicrotasks();
       const running = overlays.runUpdate();
       try {
         await flushMicrotasks();
@@ -95,7 +93,7 @@ describe("update run response races", () => {
   it.each(["Gateway", "profile", "administrator", "dispose"] as const)(
     "discards a run read after changing %s",
     async (boundary) => {
-      const pending = deferred();
+      const pending = deferred<unknown>();
       const run = updateRunFixture();
       const request = vi.fn<RequestFn>(async (method) =>
         method === "update.runs.get" ? pending.promise : {},
@@ -135,7 +133,7 @@ describe("update run response races", () => {
   );
 
   it("ignores a retired reconnect response after a replacement connection reads the final row", async () => {
-    const pending = deferred();
+    const pending = deferred<unknown>();
     const run = updateRunFixture();
     let reads = 0;
     const firstRequest = vi.fn<RequestFn>(async (method) => {
@@ -179,7 +177,7 @@ describe("update run response races", () => {
   });
 
   it("does not send an update after the config-write barrier loses its authority", async () => {
-    const drained = deferred<void>();
+    const drained = deferred();
     const request = vi.fn<RequestFn>(async () => ({}));
     const harness = updateRunHarness(request);
     const overlays = createApplicationOverlays(harness.gateway, {
@@ -203,4 +201,105 @@ describe("update run response races", () => {
       overlays.dispose();
     }
   });
+  it.each([
+    { baseline: "unknown", discovered: "old", attach: false },
+    { baseline: "unknown", discovered: "old after disconnect", attach: false },
+    { baseline: "previous", discovered: "old", attach: false },
+    { baseline: "previous", discovered: "new", attach: true },
+    { baseline: "empty", discovered: "new", attach: true },
+    { baseline: "unknown", discovered: "active", attach: true },
+  ] as const)(
+    "reconciles lost admission using $baseline history and $discovered run identity",
+    async ({ baseline, discovered, attach }) => {
+      const admission = deferred<unknown>();
+      const previous = updateRunFixture({
+        status: "succeeded",
+        phase: "finished",
+        finishedAtMs: 3_000,
+      });
+      let found = discovered.startsWith("old")
+        ? previous
+        : updateRunFixture({
+            runId: "00000000-0000-4000-8000-000000000002",
+            ...(discovered === "active"
+              ? {}
+              : { status: "succeeded", phase: "finished", finishedAtMs: 4_000 }),
+          });
+      let requested = false;
+      const request = vi.fn<RequestFn>(async (method, _params, options) => {
+        if (method === "update.run") {
+          options?.onSent?.("update-run-request");
+          requested = true;
+          return admission.promise;
+        }
+        if (method === "update.runs.get") {
+          return { run: found };
+        }
+        if (method !== "update.status") {
+          return {};
+        }
+        if (!requested) {
+          if (baseline === "unknown") {
+            throw new Error("Initial history unavailable");
+          }
+          return baseline === "previous" ? { lastRun: previous } : {};
+        }
+        return found.status === "running" ? { activeRun: found } : { lastRun: found };
+      });
+      const harness = updateRunHarness(request);
+      const overlays = createApplicationOverlays(harness.gateway);
+      let operation: Promise<void> | undefined;
+      const outcome =
+        discovered === "old after disconnect" ? "outcome is unknown" : "Admission reply lost";
+      try {
+        await flushMicrotasks();
+        operation = overlays.runUpdate();
+        await flushMicrotasks();
+        if (discovered === "old after disconnect") {
+          harness.update({ phase: "reconnecting" });
+        }
+        admission.reject(new Error("Admission reply lost"));
+        if (discovered === "old after disconnect") {
+          harness.update({ phase: "connected" });
+        }
+        await operation;
+        await flushMicrotasks();
+        if (attach) {
+          expect(overlays.snapshot.updateRun).toEqual(found);
+          if (discovered === "active") {
+            found = {
+              ...found,
+              status: "succeeded",
+              phase: "finished",
+              finishedAtMs: 4_000,
+              updatedAtMs: 4_000,
+            };
+            harness.emitEvent("update.run.changed", found);
+            await flushMicrotasks();
+            expect(overlays.snapshot.updateRun).toEqual(found);
+          }
+        } else {
+          expect(overlays.snapshot.updateRun).toBeNull();
+          expect(overlays.snapshot.updateStatusBanner?.tone).toBe("danger");
+          expect(overlays.snapshot.updateStatusBanner?.text).toContain(outcome);
+          expect(overlays.snapshot.updateRunning).toBe(false);
+          harness.update({ phase: "reconnecting" });
+          harness.update({ phase: "connected" });
+          await flushMicrotasks();
+          harness.emitEvent("update.run.changed", { ...previous, updatedAtMs: 4_000 });
+          await flushMicrotasks();
+          expect(overlays.snapshot.updateRun).toBeNull();
+          expect(overlays.snapshot.updateStatusBanner?.text).toContain(outcome);
+          await overlays.refreshUpdateStatus();
+          expect(overlays.snapshot.updateRun).toBeNull();
+          expect(overlays.snapshot.updateStatusBanner?.text).toContain(outcome);
+        }
+        expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(1);
+      } finally {
+        admission.resolve({});
+        await operation;
+        overlays.dispose();
+      }
+    },
+  );
 });

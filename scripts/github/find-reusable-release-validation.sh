@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 # Finds a prior green Full Release Validation run for the exact target SHA or
 # for its immediate product-equivalent predecessor. Cross-SHA reuse is limited
-# to a descendant whose complete tree delta is CHANGELOG.md; package/install
+# to a descendant whose complete tree delta is the selected release changelog; package/install
 # proof still runs against the release SHA after that changelog is committed.
 # Always exits 0 with reuse=true/false; callers fail open to a full validation.
 
@@ -11,7 +15,10 @@ REPO="${GH_REPO:-}"
 WORKFLOW_FILE="full-release-validation.yml"
 TARGET_SHA=""
 VERIFIER_WORKFLOW_SHA=""
+VERIFIER_SOURCE_SHA=""
 WORKFLOW_REF=""
+QUALIFICATION_ADMISSION_JSON=""
+QUALIFICATION_INPUTS_JSON=""
 TRUSTED_WORKFLOW_REF=""
 TRUSTED_WORKFLOW_FULL_REF=""
 TRUSTED_WORKFLOW_SHA=""
@@ -33,6 +40,8 @@ Usage: find-reusable-release-validation.sh --target-sha <sha> --workflow-sha <sh
   [--trusted-workflow-ref <main|release-publish/sha12-run>] \
   [--trusted-workflow-full-ref <refs/heads/main|refs/tags/release-publish/sha12-run>] \
   [--trusted-workflow-sha <sha>] \
+  [--verifier-source-sha <sha>] \
+  [--qualification-admission-json <json> --qualification-inputs-json <json>] \
   --release-profile <beta|stable|full> --inputs-json <json> \
   [--run-release-soak <true|false>] [--repo <owner/repo>] [--repo-dir <path>] \
   [--workflow <file>] [--max-candidates <n>] [--github-output <file>]
@@ -40,9 +49,11 @@ Usage: find-reusable-release-validation.sh --target-sha <sha> --workflow-sha <sh
 Scans recent successful Full Release Validation runs for an exact-target
 validation manifest whose recorded lane-selection inputs match --inputs-json
 and whose normalized strict-v4 phased evidence is accepted by the current trusted-main
-verifier identified by --workflow-sha. The historical producer workflow SHA
+verifier identified by --verifier-source-sha (defaults to --workflow-sha).
+Candidate-owned qualification requires independently admitted exact C/Q/P and inputs.
+The historical producer workflow SHA
 remains independent. A descendant target may reuse product validation only
-when GitHub proves the entire delta is CHANGELOG.md. Writes reuse=true plus
+when GitHub proves the entire delta is the selected release changelog. Writes reuse=true plus
 evidence_* outputs when found; reuse=false otherwise.
 EOF
 }
@@ -59,6 +70,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --workflow-ref)
       WORKFLOW_REF="${2:-}"
+      shift 2
+      ;;
+    --verifier-source-sha)
+      VERIFIER_SOURCE_SHA="${2:-}"
+      shift 2
+      ;;
+    --qualification-admission-json)
+      QUALIFICATION_ADMISSION_JSON="${2:-}"
+      shift 2
+      ;;
+    --qualification-inputs-json)
+      QUALIFICATION_INPUTS_JSON="${2:-}"
       shift 2
       ;;
     --trusted-workflow-ref)
@@ -144,13 +167,32 @@ if [[ ! "$VERIFIER_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
 fi
 TRUSTED_WORKFLOW_REF="${TRUSTED_WORKFLOW_REF:-main}"
 TRUSTED_WORKFLOW_FULL_REF="${TRUSTED_WORKFLOW_FULL_REF:-refs/heads/main}"
-TRUSTED_WORKFLOW_SHA="${TRUSTED_WORKFLOW_SHA:-${VERIFIER_WORKFLOW_SHA}}"
+VERIFIER_SOURCE_SHA="${VERIFIER_SOURCE_SHA:-${VERIFIER_WORKFLOW_SHA}}"
+TRUSTED_WORKFLOW_SHA="${TRUSTED_WORKFLOW_SHA:-${VERIFIER_SOURCE_SHA}}"
 if [[ ! "$TRUSTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
   echo "Expected --trusted-workflow-sha to be a full lowercase commit SHA; got: ${TRUSTED_WORKFLOW_SHA}" >&2
   exit 2
 fi
-if [[ "$TRUSTED_WORKFLOW_SHA" != "$VERIFIER_WORKFLOW_SHA" ]]; then
+if [[ "$TRUSTED_WORKFLOW_SHA" != "$VERIFIER_SOURCE_SHA" ]]; then
   no_reuse "trusted workflow SHA does not match verifier source SHA"
+fi
+qualification_args=()
+candidate_owned=false
+if [[ -n "$QUALIFICATION_ADMISSION_JSON" || -n "$QUALIFICATION_INPUTS_JSON" ]]; then
+  if [[ "$TARGET_SHA" != "$VERIFIER_WORKFLOW_SHA" ]] ||
+    ! jq -e 'type == "object"' <<< "$QUALIFICATION_ADMISSION_JSON" >/dev/null 2>&1 ||
+    ! jq -e 'type == "object"' <<< "$QUALIFICATION_INPUTS_JSON" >/dev/null 2>&1; then
+    no_reuse "candidate qualification reuse requires exact C=Q and complete admission inputs"
+  fi
+  qualification_args=(--qualification-reuse-json "$(jq -nc \
+    --arg candidateSha "$TARGET_SHA" --arg qualificationSha "$VERIFIER_WORKFLOW_SHA" \
+    --arg workflowRef "$WORKFLOW_REF" \
+    --argjson descriptor "$QUALIFICATION_ADMISSION_JSON" \
+    --argjson inputs "$QUALIFICATION_INPUTS_JSON" \
+    '{candidateSha: $candidateSha, qualificationSha: $qualificationSha, workflowRef: $workflowRef, descriptor: $descriptor, inputs: $inputs}')")
+  candidate_owned=true
+elif [[ "$VERIFIER_SOURCE_SHA" != "$VERIFIER_WORKFLOW_SHA" ]]; then
+  no_reuse "separate qualification and verifier SHAs require authenticated candidate admission"
 fi
 if [[ "$WORKFLOW_REF" != "main" ]]; then
   expected_release_ref="release-ci/${VERIFIER_WORKFLOW_SHA:0:12}-"
@@ -255,8 +297,9 @@ for ((index = 0; index < run_count; index += 1)); do
       --trusted-workflow-ref "$TRUSTED_WORKFLOW_REF" \
       --trusted-workflow-full-ref "$TRUSTED_WORKFLOW_FULL_REF" \
       --trusted-workflow-sha "$TRUSTED_WORKFLOW_SHA" \
-      --verifier-source-sha "$VERIFIER_WORKFLOW_SHA" \
+      --verifier-source-sha "$VERIFIER_SOURCE_SHA" \
       --verifier-source-file "$VALIDATOR" \
+      "${qualification_args[@]}" \
       --json
   )"; then
     validator_error="$(
@@ -284,12 +327,14 @@ for ((index = 0; index < run_count; index += 1)); do
     --arg trusted_workflow_full_ref "$TRUSTED_WORKFLOW_FULL_REF" \
     --arg trusted_workflow_ref "$TRUSTED_WORKFLOW_REF" \
     --arg trusted_workflow_route "$trusted_workflow_route" \
-    --arg verifier_sha "$VERIFIER_WORKFLOW_SHA" '
+    --arg verifier_sha "$VERIFIER_SOURCE_SHA" \
+    --arg qualification_sha "$VERIFIER_WORKFLOW_SHA" \
+    --argjson candidate_owned "$candidate_owned" '
       . as $record
       | .schema == "openclaw.release-validation-evidence/v4"
       and .valid == true
       and .repository == $repo
-      and .producerOnTrustedMainLineage == ($trusted_workflow_route == "main")
+      and .producerOnTrustedMainLineage == ($trusted_workflow_route == "main" and ($candidate_owned | not))
       and .trustedWorkflowRef == $trusted_workflow_ref
       and .trustedWorkflowFullRef == $trusted_workflow_full_ref
       and .directRoot == true
@@ -306,7 +351,7 @@ for ((index = 0; index < run_count; index += 1)); do
       and (.root.artifact.digest | type == "string" and test("^sha256:[0-9a-f]{64}$"))
       and all($record.current, $record.root;
         . as $parent
-        | .producerOnTrustedMainLineage == ($trusted_workflow_route == "main")
+        | .producerOnTrustedMainLineage == ($trusted_workflow_route == "main" and ($candidate_owned | not))
         and .workflowRefType == "branch"
         and .workflowPath == ".github/workflows/full-release-validation.yml"
         and .workflowFullRef == ("refs/heads/" + .workflowRef)
@@ -316,7 +361,14 @@ for ((index = 0; index < run_count; index += 1)); do
           .workflowRunPath == ".github/workflows/full-release-validation.yml"
           or .workflowRunPath == .workflowQualifiedPath
         )
-        and if $trusted_workflow_route == "main" then
+        and if $candidate_owned then
+          .manifestVersion == 4
+          and .workflowRefProof == "candidate-owned-admission-v1"
+          and .targetSha == $qualification_sha
+          and .workflowSha == $qualification_sha
+          and (.workflowRef | test("^release-ci/[0-9a-f]{12}-[1-9][0-9]*$"))
+          and (.workflowRef | startswith("release-ci/\($parent.workflowSha[0:12])-"))
+        elif $trusted_workflow_route == "main" then
           (
             (
               .workflowRef == "main"
@@ -343,7 +395,9 @@ for ((index = 0; index < run_count; index += 1)); do
       and (.verifier.schemaVersion == 3)
       and (.verifier.sourceSha == $verifier_sha)
       and ([.children[].role] | sort) ==
-        (if .validationInputs.coveragePolicy == "npm-beta-v1" then
+        (if $candidate_owned then
+          [.qualificationAdmission.coverage.children[].key] | sort
+        elif .validationInputs.coveragePolicy == "npm-beta-v1" then
           ["normalCi", "pluginPrereleaseCandidate", "pluginPrereleaseIndependent", "releaseChecksCandidate", "releaseChecksIndependent"]
         elif (
           .rerunGroup == "all"
@@ -403,20 +457,22 @@ for ((index = 0; index < run_count; index += 1)); do
       echo "[evidence-reuse] run ${run_id}: could not compare ${prior_sha}...${TARGET_SHA}; skipping" >&2
       continue
     fi
-    if ! jq -e \
-      --arg prior_sha "$prior_sha" '
-        .status == "ahead"
-        and .merge_base_commit.sha == $prior_sha
-        and (.files | type == "array" and length == 1)
-        and .files[0].filename == "CHANGELOG.md"
-        and .files[0].status == "modified"
-        and ((.files[0].previous_filename // "") == "")
-      ' <<< "$compare_json" >/dev/null; then
+    selected_version="$(jq -r '.manifest.candidateBinding.package.version // .validationInputs.targetVersion // ""' <<< "$validation_record")"
+    if ! delta_json="$(RELEASE_COMPARISON_JSON="$compare_json" RELEASE_BASE_SHA="$prior_sha" \
+      RELEASE_SELECTED_VERSION="$selected_version" node --input-type=module - "$REPO_ROOT/scripts/full-release-validation-policy.mjs" <<'NODE'
+import { pathToFileURL } from "node:url";
+const { classifyReleaseChangelogEvidenceComparison } = await import(pathToFileURL(process.argv[2]));
+const result = classifyReleaseChangelogEvidenceComparison(JSON.parse(process.env.RELEASE_COMPARISON_JSON), {
+  baseSha: process.env.RELEASE_BASE_SHA, version: process.env.RELEASE_SELECTED_VERSION,
+});
+process.stdout.write(JSON.stringify(result));
+NODE
+    )"; then
       echo "[evidence-reuse] run ${run_id}: target ${TARGET_SHA} is not a CHANGELOG.md-only descendant of ${prior_sha}; skipping" >&2
       continue
     fi
-    evidence_policy="changelog-only-release-v1"
-    changed_paths='["CHANGELOG.md"]'
+    evidence_policy="$(jq -r '.policy' <<< "$delta_json")"
+    changed_paths="$(jq -c '.changedPaths' <<< "$delta_json")"
   fi
 
   run_url="$(jq -r '.root.url' <<< "$validation_record")"

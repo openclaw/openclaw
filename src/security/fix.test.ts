@@ -84,7 +84,7 @@ describe("security fix", () => {
         const changes: string[] = [];
         let changed = false;
         const maybeApply = (prefix: string, holder: Record<string, unknown>) => {
-          if (holder.groupPolicy !== "allowlist") {
+          if (holder.groupPolicy !== "open") {
             return;
           }
           const allowFrom = Array.isArray(holder.allowFrom) ? holder.allowFrom : [];
@@ -239,6 +239,31 @@ describe("security fix", () => {
     ]);
   });
 
+  it("does not seed WhatsApp accounts that were already allowlisted", async () => {
+    const { res, channels } = await fixWhatsAppConfigScenario({
+      whatsapp: {
+        groupPolicy: "allowlist",
+        accounts: {
+          default: { groupPolicy: "allowlist" },
+          work: { groupPolicy: "allowlist" },
+        },
+      },
+      allowFromStore: ["+15550001111"],
+    });
+
+    expect(res.configWritten).toBe(false);
+    expect(res.changes).toEqual([]);
+    const whatsapp = expectDefined(channels.whatsapp, "channels.whatsapp test invariant");
+    expect(whatsapp.groupAllowFrom).toBeUndefined();
+    const accounts = whatsapp.accounts as Record<string, Record<string, unknown>>;
+    expect(
+      expectDefined(accounts.default, "accounts.default test invariant").groupAllowFrom,
+    ).toBeUndefined();
+    expect(
+      expectDefined(accounts.work, "accounts.work test invariant").groupAllowFrom,
+    ).toBeUndefined();
+  });
+
   it("does not seed WhatsApp groupAllowFrom if allowFrom is set", async () => {
     const { res, channels } = await fixWhatsAppConfigScenario({
       whatsapp: {
@@ -330,11 +355,7 @@ describe("security fix", () => {
   it("tightens the live legacy main auth store for a named default roster", async () => {
     const stateDir = await createStateDir("named-default-legacy-auth");
     const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({ agents: { entries: { ops: { default: true } } } }),
-      "utf-8",
-    );
+    await fs.writeFile(configPath, JSON.stringify({ agents: { entries: { ops: {} } } }), "utf-8");
     const legacyAuthPath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
     await fs.mkdir(path.dirname(legacyAuthPath), { recursive: true });
     await fs.writeFile(legacyAuthPath, "{}\n", "utf-8");

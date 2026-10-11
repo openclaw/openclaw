@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 SCRIPT_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -48,11 +52,7 @@ tmp_dir="$(mktemp -d)"
 trusted_scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
 source "$trusted_scripts_dir/lib/live-docker-stage.sh"
 openclaw_live_stage_mounted_auth
-openclaw_live_stage_source_tree "$tmp_dir"
-openclaw_live_stage_node_modules "$tmp_dir"
-openclaw_live_link_runtime_tree "$tmp_dir"
-openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
-openclaw_live_prepare_staged_config
+openclaw_live_stage_workspace "$tmp_dir"
 cd "$tmp_dir"
 openclaw_live_prepare_cli_backend_docker_packages \
   "${OPENCLAW_LIVE_GATEWAY_PROVIDERS:-}" \
@@ -101,9 +101,6 @@ DOCKER_RUN_ARGS+=(--rm -t \
   -e OPENCLAW_DOCKER_AUTH_PRESTAGED="$DOCKER_AUTH_PRESTAGED" \
   -e OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED="$AUTH_DIRS_CSV" \
   -e OPENCLAW_DOCKER_AUTH_FILES_RESOLVED="$AUTH_FILES_CSV" \
-  -e OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS="${OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS:-0}" \
-  -e OPENCLAW_SELECTED_SHA="${OPENCLAW_SELECTED_SHA:-}" \
-  -e OPENCLAW_TOOLING_SHA="${OPENCLAW_TOOLING_SHA:-}" \
   -e OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR="${DOCKER_TRUSTED_HARNESS_CONTAINER_DIR}/scripts" \
   -e OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE="${OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE:-copy}" \
   -e OPENCLAW_LIVE_TEST=1 \

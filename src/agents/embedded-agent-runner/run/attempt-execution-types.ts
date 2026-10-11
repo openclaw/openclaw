@@ -1,8 +1,8 @@
+import type { ContextEngine } from "../../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import type { AgentTool } from "../../runtime/index.js";
 import type { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
-import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
-/** Shared contracts for the prepared attempt execution phases. */
 import type { createPromptBuildToolPolicy } from "./attempt-prompt-support.js";
 import type { prepareEmbeddedAttemptSessionRuntime } from "./attempt-session-runtime-prepare.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
@@ -11,6 +11,7 @@ import type { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt
 import type { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import type { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
+import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import type {
   EmbeddedAttemptExecutionState,
   EmbeddedAttemptExternalAbortController,
@@ -21,8 +22,8 @@ type Prepared<T extends (...args: never[]) => unknown> = Awaited<ReturnType<T>>;
 type PreparedTranscriptLifecycle = Prepared<typeof prepareEmbeddedAttemptTranscriptLifecycle>;
 
 export type EmbeddedAttemptExecutionPhaseInput = {
-  attempt: EmbeddedRunAttemptParams;
-  activeContextEngine?: AttemptContextEngine;
+  attempt: EmbeddedRunAttemptInternalParams;
+  activeContextEngine?: ContextEngine;
   agentDir: string;
   isRawModelRun: boolean;
   resolveActiveContextEnginePluginId: () => string | undefined;
@@ -36,13 +37,18 @@ export type EmbeddedAttemptExecutionPhaseInput = {
     bundleTools: Prepared<typeof prepareEmbeddedAttemptBundleTools>;
     sessionRuntime: Prepared<typeof prepareEmbeddedAttemptSessionRuntime>;
     systemPrompt: Prepared<typeof prepareEmbeddedAttemptSystemPrompt>;
-    toolBase: ReturnType<typeof prepareEmbeddedAttemptToolBase>;
-    toolCatalog: ReturnType<typeof prepareEmbeddedAttemptToolCatalog>;
-    promptToolPolicy: ReturnType<typeof createPromptBuildToolPolicy>;
+    toolBase: Prepared<typeof prepareEmbeddedAttemptToolBase>;
+    toolCatalog: Awaited<ReturnType<typeof prepareEmbeddedAttemptToolCatalog>>;
+    promptToolPolicy: ReturnType<
+      typeof createPromptBuildToolPolicy<AgentTool, AgentTool, AgentTool>
+    >;
   };
   sessionLock: Pick<
     PreparedTranscriptLifecycle,
-    "compactionTimeoutMs" | "ownedTranscriptWriteContext" | "withOwnedTranscriptWrite"
+    | "compactionTimeoutMs"
+    | "assertCronRootCurrent"
+    | "ownedTranscriptWriteContext"
+    | "withOwnedTranscriptWrite"
   >;
   setup: Pick<
     EmbeddedAttemptSetup,
@@ -63,12 +69,13 @@ export type EmbeddedAttemptExecutionPhaseInput = {
     applyPermissionMode?: (
       mode: NonNullable<EmbeddedRunAttemptParams["permissionMode"]> | null,
       revokeApprovals: () => void,
-    ) => void;
+    ) => Promise<void>;
     readYieldState: () => {
       yieldAbortSettled: Promise<void> | null;
       yieldDetected: boolean;
       yieldMessage: string | null;
       yieldAcknowledgment?: string;
+      yieldMessageWaitRegistered?: boolean;
     };
     setToolSearchCatalogExecutor: (
       executor: ReturnType<typeof prepareEmbeddedAttemptStream>["toolSearchCatalogExecutor"],

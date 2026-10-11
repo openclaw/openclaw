@@ -3,19 +3,17 @@ import path from "node:path";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import {
-  formatKeyboardShortcutCombo,
-  KEYBOARD_SHORTCUT_COMBOS,
-} from "../lib/keyboard-shortcut-contract.ts";
-import { finishElementAnimations } from "../test-helpers/animations.ts";
-import {
-  controlUiBundledGatewayUrl,
   defaultControlUiFeatureMethods,
-  installMockGateway,
-  type ControlUiMockGatewayScenario,
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openPicker, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  captureUiProof,
+  createThemedChatOpener,
+  themeConfigResponse,
+} from "./theme-typography.test-support.ts";
 
 /*
  * A theme that declares webfonts must actually paint in them, and a theme that
@@ -24,8 +22,6 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
  * browser has fetched them, so a broken asset path or a dropped link degrades
  * silently to the fallback stack and looks merely "a bit off".
  */
-
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 // Every pair JetBrains Mono ligates, each closed by the trailing space that
 // triggers the corruption reported in issue #137473.
@@ -38,68 +34,7 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is required for theme typography proof at ${executablePath}`,
 });
 
-function themeConfigResponse(theme: string, mode: "dark" | "light") {
-  const config = { ui: { prefs: { theme, themeMode: mode } } };
-  const hash = `theme-typography-${theme}-${mode}`;
-  return {
-    appliedConfigHash: hash,
-    config,
-    configRevisionHash: hash,
-    hash,
-    issues: [],
-    raw: JSON.stringify(config),
-    valid: true,
-  };
-}
-
-async function openThemedChat(
-  theme: string,
-  mode: "dark" | "light",
-  scenario: Pick<
-    ControlUiMockGatewayScenario,
-    "basePath" | "featureMethods" | "historyMessages" | "methodResponses"
-  > = {},
-) {
-  const context = await suite.newBrowserContext({
-    colorScheme: mode,
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport: { height: 900, width: 1440 },
-  });
-  await context.addInitScript(
-    ({ gatewayUrl, initialMode, initialTheme }) => {
-      if (sessionStorage.getItem("typography-seeded")) {
-        return;
-      }
-      sessionStorage.setItem("typography-seeded", "1");
-      localStorage.setItem(
-        `openclaw.control.settings.v1:${gatewayUrl}`,
-        JSON.stringify({ gatewayUrl, theme: initialTheme, themeMode: initialMode }),
-      );
-    },
-    {
-      gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
-      initialMode: mode,
-      initialTheme: theme,
-    },
-  );
-  const page = await context.newPage();
-  const themeRequests: string[] = [];
-  page.on("response", (response) => {
-    const { pathname } = new URL(response.url());
-    if (pathname.includes("/fonts/") || pathname.includes("/themes/")) {
-      themeRequests.push(`${pathname.split("/").pop()} ${response.status()}`);
-    }
-  });
-  const gateway = await installMockGateway(page, {
-    ...scenario,
-    methodResponses: {
-      ...scenario.methodResponses,
-      "config.get": themeConfigResponse(theme, mode),
-    },
-  });
-  return { themeRequests, gateway, page };
-}
+const openThemedChat = createThemedChatOpener(suite);
 
 async function captureTypography(
   page: Awaited<ReturnType<typeof openThemedChat>>["page"],
@@ -114,40 +49,13 @@ async function captureTypography(
   }
 }
 
-async function openPicker(picker: Locator) {
-  await Promise.all([
-    picker.evaluate(
-      (select) =>
-        new Promise<void>((resolve) => {
-          select.addEventListener("wa-after-show", () => resolve(), { once: true });
-        }),
-    ),
-    picker.click(),
-  ]);
-  await picker.locator('wa-popup [part="popup"]').evaluate(finishElementAnimations);
-}
-
-async function selectPickerValue(picker: Locator, value: string) {
-  await picker.evaluate(async (element, nextValue) => {
-    const select = element as HTMLElement & {
-      open: boolean;
-      updateComplete: Promise<unknown>;
-      value: string;
-    };
-    select.value = nextValue;
-    select.open = false;
-    await select.updateComplete;
-    select.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-  }, value);
-}
-
 suite.define(() => {
   it("previews fonts on demand, applies independent overrides, and restores theme typography", async () => {
     const { page, themeRequests, gateway } = await openThemedChat("dash", "dark");
     await page.goto(`${suite.server.baseUrl}settings/appearance`);
     await waitForControlUiSettingsTakeover(page);
-    const ui = page.locator("#settings-font-ui");
-    const chat = page.locator("#settings-font-chat");
+    const ui = page.locator("openclaw-select-picker:has(#settings-font-ui)");
+    const chat = page.locator("openclaw-select-picker:has(#settings-font-chat)");
     const preview = page.locator(".settings-typography-preview");
     const fontRequests = () =>
       themeRequests.filter(
@@ -180,7 +88,7 @@ suite.define(() => {
     }
     await captureTypography(page, "picker-default");
     await openPicker(ui);
-    await ui.locator('wa-option[value="geist"]').waitFor({ state: "visible" });
+    await ui.locator('[role="option"][data-value="geist"]').waitFor({ state: "visible" });
     await expect.poll(() => fontRequests().length).toBe(9);
     await captureTypography(page, "picker-specimens");
     await selectPickerValue(ui, "geist");
@@ -414,6 +322,8 @@ suite.define(() => {
               match: { path: "notes.txt" },
               response: {
                 file: {
+                  previewKind: "text",
+                  contentEncoding: "utf8",
                   content: COMPOSER_LIGATURE_SEQUENCE,
                   hash: "a".repeat(64),
                   kind: "read",
@@ -470,100 +380,6 @@ suite.define(() => {
     expect(fileLineLigatures).toBe("normal");
   });
 
-  it("keeps Phosphor shortcut modifier glyphs on the system UI stack", async () => {
-    const { page } = await openThemedChat("phosphor", "dark");
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const identity = page.locator(".sidebar-identity-card");
-    await identity.focus();
-    await page.keyboard.press("Enter");
-    const menu = page.locator("wa-dropdown.sidebar-identity-menu");
-    await menu.waitFor();
-    const shortcut = menu
-      .locator('wa-dropdown-item[value="command:settings"]')
-      .locator(".session-menu__shortcut");
-
-    const report = await shortcut.evaluate((element) => ({
-      body: getComputedStyle(document.body).fontFamily,
-      shortcut: getComputedStyle(element).fontFamily,
-      text: element.textContent,
-    }));
-    expect(report.body).toMatch(/^"?JetBrains Mono/u);
-    expect(report.shortcut).toMatch(/^system-ui,/u);
-    const applePlatform = await page.evaluate(() =>
-      /Mac|iPhone|iPad|iPod/u.test(navigator.platform),
-    );
-    expect(report.text).toBe(
-      formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.appearanceSettings, applePlatform),
-    );
-
-    await page.keyboard.press("Escape");
-    await page.locator(".chat-side-panel-toggle").click();
-    const panelSelector = page.locator(".side-panel-empty--selector");
-    const panelShortcuts = panelSelector.locator(".side-panel-type-option__shortcut");
-    const panelCombos = [
-      KEYBOARD_SHORTCUT_COMBOS.reviewPanel,
-      KEYBOARD_SHORTCUT_COMBOS.workspaceFiles,
-      KEYBOARD_SHORTCUT_COMBOS.sideChat,
-      KEYBOARD_SHORTCUT_COMBOS.tasksPanel,
-    ];
-    await expect
-      .poll(() => panelShortcuts.allTextContents())
-      .toEqual(panelCombos.map((combo) => formatKeyboardShortcutCombo(combo, applePlatform)));
-    await expect
-      .poll(() =>
-        panelShortcuts.evaluateAll((elements) =>
-          elements.map((element) => {
-            return getComputedStyle(element).fontFamily;
-          }),
-        ),
-      )
-      .toEqual(panelCombos.map(() => expect.stringMatching(/^system-ui,/u)));
-
-    if (captureUiProof) {
-      await mkdir(path.join(suite.artifactDir, "theme-typography"), { recursive: true });
-      await panelSelector.screenshot({
-        path: path.join(
-          path.join(suite.artifactDir, "theme-typography"),
-          "phosphor-panel-shortcuts.png",
-        ),
-      });
-    }
-
-    await page.keyboard.press("ControlOrMeta+Shift+S");
-    await page.locator('[data-panel-slot="companion"]:not([hidden])').waitFor();
-
-    const modelShortcutFont = await page.evaluate(() => {
-      const action = document.createElement("span");
-      action.className = "chat-controls__model-option-action";
-      const keycap = document.createElement("kbd");
-      action.append(keycap);
-      document.body.append(action);
-      const fontFamily = getComputedStyle(keycap).fontFamily;
-      action.remove();
-      return fontFamily;
-    });
-    expect(modelShortcutFont).toBe(
-      await page.evaluate(() =>
-        getComputedStyle(document.documentElement).getPropertyValue("--mono").trim(),
-      ),
-    );
-
-    const genericMenuShortcutFont = await page.evaluate(() => {
-      const genericShortcut = document.createElement("span");
-      genericShortcut.className = "session-menu__shortcut";
-      genericShortcut.textContent = "C";
-      document.body.append(genericShortcut);
-      const fontFamily = getComputedStyle(genericShortcut).fontFamily;
-      genericShortcut.remove();
-      return fontFamily;
-    });
-    expect(genericMenuShortcutFont).toBe(
-      await page.evaluate(() =>
-        getComputedStyle(document.documentElement).getPropertyValue("--mono").trim(),
-      ),
-    );
-  });
-
   it.each([
     ["knot", "openknot", "#080808", "#f9f9fb"],
     ["dash", "dash", "#1a1210", "#f7f2ec"],
@@ -581,7 +397,10 @@ suite.define(() => {
       // Bundle aborts isolate the boot document; resource timing verifies the
       // browser actually blocks rendering, not merely that a link exists later.
       for (const mode of ["dark", "light"] as const) {
-        const { page } = await openThemedChat(theme, mode);
+        const { page } = await openThemedChat(theme, mode, {
+          // The app bundle is blocked to inspect the boot document before upgrade.
+          awaitInitialRoster: false,
+        });
         await page.route("**/assets/**.js", (route) => route.abort());
         await page.goto(`${suite.server.baseUrl}chat`);
         const report = await page.evaluate(() => ({

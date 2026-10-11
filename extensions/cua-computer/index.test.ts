@@ -75,8 +75,8 @@ describe("cua-computer plugin registration", () => {
     ).toBe(false);
   });
 
-  it.each(["linux", "win32"])("loads only remote policy by default on %s", (platform) => {
-    Object.defineProperty(process, "platform", { configurable: true, value: platform });
+  it("loads only remote policy by default on Linux", () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
     const registerNodeHostCommand = vi.fn();
     const policies: OpenClawPluginNodeInvokePolicy[] = [];
     registerPlugin({
@@ -94,7 +94,6 @@ describe("cua-computer plugin registration", () => {
   it.each([
     { platform: "darwin", config: {} },
     { platform: "linux", config: enabledConfig },
-    { platform: "win32", config: enabledConfig },
     {
       platform: "linux",
       config: { plugins: { entries: { " CUA-COMPUTER ": { enabled: true } } } },

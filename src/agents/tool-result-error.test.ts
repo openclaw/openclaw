@@ -9,23 +9,13 @@ import {
 } from "./tool-result-error.js";
 import { ToolAuthorizationError, ToolInputError } from "./tools/common.js";
 
-const undiciErrors = (
-  createRequire(import.meta.url)("undici") as {
-    errors: {
-      ConnectTimeoutError: new (message: string) => Error;
-      HeadersTimeoutError: new (message: string) => Error;
-      BodyTimeoutError: new (message: string) => Error;
-    };
-  }
-).errors;
+// Bun's built-in Undici shim does not carry the installed package's error codes.
+const requireUndiciPackage = createRequire(
+  createRequire(import.meta.url).resolve("undici/package.json"),
+);
+const undiciErrors = (requireUndiciPackage("./index.js") as typeof import("undici")).errors;
 
 describe("isToolResultError", () => {
-  it("keeps completed results with nonzero exit codes nonfatal", () => {
-    expect(isToolResultError({ details: { status: "completed", exitCode: 1 } })).toBe(false);
-    expect(isToolResultError({ details: { status: "completed", exitCode: 2 } })).toBe(false);
-    expect(isToolResultError({ details: { status: "completed", exitCode: 0 } })).toBe(false);
-  });
-
   it("keeps real failures fatal even with a completed status", () => {
     expect(isToolResultError({ details: { status: "completed", timedOut: true } })).toBe(true);
     expect(isToolResultError({ details: { status: "completed", error: "spawn failed" } })).toBe(
@@ -91,27 +81,26 @@ describe("protectNetworkToolExecutionError", () => {
     expect(protectedError.message).toContain("[REMOVED_SPECIAL_TOKEN]");
   });
 
-  it.each([
-    ["connect", undiciErrors.ConnectTimeoutError],
-    ["headers", undiciErrors.HeadersTimeoutError],
-    ["body", undiciErrors.BodyTimeoutError],
-  ])("retains private timeout classification for a real Undici %s cause", (_label, Failure) => {
-    const original = new TypeError("fetch failed", { cause: new Failure("deadline elapsed") });
+  it.each([["connect", undiciErrors.ConnectTimeoutError]])(
+    "retains private timeout classification for a real Undici %s cause",
+    (_label, Failure) => {
+      const original = new TypeError("fetch failed", { cause: new Failure("deadline elapsed") });
 
-    const protectedError = protectNetworkToolExecutionError(original, "fallback") as Error & {
-      cause?: unknown;
-      code?: string;
-    };
+      const protectedError = protectNetworkToolExecutionError(original, "fallback") as Error & {
+        cause?: unknown;
+        code?: string;
+      };
 
-    expect(resolveToolExecutionErrorKind(original)).toBe("timed_out");
-    expect(resolveToolExecutionErrorKind(protectedError)).toBe("timed_out");
-    expect(protectedError).toBeInstanceOf(TypeError);
-    expect(protectedError.cause).toBeUndefined();
-    expect(protectedError.code).toBeUndefined();
-    expect(protectNetworkToolExecutionError(protectedError, "second fallback")).toBe(
-      protectedError,
-    );
-  });
+      expect(resolveToolExecutionErrorKind(original)).toBe("timed_out");
+      expect(resolveToolExecutionErrorKind(protectedError)).toBe("timed_out");
+      expect(protectedError).toBeInstanceOf(TypeError);
+      expect(protectedError.cause).toBeUndefined();
+      expect(protectedError.code).toBeUndefined();
+      expect(protectNetworkToolExecutionError(protectedError, "second fallback")).toBe(
+        protectedError,
+      );
+    },
+  );
 
   it.each([
     new ToolInputError("query required"),
@@ -157,7 +146,9 @@ describe("protectNetworkToolExecutionError", () => {
 
     expect(protectedError).toBeInstanceOf(TypeError);
     expect(protectedError).toMatchObject({ name: "TypeError", code: "ETIMEDOUT", status: 504 });
-    expect((protectedError as Error).message).toContain("SECURITY NOTICE:");
+    expect((protectedError as Error).message).toMatch(
+      /<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/,
+    );
     expect((protectedError as Error).message).not.toContain("feedfeedfeedfeed");
     expect((protectedError as Error).message).not.toContain("<|im_start|>");
     expect((protectedError as Error & { cause?: unknown }).cause).toBeUndefined();

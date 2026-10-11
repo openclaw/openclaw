@@ -5,6 +5,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { replaceConfigFile, type OpenClawConfig } from "../config/config.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -12,7 +14,10 @@ import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import { resolvePluginCapabilityConsent } from "./capability-consent.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { enablePluginWithCapabilityConsent } from "./enable.js";
-import { commitConfigWriteWithPendingPluginInstalls } from "./install-record-commit.js";
+import {
+  commitConfigWithPendingPluginInstalls,
+  commitConfigWriteWithPendingPluginInstalls,
+} from "./install-record-commit.js";
 import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "./installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index.js";
@@ -40,6 +45,13 @@ function runChild(scriptPath: string, args: string[]) {
       reject(new Error(`install-record commit child exited before ready: ${output}`));
     });
   });
+  const entered = new Promise<void>((resolve) => {
+    child.on("message", (message) => {
+      if (message === "entered") {
+        resolve();
+      }
+    });
+  });
   const done = new Promise<void>((resolve, reject) => {
     child.on("error", reject);
     child.on("close", (code) => {
@@ -50,7 +62,7 @@ function runChild(scriptPath: string, args: string[]) {
       }
     });
   });
-  return { ready, done };
+  return { ready, entered, done };
 }
 
 async function fileExists(filePath: string): Promise<boolean> {
@@ -63,17 +75,6 @@ async function fileExists(filePath: string): Promise<boolean> {
     }
     throw error;
   }
-}
-
-async function waitForFile(filePath: string, timeoutMs = 15_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await fileExists(filePath)) {
-      return;
-    }
-    await delay(10);
-  }
-  throw new Error(`timed out waiting for ${filePath}`);
 }
 
 async function expectFileToStayAbsent(filePath: string, durationMs = 500): Promise<void> {
@@ -144,8 +145,9 @@ describe("plugin install record commit rollback", () => {
                   },
                 },
               },
-              commit: async () => {
+              commit: async (nextConfig) => {
                 commits += 1;
+                return await replaceConfigFile({ sourceConfig: nextConfig });
               },
             });
             expect(commits).toBe(1);
@@ -162,8 +164,9 @@ describe("plugin install record commit rollback", () => {
             );
           });
           let commits = 0;
-          const commit = async () => {
+          const commit = async (nextConfig: OpenClawConfig) => {
             commits += 1;
+            return await replaceConfigFile({ sourceConfig: nextConfig });
           };
           await expect(
             commitConfigWriteWithPendingPluginInstalls({
@@ -197,8 +200,11 @@ describe("plugin install record commit rollback", () => {
     },
   );
 
-  it("serializes two failing direct config commits and restores the original index", async () => {
-    await withOpenClawTestState({ label: "plugin-record-failing-commits" }, async (state) => {
+  it("serializes two failing direct config commits and restores the original index", async ({
+    signal,
+    onTestFinished,
+  }) => {
+    const run = withOpenClawTestState({ label: "plugin-record-failing-commits" }, async (state) => {
       const commitModuleUrl = pathToFileURL(
         path.resolve("src/plugins/install-record-commit.ts"),
       ).href;
@@ -211,7 +217,6 @@ describe("plugin install record commit rollback", () => {
           const [stateDir, pluginId, enteredPath, releasePath] = process.argv.slice(2);
           process.env.OPENCLAW_STATE_DIR = stateDir;
           process.send?.("ready");
-          process.disconnect?.();
           try {
             await commitConfigWriteWithPendingPluginInstalls({
               nextConfig: {
@@ -228,6 +233,7 @@ describe("plugin install record commit rollback", () => {
               },
               commit: async () => {
                 await fs.promises.writeFile(enteredPath, "entered");
+                process.send?.("entered");
                 while (true) {
                   try {
                     await fs.promises.access(releasePath);
@@ -247,6 +253,8 @@ describe("plugin install record commit rollback", () => {
             if (!(error instanceof Error) || error.message !== "config failed " + pluginId) {
               throw error;
             }
+          } finally {
+            process.disconnect?.();
           }
         `,
       );
@@ -275,8 +283,15 @@ describe("plugin install record commit rollback", () => {
         let secondDone: Promise<void> | undefined;
         try {
           // Bootstrap readiness is outside lock assertions; slow TS imports are not blocked writers.
-          await first.ready;
-          await waitForFile(firstEntered);
+          await withinTest(first.ready, signal);
+          await withinTest(
+            awaitGateBeforeSettlement(
+              first.entered,
+              firstDone,
+              `timed out waiting for ${firstEntered}`,
+            ),
+            signal,
+          );
           const second = runChild(childScript, [
             state.stateDir,
             "second",
@@ -284,17 +299,24 @@ describe("plugin install record commit rollback", () => {
             secondRelease,
           ]);
           secondDone = second.done;
-          await second.ready;
+          await withinTest(second.ready, signal);
 
           // The second writer must stay outside its config commit until the
           // first writer rolls its tentative index state back.
           await expectFileToStayAbsent(secondEntered);
 
           await fs.promises.writeFile(firstRelease, "release");
-          await firstDone;
-          await waitForFile(secondEntered);
+          await withinTest(firstDone, signal);
+          await withinTest(
+            awaitGateBeforeSettlement(
+              second.entered,
+              secondDone,
+              `timed out waiting for ${secondEntered}`,
+            ),
+            signal,
+          );
           await fs.promises.writeFile(secondRelease, "release");
-          await secondDone;
+          await withinTest(secondDone, signal);
         } finally {
           await Promise.all([
             fs.promises.writeFile(firstRelease, "release"),
@@ -315,5 +337,46 @@ describe("plugin install record commit rollback", () => {
       });
       expect(persisted?.policyHash).toBe(resolveInstalledPluginIndexPolicyHash({}));
     });
+    // A timed-out body can still be unwinding its async finally. Keep child-close
+    // and state cleanup owned by the runner before it starts the next test.
+    onTestFinished(async () => {
+      await run.catch(() => {});
+    });
+    await run;
   });
+});
+
+describe("committed plugin configuration", () => {
+  it.each([false, true])(
+    "returns committed source separately from authored configuration (pending records: %s)",
+    async (pending) => {
+      await withOpenClawTestState({ label: "committed-plugin-config" }, async (state) => {
+        await state.writeConfig({ gateway: { mode: "local" } });
+        const nextConfig: OpenClawConfig = {
+          gateway: { mode: "local" },
+          ...(pending
+            ? {
+                plugins: {
+                  installs: { fixture: { source: "npm" as const, spec: "fixture@1.0.0" } },
+                },
+              }
+            : {}),
+        };
+
+        const result = await commitConfigWithPendingPluginInstalls({ nextConfig });
+        const persisted = JSON.parse(await fs.promises.readFile(state.configPath, "utf8"));
+
+        const { meta: _meta, ...authoredConfig } = persisted;
+        expect(authoredConfig).toEqual({ gateway: { mode: "local" } });
+        // The committed source resolves the implicit roster without writing it into authored JSON.
+        const resolvedSource = { ...persisted, agents: { entries: { main: {} } } };
+        expect(result.path).toBe(state.configPath);
+        expect(result.nextConfig).toEqual(resolvedSource);
+        expect(result.persistedSourceConfig).toEqual(resolvedSource);
+        expect(result.nextConfig.meta?.lastTouchedVersion).toEqual(expect.any(String));
+        expect(result.movedInstallRecords).toBe(pending);
+        expect(result.nextConfig.plugins?.installs).toBeUndefined();
+      });
+    },
+  );
 });

@@ -15,21 +15,25 @@ Search the live OpenClaw docs index from the terminal.
 ```bash
 openclaw docs                              # print docs entrypoint and example search
 openclaw docs --json                       # print the same guidance as JSON
-openclaw docs <query...> [--json]          # search the live docs index
+openclaw docs <query...> [--json] [--limit <count>]
 ```
 
-| Argument/option | Description                                                                        |
-| --------------- | ---------------------------------------------------------------------------------- |
-| `[query...]`    | Free-form search query. Multi-word queries are joined with spaces and sent as one. |
-| `--json`        | Emit one machine-readable JSON object on stdout.                                   |
+| Argument/option   | Description                                                                        |
+| ----------------- | ---------------------------------------------------------------------------------- |
+| `[query...]`      | Free-form search query. Multi-word queries are joined with spaces and sent as one. |
+| `--json`          | Emit one machine-readable JSON object on stdout.                                   |
+| `--limit <count>` | Return at most this many results. The value must be a positive integer.            |
 
 With no query, `openclaw docs` prints the docs entrypoint URL and a sample search command instead of running a search.
+
+Omit `--limit` to show all results returned by the search service. The limit applies to displayed results and does not reduce the downloaded response size.
 
 ## Examples
 
 ```bash
 openclaw docs browser existing-session
 openclaw docs browser existing-session --json
+openclaw docs plugin --limit 5
 openclaw docs sandbox allowHostControl
 openclaw docs gateway token secretref
 ```
@@ -41,6 +45,8 @@ openclaw docs gateway token secretref
 ## Output
 
 In a rich (TTY) terminal, results render as a heading followed by a bullet list: page title, linked docs URL, and a short snippet on the next line. Empty results print "No results.".
+
+A response without a results array is malformed and fails the command; it is not treated as a successful search with no matches.
 
 In non-rich output (piped, `--no-color`, scripts), the same data renders as Markdown:
 
@@ -55,6 +61,9 @@ With `--json`, stdout contains one object with the normalized query and result
 list. With no query, `query` is `null`, `url` is the docs entrypoint, and
 `results` is empty. Styling and headings are suppressed; request diagnostics
 stay on stderr so stdout can be piped directly to a JSON parser.
+
+On failure, `--json` emits the [CLI JSON failure envelope](/cli#json-failures) on stdout
+while retaining the error message on stderr.
 
 ## Exit codes
 

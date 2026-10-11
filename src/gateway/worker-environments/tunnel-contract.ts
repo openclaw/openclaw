@@ -1,16 +1,18 @@
-import type { WorkerTunnelStatus } from "@openclaw/gateway-protocol";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../../infra/node-commands.js";
 import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
-import type { NodeWorkerWorkspaceSeedInput } from "../../worker/node-workspace-protocol.js";
+import type {
+  NodeWorkerWorkspaceSeedInput,
+  NodeWorkerWorkspaceQuiescenceInput,
+  NodeWorkerWorkspaceProcessInput,
+} from "../../worker/node-workspace-protocol.js";
 import type { NodeWorkerWorkspaceTransferInput } from "../../worker/node-workspace-transfer-protocol.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type {
   WorkerWorkspaceApplyResult,
   WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-reconcile.js";
-
-export type { WorkerTunnelStatus };
+export type { WorkerTunnelStatus } from "@openclaw/gateway-protocol";
 
 /** A disconnected node cannot hide an unfinished or failed local sibling cleanup. */
 export async function joinWorkerTunnelStops(operations: readonly (Promise<void> | undefined)[]) {
@@ -62,6 +64,8 @@ export class WorkerRunnerCapacityError extends Error {
 export type WorkerTunnelRequest = {
   environmentId: string;
   ownerEpoch: number;
+  /** Initiating-operation authority; established tunnel custody is independent. */
+  authorize?: () => void;
 };
 
 /** Provider teardown fences local work first; only its confirmed result releases physical ownership. */
@@ -78,32 +82,122 @@ export type WorkerWorkspaceCommand = {
   signal?: AbortSignal;
   transfer?: NodeWorkerWorkspaceTransferInput;
   seed?: NodeWorkerWorkspaceSeedInput;
+  process?: NodeWorkerWorkspaceProcessInput;
+  quiescence?: NodeWorkerWorkspaceQuiescenceInput;
+  /** Legacy scripts own their detached lease helper, not the foreground command scope. */
+  legacyQuiescence?: true;
 };
 
-export type WorkerWorkspaceSyncRequest = {
+export type WorkerLocalWorkspaceSyncRequest = {
   localPath: string;
   sessionId: string;
   generation: number;
   gitAuthor?: { name?: string; email?: string };
   /** Immutable project identity from the owning environment's provisioning snapshot. */
   projectKey?: string;
+  /** Initiating-operation authority, never retained by the connected tunnel. */
+  authorize?: () => void;
 };
 
-export type WorkerWorkspaceSyncResult = {
-  mode: "git" | "plain";
-  remoteWorkspaceDir: string;
-  manifestRef: string;
+type WorkerRepositoryCheckpointPayload = {
+  stagingRoot: string;
+  baseManifestRaw: string;
+  currentManifestRaw: string;
+  baseManifestRef: string;
+  currentManifestRef: string;
+  publicationStagingRoot?: string;
+  publicationDigest?: string;
 };
 
-export type WorkerWorkspaceReconcileRequest = {
+type WorkerRepositoryCheckpointPreparation = {
+  verify(): Promise<void>;
+  publish(): Promise<unknown>;
+  discard(): Promise<void>;
+};
+
+/** Attested by the dedicated node's one-use workspace binding. */
+export type PreparedRepositoryWorkspace = {
+  baseCommit: string;
+  workspaceDir: string;
+  sourceManifestRef: string;
+  preparedManifestRef: string;
+};
+
+type WorkerRepositoryWorkspaceSource = {
+  kind: "repository";
+  /** Owner-held result of binding this exact dedicated prepared workspace. */
+  prepared?: PreparedRepositoryWorkspace;
+  url: string;
+  ref?: string;
+  branch: string;
+  baseCommit?: string;
+  gitToken?: string;
+  runSetupScript?: boolean;
+  checkpoint?: Pick<
+    WorkerRepositoryCheckpointPayload,
+    | "stagingRoot"
+    | "baseManifestRaw"
+    | "currentManifestRaw"
+    | "publicationStagingRoot"
+    | "publicationDigest"
+  >;
+};
+
+export type WorkerWorkspaceSyncRequest = {
+  /** Live initiating operation; retained workspace custody uses its independent owner. */
+  authorize?: () => void;
+  sessionId: string;
+  sessionKey?: string;
+  generation: number;
+  gitAuthor?: { name?: string; email?: string };
+  source: { kind: "local"; path: string; projectKey?: string } | WorkerRepositoryWorkspaceSource;
+};
+
+export type WorkerWorkspaceSyncResult =
+  | {
+      mode: "git" | "plain";
+      remoteWorkspaceDir: string;
+      manifestRef: string;
+    }
+  | {
+      mode: "repository";
+      remoteWorkspaceDir: string;
+      manifestRef: string;
+      baseCommit: string;
+      baseManifestRef: string;
+    };
+
+export type WorkerLocalWorkspaceReconcileRequest = {
   localPath: string;
   remoteWorkspaceDir: string;
   baseManifestRef: string;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
-  stagedResult?: {
+  assertCurrent?: () => void;
+  stagedResult: {
     ref: string;
-    record(ref: string): void;
+    record(ref: string): void | Promise<void>;
   };
+};
+
+export type WorkerWorkspaceReconcileRequest = {
+  remoteWorkspaceDir: string;
+  baseManifestRef: string;
+  source:
+    | {
+        kind: "local";
+        path: string;
+        journal: WorkerWorkspaceReconciliationJournalAdapter;
+        assertCurrent?: () => void;
+        stagedResult: WorkerLocalWorkspaceReconcileRequest["stagedResult"];
+      }
+    | {
+        kind: "repository";
+        authorize?: () => void;
+        referenceManifestRef: string;
+        prepareCheckpoint(
+          payload: WorkerRepositoryCheckpointPayload,
+        ): Promise<WorkerRepositoryCheckpointPreparation>;
+      };
 };
 
 export type WorkerWorkspaceReconcileResult = {
@@ -115,11 +209,13 @@ export type WorkerWorkspaceReconcileResult = {
   verifyLocalStable(): Promise<void>;
   /** Apply the prepared candidate locally without making it restart-authoritative. */
   applyPreparedStagedResult?(): Promise<void>;
+  /** Reverify and accept an exact local/base match without mutating either workspace. */
+  acceptUnchangedStagedResult?: () => Promise<void>;
   /** Return the accepted local manifest and any keep-local conflicts after apply. */
   getAppliedWorkspaceResult?(): WorkerWorkspaceApplyResult | undefined;
   /** Publish the verified candidate for restart recovery. */
-  publishStagedResult?(): Promise<void>;
-  discardPreparedStagedResult?(): Promise<void>;
+  publishStagedResult(): Promise<void>;
+  discardPreparedStagedResult(): Promise<void>;
 };
 
 export type WorkerWorkspaceQuiescence = {
@@ -145,6 +241,7 @@ export type WorkerWorkspaceTunnelHandle = {
   ownerEpoch: number;
   launchTurn?: never;
   measureLaunchTurn?: never;
+  readLaunchToolNames?: never;
   runWorkspaceCommand(command: WorkerWorkspaceCommand): Promise<SpawnResult>;
   stageAttachments?(request: {
     localPath: string;
@@ -161,9 +258,11 @@ export type WorkerWorkspaceTunnelHandle = {
 
 export type WorkerTurnTunnelHandle = Omit<
   WorkerWorkspaceTunnelHandle,
-  "launchTurn" | "measureLaunchTurn"
+  "launchTurn" | "measureLaunchTurn" | "readLaunchToolNames"
 > & {
   measureLaunchTurn(plan: WorkerLaunchPlan, claim: WorkerSessionTurnClaim): number;
+  /** Placement tool implementations available in the destination's installed supervisor. */
+  readLaunchToolNames(): Promise<readonly string[]>;
   launchTurn(request: WorkerTurnLaunchRequest): Promise<SpawnResult>;
 };
 

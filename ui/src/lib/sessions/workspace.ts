@@ -1,5 +1,27 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 
+export function sessionWorkspaceFileKey(
+  sessionKey: string,
+  root: string | undefined,
+  workspacePath: string,
+): string {
+  return JSON.stringify(["file", sessionKey, root ?? "", workspacePath]);
+}
+
+export function isSessionWorkspaceFileSelected(
+  activeId: string | null,
+  sessionKey: string,
+  root: string | undefined,
+  path: string,
+  workspacePath?: string,
+): boolean {
+  // Requests and Show in Files can select a row before its canonical read completes.
+  return (
+    activeId === `file:${path}` ||
+    activeId === sessionWorkspaceFileKey(sessionKey, root, workspacePath ?? path)
+  );
+}
+
 function pathBasename(value: string): string {
   const trimmed = value.replace(/[\\/]+$/, "");
   return trimmed.split(/[\\/]/).pop() || trimmed;
@@ -13,6 +35,12 @@ export function resolveSessionWorkspace(params: {
   const row = params.session;
   if (!row) {
     return { root: null, label: null };
+  }
+  if (row.repositoryWorkspaceId) {
+    return {
+      root: row.execNode ? row.execCwd?.trim() || null : null,
+      label: row.repository ? pathBasename(row.repository.url).replace(/\.git$/u, "") : null,
+    };
   }
   // Exec-node paths belong to that node. Mirror loadSessionFileRoot precedence;
   // an unresolved worktree must never borrow the agent's different checkout.

@@ -6,6 +6,7 @@ import {
 import {
   normalizeStringEntries,
   normalizeUniqueStringEntries,
+  uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import {
   normalizeCommandDescriptorName,
@@ -19,6 +20,9 @@ import {
   NODE_WORKER_PRIVATE_COMMANDS,
 } from "../infra/node-commands.js";
 import { isReservedCommandName, registerPluginCommandInRegistry } from "./command-registration.js";
+import { bindPluginGatewayAccessPolicy } from "./gateway-access-policy-registration.js";
+import type { PluginGatewayAccessPolicy } from "./gateway-access-policy.types.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { WidgetPresenter } from "./plugin-registration.types.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
@@ -33,6 +37,7 @@ import type {
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginService,
+  OpenClawPluginServiceV2,
 } from "./types.js";
 
 function isOfficialCodexPluginRecord(
@@ -58,7 +63,13 @@ export function canClaimReservedCommandOwnership(
 }
 
 export function createOperationRegistrars(state: PluginRegistryState) {
-  const { registry, reportRegistrationError, reportRegistrationWarning } = state;
+  const {
+    registry,
+    createRegistration,
+    createIdentityRegistration,
+    reportRegistrationError,
+    reportRegistrationWarning,
+  } = state;
 
   const registerWidgetPresenter = (record: PluginRecord, presenter: WidgetPresenter) => {
     const description = normalizeOptionalString(presenter.description);
@@ -99,13 +110,11 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       );
       return;
     }
-    registry.widgetPresenters.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      presenter: { ...presenter, description },
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.widgetPresenters.push(
+      createRegistration(record, {
+        presenter: { ...presenter, description },
+      }),
+    );
   };
 
   const registerCli = (
@@ -154,7 +163,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       .filter(
         (descriptor): descriptor is OpenClawPluginCliRootCommandDescriptor => descriptor !== null,
       );
-    const commands = normalizeUniqueStringEntries(
+    const commands = uniqueStrings(
       [...(opts?.commands ?? []), ...descriptors.map((descriptor) => descriptor.name)]
         .map((command) => normalizeCommandRoot(command, "command"))
         .filter((command): command is string => command !== null),
@@ -168,12 +177,12 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     const commandPathSet = new Set(commandPaths);
     const existing = registry.cliRegistrars.find((entry) =>
       entry.commands
-        .map((command) => [...(entry.parentPath ?? []), command].join(" "))
+        .map((command) => [...entry.parentPath, command].join(" "))
         .some((commandPath) => commandPathSet.has(commandPath)),
     );
     if (existing) {
       const existingCommandPaths = new Set(
-        existing.commands.map((command) => [...(existing.parentPath ?? []), command].join(" ")),
+        existing.commands.map((command) => [...existing.parentPath, command].join(" ")),
       );
       const overlap = commandPaths.find((commandPath) => existingCommandPaths.has(commandPath));
       reportRegistrationError(
@@ -183,16 +192,14 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       return;
     }
     record.cliCommands.push(...commandPaths);
-    registry.cliRegistrars.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      register: registrar,
-      parentPath: normalizedParentPath,
-      commands,
-      descriptors,
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.cliRegistrars.push(
+      createRegistration(record, {
+        register: registrar,
+        parentPath: normalizedParentPath,
+        commands,
+        descriptors,
+      }),
+    );
   };
 
   const registerReload = (record: PluginRecord, registration: OpenClawPluginReloadRegistration) => {
@@ -209,13 +216,11 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       reportRegistrationWarning(record, "reload registration missing prefixes");
       return;
     }
-    registry.reloads.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      registration: normalized,
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.reloads.push(
+      createRegistration(record, {
+        registration: normalized,
+      }),
+    );
   };
 
   const reservedNodeHostCommands = new Set<string>([
@@ -250,13 +255,18 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       );
       return;
     }
-    registry.nodeHostCommands.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      command: { ...nodeCommand, command, cap: normalizeOptionalString(nodeCommand.cap) },
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    const normalizedCommand = {
+      ...nodeCommand,
+      command,
+      cap: normalizeOptionalString(nodeCommand.cap),
+    };
+    registry.nodeHostCommands.push(
+      createRegistration(record, {
+        command: record.nativeSessionCatalog?.nodeCommands?.includes(command)
+          ? (state.getNativeCatalogGate(record)?.node(normalizedCommand) ?? normalizedCommand)
+          : normalizedCommand,
+      }),
+    );
   };
 
   const registerNodeInvokePolicy = (
@@ -298,27 +308,35 @@ export function createOperationRegistrars(state: PluginRegistryState) {
         return;
       }
     }
-    registry.nodeInvokePolicies.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      policy: { ...policy, commands },
-      pluginConfig,
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.nodeInvokePolicies.push(
+      createRegistration(record, {
+        policy: { ...policy, commands },
+        pluginConfig,
+      }),
+    );
   };
 
   const registerSecurityAuditCollector = (
     record: PluginRecord,
     collector: OpenClawPluginSecurityAuditCollector,
   ) => {
-    registry.securityAuditCollectors.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      collector,
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.securityAuditCollectors.push(
+      createRegistration(record, {
+        collector,
+      }),
+    );
+  };
+
+  const registerGatewayAccessPolicy = (record: PluginRecord, policy: PluginGatewayAccessPolicy) => {
+    if (typeof policy.authorize !== "function") {
+      reportRegistrationError(record, "Gateway access policy requires an authorize handler");
+      return;
+    }
+    registry.gatewayAccessPolicies.push(
+      createIdentityRegistration(record, {
+        policy: bindPluginGatewayAccessPolicy(policy, getPluginInstance(record)),
+      }),
+    );
   };
 
   const resolveServiceRegistrationId = (
@@ -326,32 +344,41 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     service: { id: string },
     kind: "service" | "gateway discovery service",
   ) => {
-    const id = service.id.trim();
-    const registrations =
-      kind === "service" ? registry.services : registry.gatewayDiscoveryServices;
-    const existing = id ? registrations.find((entry) => entry.service.id.trim() === id) : undefined;
-    if (id && !existing) {
-      return id;
-    }
-    // Snapshot and activating loads can both register the same owner; keep the first.
-    if (existing?.pluginId !== record.id) {
-      reportRegistrationError(
-        record,
-        existing
-          ? `${kind} already registered: ${id} (${existing.pluginId})`
-          : `${kind} registration missing id`,
-      );
+    try {
+      const id = service.id.trim();
+      const registrations =
+        kind === "service" ? registry.services : registry.gatewayDiscoveryServices;
+      const existing = id ? registrations.find((entry) => entry.id === id) : undefined;
+      if (id && !existing) {
+        return id;
+      }
+      // Snapshot and activating loads can both register the same owner; keep the first.
+      if (existing?.pluginId !== record.id) {
+        reportRegistrationError(
+          record,
+          existing
+            ? `${kind} already registered: ${id} (${existing.pluginId})`
+            : `${kind} registration missing id`,
+        );
+      }
+    } catch {
+      // Plugin accessors can throw sensitive values; report only the boundary failure.
+      reportRegistrationError(record, `${kind} registration id cannot be normalized`);
     }
     return undefined;
   };
 
-  const registerService = (record: PluginRecord, service: OpenClawPluginService) => {
+  const registerService = (
+    record: PluginRecord,
+    service: OpenClawPluginService | OpenClawPluginServiceV2,
+  ) => {
     const id = resolveServiceRegistrationId(record, service, "service");
     if (!id) {
       return;
     }
     record.services.push(id);
     registry.services.push({
+      id,
       pluginId: record.id,
       pluginName: record.name,
       service,
@@ -372,11 +399,9 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     }
     record.gatewayDiscoveryServiceIds.push(id);
     registry.gatewayDiscoveryServices.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      service,
-      source: record.source,
-      rootDir: record.rootDir,
+      ...createRegistration(record, { id, service }),
+      // The advertiser can be native data; its registration still owns execution and cleanup.
+      instance: getPluginInstance(record),
     });
   };
 
@@ -441,6 +466,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     registerReload,
     registerNodeHostCommand,
     registerNodeInvokePolicy,
+    registerGatewayAccessPolicy,
     registerSecurityAuditCollector,
     registerService,
     registerGatewayDiscoveryService,

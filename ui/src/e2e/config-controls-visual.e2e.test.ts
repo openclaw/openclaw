@@ -133,6 +133,86 @@ async function captureBrowserSettingProof(
 }
 
 suite.define(() => {
+  it.each(["light", "dark"] as const)(
+    "keeps selected Usage accents at rest and on hover in %s mode",
+    async (colorScheme) => {
+      await suite.withPage(
+        { colorScheme, locale: "en-US", viewport: { width: 1280, height: 900 } },
+        async ({ page }) => {
+          const totals = {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            totalCost: 0,
+            inputCost: 0,
+            outputCost: 0,
+            cacheReadCost: 0,
+            cacheWriteCost: 0,
+            missingCostEntries: 0,
+          };
+          const gateway = await installMockGateway(page, {
+            methodResponses: {
+              "sessions.usage": {
+                updatedAt: Date.now(),
+                startDate: "2026-09-01",
+                endDate: "2026-09-07",
+                sessions: [],
+                totals,
+                aggregates: {
+                  messages: {
+                    total: 0,
+                    user: 0,
+                    assistant: 0,
+                    toolCalls: 0,
+                    toolResults: 0,
+                    errors: 0,
+                  },
+                  tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
+                  byModel: [],
+                  byProvider: [],
+                  byAgent: [],
+                  byChannel: [],
+                  daily: [],
+                  costDaily: [],
+                },
+              },
+            },
+          });
+          await page.goto(`${suite.server.baseUrl}usage`);
+          await gateway.waitForRequest("sessions.usage");
+          await expect
+            .poll(() => page.locator("html").getAttribute("data-theme-mode"))
+            .toBe(colorScheme);
+          const expected = await resolvedBackground(page, "var(--accent-subtle)");
+          const filters = page.locator(".usage-view-options");
+          for (const label of ["Cost", "Tokens"]) {
+            const selected = filters.getByRole("button", { name: label, exact: true });
+            await selected.click();
+            await page.mouse.move(0, 0);
+            for (const state of ["rest", "hover"]) {
+              if (state === "hover") {
+                await selected.hover();
+              }
+              if (captureUiProofEnabled) {
+                await filters.screenshot({
+                  animations: "disabled",
+                  path: path.join(uiProofArtifactDir, `usage-${colorScheme}-${label}-${state}.png`),
+                });
+              }
+              await expect
+                .poll(() =>
+                  selected.evaluate((element) => getComputedStyle(element).backgroundColor),
+                )
+                .toBe(expected);
+            }
+          }
+        },
+      );
+    },
+  );
+
   it("keeps selected segmented options distinct in forced colors", async () => {
     const cases = [
       {
@@ -187,8 +267,10 @@ suite.define(() => {
           const selected = page.getByRole("radio", { name: scenario.selected, exact: true });
           const unselected = page.getByRole("radio", { name: scenario.unselected, exact: true });
           await selected.waitFor();
-          expect(await selected.getAttribute("aria-checked")).toBe("true");
-          expect(await unselected.getAttribute("aria-checked")).toBe("false");
+          expect(await selected.isChecked()).toBe(true);
+          expect(await unselected.isChecked()).toBe(false);
+          const selectedLabel = selected.locator("..");
+          const unselectedLabel = unselected.locator("..");
           if (captureUiProofEnabled) {
             await selected
               .locator(
@@ -203,7 +285,7 @@ suite.define(() => {
               });
           }
           expect(
-            await selected.evaluate((element) => {
+            await selectedLabel.evaluate((element) => {
               const style = getComputedStyle(element);
               return {
                 textDecorationLine: style.textDecorationLine,
@@ -212,7 +294,9 @@ suite.define(() => {
             }),
           ).toEqual({ textDecorationLine: "underline", textDecorationThickness: "2px" });
           expect(
-            await unselected.evaluate((element) => getComputedStyle(element).textDecorationLine),
+            await unselectedLabel.evaluate(
+              (element) => getComputedStyle(element).textDecorationLine,
+            ),
           ).toBe("none");
 
           await selected.focus();
@@ -220,7 +304,7 @@ suite.define(() => {
             true,
           );
           expect(
-            await selected.evaluate((element) => {
+            await selectedLabel.evaluate((element) => {
               const style = getComputedStyle(element);
               return {
                 outlineOffset: style.outlineOffset,
@@ -271,13 +355,12 @@ suite.define(() => {
           exact: true,
         });
         await browserSwitchRole.waitFor();
-        expect(await browserSwitchRole.getAttribute("aria-checked")).toBe("true");
-        const browserSwitch = overview.locator("wa-switch.settings-toggle").first();
+        expect(await browserSwitchRole.isChecked()).toBe(true);
+        const browserSwitchControl = browserSwitchRole.locator("+ .settings-toggle__control");
         expect(
-          await browserSwitch.evaluate((element) => {
-            const control = element.shadowRoot?.querySelector<HTMLElement>('[part="control"]');
-            return control ? getComputedStyle(control).backgroundColor : null;
-          }),
+          await browserSwitchControl.evaluate(
+            (element) => getComputedStyle(element).backgroundColor,
+          ),
         ).toBe(await resolvedBackground(page, "var(--accent)"));
 
         if (captureUiProofEnabled) {
@@ -294,8 +377,8 @@ suite.define(() => {
             });
         }
 
-        await browserSwitch.click();
-        await expect.poll(() => browserSwitchRole.getAttribute("aria-checked")).toBe("false");
+        await browserSwitchRole.click();
+        await expect.poll(() => browserSwitchRole.isChecked()).toBe(false);
       },
     );
   });
@@ -436,20 +519,17 @@ suite.define(() => {
             name: "Open links in Control UI browser",
             exact: true,
           });
-          const preferenceHost = section
-            .locator(".settings-row", { hasText: "Open links in Control UI browser" })
-            .locator("wa-switch");
           await preference.waitFor();
-          expect(await preference.getAttribute("aria-checked")).toBe("false");
-          await preferenceHost.click();
-          await expect.poll(() => preference.getAttribute("aria-checked")).toBe("true");
+          expect(await preference.isChecked()).toBe(false);
+          await preference.click();
+          await expect.poll(() => preference.isChecked()).toBe(true);
           await page.reload();
           const persistedPreference = page.getByRole("switch", {
             name: "Open links in Control UI browser",
             exact: true,
           });
           await persistedPreference.waitFor();
-          expect(await persistedPreference.getAttribute("aria-checked")).toBe("true");
+          expect(await persistedPreference.isChecked()).toBe(true);
 
           if (host === "browser") {
             await captureBrowserSettingProof(
@@ -511,6 +591,7 @@ suite.define(() => {
             body: { url: "https://example.com/control-ui-proof" },
             method: "POST",
             path: "/tabs/open",
+            tabScope: { sessionKey: "agent:main:main" },
           });
           const browserPanel = page.locator("openclaw-browser-panel[embedded]");
           await browserPanel.waitFor();
@@ -519,7 +600,10 @@ suite.define(() => {
               (panel) => (panel as HTMLElement & { available?: boolean }).available,
             ),
           ).toBe(true);
-          await browserPanel.getByText("Example", { exact: true }).first().waitFor();
+          await page
+            .locator('[data-region-header="side"] .tabstrip-tab__label')
+            .getByText("Example", { exact: true })
+            .waitFor();
           await expect
             .poll(() =>
               browserPanel

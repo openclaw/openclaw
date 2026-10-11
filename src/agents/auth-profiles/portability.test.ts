@@ -4,6 +4,7 @@
  * copy-to-agent opt-outs.
  */
 import { describe, expect, it } from "vitest";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import {
   buildPortableAuthProfileStoreForAgentCopy,
   resolveAuthProfilePortability,
@@ -15,11 +16,7 @@ describe("auth profile portability", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai:api-key": {
-          type: "api_key",
-          provider: "openai",
-          key: "sk-test",
-        },
+        "openai:api-key": createApiKeyCredential("openai", "sk-test"),
         "github-copilot:default": {
           type: "token",
           provider: "github-copilot",

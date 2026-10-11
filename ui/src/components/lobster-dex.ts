@@ -8,6 +8,7 @@ import { getSafeLocalStorage } from "../local-storage.ts";
 
 const LOBSTERDEX_KEY = "openclaw.control.lobsterdex.v1";
 const FAMILIARITY_KEY = "openclaw.control.lobsterpet.familiarity.v1";
+const LOBSTERDEX_CHANGED_EVENT = "openclaw:lobsterdex-changed";
 
 type LobsterdexEntry = {
   firstSeenAt: number | null;
@@ -59,7 +60,11 @@ function writeDex(entries: Map<string, LobsterdexEntry>): void {
       ...(entry.shinySeenAt !== null ? { shinySeenAt: entry.shinySeenAt } : {}),
     };
   }
-  getSafeLocalStorage()?.setItem(LOBSTERDEX_KEY, JSON.stringify(persisted));
+  const storage = getSafeLocalStorage();
+  if (storage) {
+    storage.setItem(LOBSTERDEX_KEY, JSON.stringify(persisted));
+    window.dispatchEvent(new Event(LOBSTERDEX_CHANGED_EVENT));
+  }
 }
 
 export function getLobsterdex(): ReadonlySet<string> {
@@ -68,6 +73,25 @@ export function getLobsterdex(): ReadonlySet<string> {
 
 export function getLobsterdexEntries(): ReadonlyMap<string, LobsterdexEntry> {
   return readDex();
+}
+
+// Invalidation only: callers reread the existing browser-local collection.
+export function subscribeLobsterdex(callback: () => void): () => void {
+  const onChange = () => callback();
+  const onStorage = (event: StorageEvent) => {
+    if (
+      event.storageArea === getSafeLocalStorage() &&
+      (event.key === LOBSTERDEX_KEY || event.key === null)
+    ) {
+      callback();
+    }
+  };
+  window.addEventListener(LOBSTERDEX_CHANGED_EVENT, onChange);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener(LOBSTERDEX_CHANGED_EVENT, onChange);
+    window.removeEventListener("storage", onStorage);
+  };
 }
 
 export function recordLobsterVisit(
@@ -84,25 +108,17 @@ export function recordLobsterVisit(
       if (existing.firstSeenAt !== null && existing.name !== null && !shinyNews) {
         return;
       }
-      entries.set(paletteId, {
-        firstSeenAt: existing.firstSeenAt ?? Date.now(),
-        name: existing.name ?? details.name ?? null,
-        shinySeenAt: existing.shinySeenAt ?? (details.shiny === true ? Date.now() : null),
-      });
-    } else {
-      entries.set(paletteId, {
-        firstSeenAt: Date.now(),
-        name: details.name ?? null,
-        shinySeenAt: details.shiny === true ? Date.now() : null,
-      });
     }
+    entries.set(paletteId, {
+      firstSeenAt: existing?.firstSeenAt ?? Date.now(),
+      name: existing?.name ?? details.name ?? null,
+      shinySeenAt: existing?.shinySeenAt ?? (details.shiny === true ? Date.now() : null),
+    });
     writeDex(entries);
   } catch {
     // best-effort — a full or blocked storage must not break visits
   }
 }
-
-// ---- Familiarity ----
 
 type LobsterFamiliarityTier = "shy" | "regular" | "friend";
 
@@ -161,8 +177,6 @@ export function getLobsterFamiliarity(): LobsterFamiliarity {
   return { tier, wary, visits, shoos };
 }
 
-// ---- Long memory ----
-
 // Milestone honorifics for the hover title, earned by lifetime visits across
 // all palettes. Highest earned title wins; below the first rung there is none.
 const HONORIFICS: Array<[number, string]> = [
@@ -172,12 +186,7 @@ const HONORIFICS: Array<[number, string]> = [
 ];
 
 export function lobsterHonorific(visits: number): string | null {
-  for (const [threshold, title] of HONORIFICS) {
-    if (visits >= threshold) {
-      return title;
-    }
-  }
-  return null;
+  return HONORIFICS.find(([threshold]) => visits >= threshold)?.[1] ?? null;
 }
 
 // True when `now` is the month/day anniversary of a palette's first recorded

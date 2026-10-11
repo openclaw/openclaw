@@ -16,12 +16,21 @@ import {
   OwnedStdioCleanupError,
   type OwnedStdioProcess,
 } from "../process/owned-stdio.js";
+import type { ProcessCleanupResult } from "../process/supervisor/types.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
+
+type McpStdioDecoder = Pick<ReadBuffer, "append" | "readMessage" | "clear">;
+
+type McpStdioExit = { code: number | null; signal: NodeJS.Signals | null };
 
 type OpenClawStdioServerParameters = {
   command: string;
   args?: string[];
-  env?: Record<string, string>;
+  env?: NodeJS.ProcessEnv;
+  /** Use only the supplied environment, including explicit omissions. */
+  exactEnv?: true;
+  /** The decoder owns byte bounds and frame validation; the default is the MCP SDK decoder. */
+  decoder?: McpStdioDecoder;
   cwd?: string;
   prepareDataDir?: string;
   stderr?: "pipe" | "overlapped" | "inherit" | "ignore";
@@ -31,8 +40,9 @@ export class OpenClawStdioClientTransport implements Transport {
   onclose?: () => void;
   onerror?: (error: Error) => void;
   onmessage?: (message: JSONRPCMessage) => void;
+  onexit?: (exit: McpStdioExit) => void;
 
-  private readonly readBuffer = new ReadBuffer();
+  private readonly readBuffer: McpStdioDecoder;
   private readonly stderrStream: PassThrough | null = null;
   private process?: OwnedStdioProcess;
   private starting?: Promise<void>;
@@ -41,8 +51,10 @@ export class OpenClawStdioClientTransport implements Transport {
   private closeNotified = false;
   private readonly startupAbort = new AbortController();
   private startupCleanupError?: OwnedStdioCleanupError;
+  private cleanup?: ProcessCleanupResult;
 
   constructor(private readonly serverParams: OpenClawStdioServerParameters) {
+    this.readBuffer = serverParams.decoder ?? new ReadBuffer();
     if (serverParams.stderr === "pipe" || serverParams.stderr === "overlapped") {
       this.stderrStream = new PassThrough();
     }
@@ -80,7 +92,10 @@ export class OpenClawStdioClientTransport implements Transport {
       const child = await createOwnedStdioProcess({
         argv: [this.serverParams.command, ...(this.serverParams.args ?? [])],
         cwd: this.serverParams.cwd,
-        env: mergeProcessEnv([getDefaultEnvironment(), this.serverParams.env]),
+        env: this.serverParams.exactEnv
+          ? mergeProcessEnv([this.serverParams.env])
+          : mergeProcessEnv([getDefaultEnvironment(), this.serverParams.env]),
+        ...(this.serverParams.exactEnv ? { exactEnv: true as const } : {}),
         abortSignal: this.startupAbort.signal,
         stderrDestination:
           this.stderrStream ?? (this.serverParams.stderr === "ignore" ? undefined : process.stderr),
@@ -88,6 +103,9 @@ export class OpenClawStdioClientTransport implements Transport {
       this.process = child;
       child.onError((error) => this.onerror?.(error));
       const receive = (chunk: Buffer) => {
+        if (this.closing) {
+          return;
+        }
         try {
           this.readBuffer.append(chunk);
           this.processReadBuffer();
@@ -107,9 +125,15 @@ export class OpenClawStdioClientTransport implements Transport {
       // Root closure retires the connection immediately; the retained owner still
       // joins descendants before disposal can certify completed cleanup.
       void child.wait().then(
-        () => {
-          void this.close().catch(() => {});
-          this.notifyClosed();
+        (exit) => {
+          try {
+            this.onexit?.(exit);
+          } catch (error) {
+            this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+          } finally {
+            void this.close().catch(() => {});
+            this.notifyClosed();
+          }
         },
         (error: unknown) => {
           this.onerror?.(error instanceof Error ? error : new Error(String(error)));
@@ -135,6 +159,10 @@ export class OpenClawStdioClientTransport implements Transport {
     return this.process?.pid ?? null;
   }
 
+  get cleanupResult() {
+    return this.cleanup;
+  }
+
   private notifyClosed(): void {
     if (this.closeNotified) {
       return;
@@ -144,7 +172,7 @@ export class OpenClawStdioClientTransport implements Transport {
   }
 
   private processReadBuffer() {
-    while (true) {
+    while (!this.closing) {
       try {
         const message = this.readBuffer.readMessage();
         if (message === null) {
@@ -169,7 +197,7 @@ export class OpenClawStdioClientTransport implements Transport {
           throw this.startupCleanupError;
         }
         if (this.process) {
-          await closeOwnedStdioProcess(this.process, { force: this.forceRequested });
+          this.cleanup = await closeOwnedStdioProcess(this.process, { force: this.forceRequested });
         }
       } catch (error) {
         recordAgentCleanupFailure();
@@ -184,6 +212,19 @@ export class OpenClawStdioClientTransport implements Transport {
     // Attach observation in this caller's scope, including already failed startup.
     void this.closing.catch(() => recordAgentCleanupFailure());
     return this.closing;
+  }
+
+  /** Retire RPC admission now; the returned promise still joins owned-process cleanup. */
+  retire(): Promise<void> {
+    const closing = this.close();
+    this.readBuffer.clear();
+    this.notifyClosed();
+    return closing;
+  }
+
+  terminate(): Promise<void> {
+    this.process?.kill("SIGTERM");
+    return this.retire();
   }
 
   forceClose(): Promise<void> {

@@ -1,6 +1,6 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
-/** Shared command handler context and result contracts. */
+import type { ModelContextTokenProjection } from "../../agents/context-resolution.js";
 import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
@@ -19,6 +19,8 @@ import type {
 import type { ReplyPayload } from "../types.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import type { resolveElevatedPermissions } from "./reply-elevated.js";
+import type { ReplyModelLevelResolver } from "./reply-model-levels.js";
 import type { TypingController } from "./typing.js";
 
 /** Normalized command metadata derived from an inbound message. */
@@ -29,6 +31,8 @@ export type CommandContext = {
   accountId?: string;
   ownerList: string[];
   senderIsOwner: boolean;
+  /** Captured host owner capability, rechecked by handlers at awaited effect boundaries. */
+  assertOwnerCurrent?: () => void;
   isAuthorizedSender: boolean;
   senderId?: string;
   abortKey?: string;
@@ -44,7 +48,6 @@ export type CommandContext = {
   softResetTail?: string;
 };
 
-/** Full input object passed to each command handler. */
 export type HandleCommandsParams = {
   ctx: MsgContext;
   rootCtx?: MsgContext;
@@ -53,11 +56,7 @@ export type HandleCommandsParams = {
   agentId: string;
   agentDir?: string;
   directives: InlineDirectives;
-  elevated: {
-    enabled: boolean;
-    allowed: boolean;
-    failures: Array<{ gate: string; key: string }>;
-  };
+  elevated: ReturnType<typeof resolveElevatedPermissions>;
   sessionEntry?: SessionEntry;
   /** Snapshot captured before command handlers mutate the active entry. */
   initialSessionEntry?: SessionEntry;
@@ -86,6 +85,7 @@ export type HandleCommandsParams = {
   provider: string;
   model: string;
   contextTokens: number;
+  contextTokenProjection?: ModelContextTokenProjection;
   isGroup: boolean;
   skillCommands?: SkillCommandSpec[];
   loadSkillCommands?: () => Promise<SkillCommandSpec[]>;
@@ -97,7 +97,12 @@ export type HandleCommandsParams = {
   compactionSessionEntry?: SessionEntry;
 };
 
-/** Result returned by a command handler. */
+/** Dispatch can handle reset before asking for model-derived command settings. */
+export type CommandDispatchParams = Omit<
+  HandleCommandsParams,
+  "resolvedThinkLevel" | "resolvedReasoningLevel"
+> & { resolveModelLevels: ReplyModelLevelResolver };
+
 export type CommandHandlerResult = {
   reply?: ReplyPayload;
   /** Exact skill files deliberately selected by a continuing command. */
@@ -110,7 +115,6 @@ export type CommandHandlerResult = {
   shouldContinue: boolean;
 };
 
-/** Command handler function shape. */
 export type CommandHandler = (
   params: HandleCommandsParams,
   allowTextCommands: boolean,

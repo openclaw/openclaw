@@ -1,6 +1,7 @@
 import type { Writable } from "node:stream";
+import { settlesWithin } from "../shared/settle-within.js";
 import { createChildAdapter } from "./supervisor/adapters/child.js";
-import type { SpawnProcessAdapter } from "./supervisor/types.js";
+import type { ProcessCleanupResult, SpawnProcessAdapter } from "./supervisor/types.js";
 
 export type OwnedStdioProcess = SpawnProcessAdapter<NodeJS.Signals | null> &
   Required<Pick<SpawnProcessAdapter<NodeJS.Signals | null>, "onExit" | "onError">>;
@@ -21,7 +22,7 @@ export async function createOwnedStdioProcess(params: {
 }): Promise<OwnedStdioProcess> {
   let startupCleanup: Promise<boolean> | undefined;
   try {
-    return await createChildAdapter({
+    const { adapter, ready } = await createChildAdapter({
       ...params,
       ownProcessTree: true,
       stdinMode: "pipe-open",
@@ -32,6 +33,8 @@ export async function createOwnedStdioProcess(params: {
         );
       },
     });
+    await ready;
+    return adapter;
   } catch (error) {
     if (
       startupCleanup &&
@@ -45,26 +48,11 @@ export async function createOwnedStdioProcess(params: {
   }
 }
 
-async function settlesWithin(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise.then(() => true),
-      new Promise<false>((resolve) => {
-        timer = setTimeout(() => resolve(false), timeoutMs);
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 /** Protocol EOF requests shutdown; only the spawn owner can certify descendant extinction. */
 export async function closeOwnedStdioProcess(
   process: OwnedStdioProcess,
   options: { graceMs?: number; force?: boolean } = {},
-): Promise<void> {
+): Promise<ProcessCleanupResult | undefined> {
   const settled = Promise.allSettled([
     process.wait(),
     process.waitForExtinction?.() ??
@@ -88,15 +76,15 @@ export async function closeOwnedStdioProcess(
     } else {
       process.kill("SIGKILL");
     }
-    if (!(await settlesWithin(settled, 500))) {
-      throw new Error("stdio process cleanup did not confirm descendant extinction");
-    }
+    // Hard cancellation has a terminal deadline at the process owner. Join it
+    // rather than imposing a shorter wait that can discard valid late cleanup.
     const failure = (await settled).find(
       (result): result is PromiseRejectedResult => result.status === "rejected",
     );
     if (failure) {
       throw failure.reason;
     }
+    return process.cleanupResult;
   } finally {
     process.dispose();
   }

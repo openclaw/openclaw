@@ -7,6 +7,14 @@ import { resolveUndiciAutoSelectFamilyConnectOptions } from "./undici-family-pol
 
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 const requireUndici = createRequire(import.meta.url);
+let undiciModule: typeof import("undici") | undefined;
+
+// Streaming defaults must not extend TCP/TLS setup; explicit request budgets still can.
+export let globalUndiciStreamTimeoutMs: number | undefined;
+
+export function setGlobalUndiciStreamTimeoutMs(timeoutMs: number | undefined): void {
+  globalUndiciStreamTimeoutMs = timeoutMs;
+}
 
 type UndiciAgentOptions = ConstructorParameters<typeof import("undici").Agent>[0];
 type UndiciProxyAgentOptions = ConstructorParameters<typeof import("undici").ProxyAgent>[0];
@@ -27,7 +35,8 @@ export function loadUndiciModule(
   ) {
     return override as typeof import("undici");
   }
-  return requireUndici("undici") as typeof import("undici");
+  // Bun substitutes a partial built-in for bare undici; require the installed API.
+  return (undiciModule ??= requireUndici("undici/index.js") as typeof import("undici"));
 }
 
 function createHttp1ProxyClient(origin: URL, poolOptions: object): import("undici").Dispatcher {
@@ -130,7 +139,8 @@ export function buildHttp1AgentOptions(
             ...options.connect,
             ...(timeout !== undefined ? { timeout } : {}),
           },
-    ...(timeout !== undefined ? { bodyTimeout: timeout, headersTimeout: timeout } : {}),
+    bodyTimeout: timeout ?? options.bodyTimeout ?? globalUndiciStreamTimeoutMs,
+    headersTimeout: timeout ?? options.headersTimeout ?? globalUndiciStreamTimeoutMs,
   };
 }
 

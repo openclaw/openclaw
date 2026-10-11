@@ -98,7 +98,7 @@ it("separates canonical roster capture and deferrals from child session queries"
 
   const rosterMatch = { includeGlobal: true };
   const childQuery = { includeGlobal: false, spawnedBy: "agent:main:parent" };
-  gateway.deferNext("sessions.list", rosterMatch);
+  expect(gateway.deferNext("sessions.list", rosterMatch)).toBe(0);
   send("child-before", "sessions.list", childQuery);
   send("roster-held", "sessions.list", rosterMatch);
   send("child-after", "sessions.list", childQuery);
@@ -121,8 +121,7 @@ it("separates canonical roster capture and deferrals from child session queries"
   send("roster-next", "sessions.list", rosterMatch);
   await flush();
   expect(frames.at(-1)).toMatchObject({ id: "roster-next", ok: true });
-  expect(gateway.findRequests("sessions.list", rosterMatch).map((request) => request.id)).toEqual([
-    "roster-held",
-    "roster-next",
-  ]);
+  const rosterRequests = gateway.findRequests("sessions.list", rosterMatch);
+  expect(rosterRequests.map((request) => request.id)).toEqual(["roster-held", "roster-next"]);
+  expect(gateway.deferNext("sessions.list", rosterMatch)).toBe(rosterRequests.length);
 });

@@ -31,14 +31,18 @@ function parseLinuxProcessStat(raw: string) {
   };
 }
 
-function boundProcessGroupDiagnostics(details: string) {
+export function boundProcessGroupDiagnostics(details: string) {
   if (details.length <= 2_048) {
     return details;
   }
   return `${sliceUtf16Safe(details, 0, 2_045)}...`;
 }
 
-export function inspectLinuxProcessGroupStats(processGroupId: number, stats: readonly string[]) {
+export function inspectLinuxProcessGroupStats(
+  processGroupId: number,
+  stats: readonly string[],
+  isPidDefinitelyDead: (pid: number) => boolean,
+) {
   const members = stats
     .map((raw) => parseLinuxProcessStat(raw))
     .filter(
@@ -53,10 +57,9 @@ export function inspectLinuxProcessGroupStats(processGroupId: number, stats: rea
     )
     .join(", ");
   return {
-    alive:
-      members.length === 0
-        ? null
-        : members.some((entry) => entry.state !== "Z" && entry.state !== "X"),
+    // A zombie leader can still own live threads; only the canonical PID check
+    // can release the group's cleanup obligation.
+    alive: members.length === 0 ? null : members.some((entry) => !isPidDefinitelyDead(entry.pid)),
     diagnostics: boundProcessGroupDiagnostics(`pgid=${processGroupId} members=[${diagnostics}]`),
   };
 }

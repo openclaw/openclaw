@@ -1,4 +1,5 @@
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
+import { ExpectedCliError } from "../cli/failure-output.js";
 import {
   createSessionsCleanupFailure,
   resolveSessionCleanupAction,
@@ -7,7 +8,11 @@ import {
   type SessionStoreTarget,
   type SessionsCleanupOptions,
 } from "../config/sessions.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
+import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import { withActivatedPluginIds } from "../plugins/activation-context.js";
 import { resolveManifestActivationPluginIds } from "../plugins/activation-planner.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
@@ -15,6 +20,12 @@ import { loadPluginRegistryHandle } from "../plugins/loader.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { readActiveOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease.js";
+import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
+import {
+  DoctorSqliteMaintenanceLockUnavailableError,
+  withDoctorSqliteMaintenanceLock,
+} from "./doctor-sqlite-maintenance-lock.js";
 
 type CleanupRunResult = Awaited<ReturnType<typeof runSessionsCleanup>>;
 
@@ -109,53 +120,101 @@ function warnUnavailableCleanupOwners(
   }
 }
 
-/** Owns plugin preparation only for the local destructive CLI path. */
+/** Local destructive cleanup retains the offline owner through reclamation. */
 export async function runLocalSessionsCleanup(
   params: { cfg: OpenClawConfig; opts: SessionsCleanupOptions; targets: SessionStoreTarget[] },
   runtime: RuntimeEnv,
 ): Promise<CleanupRunResult> {
-  const ownersByWorkspace = new Map<string, ReturnType<typeof prepareCleanupHarnessOwners>>();
-  const results: CleanupRunResult[] = [];
-  let failure: CleanupRunResult["failure"];
-  for (const target of params.targets) {
-    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, target.agentId);
-    let owners = ownersByWorkspace.get(workspaceDir);
-    if (!owners) {
-      owners = prepareCleanupHarnessOwners(params.cfg, workspaceDir);
-      ownersByWorkspace.set(workspaceDir, owners);
-    }
-    let result: CleanupRunResult;
-    try {
-      result = await withPluginRuntimeRegistryScope(owners.registry, () =>
-        runSessionsCleanup({ ...params, targets: [target] }),
-      );
-    } catch (cause) {
-      // The local runner changes plugin scope per store, so it owns combining
-      // earlier results with the same partial outcome as the cleanup service.
-      if (results.length === 0) {
-        throw cause;
+  const run = async (): Promise<CleanupRunResult> => {
+    const ownersByWorkspace = new Map<string, ReturnType<typeof prepareCleanupHarnessOwners>>();
+    const results: CleanupRunResult[] = [];
+    let failure: CleanupRunResult["failure"];
+    for (const target of params.targets) {
+      const workspaceDir = resolveAgentWorkspaceDir(params.cfg, target.agentId);
+      let owners = ownersByWorkspace.get(workspaceDir);
+      if (!owners) {
+        owners = prepareCleanupHarnessOwners(params.cfg, workspaceDir);
+        ownersByWorkspace.set(workspaceDir, owners);
       }
-      failure =
-        cause instanceof SessionsCleanupFailureError
-          ? cause.failure
-          : createSessionsCleanupFailure(target, cause, false);
-      break;
+      let result: CleanupRunResult;
+      try {
+        result = await withPluginRuntimeRegistryScope(owners.registry, () =>
+          // Reuse the CLI's admitted handle instead of rescanning the whole database
+          // on a fresh reclamation Worker connection for every historical session.
+          runSessionsCleanup({ ...params, targets: [target], reclamationMode: "in-process" }),
+        );
+      } catch (cause) {
+        // The local runner changes plugin scope per store, so it owns combining
+        // earlier results with the same partial outcome as the cleanup service.
+        if (results.length === 0) {
+          throw cause;
+        }
+        failure =
+          cause instanceof SessionsCleanupFailureError
+            ? cause.failure
+            : createSessionsCleanupFailure(target, cause, false);
+        break;
+      }
+      warnUnavailableCleanupOwners(owners, result, runtime);
+      results.push(result);
+      if (result.failure) {
+        failure = result.failure;
+        break;
+      }
     }
-    warnUnavailableCleanupOwners(owners, result, runtime);
-    results.push(result);
-    if (result.failure) {
-      failure = result.failure;
-      break;
+    const first = results[0];
+    if (!first) {
+      return await runSessionsCleanup({ ...params, reclamationMode: "in-process" });
     }
-  }
-  const first = results[0];
-  if (!first) {
-    return await runSessionsCleanup(params);
-  }
-  return {
-    mode: first.mode,
-    previewResults: results.flatMap((result) => result.previewResults),
-    appliedSummaries: results.flatMap((result) => result.appliedSummaries),
-    ...(failure ? { failure } : {}),
+    return {
+      mode: first.mode,
+      previewResults: results.flatMap((result) => result.previewResults),
+      appliedSummaries: results.flatMap((result) => result.appliedSummaries),
+      ...(failure ? { failure } : {}),
+    };
   };
+  if (
+    params.opts.dryRun ||
+    (!params.opts.enforce &&
+      !params.opts.fixMissing &&
+      !params.opts.fixDmScope &&
+      resolveMaintenanceConfig().mode !== "enforce")
+  ) {
+    return await run();
+  }
+  try {
+    return await withDoctorSqliteMaintenanceLock({
+      operation: "sessions cleanup",
+      protectedPaths: params.targets.map(
+        (target) => resolveSqliteTargetFromSessionStorePath(target.storePath, target).path,
+      ),
+      run: async (authority) => {
+        const owner = readActiveOpenClawAgentDatabaseLeasesReadOnly(
+          {},
+          openDoctorStateSchemaReadAdmission,
+        ).find((lease) => lease.owner_pid !== process.pid);
+        if (owner) {
+          throw cleanupOwnerRefusal(`agent ${owner.agent_id} (PID ${owner.owner_pid})`);
+        }
+        authority.assertCurrent();
+        return await run();
+      },
+    });
+  } catch (error) {
+    if (
+      !(error instanceof DoctorSqliteMaintenanceLockUnavailableError) ||
+      !(error.cause.cause instanceof GatewayStateOwnerContentionError)
+    ) {
+      throw error;
+    }
+    const owner = await readActiveGatewayLockIdentity({ includeEmbedded: true });
+    throw cleanupOwnerRefusal(
+      owner ? `OpenClaw process (PID ${owner.pid})` : "another OpenClaw process",
+    );
+  }
+}
+
+function cleanupOwnerRefusal(owner: string): ExpectedCliError {
+  const message = `Cannot run local sessions cleanup: ${owner} owns this state; run Gateway-delegated cleanup without --store, or stop the Gateway and other owners first.`;
+  return new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
 }

@@ -1,5 +1,14 @@
 {
   "id": "workboard",
+  "uiCapabilities": [
+    "page",
+    "navigation",
+    "accessory",
+    "widget"
+  ],
+  "categories": [
+    "productivity"
+  ],
   "cliCommands": [
     {
       "name": "workboard",
@@ -80,6 +89,9 @@
       "workboard_board_create",
       "workboard_board_archive",
       "workboard_board_delete",
+      "workboard_sessions_board_read",
+      "workboard_sessions_board_update",
+      "workboard_sessions_board_move",
       "workboard_stats",
       "workboard_runs",
       "workboard_specify",
@@ -220,9 +232,9 @@
     "properties": {}
   },
   "controlUi": {
-    "entry": "dist/control-ui/3041fee4ed9fe2fdf67b9822431907f6776f8194057a2f4de981260449b34c98/index.js",
+    "entry": "dist/control-ui/69ebf132d654597dd264eae4e2ee0c4a5bfd0564dccd964a8d1214d910726968/index.js",
     "styles": [
-      "dist/control-ui/3041fee4ed9fe2fdf67b9822431907f6776f8194057a2f4de981260449b34c98/index.css"
+      "dist/control-ui/69ebf132d654597dd264eae4e2ee0c4a5bfd0564dccd964a8d1214d910726968/index.css"
     ]
   }
 }

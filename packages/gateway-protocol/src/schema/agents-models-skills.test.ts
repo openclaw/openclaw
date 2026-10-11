@@ -9,23 +9,14 @@ import {
   ModelsAuthLogoutParamsSchema,
   ModelsAuthOrderSetParamsSchema,
   ModelsAuthStatusParamsSchema,
-  ModelsListParamsSchema,
   ModelsListResultSchema,
   ModelsProbeParamsSchema,
   ModelsProbeResultSchema,
-  SkillProposalEvaluationSchema,
-  SkillProposalLifecycleEventSchema,
-  SkillsCuratorStatusResultSchema,
   SkillsDetailResultSchema,
-  SkillsProposalEvaluateParamsSchema,
-  SkillsProposalEvaluateResultSchema,
-  SkillsProposalEventsListParamsSchema,
-  SkillsProposalEventsListResultSchema,
-  SkillsProposalInspectResultSchema,
-  SkillsProposalRequestRevisionResultSchema,
-  ToolsEffectiveResultSchema,
   ToolsInvokeParamsSchema,
 } from "./agents-models-skills.js";
+import { ModelsListParamsSchema } from "./model-catalog.js";
+import { ToolsEffectiveResultSchema } from "./tools-catalog.js";
 
 type ProtocolSchema = TSchema;
 
@@ -39,52 +30,6 @@ const expectAccepted = (schema: ProtocolSchema, ...values: readonly unknown[]) =
   expectSchemaCases(schema, true, values);
 const expectRejected = (schema: ProtocolSchema, ...values: readonly unknown[]) =>
   expectSchemaCases(schema, false, values);
-
-const cleanProposalScan = {
-  state: "clean",
-  scannedAt: "2026-05-30T00:00:00.000Z",
-  critical: 0,
-  warn: 0,
-  info: 0,
-  findings: [],
-};
-
-const proposalTarget = (overrides: Record<string, unknown> = {}) => ({
-  skillName: "weather-helper",
-  skillDir: "/tmp/workspace/skills/weather-helper",
-  skillFile: "/tmp/workspace/skills/weather-helper/SKILL.md",
-  skillKey: "weather-helper",
-  ...overrides,
-});
-
-const proposalRecord = (overrides: Record<string, unknown> = {}) => ({
-  id: "proposal-1",
-  kind: "create",
-  status: "pending",
-  title: "weather-helper",
-  description: "Improve weather checks",
-  schema: "openclaw.skill-workshop.proposal.v1",
-  createdAt: "2026-05-30T00:00:00.000Z",
-  updatedAt: "2026-05-30T00:00:00.000Z",
-  createdBy: "gateway",
-  proposedVersion: "v2",
-  draftFile: "PROPOSAL.md",
-  draftHash: "b".repeat(64),
-  target: proposalTarget(),
-  scan: cleanProposalScan,
-  ...overrides,
-});
-
-const proposalEvaluation = (overrides: Record<string, unknown> = {}) => ({
-  id: "evaluation-1",
-  proposedVersion: "v2",
-  revisionHash: "b".repeat(64),
-  trigger: "apply",
-  startedAt: "2026-05-30T00:01:00.000Z",
-  completedAt: "2026-05-30T00:01:01.000Z",
-  outcomes: [],
-  ...overrides,
-});
 
 describe("AgentsDeleteResultSchema", () => {
   it("accepts per-path cleanup outcomes", () => {
@@ -111,7 +56,7 @@ describe("AgentsDeleteResultSchema", () => {
 });
 
 /**
- * Schema regression tests for agent metadata, skill proposals, and effective
+ * Schema regression tests for agent metadata, skills, and effective
  * tool catalogs. These payloads are UI-facing but also consumed by runtime
  * guards, so the fixtures exercise strictness at the public gateway boundary.
  */
@@ -141,6 +86,41 @@ function toolsEffectiveResult() {
 }
 
 describe("AgentsListResultSchema", () => {
+  it.each([
+    { code: "agent-database-ownership-mismatch", embeddedOwnerId: "main", accepted: true },
+    { code: "agent-database-ownership-mismatch", accepted: false },
+    { code: "agent-database-inspection-pending", accepted: true },
+    { code: "agent-database-inspection-failed", accepted: true },
+    { code: "agent-database-inspection-pending", embeddedOwnerId: "main", accepted: false },
+    { code: "agent-database-inspection-failed", embeddedOwnerId: "main", accepted: false },
+    { code: "unknown", accepted: false },
+  ])(
+    "validates admission refusal $code with owner $embeddedOwnerId: $accepted",
+    ({ code, embeddedOwnerId, accepted }) => {
+      expect(
+        Value.Check(AgentsListResultSchema, {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "per-sender",
+          agents: [
+            {
+              id: "worker",
+              status: "degraded",
+              admissionRefusal: {
+                agentId: "worker",
+                paths: ["/state/agents/worker/agent/openclaw-agent.sqlite"],
+                code,
+                ...(embeddedOwnerId ? { embeddedOwnerId } : {}),
+                reason: "The agent database is unavailable.",
+                repairHint: "Inspect the reported database before retrying.",
+              },
+            },
+          ],
+        }),
+      ).toBe(accepted);
+    },
+  );
+
   it.each([undefined, "read-only", "guarded", "workspace", "full"])(
     "accepts optional configured permission label %s but rejects non-session modes",
     (defaultPermissionMode) => {
@@ -529,264 +509,6 @@ describe("ToolsInvokeParamsSchema", () => {
     expectRejected(ToolsInvokeParamsSchema, {
       name: "message",
       conversationReadOrigin: "delegated",
-    });
-  });
-});
-
-describe("SkillsProposalInspectResultSchema", () => {
-  it("accepts support metadata and the latest bounded evaluation", () => {
-    const result = {
-      record: proposalRecord({
-        kind: "update",
-        createdBy: "skill-workshop",
-        proposedVersion: "v1",
-        target: proposalTarget({
-          currentContentHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        }),
-        draftHash: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-        evaluation: proposalEvaluation({
-          proposedVersion: "v1",
-          revisionHash: "a".repeat(64),
-          trigger: "manual",
-          correlationId: "correlation-1",
-          outcomes: [
-            {
-              pluginId: "quality-plugin",
-              pluginVersion: "1.2.3",
-              evaluatorId: "quality",
-              status: "completed",
-              result: {
-                summary: "Ready to apply.",
-                findings: [],
-                metrics: { score: 0.98, deterministic: true, profile: "strict" },
-                evaluatorVersion: "rules-v2",
-                mode: "static",
-                decision: "pass",
-                decisionReason: "No blocking findings.",
-              },
-            },
-          ],
-        }),
-        supportFiles: [
-          {
-            path: "references/weather.md",
-            sizeBytes: 42,
-            hash: "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
-            targetExisted: true,
-            targetContentHash: "123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0",
-          },
-        ],
-      }),
-      revisionHash: "a".repeat(64),
-      content: "# Weather Helper\n",
-      supportFiles: [
-        {
-          path: "references/weather.md",
-          content: "Use current weather before recommendations.\n",
-        },
-      ],
-    };
-
-    expectAccepted(SkillsProposalInspectResultSchema, result, {
-      record: result.record,
-      content: result.content,
-    });
-  });
-});
-
-describe("SkillsCuratorStatusResultSchema", () => {
-  it("accepts typed collection and experience outcomes while rejecting invalid review records", () => {
-    const legacyResult = {
-      lastAttemptAtMs: 100,
-      lastSuccessAtMs: 101,
-      lastError: null,
-      counts: { active: 1, stale: 0, archived: 0 },
-      skills: [],
-      overlaps: [],
-    };
-    const result = {
-      ...legacyResult,
-      collectionReview: {
-        workspace: { attemptedAtMs: 100, succeededAtMs: 101 },
-      },
-      experienceReview: {
-        workspace: {
-          attemptedAtMs: 102,
-          outcome: "proposed",
-          proposalId: "proposal-1",
-          usage: { inputTokens: 40, cachedInputTokens: 20, outputTokens: 10 },
-        },
-      },
-    };
-
-    expectAccepted(SkillsCuratorStatusResultSchema, result, legacyResult);
-    expectRejected(
-      SkillsCuratorStatusResultSchema,
-      {
-        ...result,
-        collectionReview: { workspace: { attemptedAtMs: 100, unexpected: true } },
-      },
-      {
-        ...result,
-        experienceReview: { workspace: { attemptedAtMs: 102, outcome: "archived" } },
-      },
-    );
-  });
-});
-
-describe("SkillProposalEvaluationSchema", () => {
-  const completedOutcome = {
-    pluginId: "quality-plugin",
-    evaluatorId: "quality",
-    status: "completed",
-    result: {
-      findings: [
-        {
-          ruleId: "skill.structure",
-          severity: "warn",
-          message: "Add a troubleshooting section.",
-          file: "SKILL.md",
-          line: 12,
-        },
-      ],
-      decision: "revise",
-    },
-  };
-  const evaluation = proposalEvaluation({
-    targetTreeSha256: "c".repeat(64),
-    outcomes: [completedOutcome],
-  });
-
-  it("accepts bounded evaluator outcomes", () => {
-    expectAccepted(SkillProposalEvaluationSchema, evaluation);
-  });
-
-  it("accepts the service result wrapper", () => {
-    const record = proposalRecord({
-      evaluation,
-    });
-
-    expectAccepted(SkillsProposalEvaluateResultSchema, { record, evaluation });
-  });
-
-  it("rejects non-primitive metrics and unknown decisions", () => {
-    expectRejected(SkillProposalEvaluationSchema, {
-      ...evaluation,
-      outcomes: [
-        {
-          ...completedOutcome,
-          result: {
-            findings: [],
-            metrics: { nested: { score: 1 } },
-            decision: "approve",
-          },
-        },
-      ],
-    });
-  });
-
-  it.each(["", "x".repeat(129)])("rejects invalid metric key %j", (key) => {
-    expectRejected(SkillProposalEvaluationSchema, {
-      ...evaluation,
-      outcomes: [
-        {
-          ...completedOutcome,
-          result: { findings: [], metrics: { [key]: true } },
-        },
-      ],
-    });
-  });
-
-  it("enforces status-specific result and error fields", () => {
-    expectRejected(
-      SkillProposalEvaluationSchema,
-      {
-        ...evaluation,
-        outcomes: [{ pluginId: "quality-plugin", evaluatorId: "quality", status: "completed" }],
-      },
-      {
-        ...evaluation,
-        outcomes: [{ pluginId: "quality-plugin", evaluatorId: "quality", status: "error" }],
-      },
-    );
-  });
-});
-
-describe("skill proposal evaluation and event replay params", () => {
-  it("validates optimistic evaluation and bounded event cursors", () => {
-    expectAccepted(SkillsProposalEvaluateParamsSchema, {
-      agentId: "main",
-      proposalId: "proposal-1",
-      expectedRevisionHash: "c".repeat(64),
-      correlationId: "correlation-1",
-    });
-    expectAccepted(SkillsProposalEventsListParamsSchema, {
-      proposalId: "proposal-1",
-      afterSequence: 10,
-      limit: 200,
-    });
-    expectRejected(SkillsProposalEventsListParamsSchema, { limit: 201 });
-  });
-
-  it("accepts sequence-ordered lifecycle replay pages", () => {
-    const event = {
-      sequence: 11,
-      eventId: "event-11",
-      proposalId: "proposal-1",
-      proposedVersion: "v2",
-      revisionHash: "d".repeat(64),
-      type: "evaluation_completed",
-      occurredAt: "2026-05-30T00:01:01.000Z",
-      actor: { type: "plugin", id: "quality-plugin" },
-      correlationId: "correlation-1",
-      payload: { trigger: "manual", outcomeCount: 1, blocking: false, note: null },
-      evaluation: proposalEvaluation({
-        id: "evaluation-11",
-        revisionHash: "d".repeat(64),
-        trigger: "manual",
-      }),
-    };
-
-    expectAccepted(SkillProposalLifecycleEventSchema, event);
-    expectAccepted(SkillsProposalEventsListResultSchema, {
-      events: [event],
-      nextSequence: 11,
-    });
-    expectRejected(
-      SkillProposalLifecycleEventSchema,
-      {
-        ...event,
-        actor: { type: "operator" },
-      },
-      {
-        ...event,
-        payload: { note: "x".repeat(4_001) },
-      },
-    );
-    for (const key of ["", "x".repeat(81)]) {
-      expectRejected(SkillProposalLifecycleEventSchema, {
-        ...event,
-        payload: { [key]: true },
-      });
-    }
-  });
-});
-
-describe("SkillsProposalRequestRevisionResultSchema", () => {
-  it.each(["started", "in_flight", "ok", "timeout", "error"])(
-    "accepts forwarded chat.send ack status %s",
-    (status) => {
-      expectAccepted(SkillsProposalRequestRevisionResultSchema, {
-        runId: "run-revision",
-        status,
-      });
-    },
-  );
-
-  it("rejects unknown forwarded chat.send ack statuses", () => {
-    expectRejected(SkillsProposalRequestRevisionResultSchema, {
-      runId: "run-revision",
-      status: "queued",
     });
   });
 });

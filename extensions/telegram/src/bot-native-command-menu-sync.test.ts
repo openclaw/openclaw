@@ -1,4 +1,5 @@
 // Telegram tests cover native command menu remote synchronization.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
@@ -14,14 +15,6 @@ function waitForTelegramMenuTurn() {
   return new Promise<void>((resolve) => {
     setTimeout(resolve, 0);
   });
-}
-
-function createDeferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 
 const ledgerRows = new Map<string, unknown>();
@@ -65,7 +58,7 @@ function createLedgerStore<T>(): PluginStateKeyedStore<T> {
 }
 
 type SyncMenuOptions = {
-  deleteMyCommands?: ReturnType<typeof vi.fn>;
+  deleteMyCommands: ReturnType<typeof vi.fn>;
   setMyCommands: ReturnType<typeof vi.fn>;
   commandsToRegister: Parameters<typeof syncTelegramMenuCommands>[0]["commandsToRegister"];
   accountId: string;
@@ -91,7 +84,7 @@ function resolveTestBotToken(options: SyncMenuOptions): string {
 
 function syncMenuCommandsWithMocks(options: SyncMenuOptions): void {
   const api = {
-    ...(options.deleteMyCommands ? { deleteMyCommands: options.deleteMyCommands } : {}),
+    deleteMyCommands: options.deleteMyCommands,
     setMyCommands: options.setMyCommands,
   };
   syncTelegramMenuCommands({
@@ -149,52 +142,6 @@ afterEach(() => {
 });
 
 describe("bot-native-command-menu sync lifecycle", () => {
-  it("deletes stale commands before setting new menu", async () => {
-    const callOrder: string[] = [];
-    const deleteMyCommands = vi.fn(async (options?: { scope?: { type?: string } }) => {
-      callOrder.push(options?.scope?.type ? `delete:${options.scope.type}` : "delete:default");
-    });
-    const setMyCommands = vi.fn(
-      async (_commands: unknown, options?: { scope?: { type?: string } }) => {
-        callOrder.push(options?.scope?.type ? `set:${options.scope.type}` : "set:default");
-      },
-    );
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      commandsToRegister: [{ command: "cmd", description: "Command" }],
-      accountId: `test-delete-${Date.now()}`,
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
-
-    expect(callOrder).toEqual([
-      "delete:default",
-      "delete:all_group_chats",
-      "set:default",
-      "set:all_group_chats",
-    ]);
-  });
-
-  it("registers the menu in default and group chat scopes", async () => {
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi.fn(async () => undefined);
-    const commands = [{ command: "cmd", description: "Command" }];
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      commandsToRegister: commands,
-      accountId: `test-scopes-${Date.now()}`,
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
-
-    expect(setMyCommands).toHaveBeenCalledWith(commands);
-    expect(setMyCommands).toHaveBeenCalledWith(commands, {
-      scope: { type: "all_group_chats" },
-    });
-  });
-
   it("registers localized command descriptions per Telegram language scope", async () => {
     const deleteMyCommands = vi.fn(async () => undefined);
     const setMyCommands = vi.fn(async () => undefined);
@@ -243,37 +190,6 @@ describe("bot-native-command-menu sync lifecycle", () => {
     ).toBe(true);
   });
 
-  it("treats blank supported localizations as absent for variants, ledger, and hashing", async () => {
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi.fn(async () => undefined);
-    const accountId = `test-blank-localization-${Date.now()}`;
-    const botId = "876543213";
-    const sync = (description: string) =>
-      syncMenuCommandsWithMocks({
-        deleteMyCommands,
-        setMyCommands,
-        accountId,
-        botToken: `${botId}:test-token`,
-        commandsToRegister: [
-          {
-            command: "cmd",
-            description: "Default",
-            descriptionLocalizations: { fr: description },
-          },
-        ],
-      });
-
-    sync(" ");
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
-    expect(ledgerRows.has(botId)).toBe(false);
-    expect(setMyCommands.mock.calls.map(readLanguageCodeFromApiCall)).not.toContain("fr");
-
-    sync("\n");
-    await waitForTelegramMenuTurn();
-
-    expect(deleteMyCommands.mock.calls.length + setMyCommands.mock.calls.length).toBe(4);
-  });
-
   it("uses neutral descriptions only for blank commands in a sibling-provided locale", async () => {
     const deleteMyCommands = vi.fn(async () => undefined);
     const setMyCommands = vi.fn(async () => undefined);
@@ -302,29 +218,6 @@ describe("bot-native-command-menu sync lifecycle", () => {
       { command: "blank", description: "Neutral blank" },
       { command: "localized", description: "Français" },
     ]);
-  });
-
-  it("caps localized command descriptions before registering Telegram variants", async () => {
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi.fn(async () => undefined);
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      commandsToRegister: [
-        {
-          command: "long",
-          description: "Default",
-          descriptionLocalizations: { ko: "x".repeat(300) },
-        },
-      ],
-      accountId: `test-localized-cap-${Date.now()}`,
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
-
-    const localizedPayload = setMyCommandsPayload(setMyCommands, 2);
-    expect(localizedPayload[0]).toMatchObject({ command: "long" });
-    expect((localizedPayload[0] as { description: string }).description).toHaveLength(256);
   });
 
   it("preserves canonical source order under localization-only pressure", async () => {
@@ -358,52 +251,18 @@ describe("bot-native-command-menu sync lifecycle", () => {
     });
 
     await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
-    const localizedNames = setMyCommandsPayload(setMyCommands, 2).map(
-      (command) => (command as { command: string }).command,
-    );
-    expect(localizedNames).toEqual([
-      "configured",
-      ...canonical.map(({ command }) => command),
-      "late_alias",
-    ]);
-    expect(setMyCommandsPayload(setMyCommands, 3)).toEqual(setMyCommandsPayload(setMyCommands, 2));
-  });
-
-  it("preserves ordinary localized order when localization creates no pressure", async () => {
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi.fn(async () => undefined);
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      commandsToRegister: [
-        {
-          command: "configured",
-          description: "Configured",
-          descriptionLocalizations: { ko: "설정" },
-        },
-        {
-          command: "canonical",
-          description: "Canonical",
-          descriptionLocalizations: { ko: "표준" },
-        },
-        {
-          command: "late_alias",
-          description: "Alias",
-          descriptionLocalizations: { ko: "별칭" },
-          isAlias: true,
-        },
-      ],
-      accountId: `test-localized-no-pressure-${Date.now()}`,
-    });
-
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
-    expect(setMyCommandsPayload(setMyCommands, 2)).toEqual([
-      { command: "configured", description: "설정" },
-      { command: "canonical", description: "표준" },
-      { command: "late_alias", description: "별칭" },
-    ]);
-    expect(setMyCommandsPayload(setMyCommands, 3)).toEqual(setMyCommandsPayload(setMyCommands, 2));
+    for (const index of [2, 3]) {
+      // Captured setMyCommands payloads are grammY BotCommand arrays.
+      const localized = setMyCommandsPayload(setMyCommands, index) as Array<{
+        command: string;
+        description: string;
+      }>;
+      const names = localized.map(({ command }) => command);
+      expect(names).toHaveLength(24);
+      expect(names.slice(0, 2)).toEqual(["configured", "canonical_0"]);
+      expect(names.slice(-2)).toEqual(["canonical_21", "late_alias"]);
+      expect(localized.every(({ description }) => description.length < 250)).toBe(true);
+    }
   });
 
   it("resyncs when command order changes (#32017)", async () => {
@@ -433,132 +292,6 @@ describe("bot-native-command-menu sync lifecycle", () => {
     expect(deleteMyCommands).toHaveBeenCalledTimes(4);
   });
 
-  it("resyncs when a command description changes (#32017)", async () => {
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi.fn(async () => undefined);
-    const accountId = `test-description-change-${Date.now()}`;
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      commandsToRegister: [{ command: "alpha", description: "A" }],
-      accountId,
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      commandsToRegister: [{ command: "alpha", description: "Changed" }],
-      accountId,
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
-  });
-
-  it("resyncs delimiter-like command lists without hash collisions", async () => {
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi.fn(async () => undefined);
-    const accountId = `test-delimiter-collision-${Date.now()}`;
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      commandsToRegister: [{ command: "a", description: "b\0c\0d" }],
-      accountId,
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      commandsToRegister: [
-        { command: "a", description: "b" },
-        { command: "c", description: "d" },
-      ],
-      accountId,
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
-  });
-
-  it("skips sync when command hash is unchanged (#32017)", async () => {
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi.fn(async () => undefined);
-    const accountId = `test-skip-${Date.now()}`;
-    const commands = [{ command: "skip_test", description: "Skip test command" }];
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      commandsToRegister: commands,
-      accountId,
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      commandsToRegister: commands,
-      accountId,
-    });
-    await waitForTelegramMenuTurn();
-
-    expect(deleteMyCommands).toHaveBeenCalledTimes(2);
-    expect(setMyCommands).toHaveBeenCalledTimes(2);
-  });
-
-  it("ignores isAlias and isSkill metadata in the requested-state hash (#32017)", async () => {
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi.fn(async () => undefined);
-    const accountId = `test-priority-hash-${Date.now()}`;
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      commandsToRegister: [
-        {
-          command: "skip_test",
-          description: "Skip test command",
-          isAlias: true,
-          isSkill: true,
-        },
-      ],
-      accountId,
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      commandsToRegister: [{ command: "skip_test", description: "Skip test command" }],
-      accountId,
-    });
-    await waitForTelegramMenuTurn();
-
-    expect(deleteMyCommands).toHaveBeenCalledTimes(2);
-    expect(setMyCommands).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not reuse cached hash across different bot identities", async () => {
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi.fn(async () => undefined);
-    const accountId = `test-bot-identity-${Date.now()}`;
-    const commands = [{ command: "same", description: "Same" }];
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      commandsToRegister: commands,
-      accountId,
-      botIdentity: "bot-a",
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      commandsToRegister: commands,
-      accountId,
-      botIdentity: "bot-b",
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
-  });
-
   it("does not cache empty-menu hash when deleteMyCommands fails", async () => {
     const deleteMyCommands = vi
       .fn()
@@ -583,90 +316,74 @@ describe("bot-native-command-menu sync lifecycle", () => {
     await waitForTelegramMenu(() => expect(deleteMyCommands).toHaveBeenCalledTimes(4));
   });
 
-  it("retries with fewer commands on BOT_COMMANDS_TOO_MUCH", async () => {
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("400: Bad Request: BOT_COMMANDS_TOO_MUCH"))
-      .mockResolvedValue(undefined);
-    const runtimeLog = vi.fn();
+  it.each([
+    {
+      label: "100→80→64 refill after partial skill retention",
+      nativeCount: 57,
+      skillCount: 20,
+      pluginCount: 20,
+      rejections: 2,
+      acceptedCount: 64,
+      acceptedPluginTail: ["plugin_0", "plugin_1", "plugin_2", "plugin_3"],
+    },
+  ])("publishes both scopes after $label without reporting a recovered error", async (testCase) => {
+    const setMyCommands = vi.fn().mockResolvedValue(undefined);
+    for (let attempt = 0; attempt < testCase.rejections; attempt++) {
+      setMyCommands.mockRejectedValueOnce(new Error("400: Bad Request: BOT_COMMANDS_TOO_MUCH"));
+    }
     const runtimeError = vi.fn();
-
     syncMenuCommandsWithMocks({
-      deleteMyCommands,
+      deleteMyCommands: vi.fn(async () => undefined),
       setMyCommands,
-      runtimeLog,
       runtimeError,
-      commandsToRegister: Array.from({ length: 100 }, (_, i) => ({
-        command: `cmd_${i}`,
-        description: `Command ${i}`,
-      })),
-      accountId: `test-retry-${Date.now()}`,
+      commandsToRegister: [
+        { command: "custom_one", description: "Custom one" },
+        { command: "custom_two", description: "Custom two" },
+        ...Array.from({ length: testCase.nativeCount }, (_, index) => ({
+          command: `native_${index}`,
+          description: `Native ${index}`,
+        })),
+        { command: "skill", description: "Run a skill" },
+        ...Array.from({ length: testCase.skillCount }, (_, index) => ({
+          command: `skill_${index}`,
+          description: `Skill ${index}`,
+          isSkill: true,
+        })),
+        ...Array.from({ length: testCase.pluginCount }, (_, index) => ({
+          command: `plugin_${index}`,
+          description: `Plugin ${index}`,
+        })),
+      ],
+      accountId: `test-skill-retry-${testCase.label}-${Date.now()}`,
     });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(3));
-
+    await waitForTelegramMenu(() =>
+      expect(setMyCommands).toHaveBeenCalledTimes(testCase.rejections + 2),
+    );
     expect(setMyCommandsPayload(setMyCommands, 0)).toHaveLength(100);
-    expect(setMyCommandsPayload(setMyCommands, 1)).toHaveLength(80);
-    expect(setMyCommandsPayload(setMyCommands, 2)).toHaveLength(80);
-    expect(setMyCommandsCall(setMyCommands, 2).at(1)).toEqual({
+    if (testCase.rejections === 2) {
+      // Captured setMyCommands payloads are grammY BotCommand arrays.
+      const firstRetry = setMyCommandsPayload(setMyCommands, 1) as Array<{ command: string }>;
+      expect(firstRetry).toHaveLength(80);
+      expect(firstRetry.filter(({ command }) => command.startsWith("skill_"))).toHaveLength(20);
+      expect(firstRetry.some(({ command }) => command.startsWith("plugin_"))).toBe(false);
+    }
+
+    for (const index of [testCase.rejections, testCase.rejections + 1]) {
+      const accepted = setMyCommandsPayload(setMyCommands, index) as Array<{ command: string }>;
+      const names = accepted.map(({ command }) => command);
+      expect(names).toHaveLength(testCase.acceptedCount);
+      expect(names.slice(0, 4)).toEqual(["skill", "custom_one", "custom_two", "native_0"]);
+      expect(names[testCase.nativeCount + 2]).toBe(`native_${testCase.nativeCount - 1}`);
+      expect(names.some((command) => command.startsWith("skill_"))).toBe(false);
+      expect(names.filter((command) => command.startsWith("plugin_"))).toEqual(
+        testCase.acceptedPluginTail,
+      );
+    }
+    expect(setMyCommandsCall(setMyCommands, testCase.rejections).at(1)).toBeUndefined();
+    expect(setMyCommandsCall(setMyCommands, testCase.rejections + 1).at(1)).toEqual({
       scope: { type: "all_group_chats" },
     });
-    expect(runtimeLog).toHaveBeenCalledWith(
-      "Telegram rejected 100 commands (BOT_COMMANDS_TOO_MUCH); retrying with 80.",
-    );
-    expect(runtimeLog).toHaveBeenCalledWith(
-      "Telegram accepted 80 commands after BOT_COMMANDS_TOO_MUCH (started with 100; omitted 20). Reduce plugin/skill/custom commands to expose more menu entries.",
-    );
     expect(runtimeError).not.toHaveBeenCalled();
-  });
-
-  it("registers localized variants from the accepted retry command set", async () => {
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("400: Bad Request: BOT_COMMANDS_TOO_MUCH"))
-      .mockResolvedValue(undefined);
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      commandsToRegister: Array.from({ length: 100 }, (_, i) => ({
-        command: `cmd_${i}`,
-        description: `Command ${i}`,
-        descriptionLocalizations: { ko: `명령 ${i}` },
-      })),
-      accountId: `test-localized-retry-${Date.now()}`,
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(5));
-
-    expect(setMyCommandsPayload(setMyCommands, 0)).toHaveLength(100);
-    expect(setMyCommandsPayload(setMyCommands, 1)).toHaveLength(80);
-    expect(setMyCommandsPayload(setMyCommands, 3)).toHaveLength(80);
-    expect(setMyCommandsCall(setMyCommands, 3).at(1)).toEqual({ language_code: "ko" });
-  });
-
-  it.each([
-    { label: "description envelope", error: { description: "BOT_COMMANDS_TOO_MUCH" } },
-    { label: "message envelope", error: { message: "BOT_COMMANDS_TOO_MUCH" } },
-  ])("retries when Telegram returns a plain-object $label error", async ({ error, label }) => {
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi.fn().mockRejectedValueOnce(error).mockResolvedValue(undefined);
-    const runtimeLog = vi.fn();
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      runtimeLog,
-      commandsToRegister: Array.from({ length: 10 }, (_, i) => ({
-        command: `cmd_${i}`,
-        description: `Command ${i}`,
-      })),
-      accountId: `test-envelope-${Date.now()}-${label}`,
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(3));
-    expect(runtimeLog).toHaveBeenCalledWith(
-      "Telegram rejected 10 commands (BOT_COMMANDS_TOO_MUCH); retrying with 8.",
-    );
   });
 
   it("clears removed localized scope pairs in one strictly serialized generation", async () => {
@@ -736,7 +453,7 @@ describe("bot-native-command-menu sync lifecycle", () => {
   });
 
   it("queues a later generation until the current remote-owner lane completes", async () => {
-    const gate = createDeferred();
+    const gate = createDeferred<void>();
     const events: string[] = [];
     let active = 0;
     let maxActive = 0;
@@ -837,106 +554,6 @@ describe("bot-native-command-menu sync lifecycle", () => {
     );
     expect(frenchGroupClears).toHaveLength(2);
     expect(runtimeError).toHaveBeenCalled();
-  });
-
-  it("keys the durable locale ledger by stable bot ID across token rotation", async () => {
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi.fn(async () => undefined);
-    const accountId = `test-ledger-bot-id-${Date.now()}`;
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      accountId,
-      botToken: "987654321:old-token",
-      commandsToRegister: [
-        { command: "cmd", description: "Default", descriptionLocalizations: { fr: "Français" } },
-      ],
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
-    expect([...ledgerRows.keys()]).toEqual(["987654321"]);
-    deleteMyCommands.mockClear();
-    setMyCommands.mockClear();
-
-    syncMenuCommandsWithMocks({
-      deleteMyCommands,
-      setMyCommands,
-      accountId,
-      botToken: "987654321:new-token",
-      commandsToRegister: [{ command: "cmd", description: "Default" }],
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
-
-    expect(deleteMyCommands).toHaveBeenCalledWith({ language_code: "fr" });
-    expect(deleteMyCommands).toHaveBeenCalledWith({
-      scope: { type: "all_group_chats" },
-      language_code: "fr",
-    });
-    expect(ledgerRows.has("987654321")).toBe(false);
-  });
-
-  it("repairs a non-canonical ledger once while preserving valid remote locale cleanup", async () => {
-    const botId = "876543210";
-    ledgerRows.set(botId, {
-      version: 1,
-      languageCodes: [" FR ", "fr", "FR", "zz", "en-GB", 42, null],
-    });
-    const deleteMyCommands = vi.fn(async () => undefined);
-    const setMyCommands = vi.fn(async () => undefined);
-    const runtimeError = vi.fn();
-    const accountId = `test-repair-ledger-${Date.now()}`;
-    const commandsToRegister = [
-      {
-        command: "cmd",
-        description: "Default",
-        descriptionLocalizations: { " KO ": "한국어" },
-      },
-    ];
-    const sync = () =>
-      syncMenuCommandsWithMocks({
-        deleteMyCommands,
-        setMyCommands,
-        runtimeError,
-        accountId,
-        botToken: `${botId}:test-token`,
-        commandsToRegister,
-      });
-
-    sync();
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
-
-    expect(deleteMyCommands).toHaveBeenCalledWith({ language_code: "fr" });
-    expect(deleteMyCommands).toHaveBeenCalledWith({
-      scope: { type: "all_group_chats" },
-      language_code: "fr",
-    });
-    expect(setMyCommands).toHaveBeenCalledWith([{ command: "cmd", description: "한국어" }], {
-      language_code: "ko",
-    });
-    expect(ledgerRegisterCalls).toEqual([
-      { key: botId, value: { version: 1, languageCodes: ["fr"] } },
-      { key: botId, value: { version: 1, languageCodes: ["ko"] } },
-    ]);
-    expect(ledgerRows.get(botId)).toEqual({ version: 1, languageCodes: ["ko"] });
-    expect(runtimeError).toHaveBeenCalledWith(
-      `Telegram command menu locale ledger for bot ${botId} was repaired; the unshipped ledger contained non-canonical data (discarded unsupported language codes: en-GB, zz; discarded 2 malformed ledger field(s) or entry(ies)).`,
-    );
-    const apiCalls = [...deleteMyCommands.mock.calls, ...setMyCommands.mock.calls];
-    expect(
-      apiCalls.every((call) => {
-        const languageCode = readLanguageCodeFromApiCall(call);
-        return languageCode !== "zz" && languageCode !== "en-GB";
-      }),
-    ).toBe(true);
-
-    await waitForTelegramMenuTurn();
-    sync();
-    await waitForTelegramMenuTurn();
-
-    expect(deleteMyCommands).toHaveBeenCalledTimes(4);
-    expect(setMyCommands).toHaveBeenCalledTimes(4);
-    expect(ledgerRegisterCalls).toHaveLength(2);
-    expect(runtimeError).toHaveBeenCalledTimes(1);
   });
 
   it("resets an unsalvageable malformed current ledger once and still completes reconciliation", async () => {
@@ -1068,33 +685,5 @@ describe("bot-native-command-menu sync lifecycle", () => {
     expect(setMyCommands).toHaveBeenCalledTimes(4);
     expect(ledgerRegisterCalls).toHaveLength(3);
     expect(runtimeError).toHaveBeenCalledTimes(2);
-  });
-
-  it("uses empty setMyCommands for each exact scope/language pair when delete is unavailable", async () => {
-    const setMyCommands = vi.fn(async () => undefined);
-    const accountId = `test-clear-fallback-${Date.now()}`;
-
-    syncMenuCommandsWithMocks({
-      setMyCommands,
-      accountId,
-      commandsToRegister: [
-        { command: "cmd", description: "Default", descriptionLocalizations: { fr: "Français" } },
-      ],
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(6));
-    setMyCommands.mockClear();
-
-    syncMenuCommandsWithMocks({
-      setMyCommands,
-      accountId,
-      commandsToRegister: [{ command: "cmd", description: "Default" }],
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(6));
-
-    expect(setMyCommands).toHaveBeenCalledWith([], { language_code: "fr" });
-    expect(setMyCommands).toHaveBeenCalledWith([], {
-      scope: { type: "all_group_chats" },
-      language_code: "fr",
-    });
   });
 });

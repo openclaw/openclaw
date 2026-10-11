@@ -1,4 +1,3 @@
-// Memory Core plugin module implements manager source state behavior.
 import type { DatabaseSync } from "node:sqlite";
 import type { ResolvedMemorySearchConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
@@ -7,10 +6,10 @@ import {
   runWithConcurrency,
   type MemoryFileEntry,
   type MemorySource,
+  type MemoryWorkspaceFiles,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-runtime";
@@ -38,48 +37,59 @@ export async function resolveMemorySourceFileEntries(params: {
   workspaceDir: string;
   settings: Pick<ResolvedMemorySearchConfig, "extraPaths" | "multimodal">;
   concurrency: number;
+  onSkippedSymlinkRoot?: (root: string) => void;
+  files?: MemoryWorkspaceFiles;
 }): Promise<MemoryFileEntry[]> {
-  const files = await listMemoryFiles(
+  const files = await (params.files?.listFiles ?? listMemoryFiles)(
     params.workspaceDir,
     params.settings.extraPaths,
     params.settings.multimodal,
+    params.onSkippedSymlinkRoot,
   );
   return (
     await runWithConcurrency(
       files.map(
         (file) => async () =>
-          await buildFileEntry(file, params.workspaceDir, params.settings.multimodal),
+          await (params.files?.inspectFile ?? buildFileEntry)(
+            file,
+            params.workspaceDir,
+            params.settings.multimodal,
+          ),
       ),
       params.concurrency,
     )
   ).filter((entry): entry is MemoryFileEntry => entry !== null);
 }
 
-/** Compare a resolved source snapshot with the persisted index without writing either side. */
-function hasMemorySourceDrift(params: {
-  entries: readonly MemoryFileEntry[];
-  indexedRows: readonly MemorySourceFileStateRow[];
-}): boolean {
-  const indexedByPath = new Map(params.indexedRows.map((row) => [row.path, row]));
-  if (indexedByPath.size !== params.entries.length) {
-    return true;
-  }
-  return params.entries.some((entry) => indexedByPath.get(entry.path)?.hash !== entry.hash);
-}
-
 export async function inspectMemorySourceState(params: {
-  db: DatabaseSync;
+  readIndexedRows: () => Promise<MemorySourceFileStateRow[]>;
   workspaceDir: string;
   settings: Pick<ResolvedMemorySearchConfig, "extraPaths" | "multimodal">;
   concurrency: number;
+  files?: MemoryWorkspaceFiles;
 }): Promise<MemorySourceInspection> {
-  const entries = await resolveMemorySourceFileEntries(params);
-  const indexedRows = loadMemorySourceFileState({ db: params.db, source: "memory" });
+  const skippedRoots = new Set<string>();
+  const entries = await resolveMemorySourceFileEntries({
+    ...params,
+    onSkippedSymlinkRoot: (root) => skippedRoots.add(root),
+  });
+  const indexedByPath = new Map(
+    (await params.readIndexedRows()).map((row) => [row.path, row.hash]),
+  );
   return {
     source: "memory",
-    dirty: hasMemorySourceDrift({ entries, indexedRows }),
+    dirty:
+      indexedByPath.size !== entries.length ||
+      entries.some((entry) => indexedByPath.get(entry.path) !== entry.hash),
     eligible: entries.length,
-    issues: entries.length === 0 ? ["no eligible memory files found"] : [],
+    issues: [
+      ...(entries.length === 0 ? ["no eligible memory files found"] : []),
+      ...Array.from(
+        skippedRoots,
+        (root) =>
+          `extra path "${root}" is a symlink root; symlinked roots are not traversed, so configure its canonical absolute directory instead`,
+      ),
+    ],
   };
 }
 
@@ -98,21 +108,21 @@ export function loadMemorySourceFileState(params: {
   return executeSqliteQuerySync(params.db, query).rows;
 }
 
-export function resolveMemorySourceExistingHash(params: {
-  db: DatabaseSync;
-  source: MemorySource;
-  path: string;
-  existingHashes?: Map<string, string> | null;
-}): string | undefined {
-  if (params.existingHashes) {
-    return params.existingHashes.get(params.path);
-  }
-  return executeSqliteQueryTakeFirstSync(
-    params.db,
-    getNodeSqliteKysely<MemorySourceDatabase>(params.db)
-      .selectFrom("memory_index_sources")
-      .select("hash")
-      .where("path", "=", params.path)
-      .where("source", "=", params.source),
-  )?.hash;
+export function refreshMemorySessionSourceState(
+  db: DatabaseSync,
+  input: { path: string; hash: string; mtime: number; size: number; expectedHash: string },
+): boolean {
+  return (
+    Number(
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<MemorySourceDatabase>(db)
+          .updateTable("memory_index_sources")
+          .set({ hash: input.hash, mtime: input.mtime, size: input.size })
+          .where("path", "=", input.path)
+          .where("source", "=", "sessions")
+          .where("hash", "=", input.expectedHash),
+      ).numAffectedRows,
+    ) === 1
+  );
 }

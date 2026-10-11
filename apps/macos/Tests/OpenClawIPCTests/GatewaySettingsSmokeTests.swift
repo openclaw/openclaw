@@ -1,10 +1,9 @@
 import AppKit
-import ApplicationServices
 import SwiftUI
 import Testing
 @testable import OpenClaw
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct GatewaySettingsSmokeTests {
     @Test func `first Reconnect prefills the Gateway and Add starts a fresh empty editor`() async throws {
@@ -14,36 +13,41 @@ struct GatewaySettingsSmokeTests {
                 name: "Project Gateway",
                 url: #require(URL(string: "wss://gateway.example.test:8443/control/")))
             try await withHostedSettings(GatewaySettings(profiles: [profile])) { hosting, window in
+                var requestOrdinal = 0
                 for (action, reconnecting) in [("Reconnect", true), ("Add Gateway", false)] {
-                    let buttons = try await settingsAccessibilityElements(hosting)
+                    requestOrdinal += 1
+                    let buttons = try await AppKitTestSupport.accessibilityElements(
+                        in: hosting,
+                        diagnosticContext: "action=\(action) phase=buttons request=\(requestOrdinal)")
                     let button = try #require(buttons.first {
                         $0.accessibilityRole?() == .button &&
-                            [$0.accessibilityLabel?(), $0.accessibilityTitle?()].contains(action)
+                            [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)].contains(action)
                     })
                     #expect(button.accessibilityPerformPress?() == true)
-                    let deadline = ContinuousClock.now + .seconds(3)
-                    while window.attachedSheet == nil, ContinuousClock.now < deadline {
-                        try await Task.sleep(for: .milliseconds(20))
-                    }
+                    try await TestWait.state("\(action) sheet") { window.attachedSheet != nil }
                     let sheet = try #require(window.attachedSheet?.contentView)
                     var values: [String] = []
                     var connectEnabled: Bool?
-                    repeat {
+                    try await TestWait.state("\(action) sheet fields") {
                         sheet.layoutSubtreeIfNeeded()
-                        let elements = try await settingsAccessibilityElements(sheet)
+                        requestOrdinal += 1
+                        let elements = try await AppKitTestSupport.accessibilityElements(
+                            in: sheet,
+                            diagnosticContext: "action=\(action) phase=fields request=\(requestOrdinal)")
                         values = elements.filter { $0.accessibilityRole?() == .textField }.map {
                             let value: Any? = $0.accessibilityValue?()
                             return value as? String ?? ""
                         }
+                        let submitAction = reconnecting ? "Reconnect" : "Connect"
                         connectEnabled = elements.first {
                             $0.accessibilityRole?() == .button &&
-                                [$0.accessibilityLabel?(), $0.accessibilityTitle?()].contains("Connect")
+                                [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)]
+                                .contains(submitAction)
                         }?.isAccessibilityEnabled?()
                         let populated = values.contains(profile.name) && values.contains(profile.url.absoluteString)
-                        if values.count >= 2, connectEnabled == reconnecting,
-                           reconnecting ? populated : values.allSatisfy(\.isEmpty) { break }
-                        try await Task.sleep(for: .milliseconds(20))
-                    } while ContinuousClock.now < deadline
+                        return values.count >= 2 && connectEnabled == reconnecting &&
+                            (reconnecting ? populated : values.allSatisfy(\.isEmpty))
+                    }
                     #expect(values.count >= 2)
                     #expect(connectEnabled == reconnecting)
                     if reconnecting {
@@ -53,16 +57,15 @@ struct GatewaySettingsSmokeTests {
                         let hasOnlyEmptyFields = values.allSatisfy(\.isEmpty)
                         #expect(hasOnlyEmptyFields)
                     }
-                    let cancel = try #require(try await settingsAccessibilityElements(sheet).first {
+                    requestOrdinal += 1
+                    let cancel = try #require(try await AppKitTestSupport.accessibilityElements(
+                        in: sheet,
+                        diagnosticContext: "action=\(action) phase=Cancel request=\(requestOrdinal)").first {
                         $0.accessibilityRole?() == .button &&
-                            [$0.accessibilityLabel?(), $0.accessibilityTitle?()].contains("Cancel")
+                            [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)].contains("Cancel")
                     })
                     #expect(cancel.accessibilityPerformPress?() == true)
-                    let dismissedDeadline = ContinuousClock.now + .seconds(3)
-                    while window.attachedSheet != nil, ContinuousClock.now < dismissedDeadline {
-                        try await Task.sleep(for: .milliseconds(20))
-                    }
-                    try #require(window.attachedSheet == nil)
+                    try await TestWait.state("\(action) sheet dismissal") { window.attachedSheet == nil }
                 }
             }
         }
@@ -89,26 +92,4 @@ private func withHostedSettings<Content: View>(
     window.orderFront(nil)
     hosting.layoutSubtreeIfNeeded()
     try await body(hosting, window)
-}
-
-@MainActor
-private func settingsAccessibilityElements(_ root: NSView) async throws -> [AnyObject] {
-    // SwiftUI materializes its virtual accessibility children after a real client request.
-    let result = await Task.detached {
-        let application = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
-        var windows: CFTypeRef?
-        return AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &windows)
-    }.value
-    try #require(result == .success)
-    var elements: [AnyObject] = []
-    var visited = Set<ObjectIdentifier>()
-    func visit(_ element: AnyObject) {
-        guard visited.insert(ObjectIdentifier(element)).inserted else { return }
-        elements.append(element)
-        for child in element.accessibilityChildren?() ?? [] {
-            visit(child as AnyObject)
-        }
-    }
-    visit(root)
-    return elements
 }

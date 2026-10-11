@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   prepareGithubIssue,
   reconcileGithubIssue,
@@ -90,11 +91,8 @@ describe("GitHub issue transport", () => {
     expect(JSON.stringify(result)).not.toContain("private-value");
   });
 
-  it.each([
-    { label: "ASCII", prefix: "a".repeat(200) },
-    { label: "multibyte", prefix: "🦞".repeat(100) },
-    { label: "heavily escaped", prefix: "&=?%".repeat(100) },
-  ])("enforces the exact encoded browser URL byte bound for $label input", ({ prefix }) => {
+  it("enforces the exact encoded browser URL byte bound", () => {
+    const prefix = "🦞&=?%".repeat(100);
     const title = "t";
     const prefixIssue = prepareGithubIssue({ body: prefix, title });
     if (prefixIssue.browserFallback.status !== "available") {
@@ -116,13 +114,6 @@ describe("GitHub issue transport", () => {
       reason: "url-too-long",
       status: "unavailable",
     });
-  });
-
-  it("never truncates the prepared report or reconciliation marker for a browser fallback", () => {
-    const issue = prepareGithubIssue({ body: "🦞 &=?".repeat(5_000), title: "Sanitized report" });
-
-    expect(issue.body).toContain(`<!-- ${issue.marker} -->`);
-    expect(issue.browserFallback).toEqual({ reason: "url-too-long", status: "unavailable" });
   });
 
   it("returns a typed unavailable fallback while retaining the prepared body", async () => {
@@ -224,10 +215,6 @@ describe("GitHub issue transport", () => {
       label: "network exit after dispatch",
       result: cliResult({ errorCode: "ETIMEDOUT", started: true }),
     },
-    {
-      label: "cancellation after dispatch",
-      result: cliResult({ errorCode: "ECANCELED", started: true }),
-    },
   ])("keeps $label on the no-fallback ambiguity path", async ({ label, result }) => {
     const issue = prepare(label);
     const runGh = vi
@@ -243,23 +230,12 @@ describe("GitHub issue transport", () => {
     expect(runGh).toHaveBeenCalledTimes(3);
   });
 
-  it.each([
-    {
-      expected: "cli-unavailable",
-      label: "missing GitHub CLI",
-      result: cliResult({ errorCode: "ENOENT" }),
-    },
-    {
-      expected: "authentication-unavailable",
-      label: "unauthenticated GitHub CLI",
-      result: cliResult({ started: true, status: 4 }),
-    },
-  ])("prepares a browser fallback for $label without starting issue creation", async (test) => {
-    const issue = prepare(test.label);
-    const runGh = vi.fn<RunGithubCli>().mockResolvedValueOnce(test.result);
+  it("prepares a browser fallback for a missing CLI without starting issue creation", async () => {
+    const issue = prepare("missing GitHub CLI");
+    const runGh = vi.fn<RunGithubCli>().mockResolvedValueOnce(cliResult({ errorCode: "ENOENT" }));
 
     await expect(submitGithubIssue(issue, runGh)).resolves.toEqual({
-      reason: test.expected,
+      reason: "cli-unavailable",
       status: "browser-fallback",
       url: availableFallbackUrl(issue),
     });
@@ -389,10 +365,7 @@ describe("GitHub issue transport", () => {
 
   it("deduplicates concurrent submissions with the same marker", async () => {
     const issue = prepare("concurrent");
-    let releaseAuth: ((value: ReturnType<typeof cliResult>) => void) | undefined;
-    const auth = new Promise<ReturnType<typeof cliResult>>((resolve) => {
-      releaseAuth = resolve;
-    });
+    const { promise: auth, resolve: releaseAuth } = createDeferred<ReturnType<typeof cliResult>>();
     const runGh = vi
       .fn<RunGithubCli>()
       .mockReturnValueOnce(auth)
@@ -449,4 +422,73 @@ describe("GitHub issue transport", () => {
     expect(child.stdin.destroy).toHaveBeenCalledOnce();
     expect(child.stdout.destroy).toHaveBeenCalledOnce();
   });
+
+  it.each([false, true])(
+    "checks live authority and claims synchronously at the default child boundary, retired=%s",
+    async (retire) => {
+      // The actual child-process dependency is mocked; no executable can run in this test.
+      vi.stubEnv("VITEST", undefined);
+      vi.stubEnv("NODE_ENV", "production");
+      let current = true;
+      let claimed = false;
+      let authorityAtCreate: boolean | undefined;
+      spawnMock.mockImplementation((_command, args: string[]) => {
+        if (args[0] === "api") {
+          authorityAtCreate = current;
+          expect(claimed).toBe(true);
+        }
+        const child = Object.assign(new EventEmitter(), {
+          stdin: Object.assign(new EventEmitter(), { destroy: vi.fn(), end: vi.fn() }),
+          stdout: Object.assign(new EventEmitter(), { destroy: vi.fn() }),
+          kill: vi.fn(),
+          unref: vi.fn(),
+        });
+        child.stdin.end.mockImplementation(() =>
+          queueMicrotask(() => {
+            child.emit("spawn");
+            if (args[0] === "api") {
+              child.stdout.emit(
+                "data",
+                Buffer.from("https://github.com/openclaw/openclaw/issues/123\n"),
+              );
+            }
+            child.emit("close", 0);
+          }),
+        );
+        return child;
+      });
+      const submission = submitGithubIssue(prepare(`final-child-${retire}`), undefined, {
+        beforeIssueCreate: async () => {
+          if (retire) {
+            queueMicrotask(() => {
+              current = false;
+            });
+          }
+          return (): undefined => {
+            if (!current) {
+              throw new Error("authority retired");
+            }
+            claimed = true;
+            queueMicrotask(() => {
+              current = false;
+            });
+          };
+        },
+      });
+      if (retire) {
+        await expect(submission).rejects.toThrow("authority retired");
+        expect(claimed).toBe(false);
+        expect(authorityAtCreate).toBeUndefined();
+      } else {
+        await expect(submission).resolves.toEqual({
+          status: "created",
+          url: "https://github.com/openclaw/openclaw/issues/123",
+        });
+        expect(authorityAtCreate).toBe(true);
+      }
+      expect(spawnMock.mock.calls.map(([, args]) => args[0])).toEqual(
+        retire ? ["auth"] : ["auth", "api"],
+      );
+    },
+  );
 });

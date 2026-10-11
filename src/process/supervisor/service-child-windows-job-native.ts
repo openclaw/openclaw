@@ -1,6 +1,8 @@
 type NativeHandle = bigint;
 
 const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x0000_2000;
+const JOB_OBJECT_BASIC_PROCESS_ID_LIST = 3;
+const MAX_JOB_PROCESS_IDS = 4_096;
 const PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x0002_0002;
 const PROC_THREAD_ATTRIBUTE_JOB_LIST = 0x0002_000d;
 const HANDLE_FLAG_INHERIT = 0x0000_0001;
@@ -9,20 +11,77 @@ const FILE_SHARE_READ = 0x0000_0001;
 const FILE_SHARE_WRITE = 0x0000_0002;
 const OPEN_EXISTING = 3;
 const FILE_ATTRIBUTE_NORMAL = 0x0000_0080;
+let retainedProcessJob: NativeHandle | undefined;
+
+/** The executable caller keeps this non-inheritable Job handle until OS exit. */
+export function retainWindowsProcessJobUntilExit(koffi: typeof import("koffi").default): void {
+  if (retainedProcessJob !== undefined) {
+    return;
+  }
+  const bindings = createWindowsJobBindings(koffi);
+  bindings.assertLayouts();
+  const job = bindings.requireHandle(bindings.CreateJobObjectW(null, null), "CreateJobObjectW");
+  try {
+    if (!bindings.SetExtendedLimits(job, 9, bindings.extendedLimits, bindings.extendedLimitsSize)) {
+      throw bindings.lastError("SetInformationJobObject(KILL_ON_JOB_CLOSE)");
+    }
+    if (!bindings.AssignProcessToJobObject(job, bindings.GetCurrentProcess())) {
+      throw bindings.lastError("AssignProcessToJobObject(finalizer)");
+    }
+  } catch (error) {
+    bindings.CloseHandle(job);
+    throw error;
+  }
+  // Closing this handle would terminate the caller before it can flush terminal
+  // JSON. OS exit closes it and kills descendants even after their launcher exits.
+  retainedProcessJob = job;
+}
+
+/** The caller supplies a pinned live launcher process, which becomes the last Job handle owner. */
+export function bindWindowsProcessJobToOwner(
+  bindings: ReturnType<typeof createWindowsJobBindings>,
+  owner: NativeHandle,
+): void {
+  const job = bindings.requireHandle(bindings.CreateJobObjectW(null, null), "CreateJobObjectW");
+  try {
+    if (!bindings.SetExtendedLimits(job, 9, bindings.extendedLimits, bindings.extendedLimitsSize)) {
+      throw bindings.lastError("SetInformationJobObject(KILL_ON_JOB_CLOSE)");
+    }
+    const transferred: Array<NativeHandle | null> = [null];
+    if (!bindings.DuplicateHandle(bindings.GetCurrentProcess(), job, owner, transferred, 0, 0, 2)) {
+      throw bindings.lastError("DuplicateHandle(Job to task launcher)");
+    }
+    bindings.requireHandle(transferred[0], "DuplicateHandle(task launcher Job)");
+    if (!bindings.AssignProcessToJobObject(job, bindings.GetCurrentProcess())) {
+      throw bindings.lastError("AssignProcessToJobObject(task supervisor)");
+    }
+  } catch (error) {
+    bindings.CloseHandle(job);
+    throw error;
+  }
+  // No supervisor/child copy may keep this Job alive after Task Scheduler ends its launcher.
+  if (!bindings.CloseHandle(job)) {
+    throw bindings.lastError("CloseHandle(local task Job)");
+  }
+}
 
 export function createWindowsJobBindings(koffi: typeof import("koffi").default) {
   if (process.arch !== "x64" && process.arch !== "arm64") {
     throw new Error(`Windows Job command ownership requires x64 or arm64, got ${process.arch}`);
   }
   const kernel32 = koffi.load("kernel32.dll");
-  const HANDLE = koffi.pointer("HANDLE", koffi.opaque());
-  const VOID_POINTER = koffi.pointer("VOID_POINTER", koffi.opaque());
-  const SECURITY_ATTRIBUTES = koffi.struct("SECURITY_ATTRIBUTES", {
+  type NativeType = Parameters<typeof kernel32.func>[2];
+  const bindNative = (name: string, result: NativeType, args: NativeType[]) =>
+    kernel32.func("__stdcall", name, result, args);
+  // Tooling and runtime owners can bind independently in one process; avoid Koffi global names.
+  const HANDLE = koffi.pointer(koffi.opaque());
+  const VOID_POINTER = koffi.pointer(koffi.opaque());
+  const SECURITY_ATTRIBUTES = koffi.struct({
     nLength: "uint32_t",
     lpSecurityDescriptor: VOID_POINTER,
     bInheritHandle: "int32_t",
   });
-  const BASIC_LIMITS = koffi.struct("JOBOBJECT_BASIC_LIMIT_INFORMATION", {
+  const BASIC_LIMITS = koffi.struct({
     PerProcessUserTimeLimit: "int64_t",
     PerJobUserTimeLimit: "int64_t",
     LimitFlags: "uint32_t",
@@ -33,7 +92,7 @@ export function createWindowsJobBindings(koffi: typeof import("koffi").default) 
     PriorityClass: "uint32_t",
     SchedulingClass: "uint32_t",
   });
-  const IO_COUNTERS = koffi.struct("IO_COUNTERS", {
+  const IO_COUNTERS = koffi.struct({
     ReadOperationCount: "uint64_t",
     WriteOperationCount: "uint64_t",
     OtherOperationCount: "uint64_t",
@@ -41,7 +100,7 @@ export function createWindowsJobBindings(koffi: typeof import("koffi").default) 
     WriteTransferCount: "uint64_t",
     OtherTransferCount: "uint64_t",
   });
-  const EXTENDED_LIMITS = koffi.struct("JOBOBJECT_EXTENDED_LIMIT_INFORMATION", {
+  const EXTENDED_LIMITS = koffi.struct({
     BasicLimitInformation: BASIC_LIMITS,
     IoInfo: IO_COUNTERS,
     ProcessMemoryLimit: "uintptr_t",
@@ -49,7 +108,7 @@ export function createWindowsJobBindings(koffi: typeof import("koffi").default) 
     PeakProcessMemoryUsed: "uintptr_t",
     PeakJobMemoryUsed: "uintptr_t",
   });
-  const BASIC_ACCOUNTING = koffi.struct("JOBOBJECT_BASIC_ACCOUNTING_INFORMATION", {
+  const BASIC_ACCOUNTING = koffi.struct({
     TotalUserTime: "int64_t",
     TotalKernelTime: "int64_t",
     ThisPeriodTotalUserTime: "int64_t",
@@ -59,7 +118,7 @@ export function createWindowsJobBindings(koffi: typeof import("koffi").default) 
     ActiveProcesses: "uint32_t",
     TotalTerminatedProcesses: "uint32_t",
   });
-  const STARTUPINFO = koffi.struct("STARTUPINFOW", {
+  const STARTUPINFO = koffi.struct({
     cb: "uint32_t",
     lpReserved: VOID_POINTER,
     lpDesktop: VOID_POINTER,
@@ -79,40 +138,52 @@ export function createWindowsJobBindings(koffi: typeof import("koffi").default) 
     hStdOutput: HANDLE,
     hStdError: HANDLE,
   });
-  const STARTUPINFOEX = koffi.struct("STARTUPINFOEXW", {
+  const STARTUPINFOEX = koffi.struct({
     StartupInfo: STARTUPINFO,
     lpAttributeList: VOID_POINTER,
   });
-  const PROCESS_INFORMATION = koffi.struct("PROCESS_INFORMATION", {
+  const PROCESS_INFORMATION = koffi.struct({
     hProcess: HANDLE,
     hThread: HANDLE,
     dwProcessId: "uint32_t",
     dwThreadId: "uint32_t",
   });
-  const getLastErrorCode = kernel32.func("__stdcall", "GetLastError", "uint32_t", []);
-  const CloseHandle = kernel32.func("__stdcall", "CloseHandle", "int32_t", [HANDLE]);
-  const CreateJobObjectW = kernel32.func("__stdcall", "CreateJobObjectW", HANDLE, [
-    VOID_POINTER,
-    "str16",
+  const getLastErrorCode = bindNative("GetLastError", "uint32_t", []);
+  const CloseHandle = bindNative("CloseHandle", "int32_t", [HANDLE]);
+  const CreateJobObjectW = bindNative("CreateJobObjectW", HANDLE, [VOID_POINTER, "str16"]);
+  const OpenJobObjectW = bindNative("OpenJobObjectW", HANDLE, ["uint32_t", "int32_t", "str16"]);
+  const GetCurrentProcess = bindNative("GetCurrentProcess", HANDLE, []);
+  const DuplicateHandle = bindNative("DuplicateHandle", "int32_t", [
+    HANDLE,
+    HANDLE,
+    HANDLE,
+    koffi.out(koffi.pointer(HANDLE)),
+    "uint32_t",
+    "int32_t",
+    "uint32_t",
   ]);
-  const SetExtendedLimits = kernel32.func("__stdcall", "SetInformationJobObject", "int32_t", [
+  const AssignProcessToJobObject = bindNative("AssignProcessToJobObject", "int32_t", [
+    HANDLE,
+    HANDLE,
+  ]);
+  const SetExtendedLimits = bindNative("SetInformationJobObject", "int32_t", [
     HANDLE,
     "int32_t",
     koffi.pointer(EXTENDED_LIMITS),
     "uint32_t",
   ]);
-  const CreatePipe = kernel32.func("__stdcall", "CreatePipe", "int32_t", [
+  const CreatePipe = bindNative("CreatePipe", "int32_t", [
     koffi.out(koffi.pointer(HANDLE)),
     koffi.out(koffi.pointer(HANDLE)),
     koffi.pointer(SECURITY_ATTRIBUTES),
     "uint32_t",
   ]);
-  const SetHandleInformation = kernel32.func("__stdcall", "SetHandleInformation", "int32_t", [
+  const SetHandleInformation = bindNative("SetHandleInformation", "int32_t", [
     HANDLE,
     "uint32_t",
     "uint32_t",
   ]);
-  const CreateFileW = kernel32.func("__stdcall", "CreateFileW", HANDLE, [
+  const CreateFileW = bindNative("CreateFileW", HANDLE, [
     "str16",
     "uint32_t",
     "uint32_t",
@@ -121,25 +192,24 @@ export function createWindowsJobBindings(koffi: typeof import("koffi").default) 
     "uint32_t",
     HANDLE,
   ]);
-  const InitializeProcThreadAttributeList = kernel32.func(
-    "__stdcall",
+  const InitializeProcThreadAttributeList = bindNative(
     "InitializeProcThreadAttributeList",
     "int32_t",
     [VOID_POINTER, "uint32_t", "uint32_t", koffi.inout(koffi.pointer("uintptr_t"))],
   );
-  const UpdateProcThreadAttribute = kernel32.func(
-    "__stdcall",
-    "UpdateProcThreadAttribute",
-    "int32_t",
-    [VOID_POINTER, "uint32_t", "uintptr_t", VOID_POINTER, "uintptr_t", VOID_POINTER, VOID_POINTER],
-  );
-  const DeleteProcThreadAttributeList = kernel32.func(
-    "__stdcall",
-    "DeleteProcThreadAttributeList",
-    "void",
-    [VOID_POINTER],
-  );
-  const CreateProcessW = kernel32.func("__stdcall", "CreateProcessW", "int32_t", [
+  const UpdateProcThreadAttribute = bindNative("UpdateProcThreadAttribute", "int32_t", [
+    VOID_POINTER,
+    "uint32_t",
+    "uintptr_t",
+    VOID_POINTER,
+    "uintptr_t",
+    VOID_POINTER,
+    VOID_POINTER,
+  ]);
+  const DeleteProcThreadAttributeList = bindNative("DeleteProcThreadAttributeList", "void", [
+    VOID_POINTER,
+  ]);
+  const CreateProcessW = bindNative("CreateProcessW", "int32_t", [
     "str16",
     koffi.pointer("uint16_t"),
     VOID_POINTER,
@@ -151,21 +221,26 @@ export function createWindowsJobBindings(koffi: typeof import("koffi").default) 
     koffi.pointer(STARTUPINFOEX),
     koffi.out(koffi.pointer(PROCESS_INFORMATION)),
   ]);
-  const WaitForSingleObject = kernel32.func("__stdcall", "WaitForSingleObject", "uint32_t", [
-    HANDLE,
-    "uint32_t",
-  ]);
-  const GetExitCodeProcess = kernel32.func("__stdcall", "GetExitCodeProcess", "int32_t", [
+  const WaitForSingleObject = bindNative("WaitForSingleObject", "uint32_t", [HANDLE, "uint32_t"]);
+  const GetExitCodeProcess = bindNative("GetExitCodeProcess", "int32_t", [
     HANDLE,
     koffi.out(koffi.pointer("uint32_t")),
   ]);
-  const QueryInformationJobObject = kernel32.func(
-    "__stdcall",
-    "QueryInformationJobObject",
+  const QueryInformationJobObject = bindNative("QueryInformationJobObject", "int32_t", [
+    HANDLE,
     "int32_t",
-    [HANDLE, "int32_t", koffi.out(koffi.pointer(BASIC_ACCOUNTING)), "uint32_t", VOID_POINTER],
-  );
-  const PeekNamedPipe = kernel32.func("__stdcall", "PeekNamedPipe", "int32_t", [
+    koffi.out(koffi.pointer(BASIC_ACCOUNTING)),
+    "uint32_t",
+    VOID_POINTER,
+  ]);
+  const QueryJobProcessIds = bindNative("QueryInformationJobObject", "int32_t", [
+    HANDLE,
+    "int32_t",
+    VOID_POINTER,
+    "uint32_t",
+    koffi.out(koffi.pointer("uint32_t")),
+  ]);
+  const PeekNamedPipe = bindNative("PeekNamedPipe", "int32_t", [
     HANDLE,
     VOID_POINTER,
     "uint32_t",
@@ -173,17 +248,14 @@ export function createWindowsJobBindings(koffi: typeof import("koffi").default) 
     koffi.out(koffi.pointer("uint32_t")),
     VOID_POINTER,
   ]);
-  const ReadFile = kernel32.func("__stdcall", "ReadFile", "int32_t", [
+  const ReadFile = bindNative("ReadFile", "int32_t", [
     HANDLE,
     koffi.out(koffi.pointer("uint8_t")),
     "uint32_t",
     koffi.out(koffi.pointer("uint32_t")),
     VOID_POINTER,
   ]);
-  const TerminateJobObject = kernel32.func("__stdcall", "TerminateJobObject", "int32_t", [
-    HANDLE,
-    "uint32_t",
-  ]);
+  const TerminateJobObject = bindNative("TerminateJobObject", "int32_t", [HANDLE, "uint32_t"]);
   const lastError = (operation: string) =>
     new Error(`${operation} failed (Win32 error ${getLastErrorCode()})`);
   const requireHandle = (value: unknown, operation: string): NativeHandle => {
@@ -191,6 +263,46 @@ export function createWindowsJobBindings(koffi: typeof import("koffi").default) 
       throw lastError(operation);
     }
     return value;
+  };
+  const readJobProcessIds = (job: NativeHandle): number[] => {
+    // Two DWORD counts precede ULONG_PTR identifiers on both supported 64-bit Windows ABIs.
+    const headerBytes = 8;
+    const processIdBytes = 8;
+    const buffer = Buffer.alloc(headerBytes + MAX_JOB_PROCESS_IDS * processIdBytes);
+    const returnedBytes = [0];
+    if (
+      !QueryJobProcessIds(
+        job,
+        JOB_OBJECT_BASIC_PROCESS_ID_LIST,
+        buffer,
+        buffer.length,
+        returnedBytes,
+      )
+    ) {
+      throw lastError("QueryInformationJobObject(ProcessIdList)");
+    }
+    const assigned = buffer.readUInt32LE(0);
+    const listed = buffer.readUInt32LE(4);
+    const length = returnedBytes[0];
+    if (
+      assigned !== listed ||
+      listed > MAX_JOB_PROCESS_IDS ||
+      !Number.isInteger(length) ||
+      length === undefined ||
+      length < headerBytes + listed * processIdBytes ||
+      length > buffer.length
+    ) {
+      throw new Error("QueryInformationJobObject returned an incomplete process ID list");
+    }
+    const pids = new Set<number>();
+    for (let index = 0; index < listed; index += 1) {
+      const pid = buffer.readBigUInt64LE(headerBytes + index * processIdBytes);
+      if (pid === 0n || pid > 0xffff_ffffn || pids.has(Number(pid))) {
+        throw new Error("QueryInformationJobObject returned an invalid process ID");
+      }
+      pids.add(Number(pid));
+    }
+    return [...pids];
   };
   const createCommandStdio = () => {
     let stdinHandle: NativeHandle | undefined;
@@ -337,6 +449,10 @@ export function createWindowsJobBindings(koffi: typeof import("koffi").default) 
   };
   return {
     CreateJobObjectW,
+    OpenJobObjectW,
+    GetCurrentProcess,
+    DuplicateHandle,
+    AssignProcessToJobObject,
     SetExtendedLimits,
     CreateProcessW,
     WaitForSingleObject,
@@ -349,6 +465,7 @@ export function createWindowsJobBindings(koffi: typeof import("koffi").default) 
     getLastErrorCode,
     lastError,
     requireHandle,
+    readJobProcessIds,
     createCommandStdio,
     createProcessAttributeList,
     assertLayouts: () => {

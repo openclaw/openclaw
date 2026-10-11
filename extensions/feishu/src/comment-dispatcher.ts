@@ -1,4 +1,3 @@
-// Feishu plugin module implements comment dispatcher behavior.
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
 import { createReplyPrefixContext } from "openclaw/plugin-sdk/channel-outbound";
@@ -52,22 +51,13 @@ export function createFeishuCommentReplyDispatcher(
     },
   );
   const chunkMode = core.channel.text.resolveChunkMode(params.cfg, "feishu", params.accountId);
-  const typingReaction = createCommentTypingReactionLifecycle({
-    cfg: params.cfg,
-    fileToken: params.fileToken,
-    fileType: params.fileType,
-    replyId: params.replyId,
-    accountId: params.accountId,
-    runtime: params.runtime,
-  });
+  const typingReaction = createCommentTypingReactionLifecycle({ ...params });
 
   const dispatcherOptions: NonNullable<ChannelInboundTurnPlan["dispatcherOptions"]> = {
     responsePrefix: prefixContext.responsePrefix,
     responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
     humanDelay: resolveHumanDelayConfig(params.cfg, params.agentId),
-    onReplyStart: async () => {
-      await typingReaction.start();
-    },
+    onReplyStart: typingReaction.start,
     onCleanup: () => {
       void typingReaction.cleanup();
     },
@@ -136,7 +126,6 @@ export function createFeishuCommentReplyDispatcher(
   return {
     dispatcherOptions,
     delivery,
-    startTypingReaction: typingReaction.start,
     cleanupTypingReaction: typingReaction.cleanup,
   };
 }

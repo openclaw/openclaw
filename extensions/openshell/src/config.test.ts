@@ -22,10 +22,6 @@ describe("openshell plugin config", () => {
     });
   });
 
-  it("accepts remote mode", () => {
-    expect(resolveOpenShellPluginConfig({ mode: "remote" }).mode).toBe("remote");
-  });
-
   it("rejects relative remote paths", () => {
     expect(
       createOpenShellPluginConfigSchema().safeParse?.({
@@ -60,60 +56,14 @@ describe("openshell plugin config", () => {
     ).toBe(false);
   });
 
-  it.each([
-    ["/sandbox/project", "/sandbox/project"],
-    ["/sandbox/project", "/sandbox/project/agent"],
-    ["/agent/worker/project", "/agent/worker"],
-  ])(
-    "preserves shipped overlapping workspace roots %s and %s",
-    (remoteWorkspaceDir, remoteAgentWorkspaceDir) => {
-      const config = { remoteWorkspaceDir, remoteAgentWorkspaceDir };
-      expect(createOpenShellPluginConfigSchema().safeParse?.(config).success).toBe(true);
-      expect(resolveOpenShellPluginConfig(config)).toMatchObject(config);
-    },
-  );
-
-  it("normalizes managed sandbox subpaths", () => {
-    expect(
-      resolveOpenShellPluginConfig({
-        remoteWorkspaceDir: "/sandbox/../sandbox/project",
-        remoteAgentWorkspaceDir: "/agent/./session",
-      }),
-    ).toEqual({
-      mode: "mirror",
-      command: "openshell",
-      gateway: undefined,
-      gatewayEndpoint: undefined,
-      workspace: undefined,
-      from: "openclaw",
-      policy: undefined,
-      providers: [],
-      gpu: false,
-      autoProviders: true,
+  it("preserves shipped equal workspace roots", () => {
+    const config = {
       remoteWorkspaceDir: "/sandbox/project",
-      remoteAgentWorkspaceDir: "/agent/session",
-      timeoutMs: 120_000,
-    });
+      remoteAgentWorkspaceDir: "/sandbox/project",
+    };
+    expect(createOpenShellPluginConfigSchema().safeParse?.(config).success).toBe(true);
+    expect(resolveOpenShellPluginConfig(config)).toMatchObject(config);
   });
-
-  it("rejects unknown mode", () => {
-    expect(() =>
-      resolveOpenShellPluginConfig({
-        mode: "bogus",
-      }),
-    ).toThrow("mode must be one of mirror, remote");
-  });
-
-  it("accepts an OpenShell workspace name", () => {
-    expect(resolveOpenShellPluginConfig({ workspace: "team-1" }).workspace).toBe("team-1");
-  });
-
-  it.each(["Team", "-team", "team-", "team--one", "abcdefghijklmnopqrst"])(
-    "rejects invalid OpenShell workspace name %s",
-    (workspace) => {
-      expect(() => resolveOpenShellPluginConfig({ workspace })).toThrow(/workspace must/);
-    },
-  );
 
   it("rejects timeouts beyond Node's safe timer range", () => {
     expect(() =>

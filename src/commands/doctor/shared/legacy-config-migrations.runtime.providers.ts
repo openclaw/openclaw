@@ -1,10 +1,5 @@
-// Legacy provider runtime config migrations for plugin ids and bundled discovery policy.
-import {
-  defineLegacyConfigMigration,
-  mergeMissing,
-  type LegacyConfigMigrationSpec,
-  type LegacyConfigRule,
-} from "../../../config/legacy.shared.js";
+import { ensureRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
+import { mergeMissing } from "../../../config/merge-missing.js";
 import { isRecord } from "./legacy-config-record-shared.js";
 import {
   migrateLegacyXSearchConfig,
@@ -19,20 +14,6 @@ const CODEX_PLUGIN_ID = "codex";
 function normalizePluginIdForMigration(value: unknown): string | undefined {
   return typeof value === "string" ? value.trim().toLowerCase() : undefined;
 }
-
-const X_SEARCH_RULE: LegacyConfigRule = {
-  path: ["tools", "web", "x_search", "apiKey"],
-  message:
-    'tools.web.x_search.apiKey moved to the xAI plugin; use plugins.entries.xai.config.webSearch.apiKey instead. Run "openclaw doctor --fix".',
-};
-
-const X_SEARCH_MODEL_RULE: LegacyConfigRule = {
-  path: ["tools", "web", "x_search", "model"],
-  message:
-    'tools.web.x_search.model uses a retired xAI model; run "openclaw doctor --fix" to repair it.',
-  requireSourceLiteral: true,
-  match: (value) => resolveLegacyXSearchModelTarget(value) !== undefined,
-};
 
 function rewritePluginIdList(
   value: unknown,
@@ -68,31 +49,6 @@ function rewritePluginIdList(
   return { next, changed };
 }
 
-function rewritePluginSlots(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return false;
-  }
-  let changed = false;
-  for (const [slot, pluginId] of Object.entries(value)) {
-    if (pluginId === LEGACY_OPENAI_CODEX_PLUGIN_ID) {
-      value[slot] = OPENAI_PLUGIN_ID;
-      changed = true;
-    }
-  }
-  return changed;
-}
-
-function rewritePluginEntries(value: unknown): boolean {
-  if (!isRecord(value) || !(LEGACY_OPENAI_CODEX_PLUGIN_ID in value)) {
-    return false;
-  }
-  if (!(OPENAI_PLUGIN_ID in value)) {
-    value[OPENAI_PLUGIN_ID] = value[LEGACY_OPENAI_CODEX_PLUGIN_ID];
-  }
-  delete value[LEGACY_OPENAI_CODEX_PLUGIN_ID];
-  return true;
-}
-
 function rewriteLegacyOpenAICodexPluginPolicy(raw: Record<string, unknown>): string[] {
   const plugins = isRecord(raw.plugins) ? raw.plugins : undefined;
   if (!plugins) {
@@ -110,10 +66,23 @@ function rewriteLegacyOpenAICodexPluginPolicy(raw: Record<string, unknown>): str
       changes.push(`Rewrote plugins.${key} openai-codex references to openai.`);
     }
   }
-  if (rewritePluginEntries(plugins.entries)) {
+  const entries = isRecord(plugins.entries) ? plugins.entries : undefined;
+  if (entries && LEGACY_OPENAI_CODEX_PLUGIN_ID in entries) {
+    if (!(OPENAI_PLUGIN_ID in entries)) {
+      entries[OPENAI_PLUGIN_ID] = entries[LEGACY_OPENAI_CODEX_PLUGIN_ID];
+    }
+    delete entries[LEGACY_OPENAI_CODEX_PLUGIN_ID];
     changes.push("Rewrote plugins.entries.openai-codex to plugins.entries.openai.");
   }
-  if (rewritePluginSlots(plugins.slots)) {
+  const slots = isRecord(plugins.slots) ? plugins.slots : {};
+  let rewrittenSlots = false;
+  for (const [slot, pluginId] of Object.entries(slots)) {
+    if (pluginId === LEGACY_OPENAI_CODEX_PLUGIN_ID) {
+      slots[slot] = OPENAI_PLUGIN_ID;
+      rewrittenSlots = true;
+    }
+  }
+  if (rewrittenSlots) {
     changes.push("Rewrote plugins.slots openai-codex references to openai.");
   }
   return changes;
@@ -122,43 +91,34 @@ function rewriteLegacyOpenAICodexPluginPolicy(raw: Record<string, unknown>): str
 function migrateLegacyCodexSupervisorEntry(
   entries: Record<string, unknown>,
   legacySupervisorDenied: boolean,
-): "migrated" | "removed-invalid" | null {
+  changes: string[],
+): void {
   const legacyEntryKey = Object.keys(entries).find(
     (key) => normalizePluginIdForMigration(key) === LEGACY_CODEX_SUPERVISOR_PLUGIN_ID,
   );
   if (!legacyEntryKey) {
-    return null;
+    return;
   }
 
-  const rawLegacyEntry = entries[legacyEntryKey];
-  if (!isRecord(rawLegacyEntry)) {
+  const legacyEntry = entries[legacyEntryKey];
+  if (!isRecord(legacyEntry)) {
     delete entries[legacyEntryKey];
-    return "removed-invalid";
+    changes.push("Removed invalid plugins.entries.codex-supervisor config.");
+    return;
   }
-  const legacyEntry = rawLegacyEntry;
   const migratedEnabled = legacyEntry.enabled === true && !legacySupervisorDenied;
 
   const codexEntryKey =
     Object.keys(entries).find((key) => normalizePluginIdForMigration(key) === CODEX_PLUGIN_ID) ??
     CODEX_PLUGIN_ID;
-  const rawCodexEntry = entries[codexEntryKey];
-  let codexEntry: Record<string, unknown>;
-  if (isRecord(rawCodexEntry)) {
-    codexEntry = rawCodexEntry;
-  } else {
-    codexEntry = {};
-    entries[codexEntryKey] = codexEntry;
-  }
+  const codexEntry = ensureRecord(entries, codexEntryKey);
   // Top-level false disables the Codex harness too; inactive supervision must
   // stay nested while active migrated supervision explicitly activates Codex.
   if (migratedEnabled && codexEntry.enabled === undefined) {
     codexEntry.enabled = true;
   }
 
-  const codexConfig = isRecord(codexEntry.config) ? codexEntry.config : {};
-  codexEntry.config = codexConfig;
-  const supervision = isRecord(codexConfig.supervision) ? codexConfig.supervision : {};
-  codexConfig.supervision = supervision;
+  const supervision = ensureRecord(ensureRecord(codexEntry, "config"), "supervision");
 
   const legacyConfig = isRecord(legacyEntry.config) ? legacyEntry.config : undefined;
   const migratedSupervision: Record<string, unknown> = {
@@ -176,7 +136,9 @@ function migrateLegacyCodexSupervisorEntry(
   mergeMissing(supervision, migratedSupervision);
 
   delete entries[legacyEntryKey];
-  return "migrated";
+  changes.push(
+    "Moved plugins.entries.codex-supervisor to plugins.entries.codex.config.supervision.",
+  );
 }
 
 function migrateLegacyCodexSupervisorPlugin(raw: Record<string, unknown>): string[] {
@@ -192,15 +154,8 @@ function migrateLegacyCodexSupervisorPlugin(raw: Record<string, unknown>): strin
       (entry) => normalizePluginIdForMigration(entry) === LEGACY_CODEX_SUPERVISOR_PLUGIN_ID,
     );
   const entries = isRecord(plugins.entries) ? plugins.entries : undefined;
-  const entryMigration = entries
-    ? migrateLegacyCodexSupervisorEntry(entries, legacySupervisorDenied)
-    : null;
-  if (entryMigration === "migrated") {
-    changes.push(
-      "Moved plugins.entries.codex-supervisor to plugins.entries.codex.config.supervision.",
-    );
-  } else if (entryMigration === "removed-invalid") {
-    changes.push("Removed invalid plugins.entries.codex-supervisor config.");
+  if (entries) {
+    migrateLegacyCodexSupervisorEntry(entries, legacySupervisorDenied, changes);
   }
 
   const rewrittenAllow = rewritePluginIdList(
@@ -224,46 +179,54 @@ function migrateLegacyCodexSupervisorPlugin(raw: Record<string, unknown>): strin
   return changes;
 }
 
-/** Legacy config migration specs for provider/plugin runtime config compatibility. */
+function pluginPolicyMigration(
+  id: string,
+  message: string,
+  migrate: (raw: Record<string, unknown>) => string[],
+): LegacyConfigMigrationSpec {
+  return {
+    id,
+    legacyRules: [
+      {
+        path: ["plugins"],
+        message,
+        requireSourceLiteral: true,
+        match: (_value, root) => migrate(structuredClone(root)).length > 0,
+      },
+    ],
+    apply: (raw, changes) => {
+      changes.push(...migrate(raw));
+    },
+  };
+}
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_PROVIDERS: LegacyConfigMigrationSpec[] = [
-  defineLegacyConfigMigration({
-    id: "plugins.codex-supervisor->plugins.codex.config.supervision",
-    describe: "Move retired Codex Supervisor config into the Codex plugin",
-    legacyRules: [
-      {
-        path: ["plugins"],
-        message:
-          'plugins.entries.codex-supervisor and related plugin policy references are retired; use plugins.entries.codex.config.supervision. Run "openclaw doctor --fix".',
-        requireSourceLiteral: true,
-        match: (_value, root) =>
-          migrateLegacyCodexSupervisorPlugin(structuredClone(root)).length > 0,
-      },
-    ],
-    apply: (raw, changes) => {
-      changes.push(...migrateLegacyCodexSupervisorPlugin(raw));
-    },
-  }),
-  defineLegacyConfigMigration({
-    id: "plugins.openai-codex->plugins.openai",
-    describe: "Rewrite retired OpenAI Codex plugin policy ids",
-    legacyRules: [
-      {
-        path: ["plugins"],
-        message:
-          'plugins.openai-codex references are retired; use the openai plugin id. Run "openclaw doctor --fix".',
-        requireSourceLiteral: true,
-        match: (_value, root) =>
-          rewriteLegacyOpenAICodexPluginPolicy(structuredClone(root)).length > 0,
-      },
-    ],
-    apply: (raw, changes) => {
-      changes.push(...rewriteLegacyOpenAICodexPluginPolicy(raw));
-    },
-  }),
-  defineLegacyConfigMigration({
+  pluginPolicyMigration(
+    "plugins.codex-supervisor->plugins.codex.config.supervision",
+    'plugins.entries.codex-supervisor and related plugin policy references are retired; use plugins.entries.codex.config.supervision. Run "openclaw doctor --fix".',
+    migrateLegacyCodexSupervisorPlugin,
+  ),
+  pluginPolicyMigration(
+    "plugins.openai-codex->plugins.openai",
+    'plugins.openai-codex references are retired; use the openai plugin id. Run "openclaw doctor --fix".',
+    rewriteLegacyOpenAICodexPluginPolicy,
+  ),
+  {
     id: "tools.web.x_search.apiKey->plugins.entries.xai.config.webSearch.apiKey",
-    describe: "Move legacy x_search auth and repair retired xAI model defaults",
-    legacyRules: [X_SEARCH_RULE, X_SEARCH_MODEL_RULE],
+    legacyRules: [
+      {
+        path: ["tools", "web", "x_search", "apiKey"],
+        message:
+          'tools.web.x_search.apiKey moved to the xAI plugin; use plugins.entries.xai.config.webSearch.apiKey instead. Run "openclaw doctor --fix".',
+      },
+      {
+        path: ["tools", "web", "x_search", "model"],
+        message:
+          'tools.web.x_search.model uses a retired xAI model; run "openclaw doctor --fix" to repair it.',
+        requireSourceLiteral: true,
+        match: (value) => resolveLegacyXSearchModelTarget(value) !== undefined,
+      },
+    ],
     apply: (raw, changes) => {
       const migrated = migrateLegacyXSearchConfig(raw);
       if (!migrated.changes.length) {
@@ -275,5 +238,5 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_PROVIDERS: LegacyConfigMigrationSp
       Object.assign(raw, migrated.config);
       changes.push(...migrated.changes);
     },
-  }),
+  },
 ];

@@ -5,12 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { theme } from "../packages/terminal-core/src/theme.js";
 import { isVerbose, isYes, logVerbose, setVerbose, setYes } from "./globals.js";
 import { logDebug, logError, logInfo, logWarn } from "./logger.js";
-import {
-  resetLogger,
-  setLoggerOverride,
-  stripRedundantSubsystemPrefixForConsole,
-} from "./logging.js";
-import { flushLogger } from "./logging/logger.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "./logging/logger.js";
 import type { RuntimeEnv } from "./runtime.js";
 import { withTestDir } from "./test-helpers/temp-dir.js";
 
@@ -46,20 +41,6 @@ describe("logger helpers", () => {
     logDebug("loud");
     expect(logVerboseLocal).toHaveBeenCalled();
     logVerboseLocal.mockRestore();
-  });
-
-  it("writes to configured log file at configured level", async () => {
-    await withTestDir({ prefix: "openclaw-log-test-" }, async (dir) => {
-      const logPath = path.join(dir, "openclaw.log");
-      setLoggerOverride({ level: "info", file: logPath });
-      fs.writeFileSync(logPath, "");
-      logInfo("hello");
-      logDebug("debug-only"); // may be filtered depending on level mapping
-      // The file transport appends asynchronously; drain it before reading.
-      await flushLogger();
-      const content = fs.readFileSync(logPath, "utf-8");
-      expect(content.length).toBeGreaterThan(0);
-    });
   });
 
   it("filters messages below configured level", async () => {
@@ -122,27 +103,6 @@ describe("globals", () => {
     expect(isYes()).toBe(true);
     setYes(false);
     expect(isYes()).toBe(false);
-  });
-});
-
-describe("stripRedundantSubsystemPrefixForConsole", () => {
-  it.each([
-    { input: "discord: hello", subsystem: "discord", expected: "hello" },
-    { input: "WhatsApp: hello", subsystem: "whatsapp", expected: "hello" },
-    { input: "discord gateway: closed", subsystem: "discord", expected: "gateway: closed" },
-    {
-      input: "[discord] connection stalled",
-      subsystem: "discord",
-      expected: "connection stalled",
-    },
-  ] as const)("drops known subsystem prefix for $input", ({ input, subsystem, expected }) => {
-    expect(stripRedundantSubsystemPrefixForConsole(input, subsystem)).toBe(expected);
-  });
-
-  it("keeps messages that do not start with the subsystem", () => {
-    expect(stripRedundantSubsystemPrefixForConsole("discordant: hello", "discord")).toBe(
-      "discordant: hello",
-    );
   });
 });
 

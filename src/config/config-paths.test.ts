@@ -1,27 +1,113 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  parseConcreteConfigPath,
+  parseConcreteConfigPathTokens,
+  parseConcreteConfigPathWithProvenance,
+  tokenizeConcreteConfigPath,
+} from "../shared/dot-path.js";
+import {
   getConfigValueAtPath,
   setConfigValueAtPath,
   unsetConfigValueAtPath,
 } from "./config-paths.js";
 
+describe("concrete config path readers and mutation guards", () => {
+  it.each(["constructor", "prototype", "__proto__"])(
+    "reads diagnostic %s keys while all mutation parsers reject them",
+    (key) => {
+      const path = `tools.media.audio.request.headers.${key}`;
+      expect(tokenizeConcreteConfigPath(path).tokens).toEqual([
+        "tools",
+        "media",
+        "audio",
+        "request",
+        "headers",
+        key,
+      ]);
+      for (const parse of [
+        parseConcreteConfigPath,
+        parseConcreteConfigPathTokens,
+        parseConcreteConfigPathWithProvenance,
+      ]) {
+        expect(() => parse(path)).toThrow(`Invalid path segment: ${key}`);
+      }
+    },
+  );
+
+  it("retains quoted keys and array-index provenance through the shared grammar", () => {
+    const parsed = tokenizeConcreteConfigPath('entries["123"].headers["X.Trace"][0]');
+    expect(parsed.tokens).toEqual(["entries", "123", "headers", "X.Trace", 0]);
+    expect(parsed.quotedNumericSegments).toEqual(new Set([1]));
+    expect(parseConcreteConfigPathWithProvenance('entries["123"].headers["X.Trace"][0]')).toEqual(
+      parsed,
+    );
+  });
+});
+
 describe("config path own-property traversal", () => {
-  for (const key of ["toString", "valueOf", "hasOwnProperty"]) {
-    it(`does not treat inherited ${key} as config`, () => {
-      const parent: Record<string, unknown> = {};
-      const root: Record<string, unknown> = { parent };
-
-      expect(getConfigValueAtPath(root, ["parent", key])).toBeUndefined();
-      expect(unsetConfigValueAtPath(root, ["parent", key])).toBe(false);
-      expect(root).toEqual({ parent: {} });
-
-      setConfigValueAtPath(root, ["parent", key], "own");
-      expect(Object.hasOwn(parent, key)).toBe(true);
-      expect(getConfigValueAtPath(root, ["parent", key])).toBe("own");
-      expect(unsetConfigValueAtPath(root, ["parent", key])).toBe(true);
-      expect(root).toEqual({});
+  it.each([
+    { parent: ["agents", "defaults", "model"], member: "fallbacks", value: ["openai/gpt-4o"] },
+    {
+      parent: ["agents", "defaults", "subagents", "model"],
+      member: "fallbacks",
+      value: ["openai/gpt-4o"],
+    },
+    {
+      parent: ["agents", "entries", "worker", "model"],
+      member: "fallbacks",
+      value: ["openai/gpt-4o"],
+    },
+    {
+      parent: ["agents", "entries", "worker", "subagents", "model"],
+      member: "fallbacks",
+      value: ["openai/gpt-4o"],
+    },
+    {
+      parent: ["tools", "exec", "reviewer", "model"],
+      member: "fallbacks",
+      value: ["openai/gpt-4o"],
+    },
+    {
+      parent: ["agents", "entries", "worker", "tools", "exec", "reviewer", "model"],
+      member: "fallbacks",
+      value: ["openai/gpt-4o"],
+    },
+    { parent: ["agents", "defaults", "pdfModel"], member: "timeoutMs", value: 5000 },
+    { parent: ["agents", "defaults", "mediaModels", "video"], member: "timeoutMs", value: 5000 },
+  ])("keeps a shorthand primary when setting $parent.$member", ({ parent, member, value }) => {
+    const root: Record<string, unknown> = {};
+    setConfigValueAtPath(root, parent, "openai/gpt-4o-mini");
+    setConfigValueAtPath(root, [...parent, member], value);
+    expect(getConfigValueAtPath(root, parent)).toEqual({
+      primary: "openai/gpt-4o-mini",
+      [member]: value,
     });
-  }
+  });
+
+  it.each([
+    { member: "fallbacks", value: ["backup"] },
+    { member: "timeoutMs", value: 5000 },
+  ])("does not promote unrelated plugin strings when setting $member", ({ member, value }) => {
+    const root = { plugins: { entries: { demo: { config: { model: "opaque" } } } } };
+    setConfigValueAtPath(root, ["plugins", "entries", "demo", "config", "model", member], value);
+    expect(root.plugins.entries.demo.config.model).toEqual({ [member]: value });
+  });
+
+  it("does not treat an inherited prototype leaf as config", () => {
+    const key = "toString";
+    const parent: Record<string, unknown> = {};
+    const root: Record<string, unknown> = { parent };
+
+    expect(getConfigValueAtPath(root, ["parent", key])).toBeUndefined();
+    expect(unsetConfigValueAtPath(root, ["parent", key])).toBe(false);
+    expect(root).toEqual({ parent: {} });
+
+    setConfigValueAtPath(root, ["parent", key], "own");
+    expect(Object.hasOwn(parent, key)).toBe(true);
+    expect(getConfigValueAtPath(root, ["parent", key])).toBe("own");
+    expect(unsetConfigValueAtPath(root, ["parent", key])).toBe(true);
+    expect(root).toEqual({});
+  });
 
   it("replaces an inherited parent instead of traversing it", () => {
     const prototypeBranch = { leaf: "prototype" };

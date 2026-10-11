@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 350377,
-  "reason": "Current main b6a4d0dad430 measures 350377 B startup gzip in Linux CI after integrated UI changes (+812 B, 0.23%); pristine-main and candidate builds measured 350363 B and 350380 B, within the existing 64 B variance allowance. Fixed 358400 B cap and existing growth allowance retained.",
-  "updatedAt": "2026-09-04"
+  "startupJsGzipBytes": 374285,
+  "reason": "Personal backgrounds: Peter authorized fix and landing on 2026-10-10 after the scoped 1,407 B (0.38%) cap proposal. Paired candidate measured 374,285 B before the final deferred-drain repair and 374,327 B afterward; the 42 B difference stays within the existing 512 B growth allowance. Retain the 64 B build-variance allowance and all request, CSS, asset, and route budgets.",
+  "updatedAt": "2026-10-10"
 }

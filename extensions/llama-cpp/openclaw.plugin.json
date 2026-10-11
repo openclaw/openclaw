@@ -1,10 +1,12 @@
 {
   "id": "llama-cpp",
+  "categories": ["models"],
   "name": "llama.cpp Provider",
   "description": "Managed and external llama.cpp servers for GGUF chat and embeddings.",
   "activation": {
     "onStartup": false
   },
+  "providerCatalogEntry": "./provider-discovery.ts",
   "enabledByDefault": true,
   "autoEnableWhenConfiguredProviders": ["llama-cpp"],
   "providers": ["llama-cpp"],

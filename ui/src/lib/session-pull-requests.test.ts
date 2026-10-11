@@ -1,97 +1,39 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from "../api/gateway.ts";
-import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
+import {
+  createGatewayHarness,
+  createHello,
+  flushSync,
+} from "./session-pull-requests.test-support.ts";
 import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+  sessionGitHubRepository,
   sessionPullRequestsForGateway,
 } from "./session-pull-requests.ts";
 import { scopedSessionArtifactKey } from "./sessions/session-key.ts";
 
-function createHello(): GatewayHelloOk {
-  return {
-    type: "hello-ok",
-    protocol: 1,
-    auth: { role: "operator", scopes: [] },
-    features: { methods: [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD] },
-  };
+function createStoreHarness() {
+  const harness = createGatewayHarness();
+  return { harness, store: sessionPullRequestsForGateway(harness.gateway), owner: {} };
 }
 
-function createGatewayHarness() {
-  const request = vi.fn<GatewayBrowserClient["request"]>().mockResolvedValue({ subscribed: true });
-  const client = { request } as unknown as GatewayBrowserClient;
-  let snapshot: ApplicationGatewaySnapshot = {
-    client,
-    phase: "connected",
-    offlineStable: false,
-    hello: createHello(),
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: "main",
-    sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
-  };
-  const snapshotListeners = new Set<(value: ApplicationGatewaySnapshot) => void>();
-  const eventListeners = new Set<GatewayEventListener>();
-  const unsubscribeSnapshots = vi.fn();
-  const unsubscribeEvents = vi.fn();
-  const subscribeSnapshots = vi.fn((listener: (value: ApplicationGatewaySnapshot) => void) => {
-    snapshotListeners.add(listener);
-    return () => {
-      unsubscribeSnapshots();
-      snapshotListeners.delete(listener);
-    };
-  });
-  const subscribeEvents = vi.fn((listener: GatewayEventListener) => {
-    eventListeners.add(listener);
-    return () => {
-      unsubscribeEvents();
-      eventListeners.delete(listener);
-    };
-  });
-  const gateway = {
-    get snapshot() {
-      return snapshot;
-    },
-    connection: { gatewayUrl: "ws://example.test", token: "", bootstrapToken: "", password: "" },
-    connectionRevision: 0,
-    eventLog: [],
-    subscribe: subscribeSnapshots,
-    subscribeEvents,
-    subscribeEventLog: () => () => {},
-    connect: vi.fn(),
-    setSessionKey: vi.fn(),
-    start: vi.fn(),
-    stop: vi.fn(),
-  } as ApplicationGateway;
-  return {
-    gateway,
-    request,
-    subscribeSnapshots,
-    subscribeEvents,
-    unsubscribeSnapshots,
-    unsubscribeEvents,
-    emit(payload: unknown, event = "controlUi.sessionPullRequests.changed") {
-      for (const listener of eventListeners) {
-        listener({
-          type: "event",
-          event,
-          payload,
-          seq: 1,
-        });
-      }
-    },
-    setSnapshot(next: ApplicationGatewaySnapshot) {
-      snapshot = next;
-      for (const listener of snapshotListeners) {
-        listener(snapshot);
-      }
-    },
-  };
+function emitReadySnapshot(
+  harness: ReturnType<typeof createGatewayHarness>,
+  key: string,
+  pullRequests: Array<{ number: number; state?: string }>,
+) {
+  harness.emit({ sessions: { [key]: { pullRequests, rateLimited: false, status: "ready" } } });
 }
 
-async function flushSync() {
-  await Promise.resolve();
-  await Promise.resolve();
+function expectSubscription(
+  harness: ReturnType<typeof createGatewayHarness>,
+  sessionKeys: string[],
+  refreshSessionKeys?: string[],
+) {
+  expect(harness.request).toHaveBeenLastCalledWith(
+    SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+    { sessionKeys, ...(refreshSessionKeys ? { refreshSessionKeys } : {}) },
+    { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+  );
 }
 
 afterEach(() => {
@@ -101,42 +43,274 @@ afterEach(() => {
 });
 
 describe("session pull request snapshot store", () => {
-  it("sends an empty replace-set while the tab is hidden", async () => {
-    const harness = createGatewayHarness();
-    const store = sessionPullRequestsForGateway(harness.gateway);
-    const owner = {};
-    store.watch(owner, ["agent:main:demo"]);
-    await flushSync();
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys: ["agent:main:demo"],
-    });
+  it.each([false, true])(
+    "requires operator.read and retires cached facts (cached: %s)",
+    async (cached) => {
+      vi.useFakeTimers();
+      const { harness, store, owner } = createStoreHarness();
+      const key = "agent:main:demo";
+      if (cached) {
+        store.watch(owner, [key], { foreground: true });
+        await flushSync();
+        emitReadySnapshot(harness, key, [{ number: 42, state: "open" }]);
+        expect(store.get(key)?.pullRequests).toHaveLength(1);
+      }
+      harness.setSnapshot({
+        ...harness.gateway.snapshot,
+        hello: createHello(["operator.sessions.read", "operator.sessions.write"]),
+      });
+      store.watch(owner, [key], { foreground: true });
+      await flushSync();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(store.get(key)).toBeUndefined();
+      expect(harness.request).toHaveBeenCalledTimes(cached ? 1 : 0);
+      expect(await store.load({}, key)).toBeUndefined();
 
-    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
-    document.dispatchEvent(new Event("visibilitychange"));
+      harness.setSnapshot({ ...harness.gateway.snapshot, hello: createHello() });
+      await flushSync();
+      expectSubscription(harness, [key]);
+      expect(store.get(key)).toBeUndefined();
+      expect(harness.request).toHaveBeenCalledTimes(cached ? 2 : 1);
+      store.unwatch(owner);
+    },
+  );
+
+  it("coalesces refresh bursts while a subscription request is unsettled and keeps one trailing refresh", async () => {
+    const { harness, store, owner } = createStoreHarness();
+    const key = "agent:main:demo";
+    store.watch(owner, [key]);
     await flushSync();
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys: [],
-    });
+    let resolve!: (value: unknown) => void;
+    harness.request.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    );
+    store.refresh(key);
+    await flushSync();
+    for (let n = 0; n < 10; n++) {
+      store.refresh(key);
+      await flushSync();
+    }
+    expect(harness.request).toHaveBeenCalledTimes(2);
+    resolve({ subscribed: true });
+    await flushSync();
+    await flushSync();
+    expect(harness.request).toHaveBeenCalledTimes(3);
     store.unwatch(owner);
     await flushSync();
   });
 
+  describe("snapshot reconciliation", () => {
+    const repository = { owner: "openclaw", repo: "openclaw" };
+    const branch = { ...repository, branch: "feature/demo" };
+    const open = [{ number: 1, state: "open" }];
+    type Snapshot = {
+      pullRequests: Array<{ number: number; state?: string; branch?: string }>;
+      repository?: { owner: string; repo: string };
+      branch?: typeof branch & { additions?: number };
+      rateLimited: boolean;
+      status: string;
+    };
+    const snapshot = (fields: Partial<Snapshot> = {}): Snapshot => ({
+      pullRequests: [],
+      rateLimited: false,
+      status: "ready",
+      ...fields,
+    });
+    const unavailable = snapshot({
+      repository,
+      pullRequests: [{ number: 1, state: "merged" }],
+      status: "unavailable",
+    });
+    const changedBranch = { ...branch, additions: 9 };
+    const cases: Array<{
+      name: string;
+      initial: Snapshot;
+      updates: Array<{
+        received: Snapshot;
+        expected: Snapshot;
+        repository?: Snapshot["repository"] | null;
+      }>;
+    }> = [
+      {
+        name: "populated unavailable facts and later branch enrichment",
+        initial: snapshot({
+          repository,
+          branch: { ...branch, additions: 1 },
+          pullRequests: open,
+          rateLimited: true,
+          status: "rate-limited",
+        }),
+        updates: [
+          { received: unavailable, expected: unavailable },
+          {
+            received: { ...unavailable, pullRequests: [], branch: changedBranch },
+            expected: { ...unavailable, branch: changedBranch },
+          },
+        ],
+      },
+      ...(["unavailable", "rate-limited"] as const).map((status, index) => {
+        const next = snapshot({
+          repository,
+          branch: { ...repository, branch: "feature/current", additions: 9 },
+          rateLimited: status === "rate-limited",
+          status,
+        });
+        return {
+          name: `replacement branch during ${status} with ${index === 0 ? "branch" : "PR"} metadata`,
+          initial: snapshot({
+            repository,
+            pullRequests: [{ number: 1, state: "open", branch: "feature/previous" }],
+            ...(index === 0 ? { branch: { ...repository, branch: "feature/previous" } } : {}),
+          }),
+          updates: [{ received: next, expected: next }],
+        };
+      }),
+      ...(["rate-limited", "unavailable"] as const).map((status) => ({
+        name: `repository-only context during ${status} and its ready replacement`,
+        initial: snapshot({ repository }),
+        updates: [
+          {
+            received: snapshot({ status, rateLimited: status === "rate-limited" }),
+            expected: snapshot({ repository, status, rateLimited: status === "rate-limited" }),
+          },
+          { received: snapshot(), expected: snapshot(), repository: null },
+        ],
+      })),
+      ...(
+        [
+          { status: "unavailable", repository: { owner: "other", repo: "openclaw" } },
+          { status: "rate-limited", repository: { owner: "openclaw", repo: "other" } },
+        ] as const
+      ).map(({ status, repository: replacement }) => {
+        const next = snapshot({
+          repository: replacement,
+          status,
+          rateLimited: status === "rate-limited",
+        });
+        return {
+          name: `repository replacement during ${status}`,
+          initial: snapshot({ repository, branch, pullRequests: open }),
+          updates: [{ received: next, expected: next, repository: replacement }],
+        };
+      }),
+      {
+        name: "empty failure deltas retain PR facts and repository context",
+        initial: snapshot({ repository, pullRequests: open }),
+        updates: [
+          {
+            received: snapshot({ branch, rateLimited: true, status: "rate-limited" }),
+            expected: snapshot({
+              repository,
+              branch,
+              pullRequests: open,
+              rateLimited: true,
+              status: "rate-limited",
+            }),
+          },
+          {
+            received: snapshot({ status: "unavailable" }),
+            expected: snapshot({ repository, branch, pullRequests: open, status: "unavailable" }),
+          },
+        ],
+      },
+    ];
+    it.each(cases)("reconciles $name", async ({ initial, updates }) => {
+      const { harness, store, owner } = createStoreHarness();
+      const key = "agent:main:demo";
+      store.watch(owner, [key]);
+      await flushSync();
+      harness.emit({ sessions: { [key]: initial } });
+      for (const update of updates) {
+        harness.emit({ sessions: { [key]: update.received } });
+        expect(store.get(key)).toEqual(update.expected);
+        if (update.repository !== undefined) {
+          expect(sessionGitHubRepository(store.get(key))).toEqual(update.repository);
+        }
+      }
+      store.unwatch(owner);
+      await flushSync();
+    });
+  });
+
+  it.each([
+    { boundary: "reconnect", outcome: "resolve" },
+    { boundary: "hello", outcome: "reject" },
+  ] as const)(
+    "preserves an unsettled forced refresh across $boundary and ignores its late $outcome",
+    async ({ boundary, outcome }) => {
+      const { harness, store, owner } = createStoreHarness();
+      const key = "agent:main:demo";
+      store.watch(owner, [key]);
+      await flushSync();
+      let resolve!: (value: unknown) => void;
+      let reject!: (error: Error) => void;
+      harness.request.mockImplementationOnce(
+        () =>
+          new Promise((done, fail) => {
+            resolve = done;
+            reject = fail;
+          }),
+      );
+      store.refresh(key);
+      await flushSync();
+      const connected = harness.gateway.snapshot;
+      if (boundary === "reconnect") {
+        harness.setSnapshot({ ...connected, phase: "stopped", hello: null });
+        await flushSync();
+      }
+      harness.setSnapshot({ ...connected, hello: createHello() });
+      await flushSync();
+      expectSubscription(harness, [key], [key]);
+      const calls = harness.request.mock.calls.length;
+      if (outcome === "resolve") {
+        resolve({ subscribed: true });
+      } else {
+        reject(new Error("retired request failed"));
+      }
+      await flushSync();
+      await flushSync();
+      expect(harness.request).toHaveBeenCalledTimes(calls);
+      store.unwatch(owner);
+      await flushSync();
+    },
+  );
+  it("derives the repository from explicit context, branch, then the first pull request", () => {
+    const repository = { owner: "explicit", repo: "checkout" };
+    const branch = { owner: "branch-owner", repo: "checkout", branch: "feature/demo" };
+    const pullRequest = {
+      owner: "pr-owner",
+      repo: "checkout",
+      branch: "feature/demo",
+      number: 123,
+      title: "Demo",
+      url: "https://github.com/pr-owner/checkout/pull/123",
+      state: "open" as const,
+    };
+    const snapshot = { repository, branch, pullRequests: [pullRequest], rateLimited: false };
+    expect(sessionGitHubRepository(snapshot)).toEqual(repository);
+    expect(sessionGitHubRepository({ ...snapshot, repository: undefined })).toEqual({
+      owner: "branch-owner",
+      repo: "checkout",
+    });
+    expect(
+      sessionGitHubRepository({ ...snapshot, repository: undefined, branch: undefined }),
+    ).toEqual({
+      owner: "pr-owner",
+      repo: "checkout",
+    });
+    expect(sessionGitHubRepository({ pullRequests: [], rateLimited: false })).toBeNull();
+    expect(sessionGitHubRepository(undefined)).toBeNull();
+  });
+
   it("retires snapshots and resubscribes normally across a same-client reconnect", async () => {
-    const harness = createGatewayHarness();
-    const store = sessionPullRequestsForGateway(harness.gateway);
-    const owner = {};
+    const { harness, store, owner } = createStoreHarness();
     const key = "agent:main:demo";
     store.watch(owner, [key]);
     await flushSync();
-    harness.emit({
-      sessions: {
-        [key]: {
-          pullRequests: [{ number: 1, state: "open" }],
-          rateLimited: false,
-          status: "ready",
-        },
-      },
-    });
+    emitReadySnapshot(harness, key, [{ number: 1, state: "open" }]);
     expect(store.get(key)?.pullRequests).toEqual([{ number: 1, state: "open" }]);
 
     harness.setSnapshot({ ...harness.gateway.snapshot, phase: "reconnecting", hello: null });
@@ -149,21 +323,19 @@ describe("session pull request snapshot store", () => {
     });
     await flushSync();
     expect(harness.request).toHaveBeenCalledTimes(2);
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys: [key],
-    });
+    expectSubscription(harness, [key]);
     store.unwatch(owner);
     await flushSync();
   });
 
-  it.each(["new", "reset", "branch-switch", "fork", "rewind"])(
-    "retires and force-refreshes only the matching session for %s",
+  it.each(["branch-switch", "rewind", "send"])(
+    "invalidates matching snapshots only for structural events (%s)",
     async (reason) => {
-      const harness = createGatewayHarness();
-      const store = sessionPullRequestsForGateway(harness.gateway);
-      const owner = {};
+      vi.useFakeTimers();
+      const { harness, store, owner } = createStoreHarness();
       const listener = vi.fn();
       const globalAlias = reason === "rewind";
+      const structural = reason !== "send";
       harness.setSnapshot({
         ...harness.gateway.snapshot,
         hello: {
@@ -201,49 +373,31 @@ describe("session pull request snapshot store", () => {
         "sessions.changed",
       );
 
-      expect(store.get(key)).toBeUndefined();
+      if (structural) {
+        expect(store.get(key)).toBeUndefined();
+        expect(listener).toHaveBeenCalled();
+      } else {
+        expect(store.get(key)?.pullRequests).toEqual([{ number: 1 }]);
+      }
       expect(store.get(otherKey)?.pullRequests).toEqual([{ number: 2 }]);
-      expect(listener).toHaveBeenCalled();
       await flushSync();
-      expect(harness.request).toHaveBeenCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-        sessionKeys: [key, otherKey].toSorted(),
-        refreshSessionKeys: [key],
-      });
+      expect(harness.request).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(5_000);
+      if (structural) {
+        expectSubscription(harness, [key, otherKey].toSorted(), [key]);
+      } else {
+        expect(harness.request).not.toHaveBeenCalled();
+      }
       unsubscribe();
       store.unwatch(owner);
       await flushSync();
     },
   );
 
-  it("keeps snapshots for ordinary send events", async () => {
-    const harness = createGatewayHarness();
-    const store = sessionPullRequestsForGateway(harness.gateway);
-    const owner = {};
-    const key = "agent:main:demo";
-    store.watch(owner, [key]);
-    await flushSync();
-    harness.emit({
-      sessions: {
-        [key]: { pullRequests: [{ number: 1 }], rateLimited: false, status: "ready" },
-      },
-    });
-    harness.request.mockClear();
-
-    harness.emit({ sessionKey: key, agentId: "main", reason: "send" }, "sessions.changed");
-    await flushSync();
-
-    expect(store.get(key)?.pullRequests).toEqual([{ number: 1 }]);
-    expect(harness.request).not.toHaveBeenCalled();
-    store.unwatch(owner);
-    await flushSync();
-  });
-
   it("detaches document and gateway listeners after the last consumer leaves", async () => {
     const addEventListener = vi.spyOn(document, "addEventListener");
     const removeEventListener = vi.spyOn(document, "removeEventListener");
-    const harness = createGatewayHarness();
-    const store = sessionPullRequestsForGateway(harness.gateway);
-    const owner = {};
+    const { harness, store, owner } = createStoreHarness();
 
     expect(harness.subscribeSnapshots).not.toHaveBeenCalled();
     expect(harness.subscribeEvents).not.toHaveBeenCalled();
@@ -260,9 +414,7 @@ describe("session pull request snapshot store", () => {
 
     store.unwatch(owner);
     await flushSync();
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys: [],
-    });
+    expectSubscription(harness, []);
     expect(harness.unsubscribeSnapshots).not.toHaveBeenCalled();
     expect(harness.unsubscribeEvents).not.toHaveBeenCalled();
 
@@ -293,120 +445,161 @@ describe("session pull request snapshot store", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("resubscribes and accepts a fresh snapshot after becoming active again", async () => {
-    const harness = createGatewayHarness();
-    const store = sessionPullRequestsForGateway(harness.gateway);
-    const owner = {};
-    const key = "agent:main:demo";
+  it.each(["watch", "load"] as const)(
+    "reactivates a detached store for a fresh %s",
+    async (mode) => {
+      const { harness, store, owner } = createStoreHarness();
+      const key = "agent:main:demo";
+      store.watch(owner, [key]);
+      await flushSync();
+      emitReadySnapshot(harness, key, [{ number: 1, state: "open" }]);
+      expect(store.get(key)?.pullRequests).toEqual([{ number: 1, state: "open" }]);
+      store.unwatch(owner);
+      await flushSync();
+      expect(store.get(key)).toBeUndefined();
+      expect(harness.unsubscribeSnapshots).toHaveBeenCalledOnce();
+      expect(harness.unsubscribeEvents).toHaveBeenCalledOnce();
 
-    store.watch(owner, [key]);
-    await flushSync();
-    harness.emit({
-      sessions: {
-        [key]: {
-          pullRequests: [{ number: 1, state: "open" }],
-          rateLimited: false,
-          status: "ready",
-        },
-      },
-    });
-    expect(store.get(key)?.pullRequests).toEqual([{ number: 1, state: "open" }]);
+      emitReadySnapshot(harness, key, [{ number: 99, state: "open" }]);
+      const loaded = mode === "load" ? store.load(owner, key) : undefined;
+      if (mode === "watch") {
+        store.watch(owner, [key]);
+      }
+      await flushSync();
+      expect(harness.subscribeSnapshots).toHaveBeenCalledTimes(2);
+      expect(harness.subscribeEvents).toHaveBeenCalledTimes(2);
+      expectSubscription(harness, [key]);
+      emitReadySnapshot(harness, key, [{ number: 2, state: "open" }]);
+      expect(store.get(key)?.pullRequests).toEqual([{ number: 2, state: "open" }]);
+      if (loaded) {
+        await expect(loaded).resolves.toMatchObject({ status: "ready" });
+      }
+      store.unwatch(owner);
+      await flushSync();
+    },
+  );
 
-    store.unwatch(owner);
-    await flushSync();
-    expect(store.get(key)).toBeUndefined();
-    expect(harness.unsubscribeSnapshots).toHaveBeenCalledOnce();
-    expect(harness.unsubscribeEvents).toHaveBeenCalledOnce();
-
-    harness.emit({
-      sessions: {
-        [key]: {
-          pullRequests: [{ number: 99, state: "open" }],
-          rateLimited: false,
-          status: "ready",
-        },
-      },
-    });
-    store.watch(owner, [key]);
-    await flushSync();
-    expect(harness.subscribeSnapshots).toHaveBeenCalledTimes(2);
-    expect(harness.subscribeEvents).toHaveBeenCalledTimes(2);
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys: [key],
-    });
-    harness.emit({
-      sessions: {
-        [key]: {
-          pullRequests: [{ number: 2, state: "open" }],
-          rateLimited: false,
-          status: "ready",
-        },
-      },
-    });
-    expect(store.get(key)?.pullRequests).toEqual([{ number: 2, state: "open" }]);
-
-    store.unwatch(owner);
-    await flushSync();
-  });
-
-  it("reactivates a detached store for a standalone load", async () => {
-    const harness = createGatewayHarness();
-    const store = sessionPullRequestsForGateway(harness.gateway);
-    const owner = {};
-    const key = "agent:main:demo";
-    store.watch(owner, [key]);
-    await flushSync();
-    store.unwatch(owner);
+  it("requests an immediate refresh for only the selected watched key", async () => {
+    const { harness, store, owner } = createStoreHarness();
+    store.watch(owner, ["agent:main:demo", "agent:main:other"]);
     await flushSync();
     harness.request.mockClear();
 
-    const loaded = store.load({}, key);
+    expect(store.refresh("agent:main:unwatched")).toBe(false);
+    expect(store.refresh("agent:main:demo")).toBe(true);
+    expect(store.refresh("agent:main:demo")).toBe(true);
     await flushSync();
-    expect(harness.request).toHaveBeenCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys: [key],
-    });
-    harness.emit({
-      sessions: {
-        [key]: { pullRequests: [], rateLimited: false, status: "ready" },
-      },
-    });
-    await expect(loaded).resolves.toMatchObject({ status: "ready" });
+
+    expect(harness.request).toHaveBeenCalledOnce();
+    expectSubscription(harness, ["agent:main:demo", "agent:main:other"], ["agent:main:demo"]);
+    store.unwatch(owner);
     await flushSync();
   });
 
-  it("retries a transient subscription failure with bounded backoff", async () => {
+  it("debounces automatic bursts per session while an explicit refresh absorbs its timer", async () => {
     vi.useFakeTimers();
-    const harness = createGatewayHarness();
-    harness.request.mockRejectedValueOnce(new Error("temporarily unavailable"));
-    const store = sessionPullRequestsForGateway(harness.gateway);
-    const owner = {};
-    store.watch(owner, ["agent:main:demo"]);
+    const { harness, store, owner } = createStoreHarness();
+    const first = "agent:main:first";
+    const second = "agent:main:second";
+    store.watch(owner, [first, second]);
     await flushSync();
-    expect(harness.request).toHaveBeenCalledTimes(1);
+    harness.request.mockClear();
 
-    await vi.advanceTimersByTimeAsync(29_999);
-    expect(harness.request).toHaveBeenCalledTimes(1);
+    store.refresh(first, { automatic: true });
+    store.refresh(second, { automatic: true });
+    await vi.advanceTimersByTimeAsync(2_000);
+    store.refresh(first, { automatic: true });
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(harness.request).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
+    expectSubscription(harness, [first, second], [second]);
+
+    store.refresh(first);
     await flushSync();
+    await flushSync();
+    expectSubscription(harness, [first, second], [first]);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(harness.request).toHaveBeenCalledTimes(2);
     store.unwatch(owner);
     await flushSync();
   });
 
-  it("requests an immediate refresh for only the selected watched key", async () => {
-    const harness = createGatewayHarness();
-    const store = sessionPullRequestsForGateway(harness.gateway);
-    const owner = {};
-    store.watch(owner, ["agent:main:demo", "agent:main:other"]);
+  it("coalesces tool and terminal activity for viewed sessions without refreshing passive rows", async () => {
+    vi.useFakeTimers();
+    const { harness, store, owner } = createStoreHarness();
+    const passiveOwner = {};
+    const viewed = "agent:main:demo";
+    const passive = "agent:main:idle";
+    store.watch(passiveOwner, [viewed, passive], { passive: true });
+    store.watch(owner, [viewed], { foreground: true });
     await flushSync();
     harness.request.mockClear();
 
-    store.refresh("agent:main:demo");
-    await flushSync();
+    for (const event of ["agent", "session.tool"]) {
+      for (const sessionKey of [viewed, passive]) {
+        harness.emit({ sessionKey, stream: "tool", data: { phase: "result" } }, event);
+      }
+    }
+    for (const phase of ["end", "error"]) {
+      harness.emit({ sessionKey: viewed, stream: "lifecycle", data: { phase } }, "agent");
+    }
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(harness.request).toHaveBeenCalledOnce();
+    expectSubscription(harness, [viewed], [viewed]);
 
-    expect(harness.request).toHaveBeenCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys: ["agent:main:demo", "agent:main:other"],
-      refreshSessionKeys: ["agent:main:demo"],
+    harness.emit({ sessionKey: viewed, stream: "tool", data: { phase: "result" } }, "agent");
+    store.unwatch(owner);
+    await flushSync();
+    harness.request.mockClear();
+    harness.emit({ sessionKey: viewed, stream: "tool", data: { phase: "result" } }, "session.tool");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(harness.request).not.toHaveBeenCalled();
+    expect(store.refresh(passive)).toBe(false);
+    store.unwatch(passiveOwner);
+    await flushSync();
+  });
+
+  it("drops a delayed automatic refresh when its watch is replaced", async () => {
+    vi.useFakeTimers();
+    const { harness, store, owner } = createStoreHarness();
+    store.watch(owner, ["agent:main:old"]);
+    await flushSync();
+    store.refresh("agent:main:old", { automatic: true });
+    store.watch(owner, ["agent:main:next"]);
+    await flushSync();
+    harness.request.mockClear();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(harness.request).not.toHaveBeenCalled();
+    store.unwatch(owner);
+    await flushSync();
+  });
+
+  it("retains an unsettled refresh across hiding and restoring the watched tab", async () => {
+    const { harness, store, owner } = createStoreHarness();
+    const key = "agent:main:demo";
+    store.watch(owner, [key]);
+    await flushSync();
+    let resolve!: (value: unknown) => void;
+    harness.request.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    );
+    store.refresh(key);
+    await flushSync();
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flushSync();
+    expect(harness.request.mock.calls.at(-1)?.[1]).toEqual({ sessionKeys: [] });
+    resolve({ subscribed: true });
+    await flushSync();
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flushSync();
+    expect(harness.request.mock.calls.at(-1)?.[1]).toEqual({
+      sessionKeys: [key],
+      refreshSessionKeys: [key],
     });
     store.unwatch(owner);
     await flushSync();
@@ -466,11 +659,7 @@ describe("session pull request snapshot store", () => {
     await flushSync();
     expect(settled).toBe(false);
 
-    harness.emit({
-      sessions: {
-        "agent:main:demo": { pullRequests: [], rateLimited: false, status: "ready" },
-      },
-    });
+    emitReadySnapshot(harness, "agent:main:demo", []);
     await expect(loaded).resolves.toMatchObject({ status: "ready" });
     store.unwatch(otherOwner);
     await flushSync();
@@ -497,15 +686,16 @@ describe("session pull request snapshot store", () => {
     await flushSync();
   });
 
-  it("resubscribes when foreground promotion changes the bounded server union", async () => {
+  it("updates the bounded server union and snapshots when foreground priority changes", async () => {
     const harness = createGatewayHarness();
     const store = sessionPullRequestsForGateway(harness.gateway);
     const normalOwner = {};
     const foregroundOwner = {};
-    store.watch(
-      normalOwner,
-      Array.from({ length: 201 }, (_value, index) => `normal-${String(index).padStart(3, "0")}`),
+    const normalKeys = Array.from(
+      { length: 201 },
+      (_value, index) => `normal-${String(index).padStart(3, "0")}`,
     );
+    store.watch(normalOwner, normalKeys);
     await flushSync();
     harness.request.mockClear();
 
@@ -517,122 +707,74 @@ describe("session pull request snapshot store", () => {
     expect(params.sessionKeys).toHaveLength(200);
     expect(params.sessionKeys[0]).toBe("normal-200");
     expect(params.sessionKeys).not.toContain("normal-199");
+    const snapshot = { pullRequests: [], rateLimited: false, status: "ready" };
+    harness.emit({ sessions: { "normal-199": snapshot, "normal-200": snapshot } });
+    expect(store.get("normal-199")).toBeUndefined();
+    expect(store.get("normal-200")).toEqual(snapshot);
+
+    store.watch(foregroundOwner, ["normal-200"]);
+    await flushSync();
+
+    expect(harness.request).toHaveBeenCalledTimes(2);
+    expect(harness.request.mock.lastCall?.[1]).toEqual({
+      sessionKeys: normalKeys.slice(0, 200),
+    });
+    expect(store.get("normal-200")).toBeUndefined();
+    harness.emit({ sessions: { "normal-199": snapshot, "normal-200": snapshot } });
+    expect(store.get("normal-199")).toEqual(snapshot);
+    expect(store.get("normal-200")).toBeUndefined();
     store.unwatch(normalOwner);
     store.unwatch(foregroundOwner);
     await flushSync();
   });
 
-  it("merges an empty rate-limit delta with the last known snapshot", async () => {
+  it.each(["disconnected", "unwatch", "disconnect"] as const)(
+    "settles a one-shot load when %s",
+    async (transition) => {
+      const { harness, store, owner } = createStoreHarness();
+      const disconnect = () =>
+        harness.setSnapshot({ ...harness.gateway.snapshot, phase: "reconnecting", hello: null });
+      if (transition === "disconnected") {
+        disconnect();
+      } else {
+        harness.request.mockReturnValue(new Promise<never>(() => {}));
+      }
+      const loaded = store.load(owner, "agent:main:demo");
+      await flushSync();
+      if (transition === "unwatch") {
+        store.unwatch(owner);
+      } else if (transition === "disconnect") {
+        disconnect();
+        await flushSync();
+      }
+      await expect(loaded).resolves.toBeUndefined();
+      store.unwatch(owner);
+    },
+  );
+
+  it("refreshes a passive snapshot when a one-shot load immediately replaces its viewer", async () => {
     const harness = createGatewayHarness();
     const store = sessionPullRequestsForGateway(harness.gateway);
     const key = "agent:main:demo";
-    const owner = {};
-    store.watch(owner, [key]);
+    const sidebar = {};
+    const viewer = {};
+    store.watch(sidebar, [key], { passive: true });
+    store.watch(viewer, [key], { foreground: true });
     await flushSync();
-    harness.emit({
-      sessions: {
-        [key]: {
-          pullRequests: [{ number: 1, state: "open" }],
-          rateLimited: false,
-          status: "ready",
-        },
-      },
-    });
-    harness.emit({
-      sessions: {
-        [key]: {
-          pullRequests: [],
-          branch: { owner: "openclaw", repo: "openclaw", branch: "feature/demo" },
-          rateLimited: true,
-          status: "rate-limited",
-        },
-      },
-    });
-
-    expect(store.get(key)).toMatchObject({
-      pullRequests: [{ number: 1, state: "open" }],
-      branch: { branch: "feature/demo" },
-      rateLimited: true,
-      status: "rate-limited",
-    });
-    harness.emit({
-      sessions: {
-        [key]: {
-          pullRequests: [],
-          rateLimited: false,
-          status: "unavailable",
-        },
-      },
-    });
-    harness.emit({
-      sessions: {
-        [key]: {
-          pullRequests: [],
-          rateLimited: false,
-          status: "unavailable",
-        },
-      },
-    });
-    expect(store.get(key)).toMatchObject({
-      pullRequests: [{ number: 1, state: "open" }],
-      status: "unavailable",
-    });
-    store.unwatch(owner);
+    emitReadySnapshot(harness, key, [{ number: 1, state: "open" }]);
+    store.unwatch(viewer);
+    const loaded = store.load({}, key);
     await flushSync();
-  });
-
-  it("does not leave one-shot loads pending while disconnected", async () => {
-    const harness = createGatewayHarness();
-    harness.setSnapshot({ ...harness.gateway.snapshot, phase: "reconnecting", hello: null });
-    const store = sessionPullRequestsForGateway(harness.gateway);
-    const owner = {};
-
-    await expect(store.load(owner, "agent:main:demo")).resolves.toBeUndefined();
-    store.unwatch(owner);
-  });
-
-  it("settles a pending one-shot load when its key leaves the active union", async () => {
-    const harness = createGatewayHarness();
-    harness.request.mockReturnValue(new Promise<never>(() => {}));
-    const store = sessionPullRequestsForGateway(harness.gateway);
-    const owner = {};
-    const loaded = store.load(owner, "agent:main:demo");
-    await flushSync();
-
-    store.unwatch(owner);
-
-    await expect(loaded).resolves.toBeUndefined();
-  });
-
-  it("automatically releases a one-shot watch after its snapshot settles", async () => {
-    const harness = createGatewayHarness();
-    const store = sessionPullRequestsForGateway(harness.gateway);
-    const loaded = store.load({}, "agent:main:demo");
-    await flushSync();
-    harness.emit({
-      sessions: {
-        "agent:main:demo": { pullRequests: [], rateLimited: false, status: "ready" },
-      },
+    expectSubscription(harness, [key], [key]);
+    emitReadySnapshot(harness, key, [{ number: 1, state: "merged" }]);
+    await expect(loaded).resolves.toMatchObject({
+      pullRequests: [{ number: 1, state: "merged" }],
     });
-    await loaded;
     await flushSync();
-
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys: [],
-    });
-  });
-
-  it("settles a pending one-shot load when the gateway disconnects", async () => {
-    const harness = createGatewayHarness();
-    harness.request.mockReturnValue(new Promise<never>(() => {}));
-    const store = sessionPullRequestsForGateway(harness.gateway);
-    const loaded = store.load({}, "agent:main:demo");
+    expectSubscription(harness, []);
+    expect(store.get(key)?.pullRequests).toEqual([{ number: 1, state: "merged" }]);
+    store.unwatch(sidebar);
     await flushSync();
-
-    harness.setSnapshot({ ...harness.gateway.snapshot, phase: "reconnecting", hello: null });
-    await flushSync();
-
-    await expect(loaded).resolves.toBeUndefined();
   });
 
   it("scopes global aliases without changing canonical keys", () => {

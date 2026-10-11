@@ -1,0 +1,133 @@
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { AgentHarness } from "../agents/harness/types.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import { closeCliResources, getPendingCliDisposers } from "./runtime-cleanup.js";
+
+const memoryClosed = vi.hoisted(() => vi.fn(async () => {}));
+const databasesClosed = vi.hoisted(() => vi.fn(async () => {}));
+const skillsClosed = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("../state/openclaw-agent-db-resources.js", () => ({
+  hasOpenClawAgentDatabaseAsyncResources: () => true,
+}));
+vi.mock("../state/openclaw-agent-db-lifecycle.js", () => ({
+  closeOpenClawAgentDatabasesAsync: databasesClosed,
+}));
+vi.mock("../agents/harness/registry.js", () => ({
+  listRegisteredAgentHarnesses: () => [],
+  disposeRegisteredAgentHarnesses: async () => {},
+}));
+vi.mock("../plugins/registry-lifecycle.js", () => ({ markPluginRegistryRetired() {} }));
+vi.mock("../agents/provider-runtime-lifecycle.js", () => ({
+  stopActiveManagedProviderLocalServices: async () => {},
+  hasProviderTransportDispatcherPool: () => false,
+}));
+vi.mock("../gateway/mcp-http.loopback-runtime.js", () => ({
+  getActiveMcpLoopbackRuntime: () => undefined,
+}));
+vi.mock("../plugins/memory-state.js", () => ({ hasMemoryRuntime: () => true }));
+vi.mock("../plugins/memory-runtime.js", () => ({
+  closeActiveMemorySearchManagersCore: memoryClosed,
+}));
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  memoryClosed.mockClear();
+  databasesClosed.mockClear();
+  skillsClosed.mockClear();
+});
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
+
+it("continues later cleanup when a harness disposer never settles", async () => {
+  const gate = createDeferredCore();
+  const entered = createDeferredCore();
+  const dispose = async () => {
+    entered.resolve();
+    await gate.promise;
+  };
+  const harness: AgentHarness = {
+    id: "stalled-fixture",
+    label: "Stalled fixture",
+    supports: () => ({ supported: true }),
+    runAttempt: async () => {
+      throw new Error("cleanup-only fixture");
+    },
+    dispose,
+  };
+  const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+  const closing = closeCliResources({
+    scheduler: createTestGatewayScheduler(),
+    harnesses: new Map([[harness, dispose]]),
+    registries: new Set(),
+    closeSkillsWatchers: skillsClosed,
+  });
+  try {
+    await entered.promise;
+    await vi.advanceTimersByTimeAsync(5_000);
+    await closing;
+    expect(skillsClosed).toHaveBeenCalledOnce();
+    expect(memoryClosed).toHaveBeenCalledOnce();
+    expect(databasesClosed).toHaveBeenCalledOnce();
+    expect(getPendingCliDisposers()).toEqual(["agent-harness/stalled-fixture"]);
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining("agent-harness/stalled-fixture"));
+  } finally {
+    gate.resolve();
+    await closing;
+    await vi.advanceTimersByTimeAsync(0);
+  }
+  expect(getPendingCliDisposers()).toEqual([]);
+});
+
+it("stops scheduling and joins admitted callbacks before dependent CLI resources", async () => {
+  const clock = createGatewaySchedulerClock();
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+  scheduler.schedule({
+    id: "cli-work",
+    atMs: 0,
+    everyMs: 1_000,
+    run: async () => {
+      entered.resolve();
+      await release.promise;
+      expect(memoryClosed).not.toHaveBeenCalled();
+      expect(databasesClosed).not.toHaveBeenCalled();
+    },
+  });
+  const running = clock.advanceBy(0);
+  await entered.promise;
+  const closing = closeCliResources({
+    scheduler,
+    harnesses: new Map(),
+    registries: new Set(),
+    closeSkillsWatchers: skillsClosed,
+  });
+  try {
+    expect(scheduler.signal.aborted).toBe(true);
+    expect(scheduler.nextWakeAtMs).toBeNull();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining("scheduled-work"));
+    expect(memoryClosed).not.toHaveBeenCalled();
+    expect(databasesClosed).not.toHaveBeenCalled();
+    release.resolve();
+    await Promise.all([running, closing]);
+    expect(skillsClosed).toHaveBeenCalledOnce();
+    expect(memoryClosed).toHaveBeenCalledOnce();
+    expect(databasesClosed).toHaveBeenCalledOnce();
+  } finally {
+    release.resolve();
+    await Promise.all([running, closing, scheduler.stop()]);
+  }
+});
+
+it("leaves watcher retirement to an embedded caller without process ownership", async () => {
+  await closeCliResources();
+  expect(skillsClosed).not.toHaveBeenCalled();
+});

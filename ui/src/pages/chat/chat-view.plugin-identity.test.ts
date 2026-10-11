@@ -9,13 +9,17 @@ import type {
   ControlUiViewContext,
 } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import {
+  createApplicationContextProvider,
+  createApplicationGateway,
+} from "../../test-helpers/application-context.ts";
 import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
 import { renderChat, type ChatProps } from "./chat-view.ts";
 import { renderGroupedMessage } from "./components/chat-message-bubble.ts";
-import { threadProps } from "./components/chat-transcript.test-support.ts";
+import { prepareChatMessageRender } from "./components/chat-message-markdown.ts";
 import "../../plugins/control-ui-view.runtime.ts";
+import { threadProps } from "./components/chat-transcript.test-support.ts";
 
 afterEach(() => resetComposerFixture());
 
@@ -52,7 +56,8 @@ describe("native chat view session identity", () => {
     );
     const reportError = vi.fn();
     const context = {
-      agentSelection: { state: { selectedId: "main" } },
+      gateway: createApplicationGateway().gateway,
+      agentSelection: { state: { selectedId: "main" }, subscribe: () => () => undefined },
       plugins: {
         registrations: () => [],
         selectedReplacement: (surface: ControlUiSurface) =>
@@ -72,13 +77,10 @@ describe("native chat view session identity", () => {
         currentAgentId: "writer",
       }),
       transcript: createTestTranscript(),
-      onSessionKeyChange: vi.fn(),
-      thinkingLevel: null,
       error: null,
       approvalCanGrant: false,
       onRefresh: vi.fn(),
       agentsList: null,
-      onAgentChange: vi.fn(),
     };
     class ChatHost extends LitElement {
       override createRenderRoot() {
@@ -88,12 +90,12 @@ describe("native chat view session identity", () => {
       override render() {
         return html`${renderChat(props)}
         ${renderGroupedMessage(
-          {
+          prepareChatMessageRender({
             role: "toolResult",
             toolCallId: "identity-result",
             toolName: "inspect",
             content: [{ type: "text", text: "Inspection complete" }],
-          },
+          }),
           "identity-message",
           {
             isStreaming: false,

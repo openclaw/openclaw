@@ -1,19 +1,28 @@
 // Tests applying parsed directives to get-reply execution options.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import * as sandboxRuntime from "../../agents/sandbox.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
 import { applyMixedDirectives } from "./directive-handling.mixed-inline.test-helpers.js";
+import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
-import { resolveDirectiveRuntimeContext } from "./directive-runtime-context.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
-import { createFastTestModelSelectionState } from "./model-selection.js";
+import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
+import {
+  REPLY_OPERATION_RUN_STATE,
+  type ReplyOperationRunState,
+} from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createMockTypingController } from "./test-helpers.js";
 import { createTypingController } from "./typing.js";
 
 const mocks = vi.hoisted(() => ({
-  handleDirective: vi.fn(),
+  handleDirective:
+    vi.fn<
+      (params: HandleDirectiveOnlyParams) => Promise<import("../types.js").ReplyPayload | undefined>
+    >(),
   applyModelSelection: vi.fn(),
   systemEvent: vi.fn(),
 }));
@@ -23,11 +32,12 @@ vi.mock("../../infra/system-events.js", () => ({
 }));
 
 vi.mock("./directive-handling.impl.js", () => ({
-  handleDirectiveOnly: (...args: unknown[]) => mocks.handleDirective(...args),
+  handleDirectiveOnly: (params: HandleDirectiveOnlyParams) => mocks.handleDirective(params),
 }));
 
-vi.mock("./directive-handling.persist.runtime.js", () => ({
-  applySessionModelSelection: (...args: unknown[]) => mocks.applyModelSelection(...args),
+vi.mock("../../model-picker/apply-session-model-selection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../model-picker/apply-session-model-selection.js")>()),
+  applySessionModelSelectionInternal: (...args: unknown[]) => mocks.applyModelSelection(...args),
 }));
 
 beforeEach(() => {
@@ -36,7 +46,103 @@ beforeEach(() => {
   mocks.systemEvent.mockReset();
 });
 
+async function runRuntimePolicyDirective(
+  params: Pick<HandleDirectiveOnlyParams, "cfg" | "agentId" | "sessionKey" | "ctx">,
+  assertRuntime: (runtime: ReturnType<typeof sandboxRuntime.resolveSandboxRuntimeStatus>) => void,
+) {
+  const { handleDirectiveOnly } = await vi.importActual<
+    typeof import("./directive-handling.impl.js")
+  >("./directive-handling.impl.js");
+  using runtime = vi.spyOn(sandboxRuntime, "resolveSandboxRuntimeStatus");
+  const sessionEntry = { sessionId: "runtime-policy", updatedAt: 1 };
+  let outcome:
+    | { kind: "reply"; reply: Awaited<ReturnType<typeof handleDirectiveOnly>> }
+    | { kind: "error"; error: unknown };
+  try {
+    const reply = await handleDirectiveOnly({
+      ...params,
+      directives: parseInlineSessionDirectives("/elevated on"),
+      sessionEntry,
+      sessionStore: { [params.sessionKey]: sessionEntry },
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      provider: "openai",
+      model: "gpt-5.5",
+      initialModelLabel: "openai/gpt-5.5",
+      formatModelSwitchEvent: (label) => label,
+      aliasIndex: { byAlias: new Map(), byKey: new Map() },
+      allowedModelKeys: new Set(),
+      allowedModelCatalog: [],
+      resetModelOverride: false,
+    });
+    outcome = { kind: "reply", reply };
+  } catch (error) {
+    outcome = { kind: "error", error };
+  }
+  expect(runtime).toHaveBeenCalledOnce();
+  const result = runtime.mock.results[0];
+  if (result?.type !== "return") {
+    throw new Error("Directive runtime classification did not return");
+  }
+  assertRuntime(result.value);
+  if (outcome.kind === "error") {
+    throw outcome.error;
+  }
+  return outcome.reply;
+}
+
 describe("applyInlineDirectiveOverrides", () => {
+  it.each(["thinking", "catalog"] as const)(
+    "cancels a reply directive during %s discovery without consuming its late result",
+    async (stage) => {
+      const held = createDeferred();
+      const entered = createDeferred();
+      const controller = new AbortController();
+      const wait = async () => {
+        entered.resolve();
+        await held.promise;
+      };
+      const pending = applyMixedDirectives({
+        body: stage === "thinking" ? "/think low" : "/status",
+        abortSignal: controller.signal,
+        resolveDefaultThinkingLevel: async () => {
+          if (stage === "thinking") {
+            await wait();
+          }
+          return "off";
+        },
+        resolveThinkingCatalog: async () => {
+          if (stage === "catalog") {
+            await wait();
+          }
+          return [];
+        },
+      });
+      await entered.promise;
+      const outcome = pending.then(
+        () => "completed",
+        (error: unknown) => (error instanceof Error ? error.name : "unknown"),
+      );
+      controller.abort();
+      try {
+        expect(
+          await Promise.race([
+            outcome,
+            new Promise<string>((resolve) => {
+              setImmediate(() => resolve("pending"));
+            }),
+          ]),
+        ).toBe("AbortError");
+        expect(mocks.handleDirective).not.toHaveBeenCalled();
+      } finally {
+        held.resolve();
+        await Promise.allSettled([pending]);
+      }
+    },
+  );
+
   it("returns the elevated denial for a prepared global owner", async () => {
     const ctx = buildTestCtx({
       Body: "/elevated on",
@@ -47,6 +153,8 @@ describe("applyInlineDirectiveOverrides", () => {
       Surface: "webchat",
     });
     const sessionEntry = { sessionId: "global-session", updatedAt: 1 };
+    const runState: ReplyOperationRunState = {};
+    const opts = { [REPLY_OPERATION_RUN_STATE]: runState, suppressTyping: true };
     const result = await resolveReplyDirectives({
       ctx,
       cfg: {
@@ -74,12 +182,14 @@ describe("applyInlineDirectiveOverrides", () => {
       model: "gpt-5.5",
       hasResolvedHeartbeatModelOverride: false,
       typing: createTypingController({}),
+      opts,
     });
 
     expect(result).toMatchObject({
       kind: "reply",
       reply: { text: expect.stringContaining("elevated is not available") },
     });
+    expect(runState.preRunRejection).toBe("session-directive-rejected");
     expect(mocks.handleDirective).not.toHaveBeenCalled();
   });
 
@@ -96,7 +206,7 @@ describe("applyInlineDirectiveOverrides", () => {
     );
   });
 
-  it("uses the prepared global owner for directive runtime policy", () => {
+  it("uses the prepared global owner for directive runtime policy", async () => {
     const params = {
       cfg: {
         session: { scope: "global" as const },
@@ -112,31 +222,42 @@ describe("applyInlineDirectiveOverrides", () => {
       }),
     };
 
-    const result = resolveDirectiveRuntimeContext(params);
-
-    expect(result.activeAgentId).toBe("target");
-    expect(result.runtimePolicySessionKey).toBe("agent:target:telegram:default:direct:sender");
+    const reply = await runRuntimePolicyDirective(params, (runtime) => {
+      expect(runtime.agentId).toBe("target");
+      expect(runtime.classificationSessionKey).toBe("agent:target:telegram:default:direct:sender");
+    });
+    expect(reply?.text).toContain("elevated is not available right now (runtime=direct).");
   });
 
-  it("keeps the active agent when an independent directive policy belongs to another agent", () => {
-    const result = resolveDirectiveRuntimeContext({
-      cfg: {
-        agents: {
-          ownership: "explicit",
-          entries: {
-            target: { sandbox: { mode: "off" } },
-            main: { sandbox: { mode: "all" } },
+  it("keeps the active agent when an independent directive policy belongs to another agent", async () => {
+    await expect(
+      runRuntimePolicyDirective(
+        {
+          cfg: {
+            agents: {
+              ownership: "explicit",
+              entries: {
+                target: { sandbox: { mode: "off" } },
+                main: { sandbox: { mode: "all" } },
+              },
+            },
           },
+          agentId: "target",
+          sessionKey: "agent:target:main",
+          ctx: buildTestCtx({ RuntimePolicySessionKey: "agent:main:group" }),
         },
-      },
-      agentId: "target",
-      sessionKey: "agent:target:main",
-      ctx: buildTestCtx({ RuntimePolicySessionKey: "agent:main:group" }),
+        (runtime) => {
+          expect(runtime.agentId).toBe("target");
+          expect(runtime.classificationSessionKey).toBe("agent:main:group");
+          expect(runtime.sandboxed).toBe(true);
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "AgentSelectionRequiredError",
+      code: "AGENT_SELECTION_REQUIRED",
+      surface: "session agent resolution",
+      hint: 'The agent-scoped session key belongs to "main", not "target".',
     });
-
-    expect(result.activeAgentId).toBe("target");
-    expect(result.runtimePolicySessionKey).toBe("agent:main:group");
-    expect(result.runtimeIsSandboxed).toBe(true);
   });
 
   it.each([
@@ -163,14 +284,6 @@ describe("applyInlineDirectiveOverrides", () => {
       expected:
         "Stored model override openai/gpt-4o is stale for this session; reverted to openai/gpt-5.5. Pick a model again with /model if you still want to override the default.",
     },
-    {
-      rejectedRef: "external/sensitive",
-      reason: "disallowed" as const,
-      modelPolicyConfigPath: "agents.defaults.models",
-      modelPolicyRepairConfigPath: "agents.defaults.modelPolicy.allow",
-      expected:
-        "Model override external/sensitive is not allowed for this agent by agents.defaults.models; reverted to openai/gpt-5.5. Add external/sensitive to agents.defaults.modelPolicy.allow or pick an allowed model with /model list.",
-    },
   ])(
     "emits the $reason reset event before rejecting a locked mixed directive",
     async ({
@@ -193,7 +306,7 @@ describe("applyInlineDirectiveOverrides", () => {
         agentRuntimeOverride: "codex",
         modelSelectionLocked: true,
       };
-      const modelState = createFastTestModelSelectionState({
+      const modelState = createModelSelectionStateFixture({
         agentCfg: {},
         provider: "openai",
         model: "gpt-5.5",
@@ -232,7 +345,6 @@ describe("applyInlineDirectiveOverrides", () => {
           commandBodyNormalized: "hello /model openai/gpt-5.4 --runtime openclaw",
         },
         directives,
-        messageProviderKey: "webchat",
         elevatedEnabled: true,
         elevatedAllowed: true,
         elevatedFailures: [],
@@ -254,6 +366,7 @@ describe("applyInlineDirectiveOverrides", () => {
       expect(result).toEqual({
         kind: "reply",
         reply: { text: MODEL_SELECTION_LOCKED_MESSAGE, isError: true },
+        preRunRejection: "model-selection-locked",
       });
       expect(typing.cleanup).toHaveBeenCalledOnce();
       expect(mocks.handleDirective).not.toHaveBeenCalled();
@@ -276,14 +389,6 @@ describe("applyInlineDirectiveOverrides", () => {
 
   it.each([
     {
-      reason: "its single directive transaction loses",
-      body: "hello /elevated full",
-      errorText: "Session settings were not applied because the session changed. Retry.",
-      model: "gpt-5.5",
-      contextTokens: 8192,
-      resolvedElevatedLevel: "full" as const,
-    },
-    {
       reason: "its transaction rejects unsupported thinking",
       body: "/think ultra please solve",
       errorText:
@@ -297,7 +402,11 @@ describe("applyInlineDirectiveOverrides", () => {
     async ({ body, errorText, model, contextTokens, resolvedElevatedLevel }) => {
       const directives = parseInlineSessionDirectives(body);
       mocks.handleDirective.mockImplementation(async (params) => {
+        if (!params.persistenceState) {
+          throw new Error("Expected a mixed-message transaction");
+        }
         params.persistenceState.outcome = { kind: "rejected", errorText };
+        params.onRejection?.();
         return { text: errorText };
       });
       const typing = createMockTypingController();
@@ -326,7 +435,6 @@ describe("applyInlineDirectiveOverrides", () => {
           commandBodyNormalized: body,
         },
         directives,
-        messageProviderKey: "webchat",
         elevatedEnabled: true,
         elevatedAllowed: true,
         elevatedFailures: [],
@@ -335,7 +443,7 @@ describe("applyInlineDirectiveOverrides", () => {
         aliasIndex: { byAlias: new Map(), byKey: new Map() },
         provider: "openai",
         model,
-        modelState: createFastTestModelSelectionState({
+        modelState: createModelSelectionStateFixture({
           agentCfg: {},
           provider: "openai",
           model,
@@ -351,9 +459,34 @@ describe("applyInlineDirectiveOverrides", () => {
       expect(result).toEqual({
         kind: "reply",
         reply: { text: errorText, isError: true },
+        preRunRejection: "session-directive-rejected",
       });
       expect(typing.cleanup).toHaveBeenCalledOnce();
       expect(mocks.handleDirective).toHaveBeenCalledOnce();
     },
   );
+
+  it("rejects unexpected native model arguments before model selection", async () => {
+    const body = "/model openai/gpt-5.5 extra";
+    const directives = parseInlineSessionDirectives(body, {
+      command: { kind: "native", name: "model" },
+    });
+    const { result, typing } = await applyMixedDirectives({
+      body,
+      directives,
+      provider: "openai",
+      model: "gpt-5.5",
+      senderIsOwner: true,
+      allowedModels: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
+    });
+
+    expect(result).toEqual({
+      kind: "reply",
+      reply: { text: 'Unexpected argument "extra" for /model.' },
+      preRunRejection: "session-directive-rejected",
+    });
+    expect(typing.cleanup).toHaveBeenCalledOnce();
+    expect(mocks.applyModelSelection).not.toHaveBeenCalled();
+    expect(mocks.handleDirective).not.toHaveBeenCalled();
+  });
 });

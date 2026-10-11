@@ -1,4 +1,3 @@
-// Bonjour tests cover manifest plugin behavior.
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 

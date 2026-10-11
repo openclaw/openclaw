@@ -113,7 +113,7 @@ suite.define(() => {
 
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, mainSessionKey));
     await gateway.waitForRequest("sessions.list", { match: rosterMatch });
-    const home = page.locator(".nav-item--home");
+    const home = page.locator(".sidebar-footer-bar__home");
     await home.waitFor();
     const observed = {
       quiet: await captureState(page, home, "00-non-attention"),
@@ -155,20 +155,16 @@ suite.define(() => {
       status: "pending",
     } satisfies QuestionRecord;
     await gateway.emitGatewayEvent("question.requested", question);
-    await page.getByText("Should the run continue?", { exact: true }).waitFor();
-    observed.question = await captureState(
-      page,
-      home,
-      "02-question-attention",
-      page.locator(".chat-question-panel"),
-    );
+    const questionPanel = page.locator(".chat-question-panel");
+    await questionPanel.getByText("Should the run continue?", { exact: true }).waitFor();
+    observed.question = await captureState(page, home, "02-question-attention", questionPanel);
 
     await gateway.emitGatewayEvent("question.resolved", {
       id: question.id,
       status: "cancelled",
     });
     await expect
-      .poll(() => page.getByText("Should the run continue?", { exact: true }).count())
+      .poll(() => questionPanel.getByText("Should the run continue?", { exact: true }).count())
       .toBe(0);
     await publishSessionRow(
       gateway,

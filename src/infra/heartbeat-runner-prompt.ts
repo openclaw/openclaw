@@ -3,26 +3,37 @@ import {
   HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
   isHeartbeatContentEffectivelyEmpty,
 } from "../auto-reply/heartbeat.js";
+import { isStoredConversationRoute } from "../auto-reply/reply/prompt-session-context.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readHeartbeatMonitorScratch } from "../cron/scratch-store.js";
+import { readCronScratchSnapshot } from "../cron/scratch-read.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import { channelRouteTargetsMatchExact } from "../plugin-sdk/channel-route.js";
+import { SESSION_CREATED_NOTICE_CONTEXT_PREFIX } from "../sessions/session-state-event-kinds.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { formatErrorMessage } from "./errors.js";
+import type { HeartbeatConfig } from "./heartbeat-config.js";
 import {
   buildCronEventPrompt,
   buildExecEventPrompt,
   isCronSystemEvent,
-  isExecCompletionEvent,
+  isConversationExecCompletion,
+  isExecCompletionSystemEvent,
   isHeartbeatDeliveryAwarenessEvent,
   isRelayableExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
+import { heartbeatLog as log } from "./heartbeat-log.js";
 import {
-  heartbeatLog,
+  resolveHeartbeatChannelPlugin,
   resolveConfiguredHeartbeatPrompt,
   resolveHeartbeatResponseToolPrompt,
-  type HeartbeatConfig,
 } from "./heartbeat-runner-config.js";
-import { resolveHeartbeatSessionSelection } from "./heartbeat-runner-session.js";
+import {
+  type HeartbeatSessionSelection,
+  resolveHeartbeatSession,
+  resolveHeartbeatSessionSelection,
+} from "./heartbeat-runner-session.js";
 import {
   resolveHeartbeatWakePayloadFlags,
   type HeartbeatWakePayloadFlags,
@@ -32,14 +43,13 @@ import {
   type HeartbeatScheduledTask,
   type HeartbeatWakeSource,
 } from "./heartbeat-wake.js";
-import { selectAgentSystemEvents } from "./system-event-ownership.js";
+import { heartbeatExecRouteKey } from "./outbound/heartbeat-route-context.js";
+import { resolveSystemEventQueueKey } from "./system-event-ownership.js";
 import {
-  peekSystemEventEntries,
+  peekDeliverableSystemEventEntries,
   resolveSystemEventDeliveryContext,
   type SystemEvent,
 } from "./system-events.js";
-
-const log = heartbeatLog;
 
 export function truncateHeartbeatPreview(value: string | undefined): string | undefined {
   return value ? truncateUtf16Safe(value, 200) : undefined;
@@ -48,10 +58,15 @@ export function truncateHeartbeatPreview(value: string | undefined): string | un
 type HeartbeatSkipReason = "empty-heartbeat-file" | typeof HEARTBEAT_SKIP_NO_PENDING_EVENT;
 
 type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
-  session: ReturnType<typeof resolveHeartbeatSessionSelection>;
-  pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
+  session: HeartbeatSessionSelection;
+  /** Selection under the heartbeat's own isolation; differs from `session` only on a continuation. */
+  heartbeatSession: HeartbeatSessionSelection;
+  pendingEventEntries: ReturnType<typeof peekDeliverableSystemEventEntries>;
+  selectedEventEntries: SystemEvent[];
+  deferredEventEntries: SystemEvent[];
   turnSourceDeliveryContext: ReturnType<typeof resolveSystemEventDeliveryContext>;
-  hasTaggedCronEvents: boolean;
+  /** Route of a conversation's own command completion; that conversation owns the turn. */
+  conversationRoute?: DeliveryContext;
   shouldInspectPendingEvents: boolean;
   authoritativeScheduledTick: boolean;
   skipReason?: HeartbeatSkipReason;
@@ -59,6 +74,28 @@ type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
   scratchRevision?: number;
   heartbeatScratchContent?: string;
 };
+
+/**
+ * A targeted exec wake whose pending events are all command completions started by a
+ * conversation turn, captured in the session's own conversation, continues that
+ * conversation, not the periodic monitor. Commands started by heartbeat or automation
+ * work keep heartbeat isolation and delivery.
+ */
+function resolveConversationCompletionRoute(
+  events: readonly SystemEvent[],
+  entry: SessionEntry | undefined,
+): DeliveryContext | undefined {
+  const route = events[0]?.deliveryContext;
+  return route &&
+    events.every(
+      (event) =>
+        isConversationExecCompletion(event) &&
+        channelRouteTargetsMatchExact({ left: event.deliveryContext, right: route }),
+    ) &&
+    isStoredConversationRoute({ ...route, entry })
+    ? route
+    : undefined;
+}
 
 /**
  * Terminal no-op preflight (empty scratch, consumed exec events) must resolve
@@ -91,21 +128,44 @@ export async function resolveHeartbeatPreflight(params: {
   scheduledEveryMs?: number;
   scheduledTasks?: readonly HeartbeatScheduledTask[];
 }): Promise<HeartbeatPreflight> {
-  const wakeFlags = resolveHeartbeatWakePayloadFlags({
-    source: params.source,
-    reason: params.reason,
-  });
-  const session = resolveHeartbeatSessionSelection(
+  let monitorScratch: Awaited<ReturnType<typeof readCronScratchSnapshot>>;
+  try {
+    monitorScratch = await readCronScratchSnapshot(resolveCronJobsStorePathFromConfig(params.cfg), {
+      kind: "heartbeat",
+      agentId: params.agentId,
+    });
+  } catch (error) {
+    log.warn(`heartbeat: scratch read failed: ${formatErrorMessage(error)}`);
+  }
+  const wakeFlags = resolveHeartbeatWakePayloadFlags(params);
+  const queue = await resolveHeartbeatSession(
     params.cfg,
     params.agentId,
     params.heartbeat,
     params.sessionKey,
   );
-  const pendingEventEntries = selectAgentSystemEvents(
-    peekSystemEventEntries(session.sessionKey),
-    params.agentId,
+  const pendingEventEntries = peekDeliverableSystemEventEntries(
+    resolveSystemEventQueueKey(queue.sessionKey, params.agentId),
   ).filter((event) => !isHeartbeatDeliveryAwarenessEvent(event));
-  const turnSourceDeliveryContext = resolveSystemEventDeliveryContext(pendingEventEntries);
+  const authoritativeScheduledTick =
+    typeof params.scheduledEveryMs === "number" &&
+    Number.isSafeInteger(params.scheduledEveryMs) &&
+    params.scheduledEveryMs > 0;
+  const conversationRoute =
+    wakeFlags.isExecEventWake && !authoritativeScheduledTick && !params.scheduledTasks?.length
+      ? resolveConversationCompletionRoute(pendingEventEntries, queue.entry)
+      : undefined;
+  const heartbeatSession = resolveHeartbeatSessionSelection(
+    params.cfg,
+    params.agentId,
+    params.heartbeat,
+    queue,
+    params.heartbeat?.isolatedSession === true,
+  );
+  // Isolation saves periodic-poll history cost; a conversation's continuation needs its history.
+  const session = conversationRoute
+    ? resolveHeartbeatSessionSelection(params.cfg, params.agentId, params.heartbeat, queue, false)
+    : heartbeatSession;
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
   );
@@ -116,32 +176,59 @@ export async function resolveHeartbeatPreflight(params: {
     wakeFlags.isCronWake ||
     shouldInspectWakePendingEvents ||
     hasTaggedCronEvents;
+  const firstExec =
+    !params.scheduledTasks?.length && shouldInspectPendingEvents
+      ? pendingEventEntries.find(isExecCompletionSystemEvent)
+      : undefined;
+  const routeKey = (event: SystemEvent) =>
+    event.deliveryContext
+      ? heartbeatExecRouteKey(
+          event.deliveryContext,
+          resolveHeartbeatChannelPlugin(event.deliveryContext.channel ?? ""),
+        )
+      : undefined;
+  const isolateExecRoutes = firstExec && pendingEventEntries.some((event) => event.deliveryContext);
+  const firstRouteKey = firstExec ? routeKey(firstExec) : undefined;
+  const selectedEventEntries = isolateExecRoutes
+    ? pendingEventEntries.filter(
+        (event) =>
+          isExecCompletionSystemEvent(event) &&
+          Boolean(event.contextKey) === Boolean(firstExec.contextKey) &&
+          (!firstExec.deliveryContext
+            ? !event.deliveryContext
+            : event === firstExec ||
+              (firstRouteKey !== undefined && routeKey(event) === firstRouteKey)),
+      )
+    : pendingEventEntries;
+  const deferredEventEntries = isolateExecRoutes
+    ? pendingEventEntries.filter((event) => !selectedEventEntries.includes(event))
+    : [];
+  const turnSourceDeliveryContext = resolveSystemEventDeliveryContext(
+    params.scheduledTasks?.length || !shouldInspectPendingEvents
+      ? []
+      : firstExec
+        ? selectedEventEntries.filter(
+            (event) => isExecCompletionSystemEvent(event) && event.contextKey != null,
+          )
+        : selectedEventEntries,
+  );
   const shouldBypassScratchGates =
     wakeFlags.isExecEventWake ||
     wakeFlags.isCronWake ||
     wakeFlags.isWakePayload ||
     hasTaggedCronEvents;
-  let monitorScratch: ReturnType<typeof readHeartbeatMonitorScratch>;
-  try {
-    monitorScratch = readHeartbeatMonitorScratch(
-      resolveCronJobsStorePathFromConfig(params.cfg),
-      params.agentId,
-    );
-  } catch (error) {
-    log.warn(`heartbeat: scratch read failed: ${formatErrorMessage(error)}`);
-  }
   const heartbeatScratchContent = monitorScratch?.state.scratch?.content;
   const basePreflight = {
     ...wakeFlags,
     session,
+    heartbeatSession,
     pendingEventEntries,
+    selectedEventEntries,
+    deferredEventEntries,
     turnSourceDeliveryContext,
-    hasTaggedCronEvents,
+    ...(conversationRoute ? { conversationRoute } : {}),
     shouldInspectPendingEvents,
-    authoritativeScheduledTick:
-      typeof params.scheduledEveryMs === "number" &&
-      Number.isSafeInteger(params.scheduledEveryMs) &&
-      params.scheduledEveryMs > 0,
+    authoritativeScheduledTick,
     ...(monitorScratch?.jobId
       ? {
           scratchJobId: monitorScratch.jobId,
@@ -163,24 +250,20 @@ export async function resolveHeartbeatPreflight(params: {
     !basePreflight.authoritativeScheduledTick &&
     !params.scheduledTasks?.length &&
     !hasTaggedCronEvents &&
-    !pendingEventEntries.some((event) => isExecCompletionEvent(event.text))
+    !pendingEventEntries.some(isExecCompletionSystemEvent) &&
+    (!session.inspectsRunQueue || pendingEventEntries.length === 0)
   ) {
     return {
       ...basePreflight,
       skipReason: HEARTBEAT_SKIP_NO_PENDING_EVENT,
     };
   }
-  if (shouldBypassScratchGates) {
-    return basePreflight;
-  }
-  // Cron owns task due-ness. Task wakes still receive ordinary scratch prose,
-  // but empty or missing scratch must never suppress the independently scheduled job.
-  if (params.scheduledTasks?.length) {
-    return basePreflight;
-  }
-  if (heartbeatScratchContent === undefined) {
-    // Without scratch, the model still gets the generic monitor prompt and
-    // decides whether anything needs attention.
+  // Payload/task wakes bypass the empty-scratch gate; absent scratch uses the generic prompt.
+  if (
+    shouldBypassScratchGates ||
+    params.scheduledTasks?.length ||
+    heartbeatScratchContent === undefined
+  ) {
     return basePreflight;
   }
   if (isHeartbeatContentEffectivelyEmpty(heartbeatScratchContent)) {
@@ -194,6 +277,7 @@ export async function resolveHeartbeatPreflight(params: {
 
 type HeartbeatPromptResolution = {
   prompt: string;
+  hasTaskContinuation: boolean;
   hasExecCompletion: boolean;
   hasRelayableExecCompletion: boolean;
   hasCronEvents: boolean;
@@ -202,7 +286,6 @@ type HeartbeatPromptResolution = {
   inspectedSystemEventsToConsume: SystemEvent[];
 };
 
-/** Appends monitor scratch prose to the generated heartbeat prompt. */
 function appendHeartbeatScratch(prompt: string, heartbeatScratchContent?: string): string {
   if (!heartbeatScratchContent) {
     return prompt;
@@ -219,12 +302,10 @@ export function resolveHeartbeatRunPrompt(params: {
   heartbeat?: HeartbeatConfig;
   preflight: HeartbeatPreflight;
   canRelayToUser: boolean;
-  startedAt: number;
   scheduledTasks: readonly HeartbeatScheduledTask[];
-  heartbeatScratchContent?: string;
   useHeartbeatResponseTool: boolean;
 }): HeartbeatPromptResolution {
-  const pendingEventEntries = params.preflight.pendingEventEntries;
+  const pendingEventEntries = params.preflight.selectedEventEntries;
   const genericEvents: SystemEvent[] = [];
   const cronEvents: SystemEvent[] = [];
   const execEvents: SystemEvent[] = [];
@@ -232,78 +313,68 @@ export function resolveHeartbeatRunPrompt(params: {
   // Select once: admission owns generic text; completed delivery owns dedicated
   // prompts and filtered cron noise. Late arrivals retain their queue identities.
   for (const event of pendingEventEntries) {
-    if (isExecCompletionEvent(event.text)) {
+    if (event.contextKey?.startsWith(SESSION_CREATED_NOTICE_CONTEXT_PREFIX)) {
+      genericEvents.push(event);
+    } else if (isExecCompletionSystemEvent(event)) {
       if (params.preflight.shouldInspectPendingEvents) {
         execEvents.push(event);
       }
     } else if (params.preflight.isCronWake || event.contextKey?.startsWith("cron:")) {
-      (isCronSystemEvent(event.text) ? cronEvents : cronNoise).push(event);
+      (isCronSystemEvent(event) ? cronEvents : cronNoise).push(event);
     } else {
       genericEvents.push(event);
     }
   }
-  const hasExecCompletion = execEvents.length > 0;
+  const hasScheduledTasks = params.scheduledTasks.length > 0;
+  const hasExecCompletion = !hasScheduledTasks && execEvents.length > 0;
   const hasRelayableExecCompletion =
-    params.canRelayToUser && execEvents.some((event) => isRelayableExecCompletionEvent(event.text));
-  const hasCronEvents = cronEvents.length > 0;
-  if (params.scheduledTasks.length > 0) {
+    !hasScheduledTasks &&
+    params.canRelayToUser &&
+    execEvents.some((event) => isRelayableExecCompletionEvent(event.text));
+  const hasCronEvents = !hasScheduledTasks && cronEvents.length > 0;
+  const hasBackgroundTaskEvent =
+    params.preflight.session.inspectsRunQueue &&
+    genericEvents.some((event) => event.contextKey?.startsWith("task:"));
+  let basePrompt: string;
+  if (hasScheduledTasks) {
     const taskList = params.scheduledTasks
       .map((task) => `- ${task.name}: ${task.prompt}`)
       .join("\n");
     const completionInstruction = params.useHeartbeatResponseTool
       ? `After completing all due tasks:\n${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`
       : `After completing all due tasks, reply ${SILENT_REPLY_TOKEN}.`;
-    const taskPrompt = `Run the following periodic tasks (only those due based on their intervals):
+    basePrompt = `Run the following periodic tasks (only those due based on their intervals):
 
 ${taskList}
 
 ${completionInstruction}`;
-    const prompt = appendHeartbeatScratch(taskPrompt, params.heartbeatScratchContent);
-    return {
-      prompt,
-      hasExecCompletion: false,
-      hasRelayableExecCompletion: false,
-      hasCronEvents: false,
-      usesHeartbeatResponseTool: params.useHeartbeatResponseTool,
-      genericEvents,
-      inspectedSystemEventsToConsume: cronNoise,
-    };
+  } else {
+    basePrompt =
+      hasExecCompletion || hasCronEvents
+        ? (hasExecCompletion ? buildExecEventPrompt : buildCronEventPrompt)(
+            (hasExecCompletion ? execEvents : cronEvents).map((event) => event.text),
+            {
+              deliverToUser: params.canRelayToUser,
+              useHeartbeatResponseTool: params.useHeartbeatResponseTool,
+            },
+          )
+        : params.useHeartbeatResponseTool
+          ? resolveHeartbeatResponseToolPrompt(params.cfg, params.heartbeat)
+          : resolveConfiguredHeartbeatPrompt(params.cfg, params.heartbeat);
   }
-
-  const baseUsesHeartbeatResponseTool = params.useHeartbeatResponseTool;
-  const basePrompt = hasExecCompletion
-    ? buildExecEventPrompt(
-        execEvents.map((event) => event.text),
-        {
-          deliverToUser: params.canRelayToUser,
-          useHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
-        },
-      )
-    : hasCronEvents
-      ? buildCronEventPrompt(
-          cronEvents.map((event) => event.text),
-          {
-            deliverToUser: params.canRelayToUser,
-            useHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
-          },
-        )
-      : baseUsesHeartbeatResponseTool
-        ? resolveHeartbeatResponseToolPrompt(params.cfg, params.heartbeat)
-        : resolveConfiguredHeartbeatPrompt(params.cfg, params.heartbeat);
-  const basePromptWithDirectives = appendHeartbeatScratch(
-    basePrompt,
-    params.heartbeatScratchContent,
-  );
   return {
-    prompt: basePromptWithDirectives,
+    prompt: appendHeartbeatScratch(basePrompt, params.preflight.heartbeatScratchContent),
+    hasTaskContinuation:
+      hasExecCompletion ||
+      hasBackgroundTaskEvent ||
+      (!hasScheduledTasks && cronEvents.some((event) => event.contextKey?.startsWith("task:"))),
     hasExecCompletion,
     hasRelayableExecCompletion,
     hasCronEvents,
-    usesHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
+    usesHeartbeatResponseTool: params.useHeartbeatResponseTool,
     genericEvents,
-    inspectedSystemEventsToConsume: [
-      ...cronNoise,
-      ...(hasExecCompletion ? execEvents : cronEvents),
-    ],
+    inspectedSystemEventsToConsume: hasScheduledTasks
+      ? cronNoise
+      : [...cronNoise, ...(hasExecCompletion ? execEvents : cronEvents)],
   };
 }

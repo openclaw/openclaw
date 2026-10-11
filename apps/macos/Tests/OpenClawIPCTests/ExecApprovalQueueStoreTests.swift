@@ -7,7 +7,9 @@ import Testing
 
 private struct ApprovalFixtureRequest: Encodable, Sendable {
     struct Command: Encodable, Sendable {
-        let command: String
+        let command: String?
+        let title: String?
+        let description: String?
         let sessionKey: String?
         let allowedDecisions: [String]?
     }
@@ -20,15 +22,20 @@ private struct ApprovalFixtureRequest: Encodable, Sendable {
     init(
         id: String,
         sessionKey: String? = "main",
-        command: String = "echo safe",
+        command: String? = "echo safe",
+        title: String? = nil,
+        description: String? = nil,
         createdOffsetMs: Int = 0,
+        createdAtMs: Int? = nil,
         expiresOffsetMs: Int = 60000,
         allowedDecisions: [String]? = nil)
     {
         let nowMs = Int(Date().timeIntervalSince1970 * 1000)
         self.id = id
-        self.request = Command(command: command, sessionKey: sessionKey, allowedDecisions: allowedDecisions)
-        self.createdAtMs = nowMs + createdOffsetMs
+        self.request = Command(
+            command: command, title: title, description: description,
+            sessionKey: sessionKey, allowedDecisions: allowedDecisions)
+        self.createdAtMs = createdAtMs ?? nowMs + createdOffsetMs
         self.expiresAtMs = nowMs + expiresOffsetMs
     }
 
@@ -50,6 +57,8 @@ private struct ApprovalGatewayRequest: Sendable {
 
 private actor ApprovalGatewayRequestLog {
     private var makeListedRequests: @Sendable () -> [ApprovalFixtureRequest]
+    private var makeListedPluginRequests: @Sendable () -> [ApprovalFixtureRequest]
+    private let presentation: @Sendable (String) -> String?
     private var makeListedSystemRequests: @Sendable () -> [ApprovalFixtureRequest]
     private var requests: [ApprovalGatewayRequest] = []
     private var nextSequence = 0
@@ -58,10 +67,14 @@ private actor ApprovalGatewayRequestLog {
 
     init(
         initialRequests: @escaping @Sendable () -> [ApprovalFixtureRequest],
-        systemRequests: @escaping @Sendable () -> [ApprovalFixtureRequest])
+        systemRequests: @escaping @Sendable () -> [ApprovalFixtureRequest],
+        pluginRequests: @escaping @Sendable () -> [ApprovalFixtureRequest],
+        presentation: @escaping @Sendable (String) -> String?)
     {
         self.makeListedRequests = initialRequests
         self.makeListedSystemRequests = systemRequests
+        self.makeListedPluginRequests = pluginRequests
+        self.presentation = presentation
     }
 
     func append(_ request: ApprovalGatewayRequest) {
@@ -74,8 +87,20 @@ private actor ApprovalGatewayRequestLog {
 
     func listResponse(method: String) throws -> String {
         // Start fixture lifetimes at the Gateway response, after cold connection work.
-        let requests = method == "openclaw.approval.list" ? self.makeListedSystemRequests() : self.makeListedRequests()
+        let requests = switch method {
+        case "openclaw.approval.list": self.makeListedSystemRequests()
+        case "plugin.approval.list": self.makeListedPluginRequests()
+        default: self.makeListedRequests()
+        }
         return try #require(String(data: JSONEncoder().encode(requests), encoding: .utf8))
+    }
+
+    func presentationResponse(id: String) -> String {
+        self.presentation(id) ?? #"{"ok":true}"#
+    }
+
+    func setListedPluginRequests(_ requests: @escaping @Sendable () -> [ApprovalFixtureRequest]) {
+        self.makeListedPluginRequests = requests
     }
 
     func setListedRequests(_ requests: @escaping @Sendable () -> [ApprovalFixtureRequest]) {
@@ -115,12 +140,16 @@ private final class ApprovalGatewayFixture: @unchecked Sendable {
     init(
         initialRequests: @escaping @Sendable () -> [ApprovalFixtureRequest] = { [] },
         systemRequests: @escaping @Sendable () -> [ApprovalFixtureRequest] = { [] },
+        pluginRequests: @escaping @Sendable () -> [ApprovalFixtureRequest] = { [] },
+        presentation: @escaping @Sendable (String) -> String? = { _ in nil },
         advertisedMethods: [String] = [],
         listResponseDelay: Duration = .zero,
         beforeListResponse: (@Sendable () async -> Void)? = nil,
         gatewayURL: @escaping @Sendable () -> URL = { URL(string: "ws://127.0.0.1:1")! })
     {
-        let requestLog = ApprovalGatewayRequestLog(initialRequests: initialRequests, systemRequests: systemRequests)
+        let requestLog = ApprovalGatewayRequestLog(
+            initialRequests: initialRequests, systemRequests: systemRequests,
+            pluginRequests: pluginRequests, presentation: presentation)
         self.requestLog = requestLog
         self.session = GatewayTestWebSocketSession(taskFactory: {
             let connectionURL = gatewayURL()
@@ -157,6 +186,8 @@ private final class ApprovalGatewayFixture: @unchecked Sendable {
                 }
                 let payload = if request.method.hasSuffix(".approval.list") {
                     try await requestLog.listResponse(method: request.method)
+                } else if request.method == "approval.get", let approvalID = request.approvalId {
+                    await requestLog.presentationResponse(id: approvalID)
                 } else {
                     #"{"ok":true}"#
                 }
@@ -181,7 +212,7 @@ private final class ApprovalGatewayFixture: @unchecked Sendable {
 
     @MainActor
     func withStore(_ body: @MainActor (ExecApprovalQueueStore) async throws -> Void) async rethrows {
-        let store = ExecApprovalQueueStore(gateway: gateway)
+        let store = self.gateway.approvalQueue
         do {
             try await body(store)
         } catch {
@@ -193,20 +224,21 @@ private final class ApprovalGatewayFixture: @unchecked Sendable {
         await self.gateway.shutdown()
     }
 
-    func sendEvent(name: String, payload: String) async throws {
-        let socket = try await readySocket()
+    func sendEvent(
+        name: String,
+        payload: String,
+        sourceLocation: SourceLocation = #_sourceLocation) async throws
+    {
+        let socket = try await readySocket(sourceLocation: sourceLocation)
         let sequence = await requestLog.nextEventSequence()
         let event = #"{"type":"event","event":"\#(name)","seq":\#(sequence),"payload":\#(payload)}"#
         socket.emitReceiveSuccess(.data(Data(event.utf8)))
     }
 
-    private func readySocket() async throws -> GatewayTestWebSocketTask {
-        let deadline = ContinuousClock.now + .seconds(2)
-        while ContinuousClock.now < deadline {
-            if let socket = session.latestTask(), socket.hasPendingReceiveHandler() {
-                return socket
-            }
-            try await Task.sleep(for: .milliseconds(2))
+    private func readySocket(sourceLocation: SourceLocation = #_sourceLocation) async throws
+    -> GatewayTestWebSocketTask {
+        try await TestWait.state("approval socket receive handler", sourceLocation: sourceLocation) {
+            self.session.latestTask()?.hasPendingReceiveHandler() == true
         }
         return try #require(self.session.latestTask())
     }
@@ -236,7 +268,7 @@ private final class ApprovalGatewayFixture: @unchecked Sendable {
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct ExecApprovalQueueStoreTests {
     @Test(arguments: [false, true])
@@ -250,7 +282,8 @@ struct ExecApprovalQueueStoreTests {
         try await fixture.withStore { store in
             await store.refresh()
             let capturedA = try #require(store.requests.first)
-            #expect(capturedA.request.command == "echo gateway-a")
+            let originalOwnerID = try #require(store.attentionRequests.first?.ownerID)
+            #expect(capturedA.preview == "echo gateway-a")
 
             source.withValue { $0 = urlB }
             try await fixture.gateway.refresh()
@@ -259,7 +292,7 @@ struct ExecApprovalQueueStoreTests {
             }
             if refreshReplacement {
                 await store.refresh()
-                #expect(store.requests.first?.request.command == "echo gateway-b")
+                #expect(store.requests.first?.preview == "echo gateway-b")
             }
 
             // A menu button retains the displayed item before its Task starts.
@@ -267,11 +300,12 @@ struct ExecApprovalQueueStoreTests {
             await store.resolve(request: capturedA, decision: .deny)
             #expect(await fixture.requestLog.requests(method: "exec.approval.resolve").isEmpty)
             if refreshReplacement {
-                #expect(store.requests.first?.request.command == "echo gateway-b")
+                #expect(store.requests.first?.preview == "echo gateway-b")
             }
 
             await store.refresh()
             let currentB = try #require(store.requests.first)
+            #expect(store.attentionRequests.first?.ownerID != originalOwnerID)
             await store.resolve(request: currentB, decision: .allowOnce)
             let resolutions = await fixture.requestLog.requests(method: "exec.approval.resolve")
             #expect(resolutions.count == 1)
@@ -292,7 +326,7 @@ struct ExecApprovalQueueStoreTests {
             await store.refresh()
 
             #expect(store.requests.map(\.id) == ["earlier", "later"])
-            #expect(store.requests.last?.request.sessionKey == "work")
+            #expect(store.requests.last?.sessionKey == "work")
             #expect(store.requests.first?.allowedDecisions == [.allowOnce, .deny])
             #expect(await fixture.requestLog.requests(method: "exec.approval.list").count == 1)
         }
@@ -353,14 +387,19 @@ struct ExecApprovalQueueStoreTests {
         try await fixture.withStore { store in
             store.start()
             await store.refresh()
+            let chatWindowQueue = fixture.gateway.approvalQueue
 
             let request = ApprovalFixtureRequest(id: "live", sessionKey: "agent:main:work")
             try await fixture.sendEvent(name: "exec.approval.requested", payload: request.json)
-            try #require(await self.waitUntil { store.requests.map(\.id) == ["live"] })
-            #expect(store.requests.first?.request.sessionKey == "agent:main:work")
+            try await TestWait.observed("live approval") { store.requests.map(\.id) == ["live"] }
+            try #require(store.requests.map(\.id) == ["live"])
+            #expect(store.requests.first?.sessionKey == "agent:main:work")
+            #expect(chatWindowQueue.requests.map(\.id) == ["live"])
 
             try await fixture.sendEvent(name: "exec.approval.resolved", payload: #"{"id":"live"}"#)
-            try #require(await self.waitUntil { store.requests.isEmpty })
+            try await TestWait.observed("empty approval queue") { store.requests.isEmpty }
+            try #require(store.requests.isEmpty)
+            #expect(chatWindowQueue.requests.isEmpty)
         }
     }
 
@@ -373,7 +412,10 @@ struct ExecApprovalQueueStoreTests {
         }
     }
 
-    private static func checkDelayedExpiry(listResponseDelayMs: Int) async throws {
+    private static func checkDelayedExpiry(
+        listResponseDelayMs: Int,
+        sourceLocation: SourceLocation = #_sourceLocation) async throws
+    {
         let fixture = ApprovalGatewayFixture(initialRequests: {
             [ApprovalFixtureRequest(id: "delayed-expiry-task", expiresOffsetMs: 3000)]
         }, listResponseDelay: .milliseconds(listResponseDelayMs))
@@ -385,9 +427,9 @@ struct ExecApprovalQueueStoreTests {
             let request = try #require(store.requests.first)
             // Hold the actor past the published deadline before the queued expiry task can start.
             Self.blockUntilExpiry(request.expiresAtMs)
-            try #require(
-                await Self().waitUntil { store.requests.isEmpty },
-                "list response delay: \(listResponseDelayMs) ms")
+            try await TestWait
+                .observed("expired delayed approval", sourceLocation: sourceLocation) { store.requests.isEmpty }
+            try #require(store.requests.isEmpty, "list response delay: \(listResponseDelayMs) ms")
         }
     }
 
@@ -432,7 +474,8 @@ struct ExecApprovalQueueStoreTests {
 
             let request = ApprovalFixtureRequest(id: "system", allowedDecisions: ["allow-once", "deny"])
             try await fixture.sendEvent(name: "openclaw.approval.requested", payload: request.json)
-            try #require(await self.waitUntil { store.requests.first?.id == "system" })
+            try await TestWait.observed("system approval") { store.requests.first?.id == "system" }
+            try #require(store.requests.first?.id == "system")
             let queued = try #require(store.requests.first)
 
             await store.resolve(request: queued, decision: .allowOnce)
@@ -456,18 +499,22 @@ struct ExecApprovalQueueStoreTests {
             store.start()
             let initialLease = try await fixture.gateway.acquireServerLease()
             // Startup may finish before the menu opens; its refresh need not coalesce.
-            try #require(await self.waitUntil {
+            try await TestWait.observed("initial advertised approval lists") {
                 Set(store.requests.map(\.id)) ==
                     (supportsSystemList ? ["exec-pending", "system-pending"] : ["exec-pending"])
-            })
+            }
+            try #require(
+                Set(store.requests.map(\.id)) ==
+                    (supportsSystemList ? ["exec-pending", "system-pending"] : ["exec-pending"]))
             await store.refresh()
             var captured: ExecApprovalQueueItem?
             if supportsSystemList {
                 let event = ApprovalFixtureRequest(id: "system-pending", command: "echo before-reconnect")
                 try await fixture.sendEvent(name: "openclaw.approval.requested", payload: event.json)
-                try #require(await self.waitUntil {
-                    store.requests.contains { $0.request.command == "echo before-reconnect" }
-                })
+                try await TestWait.observed("approval before reconnect") {
+                    store.requests.contains { $0.preview == "echo before-reconnect" }
+                }
+                try #require(store.requests.contains { $0.preview == "echo before-reconnect" })
                 await store.refresh()
                 captured = try #require(store.requests.first { $0.kind == .systemAgent })
             }
@@ -488,7 +535,7 @@ struct ExecApprovalQueueStoreTests {
             if supportsSystemList {
                 #expect(systemLists.count > listsBeforeReconnect.count)
                 let recovered = try #require(store.requests.first { $0.kind == .systemAgent })
-                #expect(recovered.request.command == "echo recovered")
+                #expect(recovered.preview == "echo recovered")
                 await store.resolve(request: recovered, decision: .allowOnce)
                 let resolutions = await fixture.requestLog.requests(method: "approval.resolve")
                 #expect(resolutions.count == 1)
@@ -519,27 +566,30 @@ struct ExecApprovalQueueStoreTests {
         try await fixture.withStore { store in
             store.start()
             await store.refresh()
-            #expect(Set(store.requests.map(\.request.command)) == ["exec-before", "system-before"])
+            #expect(Set(store.requests.map(\.preview)) == ["exec-before", "system-before"])
 
             phase.withValue { $0 = "after" }
             await fixture.gateway.shutdown()
             _ = try await fixture.gateway.acquireServerLease()
 
-            try #require(await self.waitUntil {
-                Set(store.requests.map(\.request.command)) == ["exec-after", "system-after"]
-            })
+            try await TestWait.observed("replacement approval lists") {
+                Set(store.requests.map(\.preview)) == ["exec-after", "system-after"]
+            }
+            try #require(Set(store.requests.map(\.preview)) == ["exec-after", "system-after"])
         }
     }
 
     @Test func `overlapping refreshes cannot replace a newer approval event`() async throws {
         let holdResponse = LockIsolated(false)
         let responseCaptured = LockIsolated(false)
+        let responseRecorded = AsyncTestSignal()
         let releaseResponse = AsyncTestGate()
         let fixture = ApprovalGatewayFixture(
             initialRequests: { [ApprovalFixtureRequest(id: "resolved-during-list")] },
             beforeListResponse: {
                 guard holdResponse.value else { return }
                 responseCaptured.withValue { $0 = true }
+                responseRecorded.notify()
                 await releaseResponse.wait()
             })
         try await fixture.withStore { store in
@@ -554,13 +604,15 @@ struct ExecApprovalQueueStoreTests {
                 second.cancel()
                 releaseResponse.open()
             }
-            try #require(await self.waitUntil { responseCaptured.value })
+            try await responseRecorded.wait("held approval list") { responseCaptured.value }
+            try #require(responseCaptured.value)
 
             await fixture.requestLog.setListedRequests { [] }
             try await fixture.sendEvent(
                 name: "exec.approval.resolved",
                 payload: #"{"id":"resolved-during-list"}"#)
-            try #require(await self.waitUntil { store.requests.isEmpty })
+            try await TestWait.observed("empty approval queue") { store.requests.isEmpty }
+            try #require(store.requests.isEmpty)
             releaseResponse.open()
             await first.value
             await second.value
@@ -570,6 +622,7 @@ struct ExecApprovalQueueStoreTests {
 
     @Test func `initial reconciliation converges after a newer approval event`() async throws {
         let responseCaptured = LockIsolated(false)
+        let responseRecorded = AsyncTestSignal()
         let releaseResponse = AsyncTestGate()
         let fixture = ApprovalGatewayFixture(
             initialRequests: {
@@ -577,37 +630,190 @@ struct ExecApprovalQueueStoreTests {
             },
             beforeListResponse: {
                 responseCaptured.withValue { $0 = true }
+                responseRecorded.notify()
                 await releaseResponse.wait()
             })
-        defer { releaseResponse.open() }
         try await fixture.withStore { store in
+            defer { releaseResponse.open() }
             store.start()
             _ = try await fixture.gateway.acquireServerLease()
-            try #require(await self.waitUntil { responseCaptured.value })
+            try await responseRecorded.wait("held approval list") { responseCaptured.value }
+            try #require(responseCaptured.value)
 
             let request = ApprovalFixtureRequest(id: "resolved-during-list")
             try await fixture.sendEvent(name: "exec.approval.requested", payload: request.json)
-            try #require(await self.waitUntil { store.requests.map(\.id) == [request.id] })
+            try await TestWait.observed("requested approval") { store.requests.map(\.id) == [request.id] }
+            try #require(store.requests.map(\.id) == [request.id])
             await fixture.requestLog.setListedRequests { [ApprovalFixtureRequest(id: "still-pending")] }
             try await fixture.sendEvent(name: "exec.approval.resolved", payload: #"{"id":"resolved-during-list"}"#)
-            try #require(await self.waitUntil { store.requests.isEmpty })
+            try await TestWait.observed("empty approval queue") { store.requests.isEmpty }
+            try #require(store.requests.isEmpty)
 
             releaseResponse.open()
-            try #require(await self.waitUntil { store.requests.map(\.id) == ["still-pending"] })
+            try await TestWait.observed("reconciled pending approval") { store.requests.map(\.id) == ["still-pending"] }
+            try #require(store.requests.map(\.id) == ["still-pending"])
         }
     }
 
-    private func waitUntil(
-        timeout: Duration = .seconds(2),
-        _ predicate: @escaping @MainActor () -> Bool) async -> Bool
-    {
-        let deadline = ContinuousClock.now + timeout
-        while ContinuousClock.now < deadline {
-            if predicate() {
-                return true
-            }
-            try? await Task.sleep(for: .milliseconds(5))
+    @Test(arguments: [false, true])
+    func `Unicode-equivalent approval IDs resolve and expire independently`(viaEvents: Bool) async throws {
+        let composed = "\u{E9}"
+        let decomposed = "e\u{301}"
+        let makeRequests: @Sendable () -> [ApprovalFixtureRequest] = {
+            [
+                ApprovalFixtureRequest(id: composed, createdAtMs: 1),
+                ApprovalFixtureRequest(id: decomposed, createdAtMs: 1, expiresOffsetMs: 1500),
+            ]
         }
-        return predicate()
+        let fixture = ApprovalGatewayFixture(initialRequests: { viaEvents ? [] : makeRequests() })
+        try await fixture.withStore { store in
+            store.start()
+            await store.refresh()
+            if viaEvents {
+                for request in makeRequests() {
+                    try await fixture.sendEvent(name: "exec.approval.requested", payload: request.json)
+                }
+                try await TestWait.observed("two Unicode approvals") { store.requests.count == 2 }
+                try #require(store.requests.count == 2)
+            }
+            #expect(store.requests.map(\.idKey) == [Data(decomposed.utf8), Data(composed.utf8)])
+            let resolved = try JSONEncoder().encode(["id": composed])
+            try await fixture.sendEvent(
+                name: "exec.approval.resolved",
+                payload: #require(String(data: resolved, encoding: .utf8)))
+            try await TestWait.observed("remaining Unicode approval") {
+                store.requests.map(\.idKey) == [Data(decomposed.utf8)]
+            }
+            try #require(store.requests.map(\.idKey) == [Data(decomposed.utf8)])
+            try await TestWait.observed("empty approval queue") { store.requests.isEmpty }
+            try #require(store.requests.isEmpty)
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `canonical presentation requires byte-identical approval identity`(exactID: Bool) async {
+        let fixture = ApprovalGatewayFixture(
+            initialRequests: { [ApprovalFixtureRequest(id: "\u{E9}")] },
+            presentation: { _ in
+                let id = exactID ? "\u{E9}" : "e\u{301}"
+                return """
+                {"approval":{"id":"\(id)","urlPath":"/approval/synthetic","status":"pending",
+                "createdAtMs":1,"expiresAtMs":9999999999999,
+                "presentation":{"kind":"exec","commandText":"echo canonical","allowedDecisions":["deny"]}}}
+                """
+            },
+            advertisedMethods: ["approval.get"])
+        await fixture.withStore { store in
+            await store.refresh()
+            #expect(store.requests.map(\.preview) == (exactID ? ["echo canonical"] : []))
+        }
+    }
+
+    @Test func `plugin attention uses canonical presentation without acquiring exec decisions`() async throws {
+        let source = ApprovalFixtureRequest(
+            id: "plugin", sessionKey: "agent:main:review", command: nil,
+            title: "Raw plugin title", description: "Raw description", createdOffsetMs: -20000,
+            allowedDecisions: ["allow-once", "allow-always", "deny"])
+        let fixture = ApprovalGatewayFixture(
+            pluginRequests: { [source] },
+            presentation: { _ in
+                """
+                {"approval":{"id":"plugin","urlPath":"/approval/plugin","status":"pending",
+                "createdAtMs":1,"expiresAtMs":9999999999999,"sourceSessionKey":"different-projection",
+                "presentation":{"kind":"plugin","title":"Review deployment","description":"Publish the staged site",
+                "detail":"Target: preview environment","severity":"warning","allowedDecisions":["allow-once","deny"]}}}
+                """
+            },
+            advertisedMethods: ["plugin.approval.list", "approval.get"])
+        try await fixture.withStore { store in
+            await store.refresh()
+            let request = try #require(store.requests.first)
+            #expect(request.kind == .plugin)
+            #expect(request.preview == "Review deployment\n\nPublish the staged site\n\nTarget: preview environment")
+            #expect(request.sessionKey == "agent:main:review")
+            #expect(request.createdAtMs == source.createdAtMs)
+            #expect(request.expiresAtMs == source.expiresAtMs)
+            #expect(store.attentionRequests.first?.kind == .approval)
+            #expect(request.allowedDecisions.isEmpty)
+            await store.resolve(request: request, decision: .allowOnce)
+            await store.resolve(request: request, decision: .deny)
+            #expect(await fixture.requestLog.requests(method: "exec.approval.resolve").isEmpty)
+            #expect(await fixture.requestLog.requests(method: "approval.resolve").isEmpty)
+            #expect(await fixture.requestLog.requests(method: "approval.get").count == 1)
+        }
+    }
+
+    @Test func `one approval kind failing preserves its rows while other kinds refresh`() async {
+        let fixture = ApprovalGatewayFixture(
+            initialRequests: { [ApprovalFixtureRequest(id: "exec-old")] },
+            pluginRequests: { [ApprovalFixtureRequest(id: "plugin-pending", command: nil, title: "Review upload")] },
+            advertisedMethods: ["plugin.approval.list"])
+        await fixture.withStore { store in
+            await store.refresh()
+            #expect(Set(store.requests.map(\.id)) == ["exec-old", "plugin-pending"])
+            await fixture.requestLog.setListedRequests { [ApprovalFixtureRequest(id: "exec-new")] }
+            await fixture.requestLog.rejectTemporarily(methods: ["plugin.approval.list"])
+            await store.refresh()
+            #expect(Set(store.requests.map(\.id)) == ["exec-new", "plugin-pending"])
+        }
+    }
+
+    @Test func `terminal canonical presentation removes an approval still returned by list`() async {
+        let fixture = ApprovalGatewayFixture(
+            initialRequests: { [ApprovalFixtureRequest(id: "finished")] },
+            presentation: { _ in
+                """
+                {"approval":{"id":"finished","urlPath":"/approval/finished","status":"expired","reason":"timeout",
+                "createdAtMs":1,"expiresAtMs":2,"resolvedAtMs":2,
+                "presentation":{"kind":"exec","commandText":"echo safe","allowedDecisions":["deny"]}}}
+                """
+            },
+            advertisedMethods: ["approval.get"])
+        await fixture.withStore { store in
+            await store.refresh()
+            #expect(store.requests.isEmpty)
+            #expect(await fixture.requestLog.requests(method: "approval.get").count == 1)
+        }
+    }
+
+    @Test func `plugin events clear attention on resolution and cannot be revived by an older list`() async throws {
+        let holdResponse = LockIsolated(false)
+        let responseCaptured = LockIsolated(false)
+        let responseRecorded = AsyncTestSignal()
+        let releaseResponse = AsyncTestGate()
+        let source = ApprovalFixtureRequest(id: "plugin-live", command: nil, title: "Approve preview")
+        let fixture = ApprovalGatewayFixture(
+            pluginRequests: { [source] },
+            advertisedMethods: ["plugin.approval.list"],
+            beforeListResponse: {
+                guard holdResponse.value else { return }
+                responseCaptured.withValue { $0 = true }
+                responseRecorded.notify()
+                await releaseResponse.wait()
+            })
+        try await fixture.withStore { store in
+            store.start()
+            await store.refresh()
+            try #require(store.requests.first?.kind == .plugin)
+            holdResponse.withValue { $0 = true }
+            let refresh = Task { await store.refresh() }
+            defer {
+                refresh.cancel()
+                releaseResponse.open()
+            }
+            try await responseRecorded.wait("held approval list") { responseCaptured.value }
+            try #require(responseCaptured.value)
+            await fixture.requestLog.setListedPluginRequests { [] }
+            try await fixture.sendEvent(name: "plugin.approval.resolved", payload: #"{"id":"plugin-live"}"#)
+            try await TestWait.observed("empty approval queue") { store.requests.isEmpty }
+            try #require(store.requests.isEmpty)
+            releaseResponse.open()
+            await refresh.value
+            #expect(store.requests.isEmpty)
+            try await fixture.sendEvent(name: "plugin.approval.requested", payload: source.json)
+            try await TestWait.observed("plugin approval") { store.requests.first?.kind == .plugin }
+            try #require(store.requests.first?.kind == .plugin)
+            #expect(store.requests.first?.allowedDecisions.isEmpty == true)
+        }
     }
 }

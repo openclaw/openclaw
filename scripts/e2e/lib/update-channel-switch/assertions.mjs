@@ -1,21 +1,17 @@
-// Assertions for update-channel switch E2E scenarios.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { legacyPackageAcceptanceCompat } from "../package-compat.mjs";
+import { readJson } from "../fixtures/common.mjs";
 
 const [command, ...args] = process.argv.slice(2);
 const controlUiHtml = "<!doctype html><title>fixture</title>\n";
 
 function usage() {
   console.error(
-    "usage: assertions.mjs <prepare-git-fixture|write-control-ui|assert-update|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version> [...]",
+    "usage: assertions.mjs <prepare-git-fixture|write-control-ui|assert-update|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version|assert-runtime-staging-clean|assert-dirty-exit|assert-dirty-update> [...]",
   );
   process.exit(2);
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
 // Runs inside the bare Docker E2E image, before package dependencies are installed.
@@ -35,10 +31,10 @@ function findTopLevelBlock(lines, key) {
 function parseYamlScalar(raw) {
   const trimmed = raw.trim();
   const withoutComment = trimmed.replace(/\s+#.*$/, "");
-  if (withoutComment.startsWith('"') && withoutComment.endsWith('"')) {
-    return withoutComment.slice(1, -1);
-  }
-  if (withoutComment.startsWith("'") && withoutComment.endsWith("'")) {
+  if (
+    (withoutComment.startsWith('"') && withoutComment.endsWith('"')) ||
+    (withoutComment.startsWith("'") && withoutComment.endsWith("'"))
+  ) {
     return withoutComment.slice(1, -1);
   }
   return withoutComment;
@@ -82,18 +78,17 @@ function writeWorkspacePnpmConfig(file, keptPatches) {
     lines.push(...nextLines);
   }
 
-  const allowUnusedIndex = lines.findIndex((line) => /^allowUnusedPatches:\s*/.test(line));
-  if (allowUnusedIndex === -1) {
-    lines.push("allowUnusedPatches: true");
-  } else {
-    lines[allowUnusedIndex] = "allowUnusedPatches: true";
-  }
-
-  const minimumReleaseAgeIndex = lines.findIndex((line) => /^minimumReleaseAge:\s*/.test(line));
-  if (minimumReleaseAgeIndex === -1) {
-    lines.push("minimumReleaseAge: 0");
-  } else {
-    lines[minimumReleaseAgeIndex] = "minimumReleaseAge: 0";
+  for (const [key, value] of [
+    ["allowUnusedPatches", true],
+    ["minimumReleaseAge", 0],
+  ]) {
+    const index = lines.findIndex((line) => new RegExp(`^${key}:\\s*`).test(line));
+    const setting = `${key}: ${value}`;
+    if (index === -1) {
+      lines.push(setting);
+    } else {
+      lines[index] = setting;
+    }
   }
 
   fs.writeFileSync(file, `${lines.join("\n")}${hadTrailingNewline ? "\n" : ""}`);
@@ -127,7 +122,7 @@ function prepareGitFixture(root) {
         missing.push(`${dependency} -> ${String(patchFile)}`);
       }
     }
-    if (missing.length > 0 && !legacyPackageAcceptanceCompat(packageJson.version)) {
+    if (missing.length > 0) {
       throw new Error(
         `package ${packageJson.version} has missing pnpm patchedDependencies in package fixture: ${missing.join(", ")}`,
       );
@@ -186,15 +181,40 @@ function assertUpdate(channel) {
   }
 }
 
+function assertRuntimeStagingClean(root) {
+  const pending = [root];
+  const leftovers = [];
+  while (pending.length > 0) {
+    const directory = pending.pop();
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const fullPath = path.join(directory, entry.name);
+      if (/\.openclaw-update-.*\.tmp$/u.test(entry.name)) {
+        leftovers.push(path.relative(root, fullPath));
+      } else if (entry.isDirectory() && entry.name !== ".git") {
+        pending.push(fullPath);
+      }
+    }
+  }
+  assert.deepEqual(leftovers, [], "successful update retained runtime staging entries");
+}
+
+function assertDirtyUpdate(root, expectedHead) {
+  const payload = JSON.parse(process.env.UPDATE_JSON ?? "");
+  assert.equal(payload.reason, "dirty", "ordinary untracked input must block admission");
+  assert.equal(
+    execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+    expectedHead,
+  );
+  assert.equal(
+    fs.readFileSync(path.join(root, "operator-update-notes.tmp"), "utf8"),
+    "retain user notes\n",
+  );
+  assertRuntimeStagingClean(root);
+}
+
 function assertConfigChannel(channel) {
   const config = readJson(path.join(process.env.HOME, ".openclaw", "openclaw.json"));
   if (config.update?.channel === channel) {
-    return;
-  }
-  if (process.env.OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT === "1") {
-    console.log(
-      `legacy package did not persist update.channel ${channel}; got ${JSON.stringify(config.update?.channel)}`,
-    );
     return;
   }
   throw new Error(
@@ -230,28 +250,27 @@ function assertInstalledVersion(root, expectedVersion) {
   }
 }
 
-switch (command) {
-  case "prepare-git-fixture":
-    prepareGitFixture(args[0] ?? "/tmp/openclaw-git");
-    break;
-  case "write-control-ui":
-    writeControlUi(args[0] ?? "/tmp/openclaw-git");
-    break;
-  case "assert-update":
-    assertUpdate(args[0]);
-    break;
-  case "assert-config-channel":
-    assertConfigChannel(args[0]);
-    break;
-  case "assert-dry-run":
-    assertDryRun(args[0], args[1]);
-    break;
-  case "assert-status-kind":
-    assertStatusKind(args[0]);
-    break;
-  case "assert-installed-version":
-    assertInstalledVersion(args[0], args[1]);
-    break;
-  default:
-    usage();
+function assertDirtyExit(statusRaw) {
+  const status = Number(statusRaw);
+  if (status === 1) {
+    return;
+  }
+  throw new Error(`unexpected dirty-worktree update exit ${statusRaw}; expected 1`);
 }
+
+const commands = {
+  "prepare-git-fixture": (root = "/tmp/openclaw-git") => prepareGitFixture(root),
+  "write-control-ui": (root = "/tmp/openclaw-git") => writeControlUi(root),
+  "assert-update": assertUpdate,
+  "assert-runtime-staging-clean": assertRuntimeStagingClean,
+  "assert-dirty-update": assertDirtyUpdate,
+  "assert-dirty-exit": assertDirtyExit,
+  "assert-config-channel": assertConfigChannel,
+  "assert-dry-run": assertDryRun,
+  "assert-status-kind": assertStatusKind,
+  "assert-installed-version": assertInstalledVersion,
+};
+if (!Object.hasOwn(commands, command)) {
+  usage();
+}
+commands[command](...args);

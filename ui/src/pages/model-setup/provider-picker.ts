@@ -1,6 +1,9 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
-import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
+import type {
+  SystemAgentSetupActivateParams,
+  SystemAgentSetupDetectResult,
+} from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import { syncDropdownItemRadio } from "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
@@ -8,35 +11,48 @@ import { renderProviderIcon } from "./model-setup-icon-loader.ts";
 
 type ManualProvider = SystemAgentSetupDetectResult["manualProviders"][number];
 
+export function manualProviderActivation(
+  providers: readonly ManualProvider[],
+  providerId: string,
+  apiKey: string,
+): SystemAgentSetupActivateParams | null {
+  const provider = providers.find((candidate) => candidate.id === providerId);
+  const value = apiKey.trim();
+  return provider && value
+    ? {
+        kind: "api-key",
+        authChoice: provider.id,
+        apiKey: value,
+        ...(provider.modelTarget ? { modelTarget: provider.modelTarget } : {}),
+      }
+    : null;
+}
+
+export function revealManualProvider(root: ParentNode): void {
+  const input = root.querySelector<HTMLInputElement>('.model-setup__manual input[type="password"]');
+  root.querySelector("openclaw-modal-dialog")?.setReturnFocusTarget(input);
+  input?.scrollIntoView?.({ block: "nearest", behavior: "auto" });
+}
+
 type WebAwesomeSelectEvent = CustomEvent<{
   item: HTMLElement & { checked?: boolean; value?: string };
 }>;
 
-function focusSelectedManualProvider(event: Event): void {
-  const dropdown = event.currentTarget as HTMLElement;
-  const options = Array.from(
-    dropdown.querySelectorAll<HTMLElement & { active: boolean }>(
-      "wa-dropdown-item[data-manual-provider]:not([disabled])",
-    ),
+function restoreProviderTriggerAfterHide(dropdown: HTMLElement) {
+  dropdown.addEventListener(
+    "wa-after-hide",
+    () => dropdown.querySelector<HTMLElement>('[slot="trigger"]')?.focus({ preventScroll: true }),
+    { once: true },
   );
-  const selected = options.find((option) => option.hasAttribute("data-selected")) ?? options[0];
-  if (!selected) {
-    return;
-  }
-  for (const option of options) {
-    option.active = option === selected;
-  }
-  selected.focus({ preventScroll: true });
-  selected.scrollIntoView?.({ block: "nearest" });
 }
 
 function handleManualProviderKeydown(event: KeyboardEvent): void {
   const dropdown = event.currentTarget as HTMLElement & { open: boolean };
-  if (!dropdown.open) {
+  if (!dropdown.open || (event.key !== "Tab" && event.key !== "Escape")) {
     return;
   }
+  event.preventDefault();
   if (event.key === "Tab") {
-    event.preventDefault();
     event.stopPropagation();
     const focusTarget = event.shiftKey
       ? dropdown.querySelector<HTMLElement>('[slot="trigger"]')
@@ -47,19 +63,11 @@ function handleManualProviderKeydown(event: KeyboardEvent): void {
       once: true,
     });
     dropdown.open = false;
-    return;
+  } else {
+    // The settings-level Escape shortcut runs before Web Awesome's document
+    // listener. Claim the event here and restore the durable trigger after hide.
+    restoreProviderTriggerAfterHide(dropdown);
   }
-  if (event.key !== "Escape") {
-    return;
-  }
-  // The settings-level Escape shortcut runs before Web Awesome's document
-  // listener. Claim the event here and restore the durable trigger after hide.
-  event.preventDefault();
-  dropdown.addEventListener(
-    "wa-after-hide",
-    () => dropdown.querySelector<HTMLElement>('[slot="trigger"]')?.focus({ preventScroll: true }),
-    { once: true },
-  );
 }
 
 function handleManualProviderSelect(
@@ -74,11 +82,7 @@ function handleManualProviderSelect(
     return;
   }
   if (value !== currentProviderId) {
-    dropdown.addEventListener(
-      "wa-after-hide",
-      () => dropdown.querySelector<HTMLElement>('[slot="trigger"]')?.focus({ preventScroll: true }),
-      { once: true },
-    );
+    restoreProviderTriggerAfterHide(dropdown);
     onChange(value);
     return;
   }
@@ -98,11 +102,9 @@ function manualProviderMethod(provider: ManualProvider): string | undefined {
 }
 
 export function renderManualProviderPicker(
-  props: {
+  props: Parameters<typeof renderProviderIcon>[0] & {
     manualProviderId: string;
     actionsDisabled: boolean;
-    iconUrls: Readonly<Record<string, string>>;
-    onIconError: (url: string) => void;
     onManualProviderChange: (providerId: string) => void;
   },
   result: Pick<SystemAgentSetupDetectResult, "manualProviders">,
@@ -119,7 +121,6 @@ export function renderManualProviderPicker(
       aria-label=${t("modelSetup.manual.provider")}
       @wa-select=${(event: WebAwesomeSelectEvent) =>
         handleManualProviderSelect(event, props.manualProviderId, props.onManualProviderChange)}
-      @wa-after-show=${focusSelectedManualProvider}
       @keydown=${handleManualProviderKeydown}
     >
       <button
@@ -152,35 +153,38 @@ export function renderManualProviderPicker(
           ${icons.chevronDown}
         </span>
       </button>
-      ${result.manualProviders.map((entry) => {
-        const selected = entry.id === props.manualProviderId;
-        const entryMethod = manualProviderMethod(entry);
-        const accessibleLabel = [manualProviderName(entry), entryMethod, entry.hint]
-          .filter(Boolean)
-          .join(", ");
-        return html`
-          <wa-dropdown-item
-            class="model-setup-provider-select__option"
-            data-manual-provider=${entry.id}
-            ?data-selected=${selected}
-            aria-label=${accessibleLabel}
-            .value=${entry.id}
-            type="checkbox"
-            .checked=${selected}
-            ?disabled=${props.actionsDisabled}
-            ${ref((element) => syncDropdownItemRadio(element, selected))}
-          >
-            <span slot="icon">
-              ${renderProviderIcon(props, entry, "model-setup__icon--picker")}
-            </span>
-            <span class="model-setup-provider-select__copy">
-              <strong>${manualProviderName(entry)}</strong>
-              ${entryMethod ? html`<span>${entryMethod}</span>` : nothing}
-              ${entry.hint ? html`<small>${entry.hint}</small>` : nothing}
-            </span>
-          </wa-dropdown-item>
-        `;
-      })}
+      ${result.manualProviders
+        .toSorted((a, b) => manualProviderName(a).localeCompare(manualProviderName(b)))
+        .map((entry) => {
+          const selected = entry.id === props.manualProviderId;
+          const entryMethod = manualProviderMethod(entry);
+          const accessibleLabel = [manualProviderName(entry), entryMethod, entry.hint]
+            .filter(Boolean)
+            .join(", ");
+          return html`
+            <wa-dropdown-item
+              class="model-setup-provider-select__option"
+              data-manual-provider=${entry.id}
+              ?data-selected=${selected}
+              aria-label=${accessibleLabel}
+              .value=${entry.id}
+              type="checkbox"
+              .checked=${selected}
+              ?disabled=${props.actionsDisabled}
+              ?autofocus=${selected && !props.actionsDisabled}
+              ${ref((element) => syncDropdownItemRadio(element, selected))}
+            >
+              <span slot="icon">
+                ${renderProviderIcon(props, entry, "model-setup__icon--picker")}
+              </span>
+              <span class="model-setup-provider-select__copy">
+                <strong>${manualProviderName(entry)}</strong>
+                ${entryMethod ? html`<span>${entryMethod}</span>` : nothing}
+                ${entry.hint ? html`<small>${entry.hint}</small>` : nothing}
+              </span>
+            </wa-dropdown-item>
+          `;
+        })}
     </wa-dropdown>
   `;
 }

@@ -8,6 +8,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
 import { createModelAuthAvailabilityResolver } from "./model-auth-availability.js";
 import {
   authStore,
@@ -224,6 +225,37 @@ describe("model auth unavailability reasons", () => {
       expect(pinned.unavailableUntil).toBeUndefined();
     },
   );
+
+  it("hides a cooling inline key while preserving a healthy profile fallback", () => {
+    const store = authStore();
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "anthropic-local": {
+            apiKey: "demo-key",
+            baseUrl: "http://127.0.0.1:8000/v1",
+            models: [],
+          },
+        },
+      },
+    };
+    const availability = () =>
+      createModelAuthAvailabilityResolver({ cfg, authStore: store, env: {} }).evaluateModelAuth(
+        "anthropic-local",
+        { modelId: "demo-model" },
+      ).availability;
+
+    expect(availability()).toBe(true);
+    store.usageStats = {
+      "inline-api-key:anthropic-local": {
+        disabledUntil: Date.now() + 60_000,
+        disabledReason: "billing",
+      },
+    };
+    expect(availability()).toBe(false);
+    store.profiles["test-profile"] = createApiKeyCredential("anthropic-local", "profile-key");
+    expect(availability()).toBe(true);
+  });
 
   it.each(["profile", "inline", "hydrated-inline"] as const)(
     "distinguishes %s permanent auth rejection from active retry windows",

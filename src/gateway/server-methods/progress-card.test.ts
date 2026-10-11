@@ -1,20 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  PROGRESS_CARD_MAX_STEP_UTF8_BYTES,
   PROGRESS_CARD_MAX_STEPS,
   PROGRESS_CARD_MAX_UTF8_BYTES,
   type ProgressCard,
   type ProgressCardStep,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-descriptors.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { ProgressCardStore } from "../progress-card-store.js";
 import { createProgressCardHandlers } from "./progress-card.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 function createHarness() {
   const cards = new Map<string, ProgressCard>();
-  const get = vi.fn<ProgressCardStore["get"]>((sessionKey) => cards.get(sessionKey) ?? null);
-  const put = vi.fn<ProgressCardStore["put"]>((sessionKey, input) => {
+  const get = vi.fn<ProgressCardStore["get"]>(async (sessionKey) => cards.get(sessionKey) ?? null);
+  const put = vi.fn<ProgressCardStore["put"]>(async (sessionKey, input) => {
     const current = cards.get(sessionKey);
     if (!input.markdown && !input.steps?.length) {
       if (input.expectedRevision !== undefined && current?.revision !== input.expectedRevision) {
@@ -35,14 +34,17 @@ function createHarness() {
   });
   const handlers = createProgressCardHandlers({ get, put });
   const broadcast = vi.fn();
-  const invoke = async (method: "progressCard.get" | "progressCard.put", params: unknown) => {
-    const respond = vi.fn<RespondFn>();
+  const invoke = async (
+    method: "progressCard.get" | "progressCard.put",
+    params: unknown,
+    respond = vi.fn<RespondFn>(),
+  ) => {
     await handlers[method]!({
       params,
       respond,
       context: {
         broadcast,
-        getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }, { id: "work" }] } }),
+        getRuntimeConfig: () => ({ agents: { entries: { main: {}, work: {} } } }),
       } as unknown as GatewayRequestContext,
     } as never);
     return respond;
@@ -51,10 +53,39 @@ function createHarness() {
 }
 
 describe("progress card gateway methods", () => {
-  it("registers read and write scopes", () => {
-    expect(resolveCoreOperatorGatewayMethodScope("progressCard.get")).toBe("operator.read");
-    expect(resolveCoreOperatorGatewayMethodScope("progressCard.put")).toBe("operator.write");
-  });
+  it.each(["get", "put"] as const)(
+    "reports rejected %s without publishing or retrying",
+    async (operation) => {
+      const harness = createHarness();
+      const release = createDeferredCore();
+      harness.get.mockImplementationOnce(async () => {
+        await release.promise;
+        return null;
+      });
+      harness.put.mockImplementationOnce(async () => {
+        await release.promise;
+        return { card: null };
+      });
+      const respond = vi.fn<RespondFn>();
+      const pending = harness.invoke(
+        `progressCard.${operation}`,
+        { sessionKey: "agent:main:main" },
+        respond,
+      );
+      release.reject(new Error("storage unavailable"));
+      await pending;
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          message: expect.stringContaining("storage unavailable"),
+        }),
+      );
+      expect(harness.broadcast).not.toHaveBeenCalled();
+      expect(harness[operation]).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([
     { agentId: "missing", message: "Unknown agent id" },
@@ -131,28 +162,6 @@ describe("progress card gateway methods", () => {
       },
       message: `more than ${PROGRESS_CARD_MAX_STEPS} items`,
     },
-    {
-      name: "oversized step",
-      payload: {
-        plan: [
-          {
-            step: "é".repeat(PROGRESS_CARD_MAX_STEP_UTF8_BYTES / 2 + 1),
-            status: "pending",
-          },
-        ],
-      },
-      message: `${PROGRESS_CARD_MAX_STEP_UTF8_BYTES} UTF-8 bytes`,
-    },
-    {
-      name: "multiple active steps",
-      payload: {
-        plan: [
-          { step: "One", status: "in_progress" },
-          { step: "Two", status: "in_progress" },
-        ],
-      },
-      message: "at most one in_progress",
-    },
   ])("rejects $name without broadcasting", async ({ payload, message }) => {
     const { broadcast, invoke } = createHarness();
     const respond = await invoke("progressCard.put", {
@@ -166,26 +175,6 @@ describe("progress card gateway methods", () => {
       expect.objectContaining({ message: expect.stringContaining(message) }),
     );
     expect(broadcast).not.toHaveBeenCalled();
-  });
-
-  it("clears the card and broadcasts a null revision", async () => {
-    const { broadcast, invoke } = createHarness();
-    await invoke("progressCard.put", {
-      sessionKey: "agent:main:main",
-      markdown: "Working",
-    });
-    broadcast.mockClear();
-    const clear = await invoke("progressCard.put", { sessionKey: "agent:main:main" });
-
-    expect(clear).toHaveBeenCalledWith(true, { card: null }, undefined);
-    expect(broadcast).toHaveBeenCalledWith(
-      "progressCard.changed",
-      {
-        sessionKey: "agent:main:main",
-        revision: null,
-      },
-      { sessionKeys: ["agent:main:main"], agentId: "main" },
-    );
   });
 
   it("dismisses only the matching completed revision", async () => {

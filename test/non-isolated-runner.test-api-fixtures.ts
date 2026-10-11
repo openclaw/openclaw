@@ -12,30 +12,25 @@ export function testApiLifecycleFixtureFiles(repoRoot: string): Record<string, s
         ? `
 // Check during collection before imports can overwrite the previous generation.
 const remainingKeys = [
-  "openclaw.beforeToolCallBlockedErrorTestApi",
-  "openclaw.backupPlanTestApi",
   "openclaw.staleAuthOrderTestApi",
   "openclaw.bashProcessRegistryTestApi",
   "openclaw.diagnosticRunActivityTestApi",
 ].filter((key) => Object.hasOwn(globalThis, Symbol.for(key)));
 expect(remainingKeys, "completed-file test API publications").toEqual([]);
-expect(Object.hasOwn(globalThis, "openclawOpenAIResponsesTransportTestApi")).toBe(false);
-for (const key of [Symbol.for("fixture.foreignTestApi"), Symbol.for("openclaw.google.vertexAdcTestApi"), "openclaw.backupPlanTestApi"]) {
+for (const key of [Symbol.for("fixture.foreignTestApi"), Symbol.for("openclaw.google.vertexAdcTestApi"), "openclaw.staleAuthOrderTestApi"]) {
   expect(Reflect.get(globalThis, key)).toBe("foreign");
   Reflect.deleteProperty(globalThis, key);
 }
+const { redactRegisteredSecretValues: redactPriorValues } = await import(${sourcePath("logging/secret-redaction-registry.ts")});
+const priorError = "Agent harness-owned session identity is locked and cannot be replaced or shared.";
+expect(redactPriorValues(priorError, () => "***")).toBe(priorError);
 `
         : "";
     files[`${prefix}-test-api-${generation}.test.ts`] = `
-import path from "node:path";
 import { createRequire } from "node:module";
 import { afterAll, describe, expect, it } from "vitest";
 ${observeCleanup}
-const { createBeforeToolCallBlockedError } = await import(${sourcePath("agents/agent-tools.before-tool-call.test-support.ts")});
-const { isBeforeToolCallBlockedError } = await import(${sourcePath("agents/agent-tools.before-tool-call.wrapper.ts")});
-const { resolveBackupPlanFromPaths } = await import(${sourcePath("commands/backup.test-support.ts")});
 const { repairStaleConfiguredAuthOrders } = await import(${sourcePath("commands/doctor/shared/stale-auth-order.test-support.ts")});
-const { testing: responses } = await import(${sourcePath("agents/openai-transport-stream.test-support.ts")});
 const registry = await import(${sourcePath("agents/bash-process-registry.ts")});
 const { resetProcessRegistryForTests } = await import(${sourcePath("agents/bash-process-registry.test-support.ts")});
 const { createProcessSessionFixture } = await import(${sourcePath("agents/bash-process-registry.test-helpers.ts")});
@@ -51,16 +46,11 @@ expect(nativeCron.registerActiveCronTaskRun).toBe(native.register);
 const { resetDiagnosticRunActivityForTest, getDiagnosticSessionActivitySnapshot } = await import(${sourcePath("logging/diagnostic-run-activity.ts")});
 const { markDiagnosticToolStartedForTest } = await import(${sourcePath("logging/diagnostic-run-activity.test-support.ts")});
 const { resolveGlobalSingleton } = await import(${sourcePath("shared/global-singleton.ts")});
-const stateDir = path.join(import.meta.dirname, "test-api-state");
-const configPath = path.join(stateDir, "missing-openclaw.json");
+const { registerSecretValueForRedaction, redactRegisteredSecretValues } = await import(${sourcePath("logging/secret-redaction-registry.ts")});
 describe("${generation} test API consumers", () => {
-  async function verifyConsumers(message: string): Promise<void> {
-    const blocked = createBeforeToolCallBlockedError(message);
-    expect(blocked.message).toBe(message);
-    expect(isBeforeToolCallBlockedError(blocked)).toBe(true);
-    expect(isBeforeToolCallBlockedError(new Error(message))).toBe(false);
-    expect(responses.isInvalidEncryptedContentError({ code: "invalid_encrypted_content" })).toBe(true);
-    expect(responses.isInvalidEncryptedContentError(new Error("unrelated"))).toBe(false);
+  async function verifyConsumers(): Promise<void> {
+    registerSecretValueForRedaction("identity");
+    expect(redactRegisteredSecretValues("session identity is locked", () => "***")).toBe("session *** is locked");
     registry.addSession(createProcessSessionFixture({ id: "captured", backgrounded: true }));
     replacement.addSession(createProcessSessionFixture({ id: "replacement", backgrounded: true }));
     try {
@@ -74,36 +64,25 @@ describe("${generation} test API consumers", () => {
     const controller = new AbortController();
     nativeCron.registerActiveCronTaskRun({ runId: "native-fixture", controller });
     native.api.resetActiveCronTaskRunsForTests();
-    expect(nativeCron.cancelActiveCronTaskRun({ runId: "native-fixture" })).toBe(false);
+    expect(nativeCron.abortActiveCronTaskRuns()).toBe(0);
     expect(controller.signal.aborted).toBe(false);
-    const plan = await resolveBackupPlanFromPaths({
-      stateDir,
-      configPath,
-      oauthDir: path.join(stateDir, "credentials"),
-      onlyConfig: true,
-    });
-    expect(plan).toMatchObject({
-      included: [],
-      workspaceDirs: [],
-      skipped: [{ kind: "config", sourcePath: configPath, reason: "missing" }],
-    });
     const cfg = { auth: { order: { "fixture-provider": [] } } };
     expect(repairStaleConfiguredAuthOrders({ cfg, stores: [] })).toEqual({
       config: cfg,
       changes: [],
     });
   }
-  it.each(["first test", "second test"])("keeps test API consumers usable in %s", async (phase) => {
-    await verifyConsumers(phase);
+  it.each(["first test", "second test"])("keeps test API consumers usable in %s", async () => {
+    await verifyConsumers();
   });
   afterAll(async () => {
-    await verifyConsumers("afterAll");
+    await verifyConsumers();
     console.info("test API lifecycle: ${generation} afterAll passed");
   });
   const cleanupKey = Symbol("fixture resource teardown");
   resolveGlobalSingleton(cleanupKey, () => ({}), async () => {
     try {
-      await verifyConsumers("resource teardown");
+      await verifyConsumers();
       const key = Symbol.for("openclaw.diagnosticRunActivityTestApi");
       const priorApi = Reflect.get(globalThis, key);
       resetDiagnosticRunActivityForTest();
@@ -126,7 +105,7 @@ const cron = require(${sourcePath("cron/service/active-run-cancellation.ts")});
 module.exports = { register: cron.registerActiveCronTaskRun, api: globalThis[Symbol.for("openclaw.activeCronTaskRunTestApi")] };
 `;
   files["foreign/extensions/google/vertex-adc.ts"] = `
-for (const key of [Symbol.for("fixture.foreignTestApi"), Symbol.for("openclaw.google.vertexAdcTestApi"), "openclaw.backupPlanTestApi"]) {
+for (const key of [Symbol.for("fixture.foreignTestApi"), Symbol.for("openclaw.google.vertexAdcTestApi"), "openclaw.staleAuthOrderTestApi"]) {
   Reflect.set(globalThis, key, "foreign");
 }
 `;
@@ -159,7 +138,7 @@ const native = createRequire(import.meta.url)("./native-cron.cjs");
 const workspace = await import(${sourcePath("agents/workspace-legacy-state.ts")});
 const { resetLegacyWorkspaceStateCheckForTest } = await import(${sourcePath("agents/workspace-legacy-state.test-support.ts")});
 function verifyPartialMock() {
-  expect(workspace.LEGACY_WORKSPACE_STATE_DIRNAME).toBe(".openclaw");
+  expect(workspace.LEGACY_WORKSPACE_ATTESTATION_DIRNAME).toBe("workspace-attestations");
   expect(vi.isMockFunction(workspace.prepareLegacyWorkspaceStateReset)).toBe(true);
   expect(() => resetLegacyWorkspaceStateCheckForTest()).not.toThrow();
   expect(nativeCron.registerActiveCronTaskRun).toBe(native.register);
@@ -185,10 +164,10 @@ it("loads a fresh real source after the partial mock retires", () => {
   files["09-j-test-api-mock-only.test.ts"] = `
 /* @vitest-environment jsdom */
 import { expect, it, vi } from "vitest";
-vi.mock(${sourcePath("agents/workspace-legacy-state.ts")}, () => ({ LEGACY_WORKSPACE_STATE_DIRNAME: "mock-only" }));
+vi.mock(${sourcePath("agents/workspace-legacy-state.ts")}, () => ({ LEGACY_WORKSPACE_ATTESTATION_DIRNAME: "mock-only" }));
 const workspace = await import(${sourcePath("agents/workspace-legacy-state.ts")});
 it("does not execute the source behind a mock-only import", () => {
-  expect(workspace.LEGACY_WORKSPACE_STATE_DIRNAME).toBe("mock-only");
+  expect(workspace.LEGACY_WORKSPACE_ATTESTATION_DIRNAME).toBe("mock-only");
   const key = Symbol.for("openclaw.workspaceLegacyStateTestApi");
   expect(Object.hasOwn(globalThis, key)).toBe(false);
   Reflect.set(globalThis, key, "foreign");

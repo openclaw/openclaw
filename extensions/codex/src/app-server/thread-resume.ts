@@ -1,4 +1,6 @@
 /** Owns Codex thread/resume subscription safety. */
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
+import { publishCodexCatalogResume } from "../session-catalog-events.js";
 import {
   assertCodexThreadResumeSubscription,
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
@@ -6,6 +8,7 @@ import {
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import { isCodexAppServerStartupError } from "./attempt-timeouts.js";
+import { forgetCodexWorkspaceReferences } from "./client-runtime.js";
 import {
   CodexAppServerRpcError,
   isCodexAppServerOverloadError,
@@ -14,7 +17,7 @@ import {
 } from "./client.js";
 import { assertCodexThreadResumeResponse } from "./protocol-validators.js";
 import type { CodexThreadResumeParams, CodexThreadResumeResponse } from "./protocol.js";
-import { CodexAppServerScopedRequestRejectedError } from "./request.js";
+import { CodexAppServerScopedRequestRejectedError } from "./rpc-error.js";
 import { isCodexAppServerStartSelectionChangedError } from "./shared-client.js";
 
 /** Resumes one thread, releasing or isolating every possible native subscription. */
@@ -25,23 +28,12 @@ export async function resumeCodexAppServerThread(params: {
   timeoutMs?: number;
   signal?: AbortSignal;
   assertCurrent?: () => void;
+  withCurrent?: (write: () => void) => Promise<void>;
   onSubscriptionReleased?: () => void;
   requestResume?: (request: CodexThreadResumeParams) => Promise<unknown>;
 }): Promise<CodexThreadResumeResponse> {
   const threadId = params.request.threadId;
   let response: CodexThreadResumeResponse;
-  let ownershipRejected = false;
-  const assertCurrent =
-    params.assertCurrent &&
-    (() => {
-      try {
-        params.assertCurrent?.();
-      } catch (error) {
-        // Only this physical pre-write callback proves no subscription was acquired.
-        ownershipRejected = true;
-        throw error;
-      }
-    });
   try {
     response = assertCodexThreadResumeResponse(
       await (params.requestResume
@@ -49,13 +41,14 @@ export async function resumeCodexAppServerThread(params: {
         : params.client.request("thread/resume", params.request, {
             ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
             ...(params.signal ? { signal: params.signal } : {}),
-            assertCurrent,
+            assertCurrent: params.assertCurrent,
+            withCurrent: params.withCurrent,
           })),
     );
     assertCodexThreadResumeSubscription(threadId, response.thread.id);
+    forgetCodexWorkspaceReferences(params.client, threadId);
   } catch (error) {
     if (
-      ownershipRejected ||
       isCodexAppServerStartSelectionChangedError(error) ||
       isCodexAppServerStartupError(error) ||
       error instanceof CodexAppServerScopedRequestRejectedError ||
@@ -71,6 +64,7 @@ export async function resumeCodexAppServerThread(params: {
         threadId,
         timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
         assertCurrent: params.assertCurrent,
+        withCurrent: params.withCurrent,
       }).catch(() => false);
       if (subscriptionReleased) {
         params.onSubscriptionReleased?.();
@@ -95,5 +89,6 @@ export async function resumeCodexAppServerThread(params: {
       { cause: error },
     );
   }
+  await publishCodexCatalogResume(params.client, response, sanitizeTerminalText);
   return response;
 }

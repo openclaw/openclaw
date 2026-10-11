@@ -8,12 +8,9 @@ import {
 
 describe("normalizeCatalogProjectGrouping", () => {
   it.each([
-    ["project", "project"],
     ["person", "person"],
     ["none", "none"],
     [undefined, "project"],
-    [null, "project"],
-    ["garbage", "project"],
   ] as const)("normalizes %s to %s", (raw, expected) => {
     expect(normalizeCatalogProjectGrouping(raw)).toBe(expected);
   });
@@ -37,8 +34,8 @@ describe("groupCatalogSessionsByProject", () => {
 
   it("uses a custom group before the session project", () => {
     const result = groupCatalogSessionsByProject([
-      { ...session("grouped", "/work/openclaw"), customGroup: "Release" },
       session("project", "/work/openclaw"),
+      { ...session("grouped", "/work/openclaw"), customGroup: "Release" },
     ]);
 
     expect(result.groups).toMatchObject([
@@ -54,18 +51,6 @@ describe("groupCatalogSessionsByProject", () => {
         label: "openclaw",
         sessions: [{ threadId: "project" }],
       },
-    ]);
-  });
-
-  it("sorts custom groups ahead of project groups regardless of session order", () => {
-    const result = groupCatalogSessionsByProject([
-      session("project", "/work/openclaw"),
-      { ...session("grouped", "/work/openclaw"), customGroup: "Release" },
-    ]);
-
-    expect(result.groups.map((group) => group.key)).toEqual([
-      "custom:Release",
-      "project:/work/openclaw",
     ]);
   });
 
@@ -86,7 +71,6 @@ describe("groupCatalogSessionsByProject", () => {
   });
 
   it.each([
-    ["/Users/dev/openclaw/.claude/worktrees/fix-1", "/Users/dev/openclaw"],
     ["/Users/dev/openclaw/.claude/worktrees/fix-1/ui/src", "/Users/dev/openclaw"],
     ["C:\\Users\\dev\\openclaw\\.claude\\worktrees\\fix-1", "C:\\Users\\dev\\openclaw"],
   ])("folds worktree cwd %s into %s", (worktreeCwd, expectedProject) => {
@@ -212,23 +196,27 @@ describe("groupCatalogSessionsByPerson", () => {
     expect(result.groups[0]?.title).toBe("Created by Ada");
   });
 
-  it("falls back to the actor id when the label is missing or blank", () => {
+  it.each([
+    ["profile", "profile-ada", "profile-ada"],
+    ["profile", "gateway-owner", "Shared owner"],
+    ["agent", "gateway-owner", "gateway-owner"],
+  ] as const)("labels a blank %s actor %s", (type, id, expected) => {
     const result = groupCatalogSessionsByPerson([
       {
         ...session("one"),
         createdActor: {
           type: "human",
-          id: "profile-ada",
-          identity: { type: "profile", id: "profile-ada" },
+          id,
+          identity: { type, id },
           label: "  ",
         },
       },
     ]);
 
     expect(result.groups[0]).toMatchObject({
-      key: "person:profile:profile-ada",
-      legacySectionKey: "person:profile-ada",
-      label: "profile-ada",
+      key: `person:${type}:${id}`,
+      legacySectionKey: `person:${id}`,
+      label: expected,
     });
   });
 

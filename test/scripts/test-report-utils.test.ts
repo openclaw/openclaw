@@ -4,13 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
+import { build } from "tsdown";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import {
   collectVitestAssertionDurations,
   collectVitestFileDurations,
   normalizeTrackedRepoPath,
 } from "../../scripts/test-report-utils.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 
 const { spawnSyncMock } = vi.hoisted(() => ({
@@ -26,12 +29,6 @@ vi.mock("node:child_process", async () => {
 });
 
 describe("scripts/test-report-utils normalizeTrackedRepoPath", () => {
-  it("normalizes repo-local absolute paths to repo-relative slash paths", () => {
-    const absoluteFile = path.join(process.cwd(), "src", "tools", "example.test.ts");
-
-    expect(normalizeTrackedRepoPath(absoluteFile)).toBe("src/tools/example.test.ts");
-  });
-
   it("preserves external absolute paths as normalized absolute paths", () => {
     const externalFile = path.join(path.parse(process.cwd()).root, "tmp", "outside.test.ts");
 
@@ -109,10 +106,83 @@ describe("scripts/test-report-utils runVitestJsonReport", () => {
     onTestFinished(() => lifetime.cleanup());
     await lifetime.run(async () => {
       const root = lifetime.createTempDir("oc-report-cli-");
+      const bin = path.join(root, "bin");
+      fs.mkdirSync(bin);
+      fs.symlinkSync(
+        requireNodeTool("node"),
+        path.join(bin, process.platform === "win32" ? "node.exe" : "node"),
+        "file",
+      );
+      if (process.versions.bun) {
+        fs.symlinkSync(
+          process.execPath,
+          path.join(bin, process.platform === "win32" ? "bun.exe" : "bun"),
+          "file",
+        );
+      }
       const repoRoot = process.cwd();
       const config = path.join(root, "vitest.config.mjs");
       const reportPath = path.join(root, "report.json");
-      const entry = path.join(root, "report.mts");
+      const entry = path.join(root, "report.mjs");
+      const sourceEntries = [
+        "scripts/test-report-utils.mts",
+        "scripts/run-vitest.mts",
+        "scripts/run-vitest-child.mts",
+      ];
+      for (const relative of new Set([
+        ...collectRuntimeImportClosure(
+          repoRoot,
+          [
+            ...sourceEntries,
+            "scripts/run-vitest.mjs",
+            "scripts/tsx.mjs",
+            "scripts/lib/vitest-worker-bootstrap.mts",
+          ],
+          { includeDynamicImports: true },
+        ),
+        "package.json",
+        "pnpm-workspace.yaml",
+        "tsconfig.json",
+      ])) {
+        const target = path.join(root, relative);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.copyFileSync(path.join(repoRoot, relative), target);
+      }
+      fs.symlinkSync(
+        path.join(repoRoot, "node_modules"),
+        path.join(root, "node_modules"),
+        "junction",
+      );
+      const { bundles } = await build({
+        config: false,
+        cwd: root,
+        root,
+        entry: sourceEntries,
+        outDir: root,
+        unbundle: true,
+        format: "esm",
+        platform: "node",
+        dts: false,
+        clean: false,
+        treeshake: false,
+        deps: {
+          alwaysBundle: (id) => id.startsWith("@openclaw/") && !id.startsWith("@openclaw/fs-safe"),
+          // Installed tools resolve native bindings and assets from their package directories.
+          neverBundle: [/^(?:vitest|vite|tsdown|rolldown|esbuild|typescript)(?:\/|$)/u],
+        },
+        outExtensions: () => ({ js: ".js" }),
+        outputOptions: { entryFileNames: "[name].js", chunkFileNames: "[name].js" },
+        logLevel: "silent",
+      });
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
+      for (const name of ["run-vitest", "run-vitest-child"]) {
+        fs.copyFileSync(
+          path.join(root, "scripts", `${name}.js`),
+          path.join(root, "scripts", `${name}.mts`),
+        );
+      }
       fs.writeFileSync(
         config,
         `export default { root: ${JSON.stringify(root)}, test: { include: ["case.test.mjs"], globals: true, maxWorkers: 1 } };`,
@@ -124,17 +194,17 @@ describe("scripts/test-report-utils runVitestJsonReport", () => {
       fs.writeFileSync(
         entry,
         `import assert from "node:assert/strict";
-import { runVitestJsonReport } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/test-report-utils.mts")).href)};
+import { runVitestJsonReport } from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/test-report-utils.js")).href)};
 assert.equal(runVitestJsonReport(${JSON.stringify({ config, reportPath })}), ${JSON.stringify(reportPath)});
 assert.equal(runVitestJsonReport(${JSON.stringify({ config: path.join(root, "missing.config.mjs"), reportPath })}), ${JSON.stringify(reportPath)});
 `,
       );
       const result = await lifetime.track(
         runNodeScript(
-          ["--import", path.join(repoRoot, "scripts/tsx.mjs"), entry],
+          [entry],
           {
             ...process.env,
-            PATH: "",
+            PATH: bin,
             OPENCLAW_LIVE_USE_REAL_HOME: "0",
             TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json"),
           },

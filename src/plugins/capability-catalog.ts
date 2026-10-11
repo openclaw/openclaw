@@ -1,8 +1,9 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { PluginCapabilityCatalogContext } from "./capability-catalog-context.types.js";
+import type { PluginCapabilityCatalogHostContext } from "./capability-catalog-context.types.js";
 import type { PluginCapabilityCatalog } from "./capability-catalog.types.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
+import { getPluginValueInstance, wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
 
 export const capabilityCatalogFamilies = [
   "speechProviders",
@@ -10,12 +11,40 @@ export const capabilityCatalogFamilies = [
   "realtimeVoiceProviders",
 ] as const;
 
+/** Materialize one registration without copying its descriptor or invoking provider operations. */
+export function resolveCapabilityProviderRegistration<T extends { id: string }>(
+  entry: T | ((context: PluginCapabilityCatalogHostContext) => T),
+  resolveContext: (() => PluginCapabilityCatalogHostContext) | undefined,
+): T {
+  if (typeof entry !== "function") {
+    return entry;
+  }
+  if (!resolveContext) {
+    throw new Error(
+      "Capability provider factories require host context; supply resolveCapabilityCatalogContext when creating the registry.",
+    );
+  }
+  const provider = entry(wrapCurrentPluginInstance(resolveContext()));
+  if (isPromiseLike(provider)) {
+    void Promise.resolve(provider).catch(() => {});
+    throw new Error("capability provider factories must be synchronous");
+  }
+  return provider;
+}
+
 /** Validate the declared public surface without copying provider objects or their hidden methods. */
 export function resolvePluginCapabilityCatalog(
   module: unknown,
-  context: PluginCapabilityCatalogContext,
+  context: PluginCapabilityCatalogHostContext,
 ): PluginCapabilityCatalog {
   const entry = unwrapDefaultModuleExport(module);
+  if (typeof entry === "function") {
+    // Catalog results contain registrations whose callbacks retain their setup inventory's lifetime.
+    getPluginValueInstance(entry)?.admitFactory(
+      // SAFETY: The checked callable accepts catalog host context; its unknown result is validated below.
+      entry as (context: PluginCapabilityCatalogHostContext) => unknown,
+    );
+  }
   const catalog = typeof entry === "function" ? entry(context) : entry;
   if (isPromiseLike(catalog)) {
     void Promise.resolve(catalog).catch(() => {});

@@ -1,7 +1,6 @@
 // Doctor cleanup for per-agent OAuth profiles shadowing fresher main-agent credentials.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAgentDir, listAgentEntries } from "../../../agents/agent-scope.js";
 import { hasUsableOAuthCredential } from "../../../agents/auth-profiles/credential-state.js";
@@ -18,7 +17,7 @@ import {
   loadPersistedSharedAuthProfileStore,
 } from "../../../agents/auth-profiles/persisted.js";
 import { resolveSharedMainAuthAgentDir } from "../../../agents/auth-profiles/shared-main-dir.js";
-import { updateAuthProfileStoreWithLock } from "../../../agents/auth-profiles/store.js";
+import { updateAuthProfileStoreWithLock } from "../../../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore, OAuthCredential } from "../../../agents/auth-profiles/types.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -41,28 +40,15 @@ async function loadRawAuthProfileStore(authPath: string): Promise<Record<string,
 }
 
 function hasLegacyOAuthSidecarRef(raw: Record<string, unknown> | null, profileId: string): boolean {
-  if (!raw || !isRecord(raw.profiles)) {
-    return false;
-  }
-  const profile = raw.profiles[profileId];
-  if (!isRecord(profile)) {
-    return false;
-  }
+  const profile = raw && isRecord(raw.profiles) ? raw.profiles[profileId] : undefined;
   // Removal-only guard for #79006 sidecar OAuth profiles. Do not add OS-level
   // keychain integrations; doctor must migrate these profiles, not delete them.
   return (
+    isRecord(profile) &&
     profile.type === "oauth" &&
     profile.provider === LEGACY_OAUTH_REF_PROVIDER &&
     isLegacyOAuthRef(profile.oauthRef)
   );
-}
-
-async function collectStateAgentDirs(env: NodeJS.ProcessEnv): Promise<string[]> {
-  const agentsRoot = path.join(resolveStateDir(env), "agents");
-  const entries = await fs.readdir(agentsRoot, { withFileTypes: true }).catch(() => []);
-  return entries
-    .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
-    .map((entry) => path.join(agentsRoot, entry.name, "agent"));
 }
 
 async function collectCandidateAgentDirs(
@@ -76,8 +62,12 @@ async function collectCandidateAgentDirs(
       dirs.add(path.resolve(resolveAgentDir(cfg, id, env)));
     }
   }
-  for (const agentDir of await collectStateAgentDirs(env)) {
-    dirs.add(path.resolve(agentDir));
+  const agentsRoot = path.join(resolveStateDir(env), "agents");
+  const entries = await fs.readdir(agentsRoot, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (entry.isDirectory() || entry.isSymbolicLink()) {
+      dirs.add(path.resolve(agentsRoot, entry.name, "agent"));
+    }
   }
   return [...dirs].toSorted((left, right) => left.localeCompare(right));
 }
@@ -159,12 +149,9 @@ function removeStaleProfilesFromStore(params: {
   mainStore: AuthProfileStore;
   profileIds: Set<string>;
   now: number;
-}): { store: AuthProfileStore; removedProfileIds: string[] } {
+}): string[] {
   const removedProfileIds: string[] = [];
-  const profiles = { ...params.store.profiles };
-  const usageStats = params.store.usageStats ? { ...params.store.usageStats } : undefined;
-  const order = params.store.order ? { ...params.store.order } : undefined;
-  const lastGood = params.store.lastGood ? { ...params.store.lastGood } : undefined;
+  const { profiles, usageStats, lastGood } = params.store;
   for (const profileId of params.profileIds) {
     const local = profiles[profileId];
     const main = params.mainStore.profiles[profileId];
@@ -179,9 +166,7 @@ function removeStaleProfilesFromStore(params: {
       continue;
     }
     delete profiles[profileId];
-    if (usageStats) {
-      delete usageStats[profileId];
-    }
+    delete usageStats?.[profileId];
     if (lastGood) {
       for (const [provider, lastGoodProfileId] of Object.entries(lastGood)) {
         if (lastGoodProfileId === profileId) {
@@ -189,36 +174,14 @@ function removeStaleProfilesFromStore(params: {
         }
       }
     }
-    if (order) {
-      for (const [provider, profileIds] of Object.entries(order)) {
-        const nextProfileIds = profileIds.filter((entry) => entry !== profileId);
-        if (nextProfileIds.length > 0) {
-          order[provider] = nextProfileIds;
-        } else {
-          delete order[provider];
-        }
-      }
-    }
     removedProfileIds.push(profileId);
   }
-  return {
-    store: {
-      ...params.store,
-      profiles,
-      ...(usageStats && Object.keys(usageStats).length > 0
-        ? { usageStats }
-        : { usageStats: undefined }),
-      ...(lastGood && Object.keys(lastGood).length > 0 ? { lastGood } : { lastGood: undefined }),
-      ...(order && Object.keys(order).length > 0 ? { order } : { order: undefined }),
-    },
-    removedProfileIds,
-  };
-}
-
-function formatProfileList(profileIds: string[]): string {
-  return profileIds.length === 1
-    ? expectDefined(profileIds[0], "profile ids entry at 0")
-    : `${profileIds.length} profiles`;
+  if (removedProfileIds.length > 0) {
+    params.store.usageStats =
+      usageStats && Object.keys(usageStats).length > 0 ? usageStats : undefined;
+    params.store.lastGood = lastGood && Object.keys(lastGood).length > 0 ? lastGood : undefined;
+  }
+  return removedProfileIds;
 }
 
 async function repairStaleOAuthProfilesForAgent(params: {
@@ -226,45 +189,31 @@ async function repairStaleOAuthProfilesForAgent(params: {
   mainStore: AuthProfileStore;
   profileIds: Set<string>;
   now: number;
-}): Promise<
-  { status: "changed"; removedProfileIds: string[] } | { status: "missing" | "unchanged" }
-> {
+}): Promise<string[]> {
   const rawStore = await loadRawAuthProfileStore(resolveAuthStorePath(params.agentDir));
   const profileIds = new Set(
     [...params.profileIds].filter((profileId) => !hasLegacyOAuthSidecarRef(rawStore, profileId)),
   );
   if (profileIds.size === 0) {
-    return { status: "unchanged" };
+    return [];
   }
   if (!loadPersistedAuthProfileStore(params.agentDir)) {
-    return { status: "missing" };
+    return [];
   }
-  let sawStore = false;
   let removedProfileIds: string[] = [];
   await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
     updater: (store) => {
-      sawStore = true;
-      const result = removeStaleProfilesFromStore({
+      removedProfileIds = removeStaleProfilesFromStore({
         store,
         mainStore: params.mainStore,
         profileIds,
         now: params.now,
       });
-      if (result.removedProfileIds.length === 0) {
-        return false;
-      }
-      removedProfileIds = result.removedProfileIds;
-      Object.assign(store, result.store);
-      return true;
+      return removedProfileIds.length > 0;
     },
   });
-  if (!sawStore) {
-    return { status: "missing" };
-  }
-  return removedProfileIds.length > 0
-    ? { status: "changed", removedProfileIds }
-    : { status: "unchanged" };
+  return removedProfileIds;
 }
 
 /** Format warnings for stale per-agent OAuth profile shadows. */
@@ -289,30 +238,27 @@ export async function repairStaleOAuthProfileShadows(params: {
   const hits = await scanStaleOAuthProfileShadows({ ...params, env, now });
   const changes: string[] = [];
   const warnings: string[] = [];
-  const byAgentDir = new Map<string, StaleOAuthProfileShadow[]>();
+  const byAgentDir = new Map<string, Set<string>>();
   for (const hit of hits) {
-    const existing = byAgentDir.get(hit.agentDir) ?? [];
-    existing.push(hit);
-    byAgentDir.set(hit.agentDir, existing);
+    const profileIds = byAgentDir.get(hit.agentDir) ?? new Set<string>();
+    profileIds.add(hit.profileId);
+    byAgentDir.set(hit.agentDir, profileIds);
   }
-  for (const [agentDir, agentHits] of byAgentDir) {
+  for (const [agentDir, profileIds] of byAgentDir) {
     const mainStore = loadPersistedSharedAuthProfileStore(env);
     if (!mainStore) {
       continue;
     }
-    const profileIds = new Set(agentHits.map((hit) => hit.profileId));
     try {
-      const repair = await repairStaleOAuthProfilesForAgent({
+      const removedProfileIds = await repairStaleOAuthProfilesForAgent({
         agentDir,
         mainStore,
         profileIds,
         now,
       });
-      if (repair.status === "changed") {
+      if (removedProfileIds.length > 0) {
         changes.push(
-          `Removed stale OAuth auth profile shadow ${formatProfileList(
-            repair.removedProfileIds.toSorted(),
-          )} from ${shortenHomePath(resolveAuthStorePath(agentDir))}; this agent now inherits main auth.`,
+          `Removed stale OAuth auth profile shadow ${removedProfileIds.length === 1 ? removedProfileIds[0] : `${removedProfileIds.length} profiles`} from ${shortenHomePath(resolveAuthStorePath(agentDir))}; this agent now inherits main auth.`,
         );
       }
     } catch (error) {
@@ -326,13 +272,8 @@ export async function repairStaleOAuthProfileShadows(params: {
   return { changes, warnings };
 }
 
-const testing = {
-  removeStaleProfilesFromStore,
-  repairStaleOAuthProfilesForAgent,
-};
-
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[
     Symbol.for("openclaw.staleOAuthProfileShadowsTestApi")
-  ] = testing;
+  ] = { removeStaleProfilesFromStore, repairStaleOAuthProfilesForAgent };
 }
