@@ -1,6 +1,4 @@
 // Control UI config module wires vitest behavior.
-import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { playwright } from "@vitest/browser-playwright";
@@ -34,6 +32,7 @@ import {
   uiNodeDrivenBrowserTestFiles,
   uiTimingTestFiles,
 } from "../test/vitest/vitest.ui-paths.mjs";
+import { canRunPlaywrightChromium } from "./config/chromium-executable.ts";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 import { controlUiSolidPlugin } from "./config/control-ui-solid.ts";
 import { UiRuntimePartitionSequencer } from "./test/vitest-runtime-sequencer.ts";
@@ -89,25 +88,18 @@ const systemChromiumExecutableCandidates = [
   "/usr/bin/google-chrome-stable",
 ] as const;
 
-function canRunChromiumExecutable(executablePath: string): boolean {
-  const result = spawnSync(executablePath, ["--version"], { stdio: "ignore" });
-  return result.status === 0;
-}
-
 function resolveChromiumLaunchOptions(): { executablePath: string } | undefined {
   const override = process.env[chromiumExecutableOverrideEnvKey]?.trim();
-  if (override && existsSync(override) && canRunChromiumExecutable(override)) {
+  if (override && canRunPlaywrightChromium(override)) {
     return { executablePath: override };
   }
 
   const defaultExecutablePath = chromium.executablePath();
-  if (existsSync(defaultExecutablePath) && canRunChromiumExecutable(defaultExecutablePath)) {
+  if (canRunPlaywrightChromium(defaultExecutablePath)) {
     return undefined;
   }
 
-  const systemExecutablePath = systemChromiumExecutableCandidates.find(
-    (candidate) => existsSync(candidate) && canRunChromiumExecutable(candidate),
-  );
+  const systemExecutablePath = systemChromiumExecutableCandidates.find(canRunPlaywrightChromium);
   return systemExecutablePath ? { executablePath: systemExecutablePath } : undefined;
 }
 
