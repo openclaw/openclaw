@@ -11,7 +11,7 @@ import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { runControlUiPluginAction } from "./control-ui-actions.ts";
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
-import { observePluginProperties, PluginContribution } from "./control-ui-view.runtime.tsx";
+import { observePluginProperties, PluginContribution } from "./control-ui-view.solid.tsx";
 
 type ContributionsProps = {
   kind: "navigation" | "session-header" | "composer" | "header";

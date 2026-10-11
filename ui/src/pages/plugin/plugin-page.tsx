@@ -20,7 +20,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { CustomPluginUiDisabled } from "../../plugins/control-ui-disabled.solid.tsx";
-import { PluginContribution } from "../../plugins/control-ui-view.runtime.tsx";
+import { PluginContribution } from "../../plugins/control-ui-view.solid.tsx";
 import {
   BUNDLED_TAB_VIEWS,
   PluginPageLifecycle,

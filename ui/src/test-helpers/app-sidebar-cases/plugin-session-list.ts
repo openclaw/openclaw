@@ -20,7 +20,7 @@ import {
 import { createTestGatewayClient } from "../gateway-client.ts";
 import { toggleRoster } from "./roster.test-support.ts";
 import "../../components/app-sidebar.ts";
-import "../../plugins/control-ui-view.runtime.tsx";
+import "../../plugins/control-ui-view.solid.tsx";
 import "../../plugins/control-ui-contributions.solid.tsx";
 
 describe("AppSidebar session-list replacement", () => {

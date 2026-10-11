@@ -325,11 +325,6 @@ export function defineSolidBridge<Props extends object, Methods extends object =
   };
 }
 
-/** Render an opaque built-in template with its original event receiver. */
-export function renderLitTemplate(template: unknown, target: HTMLElement, host?: object): void {
-  renderLit(template, target, { host });
-}
-
 /** Unported stateless templates exclusively own this adapter's descendants. */
 export function LitContent(props: {
   render: () => unknown;

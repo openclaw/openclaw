@@ -423,7 +423,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/chat-comment-lifecycle.e2e.test.ts",
     ["chat"],
-    ["ui/src/lib/toast.ts", "ui/src/plugins/control-ui-view.runtime.tsx"],
+    ["ui/src/lib/toast.ts", "ui/src/plugins/control-ui-view.solid.tsx"],
   ),
   pageWatch(
     "ui/src/e2e/chat-comment-pane-retirement.e2e.test.ts",

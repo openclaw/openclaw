@@ -6,7 +6,7 @@ import { icons } from "../components/icons.ts";
 import { SidebarMenusController } from "../components/sidebar-menus-controller.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
-import "./control-ui-view.runtime.tsx";
+import "./control-ui-view.solid.tsx";
 import "./control-ui-contributions.solid.tsx";
 
 const originalLocation = window.location.href;

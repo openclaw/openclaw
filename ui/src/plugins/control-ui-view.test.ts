@@ -14,7 +14,7 @@ import {
 } from "../lit/presentation-binding.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { renderPluginSurface } from "./control-ui-view.ts";
-import "./control-ui-view.runtime.tsx";
+import "./control-ui-view.solid.tsx";
 import "./control-ui-contributions.solid.tsx";
 
 function increment(this: SurfaceTestHost) {

@@ -15,7 +15,7 @@ import {
 import { createDataTransferStub } from "../drag-data.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
-import "../../plugins/control-ui-view.runtime.tsx";
+import "../../plugins/control-ui-view.solid.tsx";
 import "../../plugins/control-ui-contributions.solid.tsx";
 
 function dispatchDragEvent(

@@ -9,13 +9,10 @@ import type {
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
-import {
-  defineSolidBridge,
-  renderLitTemplate,
-  type SolidBridgeElement,
-} from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
+import { renderPluginTemplate } from "./control-ui-view.runtime.ts";
 import type { ViewKind } from "./control-ui-view.ts";
 
 type ViewRegistration = ControlUiRegistration<{ mount: ControlUiView<unknown> }>;
@@ -70,10 +67,10 @@ function MountedContent(props: { value: unknown; host?: object }) {
   createEffect(
     () => ({ value: props.value, host: props.host }),
     ({ value, host }) => {
-      renderLitTemplate(value, container, host);
+      renderPluginTemplate(value, container, host);
     },
   );
-  onCleanup(() => renderLitTemplate(undefined, container));
+  onCleanup(() => renderPluginTemplate(undefined, container));
   return (
     <div
       style={{ display: "contents" }}
@@ -124,7 +121,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
       context?.plugins.reportError(registration?.pluginId ?? "host", failure);
     }
     for (const target of defaultContainers) {
-      renderLitTemplate(undefined, target);
+      renderPluginTemplate(undefined, target);
     }
     defaultContainers.clear();
     viewContext = undefined;
@@ -223,7 +220,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
       };
       handle?.update?.(viewContext);
       for (const target of defaultContainers) {
-        renderLitTemplate(host.defaultView, target, host.defaultHost ?? host);
+        renderPluginTemplate(host.defaultView, target, host.defaultHost ?? host);
       }
     } catch (failure) {
       fail(failure);
@@ -287,13 +284,13 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
             throw new Error("This plugin UI view has ended.");
           }
           defaultContainers.add(target);
-          renderLitTemplate(host.defaultView, target, host.defaultHost ?? host);
+          renderPluginTemplate(host.defaultView, target, host.defaultHost ?? host);
           notify();
           return () => {
             if (!defaultContainers.delete(target)) {
               return;
             }
-            renderLitTemplate(undefined, target);
+            renderPluginTemplate(undefined, target);
             if (!disposed) {
               notify();
             }

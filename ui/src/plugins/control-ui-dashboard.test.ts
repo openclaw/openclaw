@@ -9,7 +9,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { acquireBoardProviderForSession, type BoardProviderLease } from "../lib/board/provider.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import "./control-ui-dashboard.tsx";
-import "./control-ui-view.runtime.tsx";
+import "./control-ui-view.solid.tsx";
 import "./control-ui-contributions.solid.tsx";
 
 type DashboardElement = HTMLElementTagNameMap["openclaw-plugin-session-dashboard"] & {
