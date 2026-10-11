@@ -158,6 +158,7 @@ export function prepareTranscriptRewriteSync(
                     message: entry.message,
                     messageAlreadyRedacted: true,
                     appendMode: entry.appendMode,
+                    supersedesEntryId: source.id,
                     idempotencyLookup: "caller-checked",
                   },
                   undefined,
@@ -168,6 +169,8 @@ export function prepareTranscriptRewriteSync(
               throw new Error("Transcript rewrite message was not appended");
             }
             entry.message = result.message;
+            // The loaded view must match the committed row for later source comparisons.
+            entry.supersedesEntryId = source.id;
           } else if (!appendTranscriptEventInTransaction(current, resolved, entry, preparation)) {
             throw new Error("Transcript rewrite entry was not appended");
           }

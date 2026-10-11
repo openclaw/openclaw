@@ -80,12 +80,14 @@ Transcripts are managed by the OpenClaw session accessor and exposed to runtime 
 
 Notable entry types:
 
-- `message`: user/assistant/toolResult messages
+- `message`: user/assistant/toolResult messages. A message that a transcript rewrite re-appended carries an optional `supersedesEntryId` with the id of the entry it replaced (see below).
 - `custom_message`: extension-injected message that _does_ enter model context (rendered in the TUI when `display: true`, hidden entirely when `display: false`)
 - `custom`: extension state that does _not_ enter model context (for persisting extension state across reloads)
 - `compaction`: persisted compaction summary with `firstKeptEntryId` and `tokensBefore`
 - `reset`: a fresh history window, optionally retaining messages from `firstKeptEntryId`
 - `branch_summary`: persisted summary when navigating a tree branch
+
+Transcript rewrites, such as tool-result truncation, chat edits, and context-engine `rewriteTranscriptEntries()`, branch from the first replaced entry's parent and re-append the rest of the active suffix under new entry ids. Each re-appended `message` entry records `supersedesEntryId`: the id of the entry it immediately replaced. A message rewritten again points to the previous copy, so repeated rewrites form a chain back to the original. Other re-appended entry types, ordinary appends, and messages re-appended by rewrites made before this field existed have no marker.
 
 History readers keep the latest reset window across later compactions: explicitly retained reset messages and messages after that reset remain visible, but older messages and compaction summaries do not reappear. Model context follows the latest reset or compaction instead, so compaction can summarize the current conversation without reopening its earlier history.
 

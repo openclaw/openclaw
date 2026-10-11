@@ -73,6 +73,15 @@ shape, and redacted tool results in a thread-bootstrap projection so fresh
 backend threads retain tool continuity without copying raw secret-bearing
 payloads.
 
+Engines that keep their own message store follow the host transcript with
+`readSessionTranscriptVisibleMessageDelta(...)` from
+`openclaw/plugin-sdk/context-engine-transcript-runtime`. Persist the returned
+opaque cursor as the engine's watermark, so each `bootstrap` reads only new
+entries, and pass `start: "reset-window"` so a fresh drain begins at the latest
+same-session reset. See
+[Context engine transcript cursor](/plugins/sdk-runtime/agent#context-engine-transcript-cursor)
+for reset reasons and fence behavior.
+
 If your engine does **not** own the compaction algorithm, keep `compact()`
 implemented and delegate it explicitly:
 

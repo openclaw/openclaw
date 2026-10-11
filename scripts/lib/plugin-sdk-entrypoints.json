@@ -240,6 +240,7 @@
   "session-key-runtime",
   "session-store-runtime",
   "session-transcript-runtime",
+  "context-engine-transcript-runtime",
   "sqlite-runtime",
   "sqlite-runtime-testing",
   "sqlite-worker-runtime",

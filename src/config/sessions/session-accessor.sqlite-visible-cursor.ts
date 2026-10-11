@@ -6,11 +6,23 @@ export const DEFAULT_VISIBLE_MESSAGE_MAX_BYTES = 1_000_000;
 export const MAX_VISIBLE_MESSAGE_MAX_MESSAGES = 10_000;
 export const MAX_VISIBLE_MESSAGE_MAX_BYTES = 64 * 1024 * 1024;
 
-type VisibleMessageCursor = {
+const VISIBLE_MESSAGE_DELTA_STARTS = new Set(["transcript", "reset-window"]);
+
+export type VisibleMessageCursor = {
   agentId: string;
   generation: string;
   lastEventSeq: number;
   lastMessagePosition: number;
+  /**
+   * Present only on reset-window cursors: raw seq of the reset row that opened the
+   * window being drained, or -1 when no reset existed when the cursor was created.
+   */
+  resetBoundarySeq?: number;
+  /**
+   * Entry id of that reset row, when it has one. Raw seqs restart after a generation
+   * rotation, so only the id identifies the drained reset across generations.
+   */
+  resetBoundaryId?: string;
   sessionId: string;
   version: typeof VISIBLE_MESSAGE_CURSOR_VERSION;
 };
@@ -29,7 +41,11 @@ export function normalizeVisibleMessageLimit(
 }
 
 export function normalizeVisibleDeltaLimits(limits: SessionTranscriptVisibleMessageDeltaLimits) {
+  if (limits.start !== undefined && !VISIBLE_MESSAGE_DELTA_STARTS.has(limits.start)) {
+    throw new RangeError('start must be "transcript" or "reset-window"');
+  }
   return {
+    start: limits.start ?? "transcript",
     maxMessages: normalizeVisibleMessageLimit(
       limits.maxMessages,
       DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES,
@@ -46,7 +62,19 @@ export function normalizeVisibleDeltaLimits(limits: SessionTranscriptVisibleMess
 }
 
 export function encodeVisibleMessageCursor(cursor: VisibleMessageCursor): string {
-  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+  // Fixed key order keeps stored cursors byte-identical across releases and lets
+  // the parser require exact encoder output.
+  const canonical: VisibleMessageCursor = {
+    agentId: cursor.agentId,
+    generation: cursor.generation,
+    sessionId: cursor.sessionId,
+    lastEventSeq: cursor.lastEventSeq,
+    lastMessagePosition: cursor.lastMessagePosition,
+    ...(cursor.resetBoundarySeq !== undefined ? { resetBoundarySeq: cursor.resetBoundarySeq } : {}),
+    ...(cursor.resetBoundaryId !== undefined ? { resetBoundaryId: cursor.resetBoundaryId } : {}),
+    version: cursor.version,
+  };
+  return Buffer.from(JSON.stringify(canonical), "utf8").toString("base64url");
 }
 
 export function createVisibleMessageCursor(params: {
@@ -85,7 +113,16 @@ export function parseVisibleMessageCursor(value: string): VisibleMessageCursor |
       typeof parsed.lastMessagePosition !== "number" ||
       !Number.isSafeInteger(parsed.lastMessagePosition) ||
       parsed.lastMessagePosition < -1 ||
-      (parsed.lastEventSeq === -1) !== (parsed.lastMessagePosition === -1)
+      (parsed.lastEventSeq === -1) !== (parsed.lastMessagePosition === -1) ||
+      (parsed.resetBoundarySeq !== undefined &&
+        (typeof parsed.resetBoundarySeq !== "number" ||
+          !Number.isSafeInteger(parsed.resetBoundarySeq) ||
+          parsed.resetBoundarySeq < -1)) ||
+      (parsed.resetBoundaryId !== undefined &&
+        (typeof parsed.resetBoundaryId !== "string" ||
+          parsed.resetBoundaryId.length === 0 ||
+          parsed.resetBoundarySeq === undefined ||
+          parsed.resetBoundarySeq < 0))
     ) {
       return undefined;
     }
@@ -95,6 +132,10 @@ export function parseVisibleMessageCursor(value: string): VisibleMessageCursor |
       sessionId: parsed.sessionId,
       lastEventSeq: parsed.lastEventSeq,
       lastMessagePosition: parsed.lastMessagePosition,
+      ...(parsed.resetBoundarySeq !== undefined
+        ? { resetBoundarySeq: parsed.resetBoundarySeq }
+        : {}),
+      ...(parsed.resetBoundaryId !== undefined ? { resetBoundaryId: parsed.resetBoundaryId } : {}),
       version: parsed.version,
     };
     return encodeVisibleMessageCursor(cursor) === value ? cursor : undefined;

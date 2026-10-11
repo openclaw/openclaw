@@ -1237,6 +1237,10 @@
     "./plugin-sdk/session-transcript-runtime": {
       "default": "./dist/plugin-sdk/session-transcript-runtime.js"
     },
+    "./plugin-sdk/context-engine-transcript-runtime": {
+      "types": "./dist/plugin-sdk/context-engine-transcript-runtime.d.ts",
+      "default": "./dist/plugin-sdk/context-engine-transcript-runtime.js"
+    },
     "./plugin-sdk/sqlite-runtime": {
       "default": "./dist/plugin-sdk/sqlite-runtime.js"
     },
