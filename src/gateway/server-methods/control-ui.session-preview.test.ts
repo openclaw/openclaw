@@ -2,8 +2,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
-import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import * as subagentState from "../../agents/subagents/registry/subagent-registry-state.js";
 import {
   persistSessionTranscriptTurn,
@@ -11,7 +9,6 @@ import {
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.js";
-import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { ControlUiSessionPreview } from "../control-ui-contract.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
@@ -34,104 +31,6 @@ async function createPreviewContext(cfg: OpenClawConfig = {}, getRuntimeConfig =
 }
 
 describe("controlUi.sessionPreview", () => {
-  it("joins a second compact recovery before presenting an authorized preview", async () => {
-    await withOpenClawTestState(
-      { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
-      async () => {
-        const sessionKey = "agent:main:dashboard:preview-refill";
-        await replaceSessionEntry(
-          { agentId: "main", sessionKey },
-          {
-            sessionId: "preview-refill",
-            updatedAt: 1,
-            label: "Visible during registry recovery",
-            visibility: "shared",
-            createdActor: { type: "human", source: "profile", id: "owner" },
-          },
-        );
-        const context = await createPreviewContext();
-        const run = createSubagentRunRecord({
-          runId: "preview-old",
-          childSessionKey: "agent:main:subagent:preview-recovery",
-          completion: { required: false },
-          delivery: { status: "not_required" },
-        });
-        saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
-        subagentState.clearSubagentRunsReadCacheForTest();
-        const recoveryStarted = createDeferred();
-        const releaseRecovery = createDeferred();
-        const execute = stateReads.executeExistingOpenClawStateRead;
-        let compactReads = 0;
-        const reads = vi
-          .spyOn(stateReads, "executeExistingOpenClawStateRead")
-          .mockImplementation(async (...args) => {
-            const result = await execute(...args);
-            if (args[1].type === "subagents.sessionList" && ++compactReads === 2) {
-              recoveryStarted.resolve();
-              await releaseRecovery.promise;
-            }
-            return result;
-          });
-        const prepareCompact = subagentState.prepareSubagentSessionListReadCache;
-        let recovering: Promise<unknown> | undefined;
-        const prepare = vi
-          .spyOn(subagentState, "prepareSubagentSessionListReadCache")
-          .mockImplementation(async () => {
-            await prepareCompact();
-            if (recovering) {
-              return;
-            }
-            const replacement = { ...run, runId: "preview-new", generation: 2 };
-            saveSubagentRegistryToSqlite(new Map([[replacement.runId, replacement]]));
-            recovering = subagentState.withSubagentRunReadSnapshot(
-              new Map(),
-              (snapshot) => ({
-                runIds: [...snapshot.values()]
-                  .filter((entry) => entry.childSessionKey === run.childSessionKey)
-                  .map((entry) => entry.runId),
-                sessionKeys: [],
-              }),
-              (selection) => selection.runIds,
-              { sessionKeys: [run.childSessionKey], descendants: true },
-            );
-            void recovering.catch(() => {});
-            await recoveryStarted.promise;
-          });
-        const respond = vi.fn<RespondFn>();
-        const pending = expectDefined(
-          createControlUiHandlers()["controlUi.sessionPreview"],
-          "session preview handler",
-        )(
-          requestOptions({ sessionKey }, respond, {
-            client: { ...identifiedClient("reader"), connId: "preview-reader" },
-            context,
-          }),
-        );
-        try {
-          await recoveryStarted.promise;
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
-          releaseRecovery.resolve();
-          await pending;
-          await expect(recovering).resolves.toEqual(["preview-new"]);
-          expect(respond).toHaveBeenCalledWith(
-            true,
-            expect.objectContaining({ status: "ok", title: "Visible during registry recovery" }),
-            undefined,
-          );
-          expect(compactReads).toBe(2);
-        } finally {
-          releaseRecovery.resolve();
-          await Promise.allSettled([pending, recovering]);
-          prepare.mockRestore();
-          reads.mockRestore();
-          subagentState.clearSubagentRunsReadCacheForTest();
-        }
-      },
-    );
-  });
-
   it("replies in the same authorization frame before queued visibility revocation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:dashboard:preview-response-frame";

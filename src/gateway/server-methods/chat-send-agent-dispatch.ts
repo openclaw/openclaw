@@ -527,7 +527,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       ),
     )
     .then(async (dispatchResult) => {
-      diagnostics.finish();
+      diagnostics.finish(queuedFollowup);
       if (acceptedMessageInjection || queuedFollowup.isEnqueued() || queuedFollowup.isTerminal()) {
         return;
       }
@@ -689,7 +689,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       );
     })
     .catch((error: unknown) => {
-      diagnostics.finish();
+      diagnostics.finish(queuedFollowup);
       return dispatchErrorLifecycle.handleError(error);
     })
     .finally(() => replyAdmissionTicket?.release());

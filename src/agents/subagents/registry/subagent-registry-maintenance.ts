@@ -102,7 +102,6 @@ registerSessionMaintenancePreserveKeysProvider(async ({ native }) => {
         return keys;
       },
       dispose() {
-        prepared.dispose();
         current?.dispose();
       },
       subagentRunBasis: prepared.basis,

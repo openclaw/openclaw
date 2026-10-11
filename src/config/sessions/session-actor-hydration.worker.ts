@@ -371,6 +371,7 @@ export function hydrateSessionActorState(
       participants,
       members,
       pendingInputs: [],
+      completionKeys: [],
       transcript: {
         version: contextVersion,
         watermark: { generation: contextVersion.generation, maxSeq: contextVersion.rawSeq },
@@ -422,6 +423,7 @@ export function projectSessionActorHotState(state: SessionActorStoredState): Ses
   hot.pendingInputs = [...state.pendingInputs.values()].map(
     ({ message_json: _message, ...row }) => row,
   );
+  hot.completionKeys = [...state.completions.keys()];
   hot.transcript.idempotency = [...state.transcript.identities.values()].flatMap((row) =>
     row.message_idempotency_key
       ? [{ key: row.message_idempotency_key, eventId: row.event_id, rawSeq: row.seq }]

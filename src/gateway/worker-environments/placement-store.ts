@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import {
@@ -9,8 +10,6 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { createPlacementLifecycleWorkerOps } from "./placement-lifecycle-store.js";
-import { createPlacementMoveOps } from "./placement-move-intent.js";
-import { readWorkerPlacementMoveAuthorityInDatabase } from "./placement-read-projection.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
 import { readPublishedPlacementProjection } from "./placement-read-publication.js";
 import { createPlacementReadStore } from "./placement-read-store.js";
@@ -106,7 +105,16 @@ export function createWorkerSessionPlacementStore(
   const store = {
     ...createPlacementReadStore({ path, withWorkspaceResultConflict }),
     ...createPlacementWorkspaceReservationOps(runtime),
-    clearLocalTurnClaimsAfterRestart,
+    /** @deprecated Await clearLocalTurnClaimsAfterRestartAsync; removed in the next Plugin SDK major. */
+    clearLocalTurnClaimsAfterRestart(): number {
+      warnPluginSdkDeprecation({
+        family: "worker-placement-sync-writers",
+        method: "clearLocalTurnClaimsAfterRestart",
+        replacement: "clearLocalTurnClaimsAfterRestartAsync",
+        compatibility: "Synchronous calls retain their return values and commit before returning.",
+      });
+      return clearLocalTurnClaimsAfterRestart();
+    },
     waitForTurnClaimRelease,
     validateTurnClaim,
     ...createPlacementSessionToolOperationOps({
@@ -119,7 +127,6 @@ export function createWorkerSessionPlacementStore(
       instanceId: runtime.instanceId,
       now: options.now,
     }),
-    getPlacementMove: createPlacementMoveOps(runtime).getPlacementMove,
     ...createPlacementLifecycleWorkerOps({
       path,
       now: options.now,
@@ -138,14 +145,6 @@ export function createWorkerSessionPlacementStore(
 
     get(sessionId: string): WorkerSessionPlacementRecord | undefined {
       return withWorkspaceResultConflict(find(read(), required(sessionId, "session id")));
-    },
-
-    readCurrentMoveAuthority(sessionId: string) {
-      const authority = readWorkerPlacementMoveAuthorityInDatabase(
-        read(),
-        required(sessionId, "session id"),
-      );
-      return { ...authority, placement: withWorkspaceResultConflict(authority.placement) };
     },
 
     prepareTurnClaimAuthority(claim: WorkerSessionTurnClaim): Promise<PlacementTurnClaimAuthority> {
@@ -330,8 +329,14 @@ export function createWorkerSessionPlacementStore(
       return records;
     },
 
-    /** @deprecated Await retireSessionPlacementAsync; retained through the next Plugin SDK major. */
+    /** @deprecated Await retireSessionPlacementAsync; removed in the next Plugin SDK major. */
     retireSessionPlacement(input: WorkerSessionPlacementRetirement): void {
+      warnPluginSdkDeprecation({
+        family: "worker-placement-sync-writers",
+        method: "retireSessionPlacement",
+        replacement: "retireSessionPlacementAsync",
+        compatibility: "Synchronous calls retain their return values and commit before returning.",
+      });
       write((db) => retireWorkerSessionPlacement(db, input));
       workspaceResultConflicts.delete(required(input.sessionId, "session id"));
     },
