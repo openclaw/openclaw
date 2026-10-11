@@ -153,7 +153,7 @@ export function createGatewayMetadataObserver(
             ? resolveUiConversationIdentity({ hello }, target.sessionKey, target.agentId)
             : {}
           : undefined;
-      read = target ? beginModelCatalogRead(client, scope) : undefined;
+      read = target ? beginModelCatalogRead(client, scope, undefined, true) : undefined;
       return true;
     },
     receive(
@@ -184,6 +184,7 @@ export function createGatewayMetadataObserver(
           )
         : publication.scope;
       const accepted = publishModelCatalogResult(currentRead, scope, publication.catalog);
+      currentRead.cache.reads.delete(currentRead);
       return accepted ? { ...event, payload: { ...publication, scope } } : undefined;
     },
   };

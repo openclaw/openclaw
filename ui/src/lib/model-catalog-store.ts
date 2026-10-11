@@ -237,6 +237,7 @@ export async function loadModelCatalog(
     }, pending.reject)
     .catch(pending.reject)
     .finally(() => {
+      cache.reads.delete(read);
       settled.resolve();
       if (budgets.get(timeoutMs) === pending) {
         budgets.delete(timeoutMs);

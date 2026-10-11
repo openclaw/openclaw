@@ -73,10 +73,38 @@ describe("model catalog display cache", () => {
         wire.resolve({ models: [prepared] });
         await settlement;
         expect(onSettled).toHaveBeenCalledOnce();
+        if (retirement === "snapshot") {
+          expect(peekModelCatalog(client, scope)?.models).toEqual([published]);
+        }
       } finally {
         wire.resolve({ models: [prepared] });
         await Promise.all([original, settlement]);
       }
+    },
+  );
+  it.each(["pending", "complete"])(
+    "keeps the selected account when a connection snapshot arrives after a %s replacement",
+    async (replacementState) => {
+      const replacement = createDeferred<ModelCatalogResult>();
+      const client = createTestGatewayClient(
+        createGatewayRequestMock().mockReturnValueOnce(replacement.promise),
+      );
+      const scope = { agentId: "main", sessionKey: "agent:main:account" };
+      const snapshot = beginModelCatalogRead(client, scope, undefined, true);
+      invalidateModelCatalogCache(client, scope);
+      const selected = loadModelCatalog(client, scope);
+      const accountB: ModelCatalogResult = {
+        models: [published],
+        accountSelection: { kind: "shared", authProfileId: "fixture:b", label: "Account B" },
+      };
+      if (replacementState === "complete") {
+        replacement.resolve(accountB);
+        await selected;
+      }
+      expect(publishModelCatalogResult(snapshot, scope, { models: [prepared] })).toBe(false);
+      replacement.resolve(accountB);
+      expect(await selected).toEqual(accountB);
+      expect(peekModelCatalog(client, scope)).toEqual(accountB);
     },
   );
   it("rereads readiness when the earliest Gateway cooldown expires without a publication", async () => {

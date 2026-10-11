@@ -55,6 +55,7 @@ export type ModelCatalogRequest = {
 type ModelCatalogCache = {
   entries: Map<string, ModelCatalogEntry>;
   requiresSnapshot?: boolean;
+  reads: Set<ModelCatalogRead>;
   requests: Map<string, Map<GatewayProtocolRequestOptions["timeoutMs"], ModelCatalogRequest>>;
 };
 
@@ -63,6 +64,7 @@ export type ModelCatalogRead = {
   cache: ModelCatalogCache;
   scope?: ModelsListParams;
   signal?: AbortSignal;
+  initialSnapshot: boolean;
 };
 export type ModelCatalogEntry = {
   scope: ModelCatalogReadScope;
@@ -81,7 +83,7 @@ export const modelCatalogObservers = new WeakMap<
 export function getModelCatalogCache(client: ModelCatalogClient): ModelCatalogCache {
   let cache = modelCatalogCache.get(client);
   if (!cache) {
-    cache = { entries: new Map(), requests: new Map() };
+    cache = { entries: new Map(), reads: new Set(), requests: new Map() };
     modelCatalogCache.set(client, cache);
   }
   return cache;
@@ -100,8 +102,12 @@ export function beginModelCatalogRead(
   client: ModelCatalogClient,
   scope?: ModelsListParams,
   signal?: AbortSignal,
+  initialSnapshot = false,
 ): ModelCatalogRead {
-  return { client, cache: getModelCatalogCache(client), scope, signal };
+  const cache = getModelCatalogCache(client);
+  const read = { client, cache, scope, signal, initialSnapshot };
+  cache.reads.add(read);
+  return read;
 }
 
 const MAX_CACHED_MODEL_CATALOGS = 64;
@@ -137,27 +143,41 @@ export function modelCatalogKey(params: ModelsListParams): string {
   );
 }
 
+function modelCatalogReadMatches(read: ModelCatalogRead, params: ModelsListParams): boolean {
+  if (!read.scope) {
+    return true;
+  }
+  const expected = modelCatalogParams(read.scope);
+  expected.agentId ??= params.agentId;
+  return modelCatalogKey(expected) === modelCatalogKey(modelCatalogParams(params));
+}
+
 export function publishModelCatalogResult(
   read: ModelCatalogRead,
   params: ModelsListParams,
   result: ModelCatalogResult,
 ): boolean {
   const { cache, client } = read;
-  if (modelCatalogCache.get(client) !== cache || read.signal?.aborted) {
+  if (modelCatalogCache.get(client) !== cache || !cache.reads.has(read) || read.signal?.aborted) {
     return false;
   }
   const key = modelCatalogKey(modelCatalogParams(params));
-  if (read.scope) {
-    const expected = modelCatalogParams(read.scope);
-    if (expected.agentId === undefined) {
-      expected.agentId = params.agentId;
-    }
-    if (modelCatalogKey(expected) !== key) {
-      return false;
-    }
+  if (!modelCatalogReadMatches(read, params)) {
+    return false;
   }
   const entry: ModelCatalogEntry = cache.entries.get(key) ?? { scope: params };
   const discoverySucceeded = !result.refreshFailed;
+  // A published catalog replaces the connection snapshot and pending copies of this scope.
+  for (const pending of cache.reads) {
+    if (
+      pending === read ||
+      (discoverySucceeded &&
+        modelCatalogReadMatches(pending, params) &&
+        (params.refresh || !pending.scope?.refresh))
+    ) {
+      cache.reads.delete(pending);
+    }
+  }
   if (params.refresh && discoverySucceeded) {
     for (const other of cache.entries.values()) {
       if (other !== entry) {
@@ -309,6 +329,12 @@ export function invalidateModelCatalogCache(
   for (const entry of cache.entries.values()) {
     if (matches(entry.scope)) {
       markModelCatalogInvalid(entry);
+    }
+  }
+  // Ordinary invalidations still share their pending read; a connect snapshot predates them.
+  for (const read of cache.reads) {
+    if (read.initialSnapshot && matches(read.scope)) {
+      cache.reads.delete(read);
     }
   }
   notifyModelCatalogCache(client, {
