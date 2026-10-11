@@ -710,7 +710,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       const live = new Set(
         [...entries.values(), ...retiredEntries].map((entry) => entry.environmentId),
       );
-      const stopped = await Promise.allSettled([
+      const tunnelStops = joinWorkerTunnelStops([
         ...[...live].map((environmentId) => stop(environmentId)),
         // Retained owners drain above even after their inventory retires.
         (async () => {
@@ -730,11 +730,8 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         })(),
       ]);
       // Shared transfer state outlives every tunnel, even when a sibling's cleanup fails.
-      stopped.push(...(await Promise.allSettled([options.workspaceTransfer.closeAll()])));
-      const failure = stopped.find((result) => result.status === "rejected");
-      if (failure) {
-        throw failure.reason;
-      }
+      const closeTransfers = () => options.workspaceTransfer.closeAll();
+      await joinWorkerTunnelStops([tunnelStops, tunnelStops.then(closeTransfers, closeTransfers)]);
     },
     status(environmentId: string): WorkerTunnelStatus {
       const entry = entries.get(environmentId);

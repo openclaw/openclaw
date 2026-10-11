@@ -930,6 +930,7 @@ src/infra/kysely-sync-cache-state.ts
 src/infra/kysely-sync.ts
 src/infra/lifecycle-write-custody.ts
 src/infra/lru-cache.ts
+src/infra/main-thread-stall.ts
 src/infra/map-size.ts
 src/infra/mutation-authority.ts
 src/infra/native-error-response-schema.ts

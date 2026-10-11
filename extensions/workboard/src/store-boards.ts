@@ -89,11 +89,6 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
         this.listBoards(),
       ])
         .then(([cards, { boards }]) => {
-          const currentToken = this.refreshWriteReceipt();
-          const replacement = this.cardLists.get(boardId);
-          if (currentToken !== undefined && replacement && replacement !== pending) {
-            return replacement;
-          }
           const result = {
             cards: cards.map(redactClaimToken),
             boards,
@@ -101,21 +96,12 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
             revision: { ...revision, ...(boardId === undefined ? {} : { boardId }) },
           };
           freezeCardList(result);
-          // Unbracketed reads keep their original revision and are never reused.
-          if (
-            writeToken === undefined ||
-            currentToken !== writeToken ||
-            this.cardsRevision !== revision ||
-            (boardId !== undefined && !boards.some((entry) => entry.id === boardId))
-          ) {
-            this.cardLists.delete(boardId);
-          }
+          // A concurrent update may finish this read with older facts; the writer
+          // receipt invalidates them on the next request.
           return result;
         })
         .catch((error: unknown) => {
-          if (this.cardLists.get(boardId) === pending) {
-            this.cardLists.delete(boardId);
-          }
+          this.cardLists.delete(boardId);
           throw error;
         });
       if (writeToken !== undefined) {

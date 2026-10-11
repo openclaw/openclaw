@@ -272,14 +272,13 @@ describe("worker live Gateway chat projection", () => {
 
   it("does not resurrect a capped completed prefix when the active worker snapshot shrinks", async () => {
     const live = await liveProjection();
+    const block = "x".repeat(16_000);
+    let expectedText = "";
     for (let index = 0; index < 32; index += 1) {
       live.start();
-      live.end(message("x".repeat(16_000)));
-      await vi.waitFor(() => {
-        expect(harness.chat.state.runs.get(RUN_ID)?.rawBuffer?.length).toBe(
-          Math.min((index + 1) * 16_000 + index * 2, 500_000),
-        );
-      });
+      live.end(message(block));
+      expectedText = `${expectedText}${index > 0 ? "\n\n" : ""}${block}`.slice(-500_000);
+      await expectChatText(expectedText);
     }
     // The 31 paragraph separators leave 3,938 characters of the first item after capping.
     const retainedPrefix = "x".repeat(3_938) + ("\n\n" + "x".repeat(16_000)).repeat(30);

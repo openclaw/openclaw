@@ -693,7 +693,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "src/plugin-sdk/provider-catalog-shared.cancellation.test.ts",
         "src/plugin-sdk/provider-catalog-shared.retention.test.ts",
       ].toSorted();
-      const nodeFiles = [skippedOnBun, nodeHistoryBenchmark];
+      const nodeFiles = [skippedOnBun, nodeHistoryBenchmark, "src/infra/main-thread-stall.test.ts"];
       const nativeFiles = vitestArgs.length ? [] : [bunTarget, nativeBunTarget];
       const bunFiles = nativeFiles.length
         ? bunVitestFiles

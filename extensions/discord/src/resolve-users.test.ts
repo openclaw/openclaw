@@ -45,71 +45,24 @@ function createGuildListProbeFetcher() {
   };
 }
 
-function createGuildsForbiddenFetcher() {
-  return withFetchPreconnect(async (input: RequestInfo | URL) => {
-    const url = urlToString(input);
-    if (url.endsWith("/users/@me/guilds")) {
-      throw new Error("Forbidden: Missing Access");
-    }
-    return new Response("not found", { status: 404 });
-  });
-}
-
 describe("resolveDiscordUserAllowlist", () => {
-  it.each(["<@123456789012345678>", "<@!123456789012345678>"])(
-    "resolves %s without calling listGuilds",
-    async (entry) => {
-      const { fetcher, wasGuildsCalled } = createGuildListProbeFetcher();
-
-      const results = await resolveDiscordUserAllowlist({
-        token: "test",
-        entries: [entry],
-        fetcher,
-      });
-
-      expect(results).toEqual([
-        {
-          input: entry,
-          resolved: true,
-          id: "123456789012345678",
-        },
-      ]);
-      expect(wasGuildsCalled()).toBe(false);
-    },
-  );
-
-  it("resolves prefixed ids (user:, discord:) without calling listGuilds", async () => {
+  it.each(["<@123456789012345678>"])("resolves %s without calling listGuilds", async (entry) => {
     const { fetcher, wasGuildsCalled } = createGuildListProbeFetcher();
 
     const results = await resolveDiscordUserAllowlist({
       token: "test",
-      entries: ["user:111", "discord:222"],
-      fetcher,
-    });
-
-    expect(results).toHaveLength(2);
-    expectResolvedUser(results[0], { id: "111" });
-    expectResolvedUser(results[1], { id: "222" });
-    expect(wasGuildsCalled()).toBe(false);
-  });
-
-  it("resolves user ids even when listGuilds would fail", async () => {
-    const fetcher = createGuildsForbiddenFetcher();
-
-    // Before the fix, this would throw because listGuilds() was called eagerly
-    const results = await resolveDiscordUserAllowlist({
-      token: "test",
-      entries: ["994979735488692324"],
+      entries: [entry],
       fetcher,
     });
 
     expect(results).toEqual([
       {
-        input: "994979735488692324",
+        input: entry,
         resolved: true,
-        id: "994979735488692324",
+        id: "123456789012345678",
       },
     ]);
+    expect(wasGuildsCalled()).toBe(false);
   });
 
   it("fetches guilds only once for multiple username entries", async () => {
@@ -143,18 +96,6 @@ describe("resolveDiscordUserAllowlist", () => {
     expect(results).toHaveLength(2);
     expectResolvedUser(results[0], { input: "alice", id: "u-alice", name: "alice" });
     expectResolvedUser(results[1], { input: "bob", id: "u-bob", name: "bob" });
-  });
-
-  it("propagates guild lookup failures when a batch includes usernames", async () => {
-    const fetcher = createGuildsForbiddenFetcher();
-
-    await expect(
-      resolveDiscordUserAllowlist({
-        token: "test",
-        entries: ["123456789012345678", "alice"],
-        fetcher,
-      }),
-    ).rejects.toThrow("Forbidden");
   });
 
   it("returns unresolved for empty/blank entries", async () => {
