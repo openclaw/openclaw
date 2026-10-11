@@ -1,6 +1,5 @@
 // The palette owns search/navigation; its draft reuses the canonical session owners.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
@@ -81,38 +80,14 @@ export class PaletteController {
   private get custodianAvailable() {
     return this.props.custodianAvailable;
   }
-  get isConnected() {
-    return this.element.isConnected;
-  }
-  get ownerDocument() {
-    return this.element.ownerDocument;
-  }
-  get querySelector() {
-    return this.element.querySelector.bind(this.element);
-  }
-  get querySelectorAll() {
-    return this.element.querySelectorAll.bind(this.element);
-  }
-  addController(controller: ReactiveController) {
-    this.lifecycle.addController(controller);
-  }
-  removeController(controller: ReactiveController) {
-    this.lifecycle.removeController(controller);
-  }
-  requestUpdate() {
-    this.lifecycle.requestUpdate();
-  }
-  get updateComplete() {
-    return this.lifecycle.updateComplete;
-  }
   private open = false;
   private pluginIconUrls: Record<string, string> = {};
   private readonly pluginIcons = new PluginIconController({
     getFetchContext: () => pluginIconFetchContext(this.context!),
-    isConnected: () => this.isConnected && this.open && this.gateway.connected,
+    isConnected: () => this.element.isConnected && this.open && this.gateway.connected,
     onUrlsChange: (urls) => {
       this.pluginIconUrls = urls;
-      this.requestUpdate();
+      this.publish();
     },
   });
   private initialInput: CommandPaletteOpenInput | undefined;
@@ -135,7 +110,7 @@ export class PaletteController {
     } else {
       this.scheduleSessionSearch(this.query);
     }
-    this.requestUpdate();
+    this.publish();
   };
   private presentationScope: ReturnType<typeof gatewayPresentationScope> | undefined;
   private filter: PaletteFilter = "all";
@@ -165,33 +140,38 @@ export class PaletteController {
     promise: Promise<void>;
     loadedAt?: number;
   };
-  private readonly modelReader = new ModelCatalogReader(() => this.requestUpdate());
+  private readonly modelReader = new ModelCatalogReader(() => this.publish());
   private readonly gateway: GatewayPageController;
 
   constructor(
     private readonly element: HTMLElement,
     private readonly props: CommandPaletteProperties,
     private readonly readContext: () => ApplicationContext,
-    private readonly lifecycle: ReactiveControllerHost,
+    legacyHost: ConstructorParameters<typeof PaletteSessionDraft>[0],
+    private readonly publish: () => void,
   ) {
-    this.draft = new PaletteSessionDraft(this, () => ({ context: this.context, open: this.open }), {
-      onClose: () => this.closePalette(),
-      onMessageChange: (query) => {
-        const text = query.trim();
-        const length = Array.from(text).length;
-        // Separate entry/exit thresholds keep edits near the boundary from
-        // repeatedly collapsing and reopening search. Draft resets pass here too.
-        this.promptMode =
-          text.includes("\n") ||
-          (this.promptMode ? length > PROMPT_EXIT_CHARS : length >= PROMPT_ENTER_CHARS);
-        if (!text) {
-          this.filter = "all";
-        }
-        this.scheduleSessionSearch(query);
+    this.draft = new PaletteSessionDraft(
+      legacyHost,
+      () => ({ context: this.context, open: this.open }),
+      {
+        onClose: () => this.closePalette(),
+        onMessageChange: (query) => {
+          const text = query.trim();
+          const length = Array.from(text).length;
+          // Separate entry/exit thresholds keep edits near the boundary from
+          // repeatedly collapsing and reopening search. Draft resets pass here too.
+          this.promptMode =
+            text.includes("\n") ||
+            (this.promptMode ? length > PROMPT_EXIT_CHARS : length >= PROMPT_ENTER_CHARS);
+          if (!text) {
+            this.filter = "all";
+          }
+          this.scheduleSessionSearch(query);
+        },
       },
-    });
-    this.subscriptions = new SubscriptionsController(this);
-    this.gateway = new GatewayPageController(this, {
+    );
+    this.subscriptions = new SubscriptionsController(legacyHost);
+    this.gateway = new GatewayPageController(legacyHost, {
       getGateway: () => this.context?.gateway,
       invalidateRequests: () => {
         this.clearSessionSearch();
@@ -235,7 +215,7 @@ export class PaletteController {
 
   connect() {
     document.addEventListener("keydown", this.handleGlobalKeydown);
-    this.requestUpdate();
+    this.publish();
   }
 
   disconnect() {
@@ -279,7 +259,7 @@ export class PaletteController {
     this.activeId = null;
     this.filter = "all";
     this.scheduleSessionSearch(this.query);
-    this.requestUpdate();
+    this.publish();
   }
 
   private synchronizePresentationScope() {
@@ -318,7 +298,7 @@ export class PaletteController {
     this.open = false;
     this.draft.close();
     this.clearSessionSearch();
-    this.requestUpdate();
+    this.publish();
   }
 
   private readonly handleInputRef = (element: Element | undefined) => {
@@ -383,7 +363,7 @@ export class PaletteController {
       ),
     );
     this.pluginIcons.reconcileKeys(iconIds);
-    for (const element of this.querySelectorAll<HTMLElement>(
+    for (const element of this.element.querySelectorAll<HTMLElement>(
       ".cmd-palette__plugin-icon[data-plugin-icon-id]",
     )) {
       const pluginId = element.dataset.pluginIconId;
@@ -399,7 +379,7 @@ export class PaletteController {
       this.sessionSearchTimer = null;
     }
     this.sessionSearchId += 1;
-    this.requestUpdate();
+    this.publish();
   }
 
   private clearSessionSearch() {
@@ -467,7 +447,7 @@ export class PaletteController {
       ) {
         this.catalogItems = items;
         this.catalogLoad = { ...this.catalogLoad, loadedAt: Date.now() };
-        this.requestUpdate();
+        this.publish();
       }
     });
     this.catalogLoad = { client, agentId, promise };
@@ -586,7 +566,7 @@ export class PaletteController {
     } finally {
       if (isCurrent()) {
         this.sessionSearchPending = false;
-        this.requestUpdate();
+        this.publish();
       }
     }
   }
@@ -660,7 +640,7 @@ export class PaletteController {
         this.composing = true;
         this.invalidateSessionSearch();
         this.mentionMenu.close();
-        this.requestUpdate();
+        this.publish();
       },
       onCompositionEnd: () => {
         this.composing = false;
@@ -672,7 +652,7 @@ export class PaletteController {
       onFilterChange: (filter) => {
         this.filter = filter;
         this.activeId = null;
-        this.requestUpdate();
+        this.publish();
       },
       agents: this.context?.agents.state.agentsList?.agents ?? [],
       agentIdentity: this.context?.agentIdentity,
@@ -713,7 +693,7 @@ export class PaletteController {
       },
       onActiveIdChange: (id) => {
         this.activeId = id;
-        this.requestUpdate();
+        this.publish();
       },
       onNavigate: this.onNavigate,
       onSelectSession: this.onSelectSession,

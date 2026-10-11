@@ -524,7 +524,7 @@ function OpenPalette(props: { readProps: () => CommandPaletteProps }) {
                     type="button"
                     class="cmd-palette__create"
                     aria-label={t("palette.startSessionBackground")}
-                    aria-busy={String(current().draft.submitting)}
+                    aria-busy={current().draft.submitting ? "true" : "false"}
                     disabled={current().composing || !current().draft.canSubmit}
                     onClick={() => {
                       if (!current().composing) {
@@ -607,15 +607,4 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
       <OpenPalette readProps={props.readProps} />
     </Show>
   );
-}
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-modal-dialog": HTMLAttributes<HTMLElement> & {
-        "prop:label": string;
-        "onModal-cancel"?: (event: Event) => void;
-      };
-    }
-  }
 }

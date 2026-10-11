@@ -89,7 +89,6 @@ export const AssistantPanelContent = defineSolidBridge<Props>(
               prop:store={store()}
               prop:onboarding={variant() === "onboarding"}
               prop:newAgentIntent={variant() === "new-agent"}
-              compact
             />
           )
         ) : undefined}

@@ -34,7 +34,27 @@ export const CommandPalette = defineSolidBridge<CommandPaletteProperties, Comman
       props.desktopAvailable,
       props.custodianAvailable,
     ]);
-    const controller = new PaletteController(host, props, () => context, lifecycle.host);
+    const legacyHost = {
+      ...lifecycle.host,
+      get updateComplete() {
+        return lifecycle.host.updateComplete;
+      },
+      get isConnected() {
+        return host.isConnected;
+      },
+      get ownerDocument() {
+        return host.ownerDocument;
+      },
+      querySelector: host.querySelector.bind(host),
+      querySelectorAll: host.querySelectorAll.bind(host),
+    };
+    const controller = new PaletteController(
+      host,
+      props,
+      () => context,
+      legacyHost,
+      lifecycle.host.requestUpdate,
+    );
     controllers.set(host, controller);
     Object.defineProperty(host, "isOpen", { configurable: true, get: () => controller.isOpen });
     host.style.display = "contents";
