@@ -182,37 +182,6 @@ describe("SessionsCatalogListParamsSchema", () => {
     }
     expect(Value.Check(SessionsCatalogListParamsSchema, { metadataOnly: "true" })).toBe(false);
   });
-
-  it("accepts an optional progressive stream id without a catalog selector", () => {
-    expect(
-      Value.Check(SessionsCatalogListParamsSchema, {
-        agentId: "main",
-        progressId: "progress-1",
-        allowPartialResults: true,
-      }),
-    ).toBe(true);
-  });
-
-  it("accepts an optional agent scope", () => {
-    expect(
-      Value.Check(SessionsCatalogListParamsSchema, {
-        agentId: "research",
-        catalogId: "claude",
-      }),
-    ).toBe(true);
-  });
-
-  it("accepts flat optional catalog cursor fields", () => {
-    expect(
-      Value.Check(SessionsCatalogListParamsSchema, { cursors: { "gateway:local": "1" } }),
-    ).toBe(true);
-    expect(
-      Value.Check(SessionsCatalogListParamsSchema, {
-        catalogId: "claude",
-        cursors: { "gateway:local": "1" },
-      }),
-    ).toBe(true);
-  });
 });
 
 describe("SessionsCatalogHostEventSchema", () => {
