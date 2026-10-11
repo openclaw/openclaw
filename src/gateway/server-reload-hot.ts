@@ -651,8 +651,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         await refreshModelRuntimeSnapshots(nextConfig);
       }
     } catch (err) {
-      if (err instanceof PreparedModelRuntimePublicationSupersededError && !isCurrent()) {
-        // The newer config owns model publication; cancellation creates no restart debt.
+      if (err instanceof PreparedModelRuntimePublicationSupersededError) {
+        // Credential writes can retire models before their queued config applies.
+        // The replacement owns publication; cancellation creates no restart debt.
         throw createReloadCancellationError(true);
       }
       scheduleRecoveryRestart("prepared model runtime reload", err);
