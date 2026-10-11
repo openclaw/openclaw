@@ -33,7 +33,8 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
                 ["executeSqliteQuerySync", "executeSqliteQueryTakeFirstSync"].includes(
                   call.primitive,
                 ) &&
-                call.operation === call.primitive &&
+                (call.operation === call.primitive ||
+                  call.operation === `${call.primitive}Legacy`) &&
                 call.forwarding?.namespace === "queries" &&
                 call.forwarding.module === "../infra/kysely-sync.js" &&
                 call.forwarding.arguments.length === 2 &&
