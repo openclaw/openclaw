@@ -73,16 +73,14 @@ describe("shared question panel", () => {
 
   function drawGateway(
     prompt: QuestionPrompt,
-    callbacks: {
-      onSubmit?: (answers: Record<string, string[]>) => void | Promise<void>;
-      onSkip?: () => void | Promise<void>;
-    } = {},
+    callbacks: Parameters<typeof createGatewayQuestionPanelProps>[1] = {},
   ) {
     let collapsed = false;
     const redraw = () => {
       render(
         html`<openclaw-chat-question-panel
           .props=${createGatewayQuestionPanelProps(prompt, {
+            ...callbacks,
             collapsed,
             onCollapsedChange: (nextCollapsed) => {
               collapsed = nextCollapsed;
@@ -372,20 +370,112 @@ describe("shared question panel", () => {
     );
   });
 
-  it("supports numeric selection and Enter submission while focused", async () => {
+  it.each([
+    { selector: ".chat-question-panel", keys: {} },
+    { selector: ".chat-question-panel", keys: { ctrlKey: true } },
+    { selector: ".chat-question-panel", keys: { metaKey: true } },
+    { selector: '[aria-checked="true"]', keys: { ctrlKey: true } },
+    { selector: '[aria-checked="true"]', keys: { metaKey: true } },
+    { selector: '[role="checkbox"][aria-checked="true"]', keys: { ctrlKey: true } },
+    { selector: '[role="checkbox"][aria-checked="true"]', keys: { metaKey: true } },
+    { selector: "textarea", keys: { ctrlKey: true } },
+  ])("submits a numbered answer from $selector with $keys", async ({ selector, keys }) => {
     const onSubmit = vi.fn();
-    drawGateway(gatewayPrompt(), { onSubmit });
+    const prompt = gatewayPrompt();
+    prompt.questions[0]!.multiSelect = selector.includes("checkbox");
+    drawGateway(prompt, { onSubmit });
     const panel = await panelIn(container);
     const group = container.querySelector<HTMLElement>(".chat-question-panel")!;
 
     group.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true }));
     await panel.updateComplete;
     expect(
-      container.querySelectorAll<HTMLElement>('[role="radio"]')[1]?.getAttribute("aria-checked"),
+      container
+        .querySelectorAll<HTMLElement>("[data-option-index]")[1]
+        ?.getAttribute("aria-checked"),
     ).toBe("true");
 
-    group.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    expect(onSubmit).toHaveBeenCalledWith({ format: ["Detailed"] });
+    const target = container.querySelector<HTMLElement>(selector)!;
+    target.focus();
+    const event = new KeyboardEvent("keydown", {
+      key: "Enter",
+      ...keys,
+      bubbles: true,
+      cancelable: true,
+    });
+    target.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ format: ["Detailed"] });
+  });
+
+  it.each([".chat-question-panel", "textarea"])(
+    "allows an empty optional answer with Ctrl+Enter from %s",
+    async (selector) => {
+      const onSubmit = vi.fn();
+      drawGateway(gatewayPrompt({ questions: [freeTextQuestion({ allowEmpty: true })] }), {
+        onSubmit,
+      });
+      await panelIn(container);
+      container
+        .querySelector<HTMLElement>(selector)!
+        .dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }),
+        );
+      expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ value: [] });
+    },
+  );
+
+  it("leaves Enter activation to native file and action controls", async () => {
+    const onSubmit = vi.fn();
+    drawGateway(
+      gatewayPrompt({
+        error: "Try again",
+        questions: [
+          {
+            ...freeTextQuestion({ allowEmpty: true, url: "https://example.test/confirm" }),
+            resource: {
+              viewId: "synthetic-form",
+              selection: "implicit",
+              userOptions: { kind: "file" },
+            },
+          },
+        ],
+      }),
+      {
+        onSubmit,
+        requestPosition: { current: 1, total: 2 },
+        onPreviousRequest: vi.fn(),
+        onNextRequest: vi.fn(),
+      },
+    );
+    await panelIn(container);
+    const resource = container.querySelector<ChatQuestionPanelElement>(
+      "openclaw-chat-question-resource",
+    )!;
+    await resource.updateComplete;
+    for (const selector of [
+      "input[type=file]",
+      "a",
+      ".chat-question-panel__skip",
+      ".chat-question-panel__advance",
+      ".chat-question-panel__collapse",
+      ".chat-question-panel__error-dismiss",
+      ".chat-question-panel__request-nav button",
+    ]) {
+      const target = container.querySelector<HTMLElement>(selector)!;
+      target.focus();
+      for (const keys of [{}, { ctrlKey: true }, { metaKey: true }]) {
+        const event = new KeyboardEvent("keydown", {
+          key: "Enter",
+          ...keys,
+          bubbles: true,
+          cancelable: true,
+        });
+        target.dispatchEvent(event);
+        expect(event.defaultPrevented, selector).toBe(false);
+        expect(onSubmit).not.toHaveBeenCalled();
+      }
+    }
   });
 
   it("leaves modified numeric shortcuts to the browser", async () => {
@@ -560,6 +650,10 @@ describe("shared question panel", () => {
     await older.promise;
     await panel.updateComplete;
     expect(button.disabled).toBe(true);
+    container
+      .querySelector<HTMLElement>(".chat-question-panel")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }));
+    expect(onSubmit).toHaveBeenCalledTimes(2);
     newer.resolve();
     await vi.waitFor(() => expect(button.disabled).toBe(false));
     expect(onSubmit).toHaveBeenCalledTimes(2);
