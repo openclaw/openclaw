@@ -209,7 +209,7 @@ async function runCandidateAuthProfileUpdate(
   peerGeneration?: AuthStoreUpdateInput["peerGeneration"],
 ): Promise<{ changed: boolean; store: AuthProfileStore } | undefined> {
   const { candidate } = params;
-  const saveOptions: SaveAuthProfileStoreOptions = {
+  const saveOptions = {
     filterExternalAuthProfiles: false,
     syncExternalCli: false,
     ...(params.preserveProfileState
@@ -218,7 +218,7 @@ async function runCandidateAuthProfileUpdate(
           preserveStateProfileIds: [params.profileId],
         }
       : {}),
-  };
+  } satisfies SaveAuthProfileStoreOptions;
   const workerWrites = getWorkerAuthProfileWrites();
   if (workerWrites) {
     const assertCurrent = () => {
