@@ -1,8 +1,8 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import type { ChannelGroups } from "../../config/channel-groups.js";
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
 import type { AgentBinding } from "../../config/types.agents.js";
 import type { ChannelDeliveryStreamingConfig, DmScope } from "../../config/types.base.js";
+import type { ChannelGroups } from "../../config/types.channel-messaging-common.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type {
