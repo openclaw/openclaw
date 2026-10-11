@@ -4,7 +4,7 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { LitContent } from "../../../lit/solid-content.tsx";
 import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
 import "./chat-audio-player.ts";
-import "./chat-svg-attachment.ts";
+import "./chat-svg-attachment.tsx";
 import "./chat-video-player.ts";
 import {
   isCrossOriginHttpSource,

@@ -46,7 +46,10 @@ export function mountLitContent(
   const end = document.createComment("lit-content");
   container.append(end);
   const renderOptions = { ...options, renderBefore: end };
-  const part = renderLit(value, container, renderOptions);
+  // Legacy directives own their signal writes, independently of the calling Solid effect.
+  const commit = (next: unknown) =>
+    runWithOwner(null, () => renderLit(next, container, renderOptions));
+  const part = commit(value);
   let ownedNodes: Node[] = [];
   const readOwnedNodes = (): Node[] => {
     const start = part.startNode;
@@ -63,17 +66,17 @@ export function mountLitContent(
   let disposed = false;
   const mount: LitContentMount = {
     update(next) {
-      renderLit(next, container, renderOptions);
+      commit(next);
       ownedNodes = readOwnedNodes();
     },
-    setConnected: (connected) => part.setConnected(connected),
+    setConnected: (connected) => runWithOwner(null, () => part.setConnected(connected)),
     dispose() {
       if (disposed) {
         return;
       }
       disposed = true;
       const nodes = readOwnedNodes();
-      part.setConnected(false);
+      runWithOwner(null, () => part.setConnected(false));
       // Solid can remove the markers first. Retire remaining template roots
       // directly instead of rendering into an already-detached ChildPart.
       for (const node of nodes) {

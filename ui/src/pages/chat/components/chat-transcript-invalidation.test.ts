@@ -29,6 +29,7 @@ import {
   toggleTranscriptSearch,
 } from "./chat-thread-interactions.ts";
 import { renderChatThread } from "./chat-thread.ts";
+import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import {
   flushDeferredRowPrune,
@@ -893,6 +894,7 @@ describe("chat transcript invalidation", () => {
     const controller = createTestTranscript();
     const retainedPane = document.body.appendChild(document.createElement("div"));
     render(renderChatThread(props, controller), retainedPane);
+    await settleToolBridges(retainedPane);
     const staleTools = getExpandedToolCards(sessionKey);
     const staleUsers = getExpandedUserMessages(sessionKey);
     const previousToolVersion = getExpansionStateVersion(staleTools);
@@ -911,9 +913,11 @@ describe("chat transcript invalidation", () => {
         ),
         alternatePane,
       );
+      await settleToolBridges(alternatePane);
     }
 
     render(renderChatThread(props, controller), retainedPane);
+    await settleToolBridges(retainedPane);
     const currentTools = getExpandedToolCards(sessionKey);
     const currentUsers = getExpandedUserMessages(sessionKey);
     expect(currentTools).not.toBe(staleTools);
@@ -969,11 +973,12 @@ describe("chat transcript invalidation", () => {
     const toolVisibilityController = createTestTranscript(toolVisibilityProps.paneId);
     onTestFinished(() => toolVisibilityController.hostDisconnected());
     const toolVisibilityPane = document.body.appendChild(document.createElement("div"));
-    const renderToolVisibility = (next = toolVisibilityProps) => {
+    const renderToolVisibility = async (next = toolVisibilityProps) => {
       render(renderChatThread(next, toolVisibilityController), toolVisibilityPane);
       toolVisibilityController.hostUpdated();
+      await settleToolBridges(toolVisibilityPane);
     };
-    renderToolVisibility();
+    await renderToolVisibility();
     toolVisibilityController.hostConnected();
     const visibilityState = getExpandedToolCards(toolVisibilitySession);
     const visibilityIds = [...visibilityState.keys()].filter((key) => key.startsWith("toolmsg:"));
@@ -990,19 +995,19 @@ describe("chat transcript invalidation", () => {
       "false",
     ]);
     expectDefined(disclosureButtons()[0], "first mounted tool disclosure").click();
-    renderToolVisibility();
+    await renderToolVisibility();
     expectDefined(disclosureButtons()[1], "second mounted tool disclosure").click();
-    renderToolVisibility();
+    await renderToolVisibility();
     expectDefined(disclosureButtons()[1], "second mounted tool disclosure").click();
-    renderToolVisibility();
+    await renderToolVisibility();
     expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
       "true",
       "false",
     ]);
 
-    renderToolVisibility({ ...toolVisibilityProps, showToolCalls: false });
+    await renderToolVisibility({ ...toolVisibilityProps, showToolCalls: false });
     expect(disclosureButtons()).toHaveLength(0);
-    renderToolVisibility();
+    await renderToolVisibility();
 
     expect(disclosureButtons()).toHaveLength(2);
     expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
@@ -1011,7 +1016,7 @@ describe("chat transcript invalidation", () => {
     ]);
     expect(visibilityState.get(expandedToolId)).toBe(true);
     expect(visibilityState.get(collapsedToolId)).toBe(false);
-    renderToolVisibility({
+    await renderToolVisibility({
       ...toolVisibilityProps,
       messages: toolVisibilityProps.messages.filter(
         (message) => !("toolCallId" in message && message.toolCallId === "expanded-tool"),

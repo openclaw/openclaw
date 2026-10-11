@@ -1,5 +1,8 @@
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
-import { SESSION_ROW_DETAIL_FIELDS } from "../../packages/gateway-protocol/src/session-row-fields.js";
+import {
+  SESSION_DASHBOARD_ROW_FIELDS,
+  SESSION_ROW_DETAIL_FIELDS,
+} from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
@@ -39,7 +42,7 @@ type PresentationOptions = Omit<
   "now" | "active" | "subagentRuns" | "preparedFacts"
 > & {
   includeActivitySummary?: boolean;
-  rowMode?: "compact";
+  rowMode?: SessionsListParams["rowMode"];
   omitSentinelChildren?: boolean;
   childArchiveFilter?: SessionsListParams["archived"];
 };
@@ -405,7 +408,14 @@ export function prepareProjectedSessionPresentation(
         row.activitySummary = { ...row.activitySummary, canEnsure: canEnsure === true };
       }
     }
-    if (options.rowMode === "compact") {
+    if (options.rowMode === "dashboard") {
+      for (const field of Object.keys(row)) {
+        if (!SESSION_DASHBOARD_ROW_FIELDS.has(field)) {
+          Reflect.deleteProperty(row, field);
+        }
+      }
+      row.rowMode = "dashboard";
+    } else if (options.rowMode === "compact") {
       for (const field of SESSION_ROW_DETAIL_FIELDS) {
         delete row[field];
       }
