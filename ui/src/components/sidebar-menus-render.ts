@@ -65,29 +65,33 @@ export function renderSidebarRailPinMenuForController(controller: SidebarMenusCo
   const before = index >= 0 ? entries[index - 1] : undefined;
   const after = index >= 0 ? entries[index + 1] : undefined;
   const trigger = controller.railPinMenuTrigger;
-  return renderSidebarDropdown({
+  // A replacement target needs a fresh dropdown so delayed hide events keep their old owner.
+  return keyed(
     position,
-    className: "sidebar-customize-menu sidebar-rail-pin-menu",
-    label: t("chat.sidebar.reorderItem", { item: position.label }),
-    ...controller.positionedMenuHandlers("railPin"),
-    onSelect: ({ value }) => {
-      controller.closePositionedMenu("railPin");
-      if (value === "remove") {
-        host.sessionOrganizer.removeSidebarEntry(position.entry);
-      } else if (value === "before" || value === "after") {
-        const target = value === "before" ? before : after;
-        if (target) {
-          host.sessionOrganizer.writeSidebarEntryAt(position.entry, target, value);
-          void host.updateComplete.then(() => trigger?.isConnected && trigger.focus());
+    renderSidebarDropdown({
+      position,
+      className: "sidebar-customize-menu sidebar-rail-pin-menu",
+      label: t("chat.sidebar.reorderItem", { item: position.label }),
+      ...controller.positionedMenuHandlers("railPin"),
+      onSelect: ({ value }) => {
+        controller.closePositionedMenu("railPin");
+        if (value === "remove") {
+          host.sessionOrganizer.removeSidebarEntry(position.entry);
+        } else if (value === "before" || value === "after") {
+          const target = value === "before" ? before : after;
+          if (target) {
+            host.sessionOrganizer.writeSidebarEntryAt(position.entry, target, value);
+            void host.updateComplete.then(() => trigger?.isConnected && trigger.focus());
+          }
         }
-      }
-    },
-    content: html`
-      ${renderSidebarMenuAction("before", t("chat.sidebar.moveUp"), "arrowUp", { disabled: !before })}
-      ${renderSidebarMenuAction("after", t("chat.sidebar.moveDown"), "arrowDown", { disabled: !after })}
-      ${renderSidebarMenuAction("remove", t("nav.unpin"), "pin")}
-    `,
-  });
+      },
+      content: html`
+        ${renderSidebarMenuAction("before", t("chat.sidebar.moveUp"), "arrowUp", { disabled: !before })}
+        ${renderSidebarMenuAction("after", t("chat.sidebar.moveDown"), "arrowDown", { disabled: !after })}
+        ${renderSidebarMenuAction("remove", t("nav.unpin"), "pin")}
+      `,
+    }),
+  );
 }
 
 export function renderSidebarAgentMenuForController(controller: SidebarMenusController) {

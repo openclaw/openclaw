@@ -202,6 +202,20 @@ suite.define(() => {
         await page.keyboard.press("Escape");
         await expect.poll(() => source.evaluate((el) => el === document.activeElement)).toBe(true);
       }
+      await rail
+        .getByRole("link", { name: "Release notes", exact: true })
+        .click({ button: "right" });
+      await menu.getByRole("menuitem", { name: "Unpin", exact: true }).waitFor();
+      const previousMenu = await menu.elementHandle();
+      expect(previousMenu).not.toBeNull();
+      await source.click({ button: "right" });
+      await expect.poll(() => menu.getAttribute("aria-label")).toContain("Research plan");
+      expect(await previousMenu!.evaluate((element) => element.isConnected)).toBe(false);
+      await previousMenu!.evaluate((element) =>
+        element.dispatchEvent(new CustomEvent("wa-after-hide", { bubbles: true, composed: true })),
+      );
+      await menu.getByRole("menuitem", { name: "Unpin", exact: true }).waitFor();
+      await page.keyboard.press("Escape");
       await source.click({ button: "right" });
       await menu.getByRole("menuitem", { name: "Move down", exact: true }).click();
       await expect.poll(pinOrder).toEqual([entries[0], entries[2], entries[1], entries[3]]);
