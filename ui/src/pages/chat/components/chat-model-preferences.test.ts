@@ -22,7 +22,9 @@ function controls(overrides: Partial<Props>) {
   const onThinkingSelect = vi.fn(async () => true);
   const onFastModeSelect = vi.fn(async () => true);
   const container = document.createElement("div");
-  onTestFinished(() => render(nothing, container));
+  onTestFinished(() => {
+    render(nothing, container);
+  });
   const props: Props = {
     activeRunId: null,
     activeRunSessionKey: "main",
