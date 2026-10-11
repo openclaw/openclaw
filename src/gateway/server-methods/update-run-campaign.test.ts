@@ -3,7 +3,7 @@ import "../../test-utils/prepare-compiled-subprocesses.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateScheduleState } from "../../../packages/gateway-protocol/src/index.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import type { UpdateCampaignController } from "../../infra/update-campaign.js";
@@ -762,17 +762,26 @@ describe("update.run campaign ownership", () => {
           >
         >
       >();
-    startManagedServiceUpdateHandoffMock.mockReturnValueOnce(deferredUpdate.promise);
+    const handoffStarted = createDeferred<void>();
+    startManagedServiceUpdateHandoffMock.mockImplementationOnce(() => {
+      handoffStarted.resolve();
+      return deferredUpdate.promise;
+    });
     const updateRun = invokeUpdateRun();
-    await vi.waitFor(() => {
+    try {
+      await awaitGateBeforeSettlement(
+        handoffStarted.promise,
+        updateRun,
+        "update.run settled before starting its managed handoff",
+      );
       expect(adoptCampaignMock).toHaveBeenCalledOnce();
       expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledOnce();
-    });
-    expect(getCampaignStateMock).not.toHaveBeenCalled();
-    currentCampaignId = "campaign-2";
-    deferredUpdate.reject(new Error("entrypoint unavailable"));
-
-    await updateRun;
+      expect(getCampaignStateMock).not.toHaveBeenCalled();
+      currentCampaignId = "campaign-2";
+    } finally {
+      deferredUpdate.reject(new Error("entrypoint unavailable"));
+      await updateRun;
+    }
 
     expect(getCampaignStateMock).toHaveBeenCalledOnce();
     expect(clearCampaignMock).not.toHaveBeenCalled();
