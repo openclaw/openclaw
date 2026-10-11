@@ -81,7 +81,7 @@ export function CronPageContent(props: { controller: CronPageController; revisio
       channelMeta: channels.channelsSnapshot?.channelMeta ?? [],
       runs: page.cron.cronRuns,
       runsState: getCronRunsViewState(page.cron),
-      highlightedRunId: page.highlightedRunId,
+      highlightedRunId: page.cron.cronRunsRunId,
       runsHasMore: page.cron.cronRunsHasMore,
       runsLoadingMore: page.cron.cronRunsLoadingMore,
       runsStatuses: page.cron.cronRunsStatuses,
