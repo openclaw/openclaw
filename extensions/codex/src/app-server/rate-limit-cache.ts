@@ -9,7 +9,7 @@ const SPARSE_ACCOUNT_METADATA_KEYS = ["credits", "individualLimit", "planType"] 
 type CodexRateLimitCacheState = {
   value: JsonValue;
   updatedAtMs: number;
-  revisionsByLimitId: Record<string, number>;
+  revision: number;
 };
 
 // The physical client has one notification observer even across same-build module copies.
@@ -26,14 +26,10 @@ export function rememberCodexRateLimitsRead(
 ): void {
   if (value !== undefined) {
     const currentState = rateLimitsByClient.get(client);
-    const revisionsByLimitId = { ...currentState?.revisionsByLimitId };
-    for (const limitId of readRateLimitIds(value)) {
-      revisionsByLimitId[limitId] = (revisionsByLimitId[limitId] ?? 0) + 1;
-    }
     rateLimitsByClient.set(client, {
       value,
       updatedAtMs: nowMs,
-      revisionsByLimitId,
+      revision: (currentState?.revision ?? 0) + Number(hasCodexRateLimit(value)),
     });
   }
 }
@@ -55,19 +51,13 @@ export function mergeCodexRateLimitsUpdate(
   rateLimitsByClient.set(client, {
     value: mergeRateLimitUpdate(current, update),
     updatedAtMs: nowMs,
-    revisionsByLimitId: {
-      ...currentState?.revisionsByLimitId,
-      [limitId]: (currentState?.revisionsByLimitId[limitId] ?? 0) + 1,
-    },
+    revision: (currentState?.revision ?? 0) + Number(limitId === "codex"),
   });
 }
 
-/** Per-limit marker used to trust only primary Codex updates from one turn startup. */
-export function readCodexRateLimitsRevision(
-  client: CodexAppServerClient,
-  limitId = "codex",
-): number {
-  return rateLimitsByClient.get(client)?.revisionsByLimitId[limitId] ?? 0;
+/** Marker used to trust only primary Codex updates from one turn startup. */
+export function readCodexRateLimitsRevision(client: CodexAppServerClient): number {
+  return rateLimitsByClient.get(client)?.revision ?? 0;
 }
 
 /** Reads one physical client's cached rate-limit payload within the max-age window. */
@@ -123,24 +113,21 @@ function mergeRateLimitUpdate(current: JsonValue | undefined, update: JsonObject
   };
 }
 
-function readRateLimitIds(value: JsonValue): string[] {
+function hasCodexRateLimit(value: JsonValue): boolean {
   if (!isJsonObject(value)) {
-    return [];
+    return false;
   }
-  const ids = new Set<string>();
-  if (isJsonObject(value.rateLimits)) {
-    ids.add(readLimitId(value.rateLimits));
+  if (isJsonObject(value.rateLimits) && readLimitId(value.rateLimits) === "codex") {
+    return true;
   }
-  if (isJsonObject(value.rateLimitsByLimitId)) {
-    for (const [key, snapshot] of Object.entries(value.rateLimitsByLimitId)) {
-      const snapshotLimitId =
-        isJsonObject(snapshot) && typeof snapshot.limitId === "string"
-          ? snapshot.limitId.trim()
-          : "";
-      ids.add(snapshotLimitId || key);
-    }
+  if (!isJsonObject(value.rateLimitsByLimitId)) {
+    return false;
   }
-  return [...ids];
+  return Object.entries(value.rateLimitsByLimitId).some(([key, snapshot]) => {
+    const id =
+      isJsonObject(snapshot) && typeof snapshot.limitId === "string" ? snapshot.limitId.trim() : "";
+    return (id || key) === "codex";
+  });
 }
 
 function readLimitId(snapshot: JsonObject): string {

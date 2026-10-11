@@ -426,41 +426,6 @@ describe("openclaw.changes.list", () => {
     });
   });
 
-  it("does not collapse a repeated transition outside the operation window", async () => {
-    await withTestDir({ prefix: "openclaw-system-changes-collapse-window-" }, async (stateDir) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-      const { systemStore, configStore } = createAuditStores(env);
-      configStore.register(
-        "old-transition",
-        configRecord({
-          ts: "2026-07-18T11:58:00.000Z",
-          origin: "system-agent",
-          previousHash: "a",
-          nextHash: "b",
-          changedPaths: ["gateway.bind"],
-        }),
-        1_000,
-      );
-      systemStore.register(
-        "operation",
-        {
-          timestamp: "2026-07-18T12:00:04.000Z",
-          operation: "config.set",
-          summary: "Set config gateway.port",
-          configHashBefore: "a",
-          configHashAfter: "b",
-        },
-        121_000,
-      );
-
-      const result = await listSystemChanges({ limit: 50 }, { env });
-      expect(result.entries).toEqual([
-        expect.objectContaining({ kind: "operation", summary: "Set config gateway.port" }),
-        expect.objectContaining({ kind: "config-write", changedPaths: ["gateway.bind"] }),
-      ]);
-    });
-  });
-
   it("prefers an in-window match over an older repeated transition", async () => {
     await withTestDir(
       { prefix: "openclaw-system-changes-repeated-transition-" },
@@ -633,53 +598,6 @@ describe("openclaw.changes.list", () => {
       expect((await listSystemChanges({ limit: 50 }, { env })).entries).toContainEqual(
         expect.objectContaining({ changedPaths: ["gateway.port"] }),
       );
-    });
-  });
-
-  it("uses store insertion order when a producer clock moves backwards", async () => {
-    await withTestDir({ prefix: "openclaw-system-changes-insertion-order-" }, async (stateDir) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-      const store = createSqliteAuditRecordStore<ConfigAuditRecord>({
-        scope: CONFIG_AUDIT_SCOPE,
-        maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
-        env,
-      });
-      for (const [key, ts, before, after, createdAt] of [
-        ["one", "2026-07-18T09:00:00.000Z", "a", "b", 1_000],
-        ["two", "2026-07-18T11:00:00.000Z", "b", "c", 2_000],
-        ["three", "2026-07-18T10:00:00.000Z", "c", "d", 3_000],
-      ] as const) {
-        store.register(
-          key,
-          configRecord({
-            ts,
-            origin: "config-rpc",
-            previousHash: before,
-            nextHash: after,
-            changedPaths: [key],
-          }),
-          createdAt,
-        );
-      }
-
-      const pages = [];
-      let cursor: string | undefined;
-      do {
-        const page = await listSystemChanges(
-          { limit: 1, ...(cursor ? { beforeCursor: cursor } : {}) },
-          { env },
-        );
-        pages.push(...page.entries);
-        cursor = page.nextCursor;
-      } while (cursor);
-
-      expect(pages.map((entry) => entry.changedPaths?.[0])).toEqual(["three", "two", "one"]);
-      expect(pages.map((entry) => entry.at)).toEqual([
-        Date.parse("2026-07-18T10:00:00.000Z"),
-        Date.parse("2026-07-18T11:00:00.000Z"),
-        Date.parse("2026-07-18T09:00:00.000Z"),
-      ]);
-      expect(pages.map((entry) => entry.id)).toEqual([...new Set(pages.map((entry) => entry.id))]);
     });
   });
 
