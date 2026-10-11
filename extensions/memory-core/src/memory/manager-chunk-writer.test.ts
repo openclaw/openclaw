@@ -33,6 +33,8 @@ describe("memory chunk publication", () => {
       await fs.writeFile(
         memoryPath,
         [
+          "# Preferences",
+          "## Project notes",
           "- Oversized alpha entry. <!-- trigger: oversized alpha --> <!-- importance: 8 --> <!-- project: alpha-key -->",
           `  ${"alpha-fragment-body ".repeat(400)}`,
           "- Global neighbor. <!-- trigger: global neighbor -->",
@@ -71,6 +73,10 @@ describe("memory chunk publication", () => {
           .all();
         const fragments = rows.filter((row) => row.triggers === "oversized alpha");
         expect(fragments.length).toBeGreaterThanOrEqual(2);
+        expect(rows.some((row) => row.text === "# Preferences")).toBe(false);
+        expect(fragments[0]?.text).toMatch(
+          /^# Preferences\n## Project notes\n- Oversized alpha entry\./,
+        );
         expect(
           fragments.every(
             (row) =>
