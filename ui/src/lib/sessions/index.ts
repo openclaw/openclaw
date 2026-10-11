@@ -8,7 +8,6 @@ import { type SelectedAgentSource, watchSelectedAgent } from "../agents/watch-se
 import { formatUiError } from "../format-error.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
 import type { SessionCreateOutcome } from "./create.ts";
-import { captureBootRoster } from "./session-boot-roster.ts";
 import { createSessionBootSnapshot } from "./session-boot-snapshot.ts";
 import type { SessionCapability, SessionGateway, SessionState } from "./session-capability.ts";
 import { createSessionDeletions } from "./session-deletions.ts";
@@ -643,11 +642,11 @@ export function createSessionCapability(
       return cacheLifecycle.routingDefaults;
     },
     whenCachedRosterSettled: () => cacheLifecycle.settled,
-    captureBootRoster: () =>
+    captureBootRoster: (capture) =>
       connection.capture() &&
       reconnectListRevision === null &&
       isPrimarySessionListQuery(roster.lastOptions())
-        ? captureBootRoster(state)
+        ? capture(state)
         : null,
     captureConnectionScope: connection.capture,
     isConnectionScopeCurrent: connection.isCurrent,

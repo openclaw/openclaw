@@ -4,6 +4,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createSessionCapability } from "./index.ts";
+import { captureBootRoster } from "./session-boot-roster.ts";
 import { sessionsResult } from "./session-capability.test-support.ts";
 import type { SessionGateway } from "./session-capability.ts";
 
@@ -114,7 +115,7 @@ describe("session roster presentation", () => {
       const observed: Array<SessionsListResult | null> = [];
       h.sessions.subscribe(() => observed.push(h.sessions.presentation.result));
       h.publish({ phase: "connected", selfUser: { id: "two" } });
-      expect(h.sessions.captureBootRoster()).toBeNull();
+      expect(h.sessions.captureBootRoster(captureBootRoster)).toBeNull();
       expect(observed.length).toBeGreaterThan(0);
       expect(observed.every((result) => result === null)).toBe(true);
     } finally {

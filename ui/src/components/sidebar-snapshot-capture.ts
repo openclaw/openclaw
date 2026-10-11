@@ -5,6 +5,7 @@ import { loadSettings } from "../app/settings.ts";
 import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { presenceViewerLastActivity } from "../lib/presence-users.ts";
+import { captureBootRoster } from "../lib/sessions/session-boot-roster.ts";
 import { sidebarOnlineOrder } from "./app-sidebar-online.ts";
 import { readSidebarBrandPresentation, type AppSidebarRenderHost } from "./app-sidebar-render.ts";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
@@ -32,7 +33,7 @@ export function captureSidebarSnapshotModel(
   rows: SidebarRecentSession[],
   sections: SidebarVisibleSections["sections"],
 ): SidebarSnapshotModel | null {
-  const bootRoster = context.sessions.captureBootRoster();
+  const bootRoster = context.sessions.captureBootRoster(captureBootRoster);
   const agents = context.agents.state.agentsList;
   if (!bootRoster || !agents) {
     return null;

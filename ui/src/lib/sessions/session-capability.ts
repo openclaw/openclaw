@@ -240,7 +240,8 @@ export type SessionCapability = {
     readonly scope: "per-sender" | "global";
   };
   whenCachedRosterSettled: () => Promise<void>;
-  captureBootRoster: () => BootRoster | null;
+  /** The lazy snapshot owner supplies its projection; this capability admits the current roster. */
+  captureBootRoster: (capture: (state: SessionState) => BootRoster | null) => BootRoster | null;
   /** Captures the current Gateway connection generation for read-only requests. */
   captureConnectionScope: () => SessionConnectionScope | null;
   /** Whether a captured read-only request still belongs to the active connection. */

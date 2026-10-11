@@ -9,7 +9,7 @@ import * as snapshotPrewarm from "../../pages/chat/session-snapshot-prewarm.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sidebarBootSnapshot } from "../../test-helpers/sidebar-boot-snapshot.test-support.ts";
 import { createSessionCapability } from "./index.ts";
-import type { BootRoster } from "./session-boot-roster.ts";
+import { captureBootRoster, type BootRoster } from "./session-boot-roster.ts";
 import { sessionsResult } from "./session-capability.test-support.ts";
 import type { SessionCapability, SessionGateway } from "./session-capability.ts";
 
@@ -332,7 +332,7 @@ describe("session capability warm roster", () => {
     });
     expect(h.sessions.canonicalListRevision).toBe(0);
     expect(h.request).not.toHaveBeenCalled();
-    expect(h.sessions.captureBootRoster()).toBeNull();
+    expect(h.sessions.captureBootRoster(captureBootRoster)).toBeNull();
     h.publish({ phase: "reconnecting" });
     expect(h.sessions.state.result?.sessions).toHaveLength(2);
     expect(h.sessions.state.resultCached).toBe(true);
@@ -371,7 +371,7 @@ describe("session capability warm roster", () => {
       await vi.waitFor(() =>
         expect(h.request).toHaveBeenCalledWith("sessions.list", expect.anything()),
       );
-      expect(h.sessions.captureBootRoster()).toBeNull();
+      expect(h.sessions.captureBootRoster(captureBootRoster)).toBeNull();
       const live = sessionsResult(
         [{ key: "agent:main:kept", sessionId: "kept", kind: "direct" }],
         2,
@@ -383,14 +383,14 @@ describe("session capability warm roster", () => {
         expect(h.sessions.captureReconcile()(observed)).toBe(true);
         expect(h.sessions.state.result?.sessions).toHaveLength(2);
         expect(h.sessions.state.resultCached).toBe(true);
-        expect(h.sessions.captureBootRoster()).toBeNull();
+        expect(h.sessions.captureBootRoster(captureBootRoster)).toBeNull();
       }
       h.live.resolve(live);
       await vi.waitFor(() => expect(h.sessions.state.resultCached).toBe(false));
       const expected = observed ? { ...live, sessions: [observed] } : live;
       expect(h.sessions.state.result).toEqual(expected);
       expect(h.sessions.canonicalListRevision).toBe(1);
-      expect(h.sessions.captureBootRoster()).toMatchObject({
+      expect(h.sessions.captureBootRoster(captureBootRoster)).toMatchObject({
         agentId: "main",
         result: expected,
       });
@@ -438,7 +438,7 @@ describe("session capability warm roster", () => {
         const accepted = h.sessions.state.result?.sessions.find((row) => row.key === observed.key);
         expect(accepted).toMatchObject(observed);
         expect(h.sessions.state.resultCached).toBe(true);
-        expect(h.sessions.captureBootRoster()).toBeNull();
+        expect(h.sessions.captureBootRoster(captureBootRoster)).toBeNull();
 
         h.live.resolve(live);
         await vi.waitFor(() => expect(h.sessions.state.resultCached).toBe(false));
@@ -518,7 +518,7 @@ describe("session capability warm roster", () => {
         }
         const accepted = h.sessions.state.result?.sessions.find((row) => row.key === key);
         expect(accepted?.label).toBe(observeAfterReconnect ? current.label : previous.label);
-        expect(h.sessions.captureBootRoster()).toBeNull();
+        expect(h.sessions.captureBootRoster(captureBootRoster)).toBeNull();
 
         h.live.resolve(sessionsResult([previous], 3));
         await Promise.resolve();
@@ -544,7 +544,7 @@ describe("session capability warm roster", () => {
     const live = sessionsResult([{ key: "agent:main:new-profile", kind: "direct" }], 2);
     h.live.resolve(live);
     await vi.waitFor(() => expect(h.sessions.state.result).toEqual(live));
-    expect(h.sessions.captureBootRoster()?.result).toEqual(live);
+    expect(h.sessions.captureBootRoster(captureBootRoster)?.result).toEqual(live);
   });
 
   it.each(["credentials", "credentials-before-notification"] as const)(
@@ -618,7 +618,7 @@ describe("session capability warm roster", () => {
       await vi.waitFor(() => expect(h.sessions.state.result).toEqual(live));
       h.publish({ sessionKey: "agent:main:other" });
       expect(h.sessions.state.result).toEqual(live);
-      expect(h.sessions.captureBootRoster()?.result).toEqual(live);
+      expect(h.sessions.captureBootRoster(captureBootRoster)?.result).toEqual(live);
     },
   );
 });
