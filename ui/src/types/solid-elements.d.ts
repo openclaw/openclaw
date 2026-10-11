@@ -1,8 +1,6 @@
 import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
 import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import type WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
-import type WaTabGroup from "@awesome.me/webawesome/dist/components/tab-group/tab-group.js";
-import type WaTab from "@awesome.me/webawesome/dist/components/tab/tab.js";
 import type { JSX } from "@solidjs/web";
 import type { MascotMood } from "../components/mascot-pose.ts";
 export type { JSX } from "@solidjs/web";
@@ -41,8 +39,6 @@ declare module "@solidjs/web" {
           "onWa-show"?: (event: Event) => void;
           "onWa-hide"?: (event: Event) => void;
         };
-      "wa-tab-group": LegacyAttributes<WaTabGroup> & Partial<Pick<WaTabGroup, "activation">>;
-      "wa-tab": LegacyAttributes<WaTab> & Partial<Pick<WaTab, "panel" | "active">>;
     }
     interface SVGAttributes<T> {
       "xml:space"?: "default" | "preserve";
