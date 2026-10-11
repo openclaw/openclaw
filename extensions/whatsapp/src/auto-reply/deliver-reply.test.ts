@@ -147,18 +147,6 @@ function expectQuotedOptions(
   expect(quoted.message).toEqual({ conversation: expected.body });
 }
 
-async function runWithFakeTimers<T>(run: () => Promise<T>): Promise<T> {
-  vi.useFakeTimers();
-  try {
-    const promise = run();
-    await vi.runAllTimersAsync();
-    return await promise;
-  } finally {
-    vi.clearAllTimers();
-    vi.useRealTimers();
-  }
-}
-
 async function createSocketOperationTimeoutError(): Promise<unknown> {
   vi.useFakeTimers();
   try {
@@ -229,9 +217,7 @@ describe("deliverWebReply", () => {
     });
     vi.mocked(msg.platform.reply).mockRejectedValue(acceptedFailure);
 
-    const failure = await runWithFakeTimers(() =>
-      deliverWebReply(params).catch((caught: unknown) => caught),
-    );
+    const failure = await deliverWebReply(params).catch((caught: unknown) => caught);
 
     expect(isChannelPartialDeliveryError(failure)).toBe(true);
     if (!isChannelPartialDeliveryError(failure)) {
@@ -464,31 +450,6 @@ describe("deliverWebReply", () => {
     });
   });
 
-  it.each(["connection closed", "operation timed out"])(
-    "retries text send on transient failure: %s",
-    async (errorMessage) => {
-      const { msg, params } = createDelivery({ text: "hi" });
-      vi.mocked(msg.platform.reply)
-        .mockRejectedValueOnce(new Error(errorMessage))
-        .mockResolvedValueOnce(createAcceptedWhatsAppSendResult("text", "reply-retry-2"));
-
-      await runWithFakeTimers(() => deliverWebReply(params));
-
-      expect(msg.platform.reply).toHaveBeenCalledTimes(2);
-    },
-  );
-
-  it("retries text send on wrapped transient failure", async () => {
-    const { msg, params } = createDelivery({ text: "hi" });
-    vi.mocked(msg.platform.reply)
-      .mockRejectedValueOnce({ error: { message: "connection closed" } })
-      .mockResolvedValueOnce(createAcceptedWhatsAppSendResult("text", "reply-retry-2"));
-
-    await runWithFakeTimers(() => deliverWebReply(params));
-
-    expect(msg.platform.reply).toHaveBeenCalledTimes(2);
-  });
-
   it("does not retry terminal socket operation timeouts", async () => {
     const msg = makeMsg();
     const timeout = await createSocketOperationTimeoutError();
@@ -588,18 +549,6 @@ describe("deliverWebReply", () => {
       participant: "111@s.whatsapp.net",
       body: "quoted media body",
     });
-  });
-
-  it("retries media send on transient failure", async () => {
-    const { msg, params } = createImageDelivery("caption");
-    vi.mocked(msg.platform.sendMedia).mockRejectedValueOnce(new Error("socket reset"));
-    vi.mocked(msg.platform.sendMedia).mockResolvedValueOnce(
-      createAcceptedWhatsAppSendResult("media", "media-retry-2"),
-    );
-
-    await runWithFakeTimers(() => deliverWebReply(params));
-
-    expect(msg.platform.sendMedia).toHaveBeenCalledTimes(2);
   });
 
   it("falls back to text-only when the first media send fails", async () => {

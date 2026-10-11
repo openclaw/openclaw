@@ -149,16 +149,12 @@ describe("prepared registry construction borrows", () => {
     }
   });
 
-  it("reacquires a refused source and rejects admission after construction closes", async () => {
+  it("rejects admission after construction closes", async () => {
     const { registry, borrower, instance } = await acquireConfiguredRegistryBorrower();
     const construction = new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry);
     await borrower[Symbol.asyncDispose]();
-    const releaseReplacement = instance.reserveReplacement();
     try {
-      expect(() => construction.retainRegistry(registry)).toThrow("replacement is in progress");
-      releaseReplacement();
       construction.retainRegistry(registry);
-      instance.reserveReplacement()();
       expect(instance.retainedWorkCount).toBeGreaterThan(0);
       await construction[Symbol.asyncDispose]();
       expect(instance.retainedWorkCount).toBe(0);
@@ -173,7 +169,6 @@ describe("prepared registry construction borrows", () => {
       markPreparedModelRuntimeSnapshotsStale("construction owner closed");
       expect(isPluginRegistryRetired(registry)).toBe(true);
     } finally {
-      releaseReplacement();
       await construction[Symbol.asyncDispose]();
       await borrower[Symbol.asyncDispose]();
     }
@@ -211,12 +206,10 @@ describe("prepared registry construction borrows", () => {
       markPreparedModelRuntimeSnapshotsStale("configuration replaced during run admission");
       await borrower[Symbol.asyncDispose]();
       expect(isPluginRegistryRetired(registry)).toBe(false);
-      instance.reserveReplacement()();
       expect(instance.retainedWorkCount).toBeGreaterThan(0);
       finishInspection.resolve();
       await expect(pending).rejects.toThrow("superseded");
       await expect(pending).rejects.toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
-      await expect(pending).rejects.toMatchObject({ admissionBlocked: false });
       expect(isPluginRegistryRetired(registry)).toBe(true);
       expect(instance.retainedWorkCount).toBe(0);
     } finally {
@@ -259,7 +252,6 @@ describe("prepared registry construction borrows", () => {
       ]);
       await borrower[Symbol.asyncDispose]();
       expect(isPluginRegistryRetired(registry)).toBe(false);
-      instance.reserveReplacement()();
       expect(instance.retainedWorkCount).toBeGreaterThan(0);
       finishProjection.resolve();
       const snapshot = await pending;

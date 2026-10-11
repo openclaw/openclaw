@@ -80,21 +80,6 @@ function mockRegistrySnapshot(index: ReturnType<typeof makeIndex>) {
   });
 }
 
-function mockSchemaSnapshotSource(
-  index: ReturnType<typeof makeIndex>,
-  properties: Record<string, unknown>,
-) {
-  const registry = makeManifestRegistry();
-  const plugin = registry.plugins[0];
-  if (!plugin) {
-    throw new Error("expected manifest plugin fixture");
-  }
-  plugin.configSchema = { type: "object", properties };
-  mockRegistrySnapshot(index);
-  loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
-  return registry;
-}
-
 describe("plugin metadata snapshot", () => {
   it("keeps strict declared ownership separate from public aliases and last-winner views", () => {
     const snapshot = restorePluginMetadataSnapshot(
@@ -367,169 +352,14 @@ describe("plugin metadata snapshot", () => {
     );
   });
 
-  it("rewalks collection-bearing manifest graphs after prototype mutation", () => {
-    const index = makeIndex();
-    const initialMapValue = { nested: { value: "initial-map" } };
-    const initialSetValue = { nested: { value: "initial-set" } };
-    const sharedMap = new Map([["initial", initialMapValue]]);
-    const sharedSet = new Set([initialSetValue]);
-    const registry = mockSchemaSnapshotSource(index, { sharedMap, sharedSet });
-
-    const first = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
-    expect(Object.isFrozen(initialMapValue.nested)).toBe(true);
-    expect(Object.isFrozen(initialSetValue.nested)).toBe(true);
-    expect(() => sharedMap.set("blocked", initialMapValue)).toThrow(
-      "Plugin metadata snapshots are immutable",
-    );
-    expect(() => sharedSet.add(initialSetValue)).toThrow("Plugin metadata snapshots are immutable");
-
-    const injectedMapValue = { nested: { value: "injected-map" } };
-    const injectedSetValue = { nested: { value: "injected-set" } };
-    Map.prototype.set.call(sharedMap, "injected", injectedMapValue);
-    Set.prototype.add.call(sharedSet, injectedSetValue);
-    expect(sharedMap.get("injected")).toBe(injectedMapValue);
-    expect(sharedSet.has(injectedSetValue)).toBe(true);
-    expect(Object.isFrozen(injectedMapValue.nested)).toBe(false);
-    expect(Object.isFrozen(injectedSetValue.nested)).toBe(false);
-
-    const second = loadPluginMetadataSnapshot({ config: {}, env: {}, index, allowCurrent: false });
-    expect(second).not.toBe(first);
-    expect(second.index).not.toBe(first.index);
-    expect(second.manifestRegistry).toBe(registry);
-    expect(Object.isFrozen(injectedMapValue)).toBe(true);
-    expect(Object.isFrozen(injectedMapValue.nested)).toBe(true);
-    expect(Object.isFrozen(injectedSetValue)).toBe(true);
-    expect(Object.isFrozen(injectedSetValue.nested)).toBe(true);
-    expect(() => {
-      injectedMapValue.nested.value = "mutated";
-    }).toThrow();
-    expect(() => {
-      injectedSetValue.nested.value = "mutated";
-    }).toThrow();
-    expect(() => sharedMap.delete("injected")).toThrow("Plugin metadata snapshots are immutable");
-    expect(() => sharedSet.delete(injectedSetValue)).toThrow(
-      "Plugin metadata snapshots are immutable",
-    );
-  });
-
-  it("refreezes retained collections across module instances", async () => {
-    const sharedMap = new Map([["initial", { nested: { value: "initial" } }]]);
-    const sharedSet = new Set([{ nested: { value: "initial" } }]);
-    const first = restorePluginMetadataSnapshot(
-      createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "retained",
-            configSchema: { type: "object", properties: { sharedMap, sharedSet } },
-          },
-        ],
-      }),
-    );
-    const mapValue = { nested: { value: "injected-map" } };
-    const setValue = { nested: { value: "injected-set" } };
-    Map.prototype.set.call(sharedMap, "injected", mapValue);
-    Set.prototype.add.call(sharedSet, setValue);
-
+  it("reuses frozen snapshots across module instances", async () => {
+    const snapshot = restorePluginMetadataSnapshot(createPluginMetadataSnapshotFixture());
     vi.resetModules();
     const reloaded = await import("./plugin-metadata-snapshot.js");
-    expect(reloaded.restorePluginMetadataSnapshot).not.toBe(restorePluginMetadataSnapshot);
-    expect(reloaded.finalizePluginMetadataSnapshot(first)).toBe(first);
-    expect(Object.isFrozen(mapValue.nested)).toBe(true);
-    expect(Object.isFrozen(setValue.nested)).toBe(true);
-    expect(() => sharedMap.clear()).toThrow("Plugin metadata snapshots are immutable");
-    expect(() => sharedMap.set("blocked", mapValue)).toThrow(
+    expect(reloaded.finalizePluginMetadataSnapshot(snapshot)).toBe(snapshot);
+    expect(() => (snapshot.declaredProviderOwners as Map<string, Set<string>>).clear()).toThrow(
       "Plugin metadata snapshots are immutable",
     );
-    expect(() => sharedSet.add(setValue)).toThrow("Plugin metadata snapshots are immutable");
-    expect(() => sharedSet.delete(setValue)).toThrow("Plugin metadata snapshots are immutable");
-  });
-
-  it("rewalks enumerable accessor graphs when their closure-backed values change", () => {
-    const index = makeIndex();
-    let accessorValue = { nested: { value: "initial" } };
-    const accessor = {} as { current: typeof accessorValue };
-    Object.defineProperty(accessor, "current", {
-      enumerable: true,
-      get: () => accessorValue,
-    });
-    const registry = mockSchemaSnapshotSource(index, { accessor });
-
-    const first = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
-    expect(Object.isFrozen(accessor)).toBe(true);
-    expect(Object.isFrozen(accessorValue)).toBe(true);
-    expect(Object.isFrozen(accessorValue.nested)).toBe(true);
-
-    const replacement = { nested: { value: "replacement" } };
-    accessorValue = replacement;
-    expect(accessor.current).toBe(replacement);
-    expect(Object.isFrozen(replacement)).toBe(false);
-    expect(Object.isFrozen(replacement.nested)).toBe(false);
-
-    const second = loadPluginMetadataSnapshot({ config: {}, env: {}, index, allowCurrent: false });
-    expect(second).not.toBe(first);
-    expect(second.index).not.toBe(first.index);
-    expect(second.manifestRegistry).toBe(registry);
-    expect(Object.isFrozen(replacement)).toBe(true);
-    expect(Object.isFrozen(replacement.nested)).toBe(true);
-    expect(() => {
-      replacement.nested.value = "mutated";
-    }).toThrow();
-  });
-
-  it("rewalks proxy graphs that forge safe descriptors before their values change", () => {
-    const index = makeIndex();
-    let currentValue = { nested: { value: "decoy" } };
-    const target = {} as { current: typeof currentValue };
-    Object.defineProperty(target, "current", {
-      configurable: true,
-      enumerable: true,
-      get: () => currentValue,
-    });
-    let forgedDescriptors = 0;
-    const proxy = new Proxy(target, {
-      getOwnPropertyDescriptor(proxyTarget, key) {
-        const descriptor = Reflect.getOwnPropertyDescriptor(proxyTarget, key);
-        // Preserve the real accessor during Object.freeze so later proxy reads remain valid.
-        if (key === "current" && descriptor?.configurable && forgedDescriptors < 1) {
-          forgedDescriptors += 1;
-          return {
-            configurable: true,
-            enumerable: true,
-            writable: true,
-            value: currentValue,
-          };
-        }
-        return descriptor;
-      },
-      get(proxyTarget, key, receiver) {
-        if (key === "current") {
-          return currentValue;
-        }
-        return Reflect.get(proxyTarget, key, receiver);
-      },
-    });
-    const registry = mockSchemaSnapshotSource(index, { proxy });
-
-    const first = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
-    expect(forgedDescriptors).toBe(1);
-    expect(Object.isFrozen(proxy)).toBe(true);
-    expect(Object.isFrozen(currentValue.nested)).toBe(true);
-
-    const replacement = { nested: { value: "real" } };
-    currentValue = replacement;
-    expect(proxy.current).toBe(replacement);
-    expect(Object.isFrozen(replacement)).toBe(false);
-    expect(Object.isFrozen(replacement.nested)).toBe(false);
-
-    const second = loadPluginMetadataSnapshot({ config: {}, env: {}, index, allowCurrent: false });
-    expect(second).not.toBe(first);
-    expect(second.index).not.toBe(first.index);
-    expect(second.manifestRegistry).toBe(registry);
-    expect(Object.isFrozen(replacement)).toBe(true);
-    expect(Object.isFrozen(replacement.nested)).toBe(true);
-    expect(() => {
-      replacement.nested.value = "mutated";
-    }).toThrow();
   });
 
   it("reuses discovery from a derived empty plugin index", () => {

@@ -212,7 +212,7 @@ export async function createSkillLibraryWireInstance(): Promise<OpenClawTestInst
       bind: "loopback",
       port: instance.port,
       trustedProxies: ["127.0.0.1", "::1"],
-      // The Gateway approves the local device; the fixture approves its command surface.
+      // The Gateway approves the local device and its initial command surface.
       nodes: { pairing: { autoApproveLocal: true } },
       auth: {
         mode: "trusted-proxy",

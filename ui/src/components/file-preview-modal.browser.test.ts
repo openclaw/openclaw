@@ -1,6 +1,5 @@
 import type WaDialog from "@awesome.me/webawesome/dist/components/dialog/dialog.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawFilePreviewModal } from "./file-preview-modal.ts";
 import type { OpenClawModalDialog } from "./modal-dialog.ts";
 import "./file-preview-modal-registration.ts";
 
@@ -49,7 +48,7 @@ async function mountPreview(width: number, activePath = initialFilePath) {
   const { page } = await import("vitest/browser");
   await page.viewport(width, 844);
 
-  const preview = document.createElement("openclaw-file-preview-modal") as OpenClawFilePreviewModal;
+  const preview = document.createElement("openclaw-file-preview-modal");
   preview.style.setProperty("--wa-transition-normal", "150ms");
   preview.files = files;
   preview.activePath = activePath;

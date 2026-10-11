@@ -2,6 +2,7 @@
 cli-root-options.mjs
 config/ci-test-timings.json
 node-compile-cache.mjs
+worker-heap-flag.mjs
 node-runtime-env.mjs
 node-sqlite.mjs
 node-version.mjs
@@ -1179,7 +1180,6 @@ src/infra/windows-port-pids.ts
 src/infra/windows-private-directory.ts
 src/infra/windows-process-census.ts
 src/infra/windows-process-start.ts
-src/infra/worker-ancestry.ts
 src/infra/worker-cpu.ts
 src/infra/worker-diagnostic-script.ts
 src/infra/worker-idle-gc.ts
@@ -1285,6 +1285,7 @@ src/plugins/compat/native-exec-approval-record.ts
 src/plugins/compat/plugin-sdk-removed-export-records.ts
 src/plugins/compat/plugin-sdk-subpath-records.ts
 src/plugins/compat/progress-receipt-handoff-record.ts
+src/plugins/compat/sqlite-runtime-records.ts
 src/plugins/compat/binding-persistence-records.ts
 src/plugins/compat/registry-records.ts
 src/plugins/compat/registry.ts
@@ -1499,6 +1500,7 @@ src/plugins/runtime-state-key.ts
 src/plugins/runtime-state.ts
 src/plugins/runtime-workspace-state.ts
 src/plugins/runtime.ts
+src/plugins/sdk-deprecation.ts
 src/plugins/runtime/execution-frame.ts
 src/plugins/runtime/gateway-context-binding-owner.ts
 src/plugins/runtime/gateway-context-binding.ts
@@ -1664,6 +1666,7 @@ src/state/agent-deletion-journal.ts
 src/state/agent-provenance.kernel.ts
 src/state/agent-provenance.schema.ts
 src/state/agent-provenance.ts
+src/state/config-machine-state-async.ts
 src/state/config-machine-state-write.ts
 src/state/config-machine-state.ts
 src/state/creator-namespace-migration.ts

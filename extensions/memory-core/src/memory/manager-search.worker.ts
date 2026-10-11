@@ -3,11 +3,11 @@ import {
   readCuratedMemoryTriggerCandidates,
   readCuratedProjectMemoryCandidates,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { withOpenClawAgentDatabaseReadOnly } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
-  withOpenClawAgentDatabaseReadOnly,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { serveWorkerTasks } from "openclaw/plugin-sdk/worker-task-server";
 import { readMemoryOriginsInWorker } from "../memory-entry-origin-reads.js";
 import type {
@@ -111,8 +111,7 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
   if (
     request.kind === "origin-rows" ||
     request.kind === "origin-exists" ||
-    request.kind === "session-tombstones" ||
-    request.kind === "origin-index-keys"
+    request.kind === "session-tombstones"
   ) {
     return readMemoryOriginsInWorker(request);
   }
