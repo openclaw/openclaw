@@ -60,7 +60,7 @@ it("keeps a route draft until its Lit pane commits it", async () => {
   await pane.updateComplete;
   expect(pane.querySelector("textarea")?.value).toBe("Scoped Home draft");
 
-  const commit = createDeferred<void>();
+  const commit = createDeferred();
   childCommit = commit.promise;
   window.history.replaceState({}, "", "/chat/main?draft=What+can+you+do%3F");
   page.data = { sessionKey: "agent:main:main", draft: "What can you do?" };

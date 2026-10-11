@@ -1508,32 +1508,41 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         type: "module",
         url: new URL("src/components/mcp-app-view-registration.ts", realChatServer.baseUrl).href,
       });
-      const backgrounds = await page.evaluate(async () => {
-        await customElements.whenDefined("mcp-app-view");
-        const readFrameBackground = async (boardSurface?: string) => {
-          const owner = document.createElement("div");
-          if (boardSurface) {
-            owner.style.setProperty("--board-surface", boardSurface);
-          }
-          const view = document.createElement("mcp-app-view") as HTMLElement & {
-            updateComplete: Promise<boolean>;
+      const contextHelpers = await page.evaluateHandle<
+        typeof import("../../test-helpers/application-context.ts")
+      >('import("/src/test-helpers/application-context.ts")');
+      const backgrounds = await contextHelpers.evaluate(
+        async ({ createApplicationContextProvider, createApplicationGateway }) => {
+          // SAFETY: This style fixture never binds a session; only its Gateway projection is read.
+          const context = {
+            gateway: createApplicationGateway().gateway,
+          } as import("../../app/context.ts").ApplicationContext;
+          await customElements.whenDefined("mcp-app-view");
+          const readFrameBackground = async (boardSurface?: string) => {
+            const owner = createApplicationContextProvider(context);
+            if (boardSurface) {
+              owner.style.setProperty("--board-surface", boardSurface);
+            }
+            const view = document.createElement("mcp-app-view") as HTMLElement & {
+              updateComplete: Promise<boolean>;
+            };
+            owner.append(view);
+            document.body.replaceChildren(owner);
+            await view.updateComplete;
+            const mount = view.querySelector(".mount");
+            if (!mount) {
+              throw new Error("MCP App mount is missing");
+            }
+            const frame = document.createElement("iframe");
+            mount.append(frame);
+            return getComputedStyle(frame).backgroundColor;
           };
-          owner.append(view);
-          document.body.replaceChildren(owner);
-          await view.updateComplete;
-          const mount = view.shadowRoot?.querySelector(".mount");
-          if (!mount) {
-            throw new Error("MCP App mount is missing");
-          }
-          const frame = document.createElement("iframe");
-          mount.append(frame);
-          return getComputedStyle(frame).backgroundColor;
-        };
-        return {
-          dashboard: await readFrameBackground("rgb(12, 34, 56)"),
-          inline: await readFrameBackground(),
-        };
-      });
+          return {
+            dashboard: await readFrameBackground("rgb(12, 34, 56)"),
+            inline: await readFrameBackground(),
+          };
+        },
+      );
 
       expect(backgrounds.dashboard).toBe("rgb(12, 34, 56)");
       expect(backgrounds.inline).toBe("rgba(0, 0, 0, 0)");
