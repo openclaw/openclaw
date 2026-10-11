@@ -72,7 +72,7 @@ describe("session observer completion", () => {
       inFlight: false,
       finalPending: false,
     };
-    const error = await request(state, []).catch((error: unknown) => error);
+    const error = await request(state, []).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(Error);
     const message = (error as Error).message;
     const heading = "session observer returned invalid JSON twice; last rejected output: ";

@@ -34,7 +34,6 @@ import * as writeAdmission from "../../state/openclaw-agent-write-admission.js";
 import * as stateResources from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { isRecordedModelFallbackStop } from "../model-fallback-stop.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { appendSessionTranscriptNote } from "./session-manager-write-admission.js";
 import { SessionManager } from "./session-manager.js";
