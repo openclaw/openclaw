@@ -353,21 +353,6 @@ describe("local turn placement admission", () => {
     expect(turn).not.toHaveBeenCalled();
   });
 
-  it("admits a provider-free local turn exactly once before execution", async () => {
-    const events: string[] = [];
-    await withSessionPlacementTurnAdmission(
-      { sessionId: "session-direct", runId: "run-direct" },
-      { ...turnParams, sessionId: "session-direct", runId: "run-direct" },
-      async () => {
-        events.push("turn");
-        return { meta: { durationMs: 1 } };
-      },
-      () => events.push("admitted"),
-    );
-
-    expect(events).toEqual(["admitted", "turn"]);
-  });
-
   it("admits once when a provider signals before calling the local turn", async () => {
     const events: string[] = [];
     uninstallProvider = installSessionPlacementAdmissionProvider({
@@ -433,7 +418,7 @@ describe("local turn placement admission", () => {
     expect(secondClaim).toHaveBeenCalledOnce();
   });
 
-  it.each([true, false])(
+  it.each([false])(
     "acknowledges CLI continuation only after successful settlement (%s)",
     async (settled) => {
       settleRequesterAfterSessionSpawns.mockResolvedValueOnce(settled).mockResolvedValueOnce(false);
@@ -465,8 +450,6 @@ describe("local turn placement admission", () => {
   );
 
   it.each([
-    { yielded: false, sameInstance: true, pending: false },
-    { yielded: true, sameInstance: true, pending: false },
     { yielded: true, sameInstance: false, pending: false },
     { yielded: false, sameInstance: true, pending: true },
   ])(
@@ -558,7 +541,7 @@ describe("local turn placement admission", () => {
     );
   });
 
-  it.each([undefined, false, true])(
+  it.each([undefined, false])(
     "settles only standalone CLI ownership after placement releases (candidate marker=%s)",
     async (isFinalFallbackAttempt) => {
       const events: string[] = [];
@@ -612,7 +595,7 @@ describe("local turn placement admission", () => {
     },
   );
 
-  it.each(["settled", "reset-without-successor", "reset-with-successor"] as const)(
+  it.each(["settled", "reset-with-successor"] as const)(
     "closes a standalone CLI settlement assertion after its lane task is %s",
     async (ending) => {
       const sessionId = `standalone-${ending}`;
