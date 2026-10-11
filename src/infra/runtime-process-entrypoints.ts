@@ -12,6 +12,7 @@ function runtimeProcessEntrypoint(modulePath: string) {
 export const SQLITE_READONLY_CHILD_ARG = "--openclaw-sqlite-readonly-child";
 
 export const runtimeProcessEntrypoints = {
+  postgresBridge: runtimeProcessEntrypoint("infra/postgres-sync/bridge.worker"),
   secretEgressProxy: runtimeProcessEntrypoint("secrets/egress-proxy/proxy.worker"),
   codeModeNode: runtimeProcessEntrypoint("agents/code-mode-node.worker"),
   cronReadOnly: runtimeProcessEntrypoint("cron/store/read-only.worker"),

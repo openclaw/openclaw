@@ -1,7 +1,8 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, vi } from "vitest";
 import { createKernelStores } from "./test/sqlite-kernel.js";
+import { sqliteOnly as test } from "./test/sqlite-only.js";
 import { createWorkboardSqliteTestHarness } from "./test/sqlite-store.js";
 
 function observeReads(onRows: (sql: string, rows: Record<string, unknown>[]) => void) {
@@ -59,7 +60,8 @@ function fixtureCard(id: string, overrides: Partial<WorkboardCard> = {}): Workbo
 }
 
 describe("Workboard context and session-scoped reads", () => {
-  it("hydrates only the completed parents and recent assignee work included in context", async () => {
+  // Intercepts native SQLite statements and edits the underlying file mid-read.
+  test("hydrates only the completed parents and recent assignee work included in context", async () => {
     const { store, stores, dbPath } = createWorkboardSqliteTestHarness({
       createStores: createKernelStores,
     });
@@ -159,7 +161,8 @@ describe("Workboard context and session-scoped reads", () => {
     await expect(store.get(parents[7]!.id)).resolves.toMatchObject({ status: "review" });
   });
 
-  it("scopes session capture while preserving existing IDs, match preference, and execution fallback", async () => {
+  // Injects legacy rows and counts reads through native SQLite handles.
+  test("scopes session capture while preserving existing IDs, match preference, and execution fallback", async () => {
     const { store, stores, dbPath } = createWorkboardSqliteTestHarness({
       createStores: createKernelStores,
     });
@@ -206,7 +209,9 @@ describe("Workboard context and session-scoped reads", () => {
       execution: execution("shadowed-session"),
     });
     const nullFallback = fixtureCard("null-fallback", { execution: execution("null-session") });
-    const emptyFallback = fixtureCard("empty-fallback", { execution: execution("empty-session") });
+    const emptyFallback = fixtureCard("empty-fallback", {
+      execution: execution("empty-session"),
+    });
     const absentExecution = fixtureCard("absent-execution", {
       execution: execution("absent-session"),
     });
@@ -270,7 +275,8 @@ describe("Workboard context and session-scoped reads", () => {
 });
 
 describe("Workboard board-scoped SQLite hydration", () => {
-  it("prunes empty legacy automation fields without losing persisted details", async () => {
+  // Injects legacy JSON through a native SQLite file handle.
+  test("prunes empty legacy automation fields without losing persisted details", async () => {
     const { store, stores, dbPath } = createWorkboardSqliteTestHarness({
       createStores: createKernelStores,
     });
@@ -297,7 +303,8 @@ describe("Workboard board-scoped SQLite hydration", () => {
     });
   });
 
-  it("reads only the requested board while preserving complete cards and order", async () => {
+  // Measures fetched rows through the native SQLite statement prototype.
+  test("reads only the requested board while preserving complete cards and order", async () => {
     const { store } = createWorkboardSqliteTestHarness({ createStores: createKernelStores });
     const later = await store.create({ title: "Later", boardId: "ops", labels: ["one", "two"] });
     await store.addComment(later.id, { body: "Retain this comment" });
@@ -331,11 +338,16 @@ describe("Workboard board-scoped SQLite hydration", () => {
     await expect(store.list()).resolves.toHaveLength(4);
   });
 
-  it("hydrates captured card IDs even if another connection moves the card after selection", async () => {
+  // Moves the card through a native SQLite file handle during statement interception.
+  test("hydrates captured card IDs even if another connection moves the card after selection", async () => {
     const { store, dbPath } = createWorkboardSqliteTestHarness({
       createStores: createKernelStores,
     });
-    const created = await store.create({ title: "Moving card", boardId: "ops", labels: ["keep"] });
+    const created = await store.create({
+      title: "Moving card",
+      boardId: "ops",
+      labels: ["keep"],
+    });
     const expected = await store.addComment(created.id, { body: "Keep across the move" });
     using raw = new DatabaseSync(dbPath);
     let moved = false;
@@ -371,7 +383,8 @@ describe("Workboard board-scoped SQLite hydration", () => {
 });
 
 describe("Workboard card-scoped notification reads", () => {
-  it("bounds fetched rows and preserves card scope, missing cards, and cursor advancement", async () => {
+  // Measures fetched rows through the native SQLite statement prototype.
+  test("bounds fetched rows and preserves card scope, missing cards, and cursor advancement", async () => {
     const { store } = createWorkboardSqliteTestHarness({ createStores: createKernelStores });
     const selected = await store.create({
       title: "Selected notifications",
@@ -430,7 +443,9 @@ describe("Workboard card-scoped notification reads", () => {
     await expect(store.notificationEvents({ cardId: ` ${selected.id} ` })).resolves.toMatchObject({
       events: [{ id: "earlier" }, { id: "later" }],
     });
-    await expect(store.notificationEvents({ cardId: "missing" })).resolves.toEqual({ events: [] });
+    await expect(store.notificationEvents({ cardId: "missing" })).resolves.toEqual({
+      events: [],
+    });
     await expect(
       store.advanceNotificationEvents({ subscriptionId: subscription.id, limit: 1 }),
     ).resolves.toMatchObject({ events: [{ id: "earlier" }] });
@@ -444,7 +459,8 @@ describe("Workboard card-scoped notification reads", () => {
 });
 
 describe("Workboard dependency status reads", () => {
-  it("prepares a card with fifty parents without hydrating each parent's tree", async () => {
+  // Measures fetched rows through the native SQLite statement prototype.
+  test("prepares a card with fifty parents without hydrating each parent's tree", async () => {
     const { store, stores } = createWorkboardSqliteTestHarness({
       createStores: createKernelStores,
     });

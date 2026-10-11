@@ -131,7 +131,29 @@ export function createSqliteWorkerBackend(
         }
       }
       try {
-        return { ok: true, value: execute(command) };
+        const readOnly = [
+          "cards.lookup",
+          "cards.entries",
+          "cards.listCardStatuses",
+          "cards.listBoardAggregates",
+          "cards.listStatsAggregates",
+          "cards.hasCards",
+          "boards.lookup",
+          "boards.entries",
+          "sessionsBoard.get",
+          "sessionsBoard.listPlacements",
+          "subscriptions.lookup",
+          "subscriptions.entries",
+          "attachments.lookup",
+          "attachments.entries",
+          "connection.close",
+        ].includes(command.type);
+        const kernel = connections.get(command.input.connection)?.kernel;
+        const value =
+          process.env.OPENCLAW_EXPERIMENTAL_POSTGRES_URL && !readOnly && kernel
+            ? kernel.withWriteTransaction(() => execute(command))
+            : execute(command);
+        return { ok: true, value };
       } catch (error) {
         return { ok: false, failure: encodeWorkboardSqliteFailure(error) };
       }

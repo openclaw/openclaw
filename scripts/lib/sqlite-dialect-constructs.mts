@@ -17,7 +17,7 @@ const constructs: readonly Construct[] = [
     /\b(?:insert\s+or\s+(?:replace|ignore|abort|fail|rollback)|replace\s+into)\b/giu,
   ],
   ["json-string-set", "mechanical", /\bjson_(?:each|tree)\s*\(/giu],
-  ["transaction-mode", "mechanical", /\b(?:begin\s+(?:immediate|deferred)|savepoint)\b/giu],
+  ["transaction-mode", "mechanical", /\bbegin\s+(?:immediate|deferred|exclusive)\b/giu],
   ["last-insert-rowid", "mechanical", /\blast_insert_rowid\s*\(/giu],
   ["without-rowid", "mechanical", /\bwithout\s+rowid\b/giu],
   ["randomblob", "mechanical", /\brandomblob\s*\(/giu],
@@ -76,12 +76,18 @@ export function matchDialect(text: string, owner = false, sqlFile = false): Dial
   );
   return constructs
     .flatMap(([construct, group, pattern]) =>
-      [...masked.matchAll(pattern)].map((match) => ({
-        construct,
-        group,
-        index: match.index,
-        owner: owner && construct === "json-string-set",
-      })),
+      [...masked.matchAll(pattern)]
+        .filter(
+          (match) =>
+            construct !== "custom-function" ||
+            !/\b(?:table|exists|into|references|on)\s+$/iu.test(masked.slice(0, match.index)),
+        )
+        .map((match) => ({
+          construct,
+          group,
+          index: match.index,
+          owner: owner && construct === "json-string-set",
+        })),
     )
     .toSorted(
       (left, right) =>

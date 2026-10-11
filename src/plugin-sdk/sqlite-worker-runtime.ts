@@ -15,6 +15,9 @@ export {
   resolveExistingSqliteFileUri,
   supportsNodeSqliteExtensionLoading,
 } from "../infra/node-sqlite.js";
+export { PostgresSyncConnection } from "../infra/postgres-sync/connection.js";
+export { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+export type { SqlConnection } from "../infra/sql-connection.js";
 export {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
@@ -27,6 +30,7 @@ export {
   assertTransactionUsable,
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
+  runSqliteReadSnapshotSync,
 } from "../infra/sqlite-transaction.js";
 export type {
   SqliteWorkerBackend,
