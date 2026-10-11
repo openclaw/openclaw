@@ -131,6 +131,8 @@ back to OpenClaw.
 Changes to `agents.defaults.models`, agent model selection and fallbacks, and
 `models.providers` hot-apply without draining the Codex plugin. Changing Codex's
 own plugin settings still follows its plugin reload policy.
+Overlapping model or credential changes use the newer write's runtime application;
+superseding an earlier publication does not itself require a Gateway restart.
 
 Agent sandbox tool allow/deny lists under `agents.entries.<id>.tools.sandbox`
 hot-apply without restarting plugin services. Workboard reads live session facts;
