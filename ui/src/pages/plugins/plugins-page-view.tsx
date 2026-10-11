@@ -406,7 +406,7 @@ export function PluginsPageView(props: { page: PluginsPageController; revision: 
         )}
       </SettingsWorkspace>
       <PluginSkillPreview controller={page().skillPreview} state={page().skillPreview.state} />
-      <LitContent>{page().mcpLogin.render()}</LitContent>
+      <LitContent render={() => page().mcpLogin.render()} />
       <Show when={page().consentController.consent}>
         {(consent) => {
           const icon = createMemo(() => {

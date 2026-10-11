@@ -1,5 +1,9 @@
+import { createSignal } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
-import type { SessionsProps } from "./view.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import type { SessionsProps } from "./view-types.ts";
+import { SessionsView } from "./view.tsx";
 
 export function buildResult(
   session: SessionsListResult["sessions"][number],
@@ -79,4 +83,33 @@ export function buildProps(result: SessionsListResult): SessionsProps {
     onOpenSessionMenu: () => undefined,
     onToggleDetails: () => undefined,
   };
+}
+
+const sessionViews = new Map<
+  HTMLElement,
+  { update: (props: SessionsProps) => void; dispose: () => void }
+>();
+
+export function renderSessionsView(initial: SessionsProps, container: HTMLElement) {
+  const existing = sessionViews.get(container);
+  if (existing) {
+    existing.update(initial);
+  } else {
+    const [props, setProps] = createSignal(initial);
+    const { unmount: dispose } = mountSolid(() => <SessionsView {...props()} />, { container });
+    sessionViews.set(container, { update: (next) => setProps(next), dispose });
+  }
+  flush();
+}
+
+export function disposeSessionView(container: HTMLElement) {
+  sessionViews.get(container)?.dispose();
+  sessionViews.delete(container);
+}
+
+export function disposeSessionViews() {
+  for (const view of sessionViews.values()) {
+    view.dispose();
+  }
+  sessionViews.clear();
 }

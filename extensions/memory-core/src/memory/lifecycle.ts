@@ -7,7 +7,6 @@ type ReloadHandle = ReturnType<NonNullable<MemoryPluginRuntime["prepareReload"]>
 export type MemoryReloadState = {
   retireRuntime: boolean;
   adapters: Set<MemoryEmbeddingProviderAdapter>;
-  generation: number;
 };
 export type MemoryManagerLifecycle = {
   reload?: MemoryReloadState;
@@ -34,29 +33,21 @@ export function getMemoryManagerLifecycle(): MemoryManagerLifecycle {
   return lifecycle;
 }
 
-/** Fence acquisition even before the lazy manager module has loaded. */
+/** Pause new acquisition while the plugin owner replaces its adapters. */
 export function prepareMemoryManagerReload(
   change: ReloadChange,
   lifecycle = getMemoryManagerLifecycle(),
 ): ReloadHandle {
-  const reload = lifecycle.reload ?? {
-    retireRuntime: false,
-    adapters: new Set<MemoryEmbeddingProviderAdapter>(),
-    generation: 0,
+  const reload = {
+    retireRuntime: change.retireRuntime,
+    adapters: new Set(change.retiringEmbeddingProviders),
   };
-  reload.retireRuntime ||= change.retireRuntime;
-  for (const adapter of change.retiringEmbeddingProviders) {
-    reload.adapters.add(adapter);
-  }
-  const generation = ++reload.generation;
   lifecycle.reload = reload;
   const drain = lifecycle.prepare?.(reload) ?? (async () => ({ errors: [] }));
   return {
     drain,
     resume() {
-      if (lifecycle.reload === reload && generation === reload.generation) {
-        lifecycle.reload = undefined;
-      }
+      lifecycle.reload = undefined;
     },
   };
 }

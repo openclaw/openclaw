@@ -246,21 +246,23 @@ function renderAdvanced(options: InventoryProps): JSX.Element {
   }
   return (
     <>
-      <LitContent>
-        {renderNode({
-          rawAvailable: false,
-          maskSensitive: true,
-          schema: options.advancedSchema,
-          value: options.configValue.plugins ?? {},
-          path: ["plugins"],
-          hints: options.configHints,
-          unsupported: new Set(options.configUnsupportedPaths),
-          disabled: !options.canEditConfig || options.configBusy,
-          showLabel: false,
-          onPatch: options.onConfigPatch,
-          onRemove: options.onConfigRemove,
-        })}
-      </LitContent>
+      <LitContent
+        render={() =>
+          renderNode({
+            rawAvailable: false,
+            maskSensitive: true,
+            schema: options.advancedSchema,
+            value: options.configValue.plugins ?? {},
+            path: ["plugins"],
+            hints: options.configHints,
+            unsupported: new Set(options.configUnsupportedPaths),
+            disabled: !options.canEditConfig || options.configBusy,
+            showLabel: false,
+            onPatch: options.onConfigPatch,
+            onRemove: options.onConfigRemove,
+          })
+        }
+      />
       {options.configError
         ? renderRetryError(options.configError, options.onConfigWriteRetry)
         : null}
@@ -326,28 +328,30 @@ export function renderPluginSettingsInventory(props: InventoryProps): JSX.Elemen
         subtitle={t("pluginsPage.settingsDescription")}
       />
       <div class="plugins-settings-content">
-        <LitContent>
-          {renderHubTabs({
-            id: "plugin-settings",
-            active: props.tab,
-            tabs: [
-              {
-                value: "installed",
-                label: t("pluginsPage.settingsInstalled"),
-              },
-              {
-                value: "advanced",
-                label: t("pluginsPage.advanced"),
-              },
-            ],
-            ariaLabel: t("pluginsPage.settingsTabs"),
-            panelId: "plugin-settings-panel",
-            variant: "sub",
-            className: "plugins-settings-tabs",
-            carapace: true,
-            onSelect: props.onTabChange,
-          })}
-        </LitContent>
+        <LitContent
+          render={() =>
+            renderHubTabs({
+              id: "plugin-settings",
+              active: props.tab,
+              tabs: [
+                {
+                  value: "installed",
+                  label: t("pluginsPage.settingsInstalled"),
+                },
+                {
+                  value: "advanced",
+                  label: t("pluginsPage.advanced"),
+                },
+              ],
+              ariaLabel: t("pluginsPage.settingsTabs"),
+              panelId: "plugin-settings-panel",
+              variant: "sub",
+              className: "plugins-settings-tabs",
+              carapace: true,
+              onSelect: props.onTabChange,
+            })
+          }
+        />
         <wa-tab-panel
           id="plugin-settings-panel"
           name={props.tab}

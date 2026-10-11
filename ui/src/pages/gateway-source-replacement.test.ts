@@ -10,6 +10,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
 import { createGatewayMetadataObserver } from "../app/gateway-observers.ts";
+import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
@@ -18,7 +19,12 @@ import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { ModelProvidersData } from "./model-providers/load.ts";
 import { createEmptyModelProvidersRouteData } from "./model-providers/model-providers-page.test-support.ts";
 import type { ModelProvidersRouteData } from "./model-providers/route.ts";
-import type { SessionDeleteRow } from "./sessions/selection.ts";
+import {
+  createContext as createSessionsContext,
+  createPage as createSessionsPage,
+  createSessions,
+  reconnectPage,
+} from "./sessions/sessions-page.test-support.ts";
 import { SkillsPage, type SkillsRouteData } from "./skills/skills-page.tsx";
 import { createSkill } from "./skills/view.test-support.ts";
 import type { UsageRefreshPolicy } from "./usage/refresh-policy.ts";
@@ -28,7 +34,6 @@ import "./cron/cron-page.ts";
 import "./debug/debug-page.ts";
 import "./logs/logs-page.ts";
 import "./model-providers/model-providers-page.ts";
-import "./sessions/sessions-page.ts";
 import "./usage/usage-page.ts";
 
 // Mirrors the module-private default usage TTL asserted below.
@@ -637,17 +642,21 @@ describe("gateway source replacement across reconnect with a reused client", () 
 
   it("clears sessions loaded by the previous provider", async () => {
     const client = {} as GatewayBrowserClient;
-    const page = createPage("openclaw-sessions-page", contextWithClient(client)) as TestPage & {
-      result: unknown;
-      selectedSessions: Map<string, SessionDeleteRow>;
-    };
-    document.body.append(page);
-    await page.updateComplete;
-    const row = { key: "old", sessionId: "old-session" };
-    page.result = { sessions: [row] };
+    const context = () => createSessionsContext(gatewayWithClient(client, false), createSessions());
+    const page = await createSessionsPage(context());
+    const row = { key: "old", sessionId: "old-session", kind: "direct" as const };
+    page.result = sessionsResult([row], 1);
     page.selectedSessions = new Map([[row.key, row]]);
 
-    await replaceContext(page, client);
+    const previous = page.context.gateway.snapshot;
+    createGatewayMetadataObserver(() => true).synchronize(previous, {
+      ...previous,
+      phase: "stopped",
+    });
+    page.remove();
+    page.context = context();
+    reconnectPage(page);
+    await page.updateComplete;
 
     expect(page.result).toBeNull();
     expect(page.selectedSessions.size).toBe(0);

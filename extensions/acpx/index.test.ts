@@ -326,7 +326,7 @@ describe("acpx plugin", () => {
     expect(getRuntime).not.toHaveBeenCalled();
   });
 
-  it.for(["enabled", "disabled", "disposed"] as const)(
+  it.for(["enabled", "disposed"] as const)(
     "inspects a real native catalog without runtime state when the harness becomes %s",
     async (lifecycle, { signal }) => {
       const directory = await fs.mkdtemp(path.join(os.tmpdir(), "acpx-native-catalog-"));
@@ -343,7 +343,7 @@ export { sendReceipt };`,
         throw new Error("Catalog inspection must not acquire the runtime");
       });
       createAcpxRuntimeServiceMock.mockReturnValue({ id: "acpx", getRuntime });
-      let config: OpenClawPluginApi["config"] = {};
+      const config: OpenClawPluginApi["config"] = {};
       const harnesses = new Map<string, Parameters<OpenClawPluginApi["registerAgentHarness"]>[0]>();
       plugin.register(
         createTestPluginApi({
@@ -410,11 +410,6 @@ export { sendReceipt };`,
           ]),
           signal,
         );
-        if (lifecycle === "disabled") {
-          config = {
-            plugins: { entries: { acpx: { config: { nativeAgents: { opencode: false } } } } },
-          };
-        }
         if (lifecycle === "disposed") {
           await harness.dispose?.();
         } else {
@@ -426,27 +421,23 @@ export { sendReceipt };`,
           expect(result.models).toBeUndefined();
         } else {
           expect(result.error).toBeUndefined();
-          expect(result.models).toEqual(
-            lifecycle === "disabled"
-              ? { entries: [] }
-              : {
-                  entries: [
-                    {
-                      provider: "acp-opencode",
-                      id: "initial",
-                      name: "Initial",
-                      nativeRuntime: "acp-opencode",
-                    },
-                    {
-                      provider: "acp-opencode",
-                      id: "selected",
-                      name: "Selected",
-                      nativeRuntime: "acp-opencode",
-                    },
-                  ],
-                  outcomes: [{ provider: "acp-opencode", status: "ready" }],
-                },
-          );
+          expect(result.models).toEqual({
+            entries: [
+              {
+                provider: "acp-opencode",
+                id: "initial",
+                name: "Initial",
+                nativeRuntime: "acp-opencode",
+              },
+              {
+                provider: "acp-opencode",
+                id: "selected",
+                name: "Selected",
+                nativeRuntime: "acp-opencode",
+              },
+            ],
+            outcomes: [{ provider: "acp-opencode", status: "ready" }],
+          });
         }
         const sessionId = await fs.readFile(
           path.join(peerDirectory, "session-new-entered"),

@@ -302,30 +302,34 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
           <div style={{ "font-size": "14px", "line-height": "1.5", color: "var(--text)" }}>
             {props.skill.description}
           </div>
-          <LitContent>
-            {renderSkillStatusChips({
-              skill: props.skill,
-              showBundledBadge: props.skill.bundled && props.skill.source !== "openclaw-bundled",
-            })}
-          </LitContent>
+          <LitContent
+            render={() =>
+              renderSkillStatusChips({
+                skill: props.skill,
+                showBundledBadge: props.skill.bundled && props.skill.source !== "openclaw-bundled",
+              })
+            }
+          />
         </div>
         <Show when={hasTabs()}>
-          <LitContent>
-            {renderHubTabs({
-              id: "skill-detail",
-              active: detailTab(),
-              tabs: [
-                { value: "overview", label: t("skillsPage.overview") },
-                ...(props.skill.skillCard?.present
-                  ? [{ value: "card" as const, label: t("skillsPage.skillCard") }]
-                  : []),
-              ],
-              ariaLabel: props.skill.name,
-              panelId: "skill-detail-panel",
-              variant: "sub",
-              onSelect: props.view.onDetailTabChange,
-            })}
-          </LitContent>
+          <LitContent
+            render={() =>
+              renderHubTabs({
+                id: "skill-detail",
+                active: detailTab(),
+                tabs: [
+                  { value: "overview", label: t("skillsPage.overview") },
+                  ...(props.skill.skillCard?.present
+                    ? [{ value: "card" as const, label: t("skillsPage.skillCard") }]
+                    : []),
+                ],
+                ariaLabel: props.skill.name,
+                panelId: "skill-detail-panel",
+                variant: "sub",
+                onSelect: props.view.onDetailTabChange,
+              })
+            }
+          />
         </Show>
         <div
           id="skill-detail-panel"

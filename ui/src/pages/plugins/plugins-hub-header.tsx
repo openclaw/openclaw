@@ -32,21 +32,23 @@ export function PluginsHubHeader(props: PluginsHubHeaderProps) {
           </div>
         </div>
         <div class="hub-page-header__tabs">
-          <LitContent>
-            {renderHubTabs({
-              id: "plugins",
-              active: props.active,
-              tabs: [
-                { value: "plugins", label: t("tabs.plugins") },
-                { value: "skills", label: t("tabs.skills") },
-                { value: "skill-workshop", label: t("tabs.skillWorkshop") },
-              ],
-              ariaLabel: t("pluginsPage.hubTablistLabel"),
-              panelId: PLUGINS_HUB_PANEL_ID,
-              className: "plugins-tabs",
-              onSelect: props.onSelect,
-            })}
-          </LitContent>
+          <LitContent
+            render={() =>
+              renderHubTabs({
+                id: "plugins",
+                active: props.active,
+                tabs: [
+                  { value: "plugins", label: t("tabs.plugins") },
+                  { value: "skills", label: t("tabs.skills") },
+                  { value: "skill-workshop", label: t("tabs.skillWorkshop") },
+                ],
+                ariaLabel: t("pluginsPage.hubTablistLabel"),
+                panelId: PLUGINS_HUB_PANEL_ID,
+                className: "plugins-tabs",
+                onSelect: props.onSelect,
+              })
+            }
+          />
         </div>
         <div class="hub-page-header__actions">
           {props.secondaryAction && (

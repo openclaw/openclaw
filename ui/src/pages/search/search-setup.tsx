@@ -43,23 +43,25 @@ function SearchConfigField(
       description={meta().help}
       stackedOnNarrow
       control={
-        <LitContent>
-          {renderNode({
-            schema: props.schema,
-            value: props.value,
-            path: props.path,
-            hints: hints(),
-            unsupported: props.unsupported,
-            disabled: !props.canEdit() || props.busy(),
-            compact: true,
-            commitOnBlur: true,
-            showLabel: false,
-            rawAvailable: false,
-            maskSensitive: true,
-            onPatch: (path, value) => void props.patch(path, value),
-            onRemove: (path) => void props.patch(path, undefined),
-          })}
-        </LitContent>
+        <LitContent
+          render={() =>
+            renderNode({
+              schema: props.schema,
+              value: props.value,
+              path: props.path,
+              hints: hints(),
+              unsupported: props.unsupported,
+              disabled: !props.canEdit() || props.busy(),
+              compact: true,
+              commitOnBlur: true,
+              showLabel: false,
+              rawAvailable: false,
+              maskSensitive: true,
+              onPatch: (path, value) => void props.patch(path, value),
+              onRemove: (path) => void props.patch(path, undefined),
+            })
+          }
+        />
       }
     />
   );

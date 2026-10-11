@@ -191,19 +191,21 @@ function PluginSettingsRow(props: FieldProps) {
             context={credential()!.context}
           />
         ) : (
-          <LitContent>
-            {renderNode({
-              ...controlParams(),
-              showLabel: false,
-              hints: {
-                ...props.field.hints,
-                [pathKey(props.field.path)]: {
-                  ...hintForPath(props.field.path, props.field.hints),
-                  label: props.field.label,
+          <LitContent
+            render={() =>
+              renderNode({
+                ...controlParams(),
+                showLabel: false,
+                hints: {
+                  ...props.field.hints,
+                  [pathKey(props.field.path)]: {
+                    ...hintForPath(props.field.path, props.field.hints),
+                    label: props.field.label,
+                  },
                 },
-              },
-            })}
-          </LitContent>
+              })
+            }
+          />
         )}
       </div>
     </div>
@@ -364,7 +366,7 @@ function PluginSettingsGroups(props: GroupsProps) {
         </For>
         {additional() ? (
           <EditorSection title="">
-            <LitContent>{additional()}</LitContent>
+            <LitContent render={() => additional()} />
           </EditorSection>
         ) : null}
         {props.permissions ? (

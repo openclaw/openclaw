@@ -20,9 +20,9 @@ it("retains a Lit island's nodes and disconnects its directives on Solid disposa
   const [label, setLabel] = createSignal("First");
   const clicked = vi.fn();
   const view = mountSolid(() => (
-    <LitContent tag="article" class="sidebar-markdown" onClick={clicked}>
-      {html`<p>${lifetime(label())}</p>`}
-    </LitContent>
+    <article class="sidebar-markdown" onClick={clicked}>
+      <LitContent render={() => html`<p>${lifetime(label())}</p>`} />
+    </article>
   ));
   try {
     flush();

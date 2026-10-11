@@ -468,18 +468,20 @@ function SearchPageContent() {
                       title={t("searchPage.model")}
                       description={current().model.runtimeLabel}
                       control={
-                        <LitContent>
-                          {renderModelPicker({
-                            label: t("searchPage.model"),
-                            value: model(),
-                            options: modelOptions(),
-                            disabled: !connected(),
-                            onChange: (value) => {
-                              setModel(value);
-                              void load(value);
-                            },
-                          })}
-                        </LitContent>
+                        <LitContent
+                          render={() =>
+                            renderModelPicker({
+                              label: t("searchPage.model"),
+                              value: model(),
+                              options: modelOptions(),
+                              disabled: !connected(),
+                              onChange: (value) => {
+                                setModel(value);
+                                void load(value);
+                              },
+                            })
+                          }
+                        />
                       }
                     />
                     <SettingsRow

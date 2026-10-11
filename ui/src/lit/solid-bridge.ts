@@ -1,4 +1,4 @@
-import { dynamic, insert, render, spread, type JSX } from "@solidjs/web";
+import { insert, render, spread, type JSX } from "@solidjs/web";
 import { nothing, render as renderLit } from "lit";
 import {
   createComponent,
@@ -237,7 +237,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           });
         }
         const host = this.#host;
-        const layout = shellLayoutOwnerForHost(host);
+        const layout = !this.#solidOwned ? shellLayoutOwnerForHost(host) : undefined;
         const view = () =>
           layout
             ? createComponent(ShellLayoutProvider, {
@@ -313,37 +313,21 @@ export function defineSolidBridge<Props extends object, Methods extends object =
   };
 }
 
-/** Temporary island for stateless Lit fragments while their callers migrate. */
-export function LitContent(props: {
-  children: unknown;
-  tag?: "div" | "span" | "article";
-  class?: JSX.HTMLAttributes<HTMLElement>["class"];
-  style?: JSX.HTMLAttributes<HTMLElement>["style"];
-  onClick?: JSX.EventHandler<HTMLElement, MouseEvent>;
-}) {
-  let container!: HTMLElement;
-  const Container = dynamic(() => props.tag ?? "div");
+/** Unported stateless templates exclusively own this adapter's descendants. */
+export function LitContent(props: { render: () => unknown }) {
+  const host = document.createElement("span");
+  host.style.display = "contents";
+  host.className = "lit-content";
+  let part: ReturnType<typeof renderLit> | undefined;
   createEffect(
-    () => props.children,
-    (content) => {
-      renderLit(content, container);
+    () => props.render(),
+    (template) => {
+      part = renderLit(template, host, { host });
     },
   );
   onCleanup(() => {
-    renderLit(nothing, container).setConnected(false);
+    part?.setConnected(false);
+    renderLit(nothing, host);
   });
-  return createComponent(Container, {
-    get class() {
-      return ["lit-content", props.class];
-    },
-    get style() {
-      return props.style ?? (props.tag ? undefined : { display: "contents" });
-    },
-    get onClick() {
-      return props.onClick;
-    },
-    ref: (element: HTMLElement) => {
-      container = element;
-    },
-  });
+  return host;
 }
