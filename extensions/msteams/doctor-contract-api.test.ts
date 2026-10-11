@@ -20,7 +20,7 @@ import {
   MSTEAMS_DELEGATED_TOKEN_KEY,
   MSTEAMS_DELEGATED_TOKEN_MAX_ENTRIES,
   MSTEAMS_DELEGATED_TOKEN_NAMESPACE,
-} from "./src/delegated-token-contract.js";
+} from "./src/delegated-state.js";
 import type { MSTeamsDelegatedTokens } from "./src/oauth.shared.js";
 
 function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
