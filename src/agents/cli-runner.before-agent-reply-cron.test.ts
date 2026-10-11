@@ -2,8 +2,13 @@
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import {
+  loadTranscriptEvents,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
 import {
   getAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
@@ -16,14 +21,13 @@ import {
 } from "../infra/diagnostic-events.js";
 import { captureGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { withBeforeAgentReplyObserver } from "../plugins/before-agent-reply.js";
-import {
-  readClaimingHookAdmission,
-  type ClaimingHookAdmission,
-} from "../plugins/hook-claim-admission.js";
-import type { PluginHookAgentContext } from "../plugins/hook-types.js";
+import { readClaimingHookAdmission } from "../plugins/hook-claim-admission.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transcript.test-support.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
@@ -31,18 +35,19 @@ import {
   getOrCreateSessionMcpRuntime,
   unopenedMcpConfig,
 } from "./agent-bundle-mcp-manager.test-support.js";
+import { CLAIMED_REPLY_MEDIA_CASES } from "./before-agent-reply.fixture.js";
+import {
+  createClaimedReplySessionTarget,
+  createRegisteredBeforeAgentReplyFixture,
+  expectClaimedReplyDelivered,
+  expectClaimedReplyPersisted,
+  registerCliClaimedReplyAuthorityTests,
+} from "./before-agent-reply.test-support.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import type { CliOutput } from "./cli-output-contracts.js";
 import { CliAuthProfilePreparationError } from "./cli-runner/auth-profile-preparation-error.js";
 import { cliBackendLog } from "./cli-runner/log.js";
 import { FailoverError } from "./failover-error.js";
-
-type BeforeAgentReplyResult =
-  | undefined
-  | {
-      handled?: boolean;
-      reply?: { text?: string };
-    };
 
 const {
   hasHooksMock,
@@ -59,12 +64,7 @@ const {
   authSuccessMock,
 } = vi.hoisted(() => ({
   hasHooksMock: vi.fn<(hookName: string) => boolean>(() => false),
-  replyMock: vi.fn<
-    (
-      event: unknown,
-      ctx: PluginHookAgentContext & ClaimingHookAdmission,
-    ) => Promise<BeforeAgentReplyResult>
-  >(async () => undefined),
+  replyMock: vi.fn<HookRunner["runBeforeAgentReply"]>(async () => undefined),
   beforeRunMock: vi.fn<HookRunner["runBeforeAgentRun"]>(async () => undefined),
   executeMock: vi.fn<(_context: unknown, _cliSessionIdToUse?: string) => Promise<CliOutput>>(
     async () => ({ text: "" }),
@@ -123,6 +123,8 @@ const runParams = {
   timeoutMs: 30_000,
   runId: "test-run-id",
 } as const;
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type ProductionRunCliAgent = typeof import("./cli-runner.js").runCliAgent;
 type TestRunCliAgent = (
@@ -218,6 +220,7 @@ afterEach(() => {
   cliBackendsTesting.resetDepsForTest();
   vi.clearAllMocks();
   resetDiagnosticEventsForTest();
+  return closeOpenClawAgentDatabasesForTest();
 });
 
 describe("runCliAgent before_agent_reply seam", () => {
@@ -646,6 +649,143 @@ describe("runCliAgent before_agent_reply seam", () => {
     expect(result.payloads?.[0]?.text).toBe(SILENT_REPLY_TOKEN);
     expect(prepareMock).not.toHaveBeenCalled();
     expect(executeMock).not.toHaveBeenCalled();
+  });
+
+  it("re-arms setup progress when a cron hook does not claim", async () => {
+    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+    replyMock.mockResolvedValue(undefined);
+    executeMock.mockResolvedValue({ text: "real reply" });
+    const onExecutionPhase = vi.fn();
+
+    await runCliAgent({
+      ...runParams,
+      trigger: "cron",
+      jobId: "cron-job-123",
+      onExecutionPhase,
+    });
+
+    expect(onExecutionPhase).toHaveBeenCalledWith({
+      phase: "before_agent_reply",
+      provider: runParams.provider,
+      model: runParams.model,
+    });
+    expect(onExecutionPhase).toHaveBeenCalledWith({
+      phase: "runtime_plugins",
+      provider: runParams.provider,
+      model: runParams.model,
+    });
+    expect(prepareMock).toHaveBeenCalledTimes(1);
+    expect(executeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats empty CLI subprocess output as a failover failure, not a green required cron run", async () => {
+    executeMock.mockResolvedValue({ text: "   " });
+
+    await expect(
+      runCliAgent({
+        ...runParams,
+        trigger: "cron",
+        terminalReplyExpectation: "required",
+      }),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      reason: "empty_response",
+      provider: runParams.provider,
+      model: runParams.model,
+      sessionId: runParams.sessionId,
+    });
+  });
+
+  registerCliClaimedReplyAuthorityTests({
+    baseRunParams: runParams,
+    hasHooksMock,
+    runBeforeAgentReplyMock: replyMock,
+    runCliAgent: (params) => runCliAgent(params),
+    makeTempDir: (prefix) => tempDirs.make(prefix),
+    assertNoBackendExecution: () => expect(executeMock).not.toHaveBeenCalled(),
+  });
+
+  it.each(CLAIMED_REPLY_MEDIA_CASES)(
+    "keeps registered plugin $name history aligned across CLI claim and routed delivery",
+    async (testCase) => {
+      const { reply, transcript } = testCase;
+      const sessionTarget = await createClaimedReplySessionTarget(
+        tempDirs.make("openclaw-cli-before-agent-reply-"),
+        runParams,
+      );
+      const { registry, hookRunner, handler, sendText, sendMedia, sendPayload } =
+        createRegisteredBeforeAgentReplyFixture(
+          setReplyPayloadMetadata(reply, {
+            heartbeatScratchProposal: "preserved plugin metadata",
+          }),
+        );
+      hasHooksMock.mockImplementation(
+        (hookName) => hookName === "before_agent_reply" && hookRunner.hasHooks(hookName),
+      );
+      replyMock.mockImplementation(hookRunner.runBeforeAgentReply);
+
+      const result = await runCliAgent({
+        ...runParams,
+        ...sessionTarget,
+        trigger: "user",
+        persistAssistantTranscript: true,
+      });
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      const [, hookContext] = replyMock.mock.calls.at(0) ?? [];
+      expect(hookContext).toMatchObject({ trigger: "user" });
+      expect(prepareMock).not.toHaveBeenCalled();
+      expect(executeMock).not.toHaveBeenCalled();
+      const { payload, beforeDelivery } = await expectClaimedReplyPersisted({
+        result,
+        reply,
+        transcript,
+        sessionTarget,
+        runId: runParams.runId,
+      });
+      const previousRegistry = getActivePluginRegistry();
+      setActivePluginRegistry(registry);
+      try {
+        const { routeReply } = await import("../auto-reply/reply/route-reply.js");
+        const routed = await routeReply({
+          cfg: { session: { store: sessionTarget.storePath } },
+          channel: "slack",
+          to: "channel:C123",
+          sessionKey: sessionTarget.sessionKey,
+          payload,
+          replyKind: "final",
+          mirror: getReplyPayloadMetadata(payload)?.assistantTranscriptOwned !== true,
+        });
+        expect(routed.ok).toBe(true);
+        expectClaimedReplyDelivered({
+          reply,
+          expectedDeliveryText:
+            "expectedDeliveryText" in testCase ? testCase.expectedDeliveryText : undefined,
+          sendText,
+          sendMedia,
+          sendPayload,
+        });
+        expect(await loadTranscriptEvents(sessionTarget)).toEqual(beforeDelivery);
+      } finally {
+        setActivePluginRegistry(previousRegistry ?? createEmptyPluginRegistry());
+      }
+    },
+  );
+
+  it("lets before_agent_reply claim heartbeat runs before CLI preparation", async () => {
+    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+    replyMock.mockResolvedValue({
+      handled: true,
+      reply: { text: "heartbeat claimed" },
+    });
+
+    const result = await runCliAgent({ ...runParams, trigger: "heartbeat" });
+
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    const [, hookContext] = replyMock.mock.calls.at(0) ?? [];
+    expect(hookContext).toMatchObject({ trigger: "heartbeat" });
+    expect(prepareMock).not.toHaveBeenCalled();
+    expect(result.payloads?.[0]?.text).toBe("heartbeat claimed");
   });
 
   it("dispatches a declining hook once when model fallback re-enters the CLI runner", async () => {

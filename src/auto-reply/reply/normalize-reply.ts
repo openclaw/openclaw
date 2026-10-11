@@ -7,6 +7,7 @@ import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   hasReplyPayloadSpeechContent,
+  isExplicitlySilentReplyPayload,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import {
@@ -90,7 +91,7 @@ export function normalizeReplyPayloadOutcome(
   if (!getReplyPayloadMetadata(payload)?.heartbeatReply) {
     const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
     if (text && isSilentReplyPayloadText(text, silentToken)) {
-      if (!hasContent("")) {
+      if (isExplicitlySilentReplyPayload(payload, silentToken)) {
         return suppress("silent");
       }
       text = "";

@@ -17,6 +17,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { ReplyPayload, ReplyPayloadTtsSupplement } from "../shared/reply-payload.types.js";
 import type { CommandOwnerAssertion } from "./command-owner-authority.js";
 import type { BlockReplySource } from "./reply/block-reply-source.types.js";
+import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "./tokens.js";
 
 export type {
   ReplyMediaAttachment,
@@ -449,6 +450,19 @@ export function readReplyPayloadSourceOccurrence(
 /** Explicit speech remains content while the payload waits for TTS admission. */
 export function hasReplyPayloadSpeechContent(payload: object): boolean {
   return Boolean(readNonBlankString(getReplyPayloadMetadata(payload)?.tts?.text));
+}
+
+/** Matches the delivery owner's content-free silent-token suppression decision. */
+export function isExplicitlySilentReplyPayload(
+  payload: ReplyPayload,
+  silentToken: string = SILENT_REPLY_TOKEN,
+): boolean {
+  return (
+    getReplyPayloadMetadata(payload)?.heartbeatReply !== true &&
+    isSilentReplyPayloadText(payload.text, silentToken) &&
+    !hasReplyPayloadContent({ ...payload, text: undefined }, { trimText: true }) &&
+    !hasReplyPayloadSpeechContent(payload)
+  );
 }
 
 export function isReplyPayloadTargetSuppressed(payload: object): boolean {
