@@ -2861,6 +2861,12 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     ],
     ["retries writer rebound without send evidence", writerRebound(), 2, "delivered", "active"],
     [
+      "keeps exhausted writer rebound retryable instead of permanent",
+      writerRebound(),
+      4,
+      "retryable",
+    ],
+    [
       "does not text-fallback after an identified incomplete platform send",
       new OutboundDeliveryError("incomplete terminal response", {
         cause: new Error("incomplete terminal response"),

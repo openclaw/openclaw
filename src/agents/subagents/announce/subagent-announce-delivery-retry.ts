@@ -55,6 +55,11 @@ const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
 const WRITER_CLAIM_REBOUND_ANNOUNCE_RE =
   /session writer claim changed before transcript persistence/i;
 
+// Writer-claim rebounds are deliberately absent: the transcript writer claim
+// changed underneath the send, which says nothing about the payload, so a
+// later attempt can persist and deliver the same result. Each error must
+// resolve to exactly one retryability outcome, and this family's outcome is
+// retryable — isPermanentAnnounceDeliveryError must never claim it.
 const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /unsupported channel/i,
   /unknown channel/i,
@@ -65,7 +70,6 @@ const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /forbidden: bot was kicked/i,
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
-  WRITER_CLAIM_REBOUND_ANNOUNCE_RE,
 ];
 
 function isWriterClaimReboundAnnounceError(error: unknown): boolean {
@@ -93,10 +97,9 @@ function isPermanentNonWriterAnnounceError(error: unknown): boolean {
     (candidate) =>
       isPlatformMessageRejectedError(candidate) ||
       isSessionTranscriptTurnMismatchErrorMessage(summarizeDeliveryError(candidate)) ||
-      (!isWriterClaimReboundAnnounceError(candidate) &&
-        PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((pattern) =>
-          pattern.test(summarizeDeliveryError(candidate)),
-        )),
+      PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((pattern) =>
+        pattern.test(summarizeDeliveryError(candidate)),
+      ),
   );
 }
 
@@ -143,7 +146,7 @@ export function isPermanentAnnounceDeliveryError(error: unknown): boolean {
   if (typedRetryability !== undefined) {
     return !typedRetryability;
   }
-  return isPermanentNonWriterAnnounceError(error) || hasWriterClaimReboundAnnounceError(error);
+  return isPermanentNonWriterAnnounceError(error);
 }
 
 export function isIncompleteAnnounceAgentResultError(error: unknown): boolean {
