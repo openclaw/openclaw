@@ -16,7 +16,6 @@ import type {
   DevicePairingNodeSnapshot,
 } from "./device-pairing-read.types.js";
 import type { PairedDevice } from "./device-pairing.types.js";
-import { inspectDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
 const log = createSubsystemLogger("device-pairing");
 
@@ -26,7 +25,10 @@ type Publication = {
   epoch: number;
   revision?: string;
   blocked: boolean;
-  mutation?: { invalidatesAuthority: boolean; receipt?: DevicePairingCommitReceipt };
+  mutation?: {
+    invalidatesAuthority: boolean;
+    receipt?: DevicePairingCommitReceipt;
+  };
   complete: boolean;
   rows: Map<string, DevicePairingBindingFact>;
   nodes?: DevicePairingNodeSnapshot;
@@ -43,16 +45,6 @@ function notifyPairingSources(publication: Publication, deviceIds?: readonly str
   }
 }
 
-function retirePairingProjection(publication: Publication) {
-  publication.epoch++;
-  publication.nodes = undefined;
-  publication.complete = false;
-  publication.pending.clear();
-  for (const [deviceId, row] of publication.rows) {
-    publication.rows.set(deviceId, freezeJsonSnapshot({ ...row, binding: null }));
-  }
-}
-
 const publications = resolveGlobalSingleton(
   Symbol.for("openclaw.devicePairingPublications"),
   () => {
@@ -60,27 +52,24 @@ const publications = resolveGlobalSingleton(
     registerOpenClawStateDatabaseAsyncResource({
       phase: "after-resources",
       async close(identity) {
-        for (const [, publication] of state) {
+        for (const [path, publication] of state) {
           if (
             !identity ||
             publication.identity === identity.key ||
             publication.canonicalPath === identity.canonicalPath
           ) {
-            retirePairingProjection(publication);
+            state.delete(path);
+            notifyPairingSources(publication);
           }
         }
       },
     });
     registerOpenClawStateDatabaseLifecycleListener((event) => {
-      if (event.kind === "opened" || event.kind === "failure-cleared") {
+      if (event.kind === "opened") {
         return;
       }
       for (const [path, publication] of state) {
         if (path === event.path || publication.identity === event.identity?.key) {
-          if (event.kind === "closed" && event.reason !== "evicted") {
-            retirePairingProjection(publication);
-            continue;
-          }
           state.delete(path);
           notifyPairingSources(publication);
         }
@@ -213,7 +202,9 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
     },
     beginMutation(invalidatesAuthority: boolean) {
       captured.epoch++;
-      const mutation: NonNullable<Publication["mutation"]> = { invalidatesAuthority };
+      const mutation: NonNullable<Publication["mutation"]> = {
+        invalidatesAuthority,
+      };
       captured.mutation = mutation;
       return {
         prepare(receipt: DevicePairingCommitReceipt) {
@@ -315,15 +306,14 @@ export function capturePublishedOperatorDeviceSource(
     for (const service of publication.pending) {
       service();
     }
+    // A prepared receipt carries the complete next revision, including sibling writes.
     const receipt = publication.mutation?.receipt;
-    const prospective = receipt?.changed.find((row) => row.deviceId === expected.deviceId);
-    const binding =
-      receipt && receipt.beforeRevision !== publication.revision
-        ? receipt.bindings.find((row) => row.deviceId === expected.deviceId)?.operatorBinding
-        : prospective
-          ? prospective.operatorBinding
-          : publication.rows.get(expected.deviceId)?.operatorBinding;
-    let reason = released
+    const binding = (
+      receipt
+        ? receipt.bindings.find((row) => row.deviceId === expected.deviceId)
+        : publication.rows.get(expected.deviceId)
+    )?.operatorBinding;
+    const reason = released
       ? "source_released"
       : publications.get(path) !== publication
         ? "publication_replaced"
@@ -340,14 +330,6 @@ export function capturePublishedOperatorDeviceSource(
                   })
                 ? "operator_scopes_reduced"
                 : undefined;
-    if (!reason && !publication.complete) {
-      try {
-        if (inspectDatabasePathIdentitySync(path)?.key !== publication.identity)
-          reason = "database_identity_changed";
-      } catch {
-        reason = "database_identity_unavailable";
-      }
-    }
     if (reason) {
       if (!reported) {
         reported = true;

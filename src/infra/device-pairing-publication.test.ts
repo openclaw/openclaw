@@ -1,14 +1,9 @@
-import { renameSync, rmSync } from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  closeOpenClawStateDatabaseByPath,
-  closeOpenClawStateDatabaseByPathAsync,
-  openClawStateDatabaseCache,
-} from "../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -64,7 +59,9 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 beforeAll(() => {
   baseDir = tempDirs.make("pairing-publication-");
-  database = openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } });
+  database = openOpenClawStateDatabase({
+    env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
+  });
 });
 
 beforeEach(() => {
@@ -77,7 +74,12 @@ beforeEach(() => {
           publicKey: "synthetic-node-key",
           roles: ["node"],
           tokens: {
-            node: { token: "synthetic-node-token", role: "node", scopes: [], createdAtMs: 1 },
+            node: {
+              token: "synthetic-node-token",
+              role: "node",
+              scopes: [],
+              createdAtMs: 1,
+            },
           },
           nodeSurface: { createdAtMs: 1, approvedAtMs: 1 },
           createdAtMs: 1,
@@ -143,60 +145,50 @@ test.each(["lookup", "pending", "mutation"] as const)(
   },
 );
 
-test.each(["sync", "async", "reconnect"] as const)(
-  "retains an operator source across %s and then detects revocation",
-  async (kind) => {
-    const device = expectDefined(await getPairedDevice("node", baseDir), "paired device");
-    device.roles = ["node", "operator"];
-    device.approvedScopes = ["operator.admin"];
-    expectDefined(device.tokens, "tokens").operator = {
-      token: "synthetic-operator-token",
-      role: "operator",
-      scopes: ["operator.admin"],
-      createdAtMs: 1,
-    };
-    persistDevicePairingStoreState(
-      { pendingById: {}, pairedByDeviceId: { node: device } },
-      baseDir,
-      "paired",
-    );
-    await listDevicePairing(baseDir);
-    const revoked = vi.fn();
-    const source = capturePublishedOperatorDeviceSource(
-      expectDefined(resolvePairedDeviceTokenIdentity(device, "operator"), "identity"),
-      ["operator.read"],
-      revoked,
-      baseDir,
-    );
-    try {
-      if (kind === "sync") closeOpenClawStateDatabaseByPath(database.path);
-      else if (kind === "async") await closeOpenClawStateDatabaseByPathAsync(database.path);
-      else {
-        for (let tab = 0; tab < 2; tab++) {
-          const token = await ensureDeviceToken({
-            deviceId: "node",
-            role: "operator",
-            scopes: ["operator.read"],
-            baseDir,
-          });
-          expect(token?.token).toBe("synthetic-operator-token");
-        }
-      }
-      expect(source.assertCurrent).not.toThrow();
-      database = openOpenClawStateDatabase({
-        env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
+test("retains an operator source across reconnect token reuse and then detects unpairing", async () => {
+  const device = expectDefined(await getPairedDevice("node", baseDir), "paired device");
+  device.roles = ["node", "operator"];
+  device.approvedScopes = ["operator.admin"];
+  expectDefined(device.tokens, "tokens").operator = {
+    token: "synthetic-operator-token",
+    role: "operator",
+    scopes: ["operator.admin"],
+    createdAtMs: 1,
+  };
+  persistDevicePairingStoreState(
+    { pendingById: {}, pairedByDeviceId: { node: device } },
+    baseDir,
+    "paired",
+  );
+  await listDevicePairing(baseDir);
+  const revoked = vi.fn();
+  const source = capturePublishedOperatorDeviceSource(
+    expectDefined(resolvePairedDeviceTokenIdentity(device, "operator"), "identity"),
+    ["operator.read"],
+    revoked,
+    baseDir,
+  );
+  try {
+    for (let tab = 0; tab < 2; tab++) {
+      const token = await ensureDeviceToken({
+        deviceId: "node",
+        role: "operator",
+        scopes: ["operator.read"],
+        baseDir,
       });
-      await listDevicePairing(baseDir);
-      expect(source.assertCurrent).not.toThrow();
-      expect(revoked).not.toHaveBeenCalled();
-      await removePairedDevice("node", baseDir);
-      expect(source.assertCurrent).toThrow("original current pairing publication");
-      expect(revoked).toHaveBeenCalled();
-    } finally {
-      source.release();
+      expect(token?.token).toBe("synthetic-operator-token");
     }
-  },
-);
+    expect(source.assertCurrent).not.toThrow();
+    await listDevicePairing(baseDir);
+    expect(source.assertCurrent).not.toThrow();
+    expect(revoked).not.toHaveBeenCalled();
+    await removePairedDevice("node", baseDir);
+    expect(source.assertCurrent).toThrow("original current pairing publication");
+    expect(revoked).toHaveBeenCalled();
+  } finally {
+    source.release();
+  }
+});
 
 test.each(["unpair", "token", "scopes"] as const)(
   "rejects an external operator %s change during an unrelated lookup",
@@ -253,54 +245,6 @@ test.each(["unpair", "token", "scopes"] as const)(
     }
   },
 );
-
-test.each(["inode", "eviction"] as const)("revokes retained operators on %s loss", async (kind) => {
-  const device = expectDefined(await getPairedDevice("node", baseDir), "device");
-  device.roles = ["node", "operator"];
-  device.approvedScopes = ["operator.admin"];
-  expectDefined(device.tokens, "tokens").operator = {
-    token: "synthetic-operator-token",
-    role: "operator",
-    scopes: ["operator.admin"],
-    createdAtMs: 1,
-  };
-  persistDevicePairingStoreState(
-    { pendingById: {}, pairedByDeviceId: { node: device } },
-    baseDir,
-    "paired",
-  );
-  await listDevicePairing(baseDir);
-  const revoked = vi.fn();
-  const source = capturePublishedOperatorDeviceSource(
-    expectDefined(resolvePairedDeviceTokenIdentity(device, "operator"), "identity"),
-    ["operator.read"],
-    revoked,
-    baseDir,
-  );
-  try {
-    if (kind === "eviction") {
-      openClawStateDatabaseCache.evictCachedOpenClawStateDatabase(database);
-      expect(source.assertCurrent).toThrow("original current pairing publication");
-      expect(revoked).toHaveBeenCalled();
-    } else {
-      await closeOpenClawStateDatabaseByPathAsync(database.path);
-      expect(getPublishedPairedDeviceBinding("node", baseDir)).toBeNull();
-      renameSync(database.path, `${database.path}.original`);
-      try {
-        const replacement = openNodeSqliteDatabase(database.path);
-        replacement.close();
-        expect(source.assertCurrent).toThrow("original current pairing publication");
-        expect(getPublishedPairedDeviceBinding("node", baseDir)).toBeNull();
-      } finally {
-        rmSync(database.path);
-        renameSync(`${database.path}.original`, database.path);
-      }
-    }
-  } finally {
-    source.release();
-    database = openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } });
-  }
-});
 
 test("keeps committed node bindings across bootstrap writes and caller-owned row edits", async () => {
   const snapshot = await readDevicePairingNodeSnapshot(baseDir);
@@ -703,7 +647,10 @@ test("keeps inspection snapshot bytes without republishing revoked node authorit
         })),
       ).toBe(0);
     },
-    { path: database.path, env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } },
+    {
+      path: database.path,
+      env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
+    },
   );
 });
 
@@ -826,7 +773,9 @@ test("retires prepared nodes after a native owner commit and database close", as
   expect(deleted.paired).toEqual([]);
   expect(deleted.bindings.size).toBe(0);
   await closeOpenClawStateDatabaseByPathAsync(database.path);
-  database = openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } });
+  database = openOpenClawStateDatabase({
+    env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
+  });
   const reopened = await readDevicePairingNodeSnapshot(baseDir);
   expect(reopened).not.toBe(deleted);
   expect(reopened.paired).toEqual([]);

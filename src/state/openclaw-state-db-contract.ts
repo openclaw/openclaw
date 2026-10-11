@@ -126,7 +126,7 @@ export type OpenClawStateDatabaseCloseOptions = NonNullable<
 > & { busyTimeoutMs?: number };
 export type OpenClawStateDatabaseLifecycleEvent =
   | { kind: "opened"; database: OpenClawStateDatabase; identity: DatabasePathIdentity }
-  | { kind: "closed"; path: string; identity: DatabasePathIdentity; reason?: "retired" | "evicted" }
+  | { kind: "closed"; path: string; identity: DatabasePathIdentity }
   | { kind: "failure-cleared"; path: string; identity?: DatabasePathIdentity }
   | { kind: "terminal-failure"; path: string; identity?: DatabasePathIdentity; error: Error }
   | { kind: "open-error"; path: string; identity?: DatabasePathIdentity; error: unknown };
