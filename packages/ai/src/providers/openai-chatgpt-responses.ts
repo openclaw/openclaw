@@ -143,7 +143,8 @@ const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
 const WEBSOCKET_TRANSPORT_ERROR_CODE = "ERR_WEBSOCKET_TRANSPORT";
 // Only registered server/transport-unavailability closes may authorize retry or
 // settled-turn finalization; peer policy/protocol rejections must fail closed.
-const RETRYABLE_WEBSOCKET_CLOSE_CODES = new Set([1001, 1005, 1006, 1011, 1012, 1013, 1014, 1015]);
+// A normal close (1000) before the terminal event is a dropped stream.
+const RETRYABLE_CLOSE_CODES = new Set([1000, 1001, 1005, 1006, 1011, 1012, 1013, 1014, 1015]);
 const WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009;
 const WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE = "websocket_connection_limit_reached";
 const WEBSOCKET_REPLAY_REJECTION =
@@ -1060,7 +1061,7 @@ function extractWebSocketCloseError(event: unknown): Error {
     }
     const message = `WebSocket closed${codeText}${reasonText}`;
     const error =
-      typeof code === "number" && RETRYABLE_WEBSOCKET_CLOSE_CODES.has(code)
+      typeof code === "number" && RETRYABLE_CLOSE_CODES.has(code)
         ? createWebSocketTransportError(message)
         : Object.assign(new Error(message), { code: WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE });
     return Object.assign(error, {

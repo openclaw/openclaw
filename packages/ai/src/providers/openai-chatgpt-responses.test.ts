@@ -742,6 +742,23 @@ describe("streamOpenAICodexResponses transport", () => {
     });
   });
 
+  it("classifies a normal WebSocket close before the terminal event as transient", async () => {
+    installWebSocket((socket) =>
+      socket.dispatchEvent(
+        Object.assign(new Event("close"), { code: 1000, reason: "", wasClean: true }),
+      ),
+    );
+
+    const result = await run({ transport: "websocket" });
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "WebSocket closed 1000",
+      errorCode: "ERR_WEBSOCKET_TRANSPORT",
+    });
+    expect(isTransientNetworkError({ code: result.errorCode })).toBe(true);
+  });
+
   it("does not classify a permanent WebSocket close as transient", async () => {
     installWebSocket((socket) =>
       socket.dispatchEvent(

@@ -20,8 +20,8 @@ is instructed to inspect interrupted actions before deciding whether to repeat
 them. A retry status shows the wait and attempt count. Cancellation remains
 available. No additional configuration is required.
 
-ChatGPT Responses WebSocket connection expiry follows this recovery policy even
-after streaming starts. The failed socket is retired; recovery continues the
+ChatGPT Responses WebSocket connection expiry and a normal close before the
+terminal event follow this recovery policy even after streaming starts. The failed socket is retired; recovery continues the
 saved transcript instead of replaying the request inside the transport.
 
 Anthropic streaming errors retain their structured error type, so rate limits,
