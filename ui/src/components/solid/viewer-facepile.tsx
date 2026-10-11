@@ -246,7 +246,7 @@ export const ViewerAvatar = defineSolidBridge<ViewerAvatarProps>(
   },
 );
 
-export const ViewerFacepile = defineSolidBridge<ViewerFacepileProps>(
+defineSolidBridge<ViewerFacepileProps>(
   "openclaw-viewer-facepile",
   (props, host) => {
     host.style.display = "contents";

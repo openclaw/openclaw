@@ -472,7 +472,7 @@ export async function appendSessionTurnInWorker(
         };
         return operation.run(
           async () => {
-            const hot = actor.snapshot(authority) ?? (await actor.read(authority));
+            const hot = inputActor.snapshot(authority) ?? (await actor.read(authority));
             const replicaPreparation = prepareSessionInputFromReplica(plan, hot, scope);
             if (replicaPreparation) {
               return replicaPreparation;
@@ -509,7 +509,7 @@ export async function appendSessionTurnInWorker(
             );
           },
           async () => {
-            const before = actor.snapshot(authority) ?? (await actor.read(authority));
+            const before = inputActor.snapshot(authority) ?? (await actor.read(authority));
             const expectedState =
               options.expectedSessionState ??
               buildRestartRecoveryExpectedState(
