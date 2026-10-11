@@ -249,7 +249,7 @@ function createInferenceRequestMeasure(request: WorkerInferenceStartParams) {
     let bytes = envelopeBytes + Math.max(0, messages.length - 1);
     for (const message of messages) {
       // The fitter replaces each changed message but reuses its candidate array.
-      // Cache message sizes only, scoped to this cloned request's synchronous fitting.
+      // Cache message sizes only, scoped to this request's synchronous fitting.
       let size = messageBytes.get(message);
       if (size === undefined) {
         size = Buffer.byteLength(JSON.stringify(message), "utf8");
@@ -285,8 +285,8 @@ export function createWorkerInferenceStreamAdapter(
     let request: WorkerInferenceStartParams = {
       ...identity,
       modelRef: inferenceRequest.modelRef,
-      context: structuredClone(inferenceRequest.context),
-      options: structuredClone(inferenceRequest.options),
+      context: inferenceRequest.context,
+      options: inferenceRequest.options,
     };
     const finishError = (
       error: unknown,

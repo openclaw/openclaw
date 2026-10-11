@@ -1,12 +1,12 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ConversationBindingInspection } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
-import { inspectRuntimeConversationBindingRoute } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import {
+  inspectRuntimeConversationBindingRoute,
   resolveConfiguredBindingRoute,
   resolveRuntimeConversationBindingRoute,
   resolveRuntimeConversationBindingRouteAsync,
   type RuntimeConversationBindingRouteResult,
-} from "openclaw/plugin-sdk/conversation-runtime";
+} from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { parseSlackTarget } from "./targets.js";
 
 type SlackRouteBinding = NonNullable<OpenClawConfig["bindings"]>[number];

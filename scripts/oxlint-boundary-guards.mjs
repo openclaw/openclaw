@@ -1,3 +1,4 @@
+import noForcedProcessExit from "./lib/no-forced-process-exit.mjs";
 import {
   BOUNDARY_GUARD_FIXTURE_ROOT,
   CHAINED_ASSERTION_EXCLUDED_ROOTS,
@@ -564,6 +565,7 @@ function noWidenThenAssertRule({ roots }) {
 export default {
   meta: { name: "openclaw-boundaries" },
   rules: {
+    "no-forced-process-exit": noForcedProcessExit,
     "no-raw-window-open-call": restrictedCallRule({
       allowedFiles: ["ui/src/lib/editor-links.ts", "ui/src/lib/open-external-url.ts"],
       roots: ["ui/src", "test/fixtures/oxlint-boundary-guards"],
