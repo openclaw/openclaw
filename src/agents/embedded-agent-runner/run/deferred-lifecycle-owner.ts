@@ -13,6 +13,10 @@ import {
   createAgentRunRestartAbortError,
   createAgentRunSupersededAbortError,
 } from "../../run-termination.js";
+import {
+  clearTurnSendLedgerForRun,
+  type TurnSendLedgerScope,
+} from "../../tools/turn-send-ledger.js";
 import { log } from "../logger.js";
 import type { EmbeddedAgentQueueHandle } from "../run-state.js";
 import { detachActiveEmbeddedRun, attachActiveEmbeddedRun } from "../runs.js";
@@ -142,6 +146,11 @@ export type DeferredEmbeddedRunLifecycleManager = {
     signal?: AbortSignal,
   ) => ((completed?: boolean) => void) | undefined;
   handoffToCli: () => DiagnosticEmbeddedRunOwner;
+  /**
+   * Keeps a per-turn send-ledger slot until `complete()`. Live model-switch retries
+   * re-enter run-entry with the same runId, so only this turn owner may reset the budget.
+   */
+  retainTurnSendLedgerScope: (scope: TurnSendLedgerScope) => void;
   complete: () => Promise<void>;
 };
 
@@ -203,6 +212,7 @@ export function createDeferredEmbeddedRunLifecycleManager(params: {
       );
     }
   };
+  const turnSendLedgerScopes: TurnSendLedgerScope[] = [];
   return {
     signal,
     abort,
@@ -254,12 +264,18 @@ export function createDeferredEmbeddedRunLifecycleManager(params: {
       replaceOwner();
       return diagnosticOwner;
     },
+    retainTurnSendLedgerScope: (scope) => {
+      turnSendLedgerScopes.push(scope);
+    },
     complete: async () => {
       const owner = current;
       current = undefined;
       try {
         await Promise.all([...discarded, owner?.complete()]);
       } finally {
+        for (const scope of turnSendLedgerScopes.splice(0)) {
+          clearTurnSendLedgerForRun(scope);
+        }
         if (cliOwner) {
           clearCliOwner();
         }
