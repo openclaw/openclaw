@@ -448,14 +448,19 @@ function readSelectedSessionEntryRows(
     : windowQuery;
   const query = options?.includeMembership
     ? boardQuery.select((outer) =>
-        outer
-          .selectFrom("session_members")
-          .select(({ fn }) =>
-            fn.agg<string>("json_group_array", ["identity_id"]).orderBy("identity_id").as("ids"),
-          )
-          .whereRef("session_members.session_key", "=", "session_nodes.session_key")
-          .$asScalar()
-          .as("member_ids_json"),
+        tableExists(database.db, "session_members")
+          ? outer
+              .selectFrom("session_members")
+              .select(({ fn }) =>
+                fn
+                  .agg<string>("json_group_array", ["identity_id"])
+                  .orderBy("identity_id")
+                  .as("ids"),
+              )
+              .whereRef("session_members.session_key", "=", "session_nodes.session_key")
+              .$asScalar()
+              .as("member_ids_json")
+          : outer.val("[]").as("member_ids_json"),
       )
     : boardQuery;
   const rows = executeSqliteQuerySync(
