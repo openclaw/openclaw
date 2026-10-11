@@ -526,7 +526,6 @@ export class MatrixClient extends MatrixClientVerification {
         this.currentSyncState = state;
         this.currentSyncError = error;
         this.currentSyncFromCache = fromCache;
-        this.currentSyncRevision += 1;
       },
     });
   }

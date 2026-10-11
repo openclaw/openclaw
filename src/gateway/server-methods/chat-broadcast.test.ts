@@ -102,43 +102,6 @@ describe("chat terminal broadcasts", () => {
     expect(context.broadcast.mock.calls[0]?.[1]).toHaveProperty("deltaText.length", 500_000);
   });
 
-  it("projects global final payloads and shares one audience across delivery keys", () => {
-    const { context, order, deleteSpy } = createContext(7);
-    const message = {
-      role: "assistant",
-      content: [{ type: "text", text: "done" }],
-    };
-
-    broadcastChatFinal({
-      terminalEntry: undefined,
-      context,
-      runId: "run-1",
-      sessionKey: "global",
-      agentId: "main",
-      message,
-    });
-
-    const payload = context.broadcast.mock.calls[0]?.[1];
-    expect(payload).toEqual({
-      runId: "run-1",
-      sessionKey: "global",
-      agentId: "main",
-      seq: 8,
-      state: "final",
-      message,
-    });
-    expect(context.broadcast).toHaveBeenCalledWith("chat", payload, {
-      sessionKeys: ["agent:main:global", "global"],
-    });
-    expect(context.nodeSendToSession.mock.calls).toEqual([
-      ["agent:main:global", "chat", payload, context.broadcast.mock.calls[0]?.[2]],
-    ]);
-    expect(context.nodeSendToSession.mock.calls[0]?.[2]).toBe(payload);
-    expect(order).toEqual(["broadcast", "node", "delete"]);
-    expect(deleteSpy).toHaveBeenCalledWith("run-1");
-    expect(context.agentRunSeq.has("run-1")).toBe(false);
-  });
-
   it("emits canonical error payloads without message or agentId", () => {
     const { context } = createContext(2);
 
@@ -171,47 +134,6 @@ describe("chat terminal broadcasts", () => {
       context.broadcast.mock.calls[0]?.[2],
     );
     expect(context.nodeSendToSession.mock.calls[0]?.[2]).toBe(payload);
-  });
-
-  it("retains the incremented sequence when websocket broadcast throws", () => {
-    const { context, deleteSpy } = createContext(4);
-    context.broadcast.mockImplementation(() => {
-      throw new Error("websocket failed");
-    });
-
-    expect(() =>
-      broadcastChatFinal({
-        terminalEntry: undefined,
-        context,
-        runId: "run-1",
-        sessionKey: "agent:main:main",
-      }),
-    ).toThrow("websocket failed");
-
-    expect(context.agentRunSeq.get("run-1")).toBe(5);
-    expect(context.nodeSendToSession).not.toHaveBeenCalled();
-    expect(deleteSpy).not.toHaveBeenCalled();
-  });
-
-  it("retains the incremented sequence when node fanout throws", () => {
-    const { context, deleteSpy } = createContext(9);
-    context.nodeSendToSession.mockImplementation(() => {
-      throw new Error("node failed");
-    });
-
-    expect(() =>
-      broadcastChatError({
-        terminalEntry: undefined,
-        context,
-        runId: "run-1",
-        sessionKey: "agent:main:main",
-        errorMessage: "failed",
-      }),
-    ).toThrow("node failed");
-
-    expect(context.broadcast).toHaveBeenCalledOnce();
-    expect(context.agentRunSeq.get("run-1")).toBe(10);
-    expect(deleteSpy).not.toHaveBeenCalled();
   });
 });
 

@@ -6,6 +6,7 @@ import type {
   SessionActorLifetime,
   SessionActorTarget,
 } from "./session-actor-contract.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { createSessionActorReplica } from "./session-actor-replica.js";
 import { createSessionActor } from "./session-actor.js";
 
@@ -25,6 +26,7 @@ export function captureDurableSessionActor(params: {
     expectedIdentity: params.target.database,
   });
   const lifetime = {
+    assertAdmission: () => params.lifetime.assertAdmission?.(),
     assertCurrent: () => {
       params.lifetime.assertCurrent();
       execution.assertCurrent();
@@ -84,6 +86,7 @@ export function captureDurableSessionActor(params: {
 
 type AcquisitionTarget =
   | SessionActorTarget
+  | { database: { kind: "memory" }; sessionKey: string }
   | { database: { kind: "native-incognito" }; sessionKey: string };
 
 /** Native incognito keeps its existing owner and gets no actor savings until P12. */
@@ -96,9 +99,21 @@ export function createSessionActorFactory(
   };
   return {
     async acquire(requestedTarget: AcquisitionTarget, lifetime: SessionActorLifetime) {
+      lifetime.assertAdmission?.();
       lifetime.assertCurrent();
       if (requestedTarget.database.kind === "native-incognito") {
         return { kind: "not-actor-owned" } as const;
+      }
+      if (requestedTarget.database.kind === "memory") {
+        const owner = memorySessionActorOwners.get(captured);
+        return owner.acquire(
+          {
+            sessionKey: requestedTarget.sessionKey,
+            database:
+              "handle" in requestedTarget.database ? requestedTarget.database : owner.identity,
+          },
+          lifetime,
+        );
       }
       const target: SessionActorTarget = {
         sessionKey: requestedTarget.sessionKey,

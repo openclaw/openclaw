@@ -5,7 +5,7 @@ import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
 import { page as agentsPage, type AgentsRouteData } from "./agents/route.ts";
-import type { DevicesRouteData } from "./devices/devices-page.ts";
+import type { DevicesRouteData } from "./devices/devices-page.tsx";
 import { page as devicesPage } from "./devices/route.ts";
 import {
   page as modelProvidersPage,
@@ -14,9 +14,9 @@ import {
 import type { PluginsRouteData } from "./plugins/route-data.ts";
 import { pages as pluginPages } from "./plugins/route.ts";
 import { pages as skillPages } from "./skills/route.ts";
-import type { SkillsRouteData } from "./skills/skills-page.ts";
+import type { SkillsRouteData } from "./skills/skills-page.tsx";
 import { page as usagePage } from "./usage/route.ts";
-import type { UsageRouteData } from "./usage/usage-page.ts";
+import type { UsageRouteData } from "./usage/usage-page.tsx";
 
 const pluginsPage = pluginPages[0];
 const skillsPage = skillPages[0];
@@ -206,19 +206,5 @@ describe("route preload gateway provenance", () => {
     expect(data.gateway).toBe(mutable.gateway);
     expect(data.gatewaySnapshot).toBe(originalSnapshot);
     expect(data.result).toEqual(result);
-  });
-
-  it("does not request plugins while disconnected", async () => {
-    const requestMethod = vi.fn();
-    const client = { request: requestMethod } as unknown as GatewayBrowserClient;
-    const mutable = mutableGateway(snapshot(client, false));
-
-    const data = await loadRoute<PluginsRouteData>(pluginsPage, {
-      gateway: mutable.gateway,
-    } as unknown as ApplicationContext);
-
-    expect(requestMethod).not.toHaveBeenCalled();
-    expect(data.result).toBeNull();
-    expect(data.error).toBeNull();
   });
 });

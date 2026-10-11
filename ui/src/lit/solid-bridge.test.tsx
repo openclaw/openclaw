@@ -1,18 +1,22 @@
 import { ContextProvider } from "@lit/context";
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { LitElement, html } from "lit";
-import { createSignal, flush, onCleanup } from "solid-js";
+import { createEffect, createSignal, flush, onCleanup } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import { ShellLayoutOwner } from "../app/shell-layout-owner.ts";
+import { ShellLayoutBoundary, ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider, useApplication } from "../lib/reactive/context.ts";
 import { collectGarbageForTest } from "../test-helpers/garbage-collection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "./solid-bridge.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { defineSolidBridge, LitContent, type SolidBridgeElement } from "./solid-bridge.ts";
 
 type Props = { label: string; enabled: boolean; count: number; payload: object | null };
 type Methods = { show(): void; close(): void; setPayload(value: object): object };
 type Host = SolidBridgeElement<Props, Methods>;
 const mounted = vi.fn<(value: object) => void>();
 const disposed = vi.fn();
+const changed = vi.fn<(host: Host, key: keyof Props) => void>();
 const Bridge = defineSolidBridge<Props, Methods>(
   "openclaw-solid-bridge-test",
   (props, host) => {
@@ -50,6 +54,7 @@ const Bridge = defineSolidBridge<Props, Methods>(
       count: { default: 0, type: Number, attribute: "item-count" },
       payload: { default: null, attribute: false },
     },
+    propertyChanged: changed,
     methods: {
       show: (host) => {
         host.enabled = true;
@@ -69,9 +74,29 @@ function createHost() {
   return document.createElement("openclaw-solid-bridge-test") as Host;
 }
 
+it("runs Solid caller effects after the parent render completes", () => {
+  const EffectBridge = defineSolidBridge<{ label: string }>(
+    "openclaw-solid-effect-bridge-test",
+    (props) => {
+      const [label, setLabel] = createSignal("");
+      createEffect(
+        () => props.label,
+        (value) => {
+          setLabel(value);
+        },
+      );
+      return <output>{label()}</output>;
+    },
+    { properties: { label: { default: "" } } },
+  );
+  const view = render(() => <EffectBridge label="committed" />);
+  expect(view.getByText("committed")).toBeTruthy();
+});
+
 beforeEach(() => {
   mounted.mockClear();
   disposed.mockClear();
+  changed.mockReset();
 });
 afterEach(async () => {
   cleanup();
@@ -100,6 +125,24 @@ it("mounts once, mirrors attributes/properties, and preserves synchronous impera
   await host.updateComplete;
   expect(host.querySelector("output")?.textContent).toBe("property:4:false");
   expect(mounted).toHaveBeenCalledTimes(1);
+});
+
+it("publishes changed properties synchronously before rendering and suppresses equal assignments", async () => {
+  const host = createHost();
+  document.body.append(host);
+  await host.updateComplete;
+  const observations: string[] = [];
+  changed.mockImplementation((current, key) => {
+    observations.push(`${key}:${current.label}:${current.querySelector("output")?.textContent}`);
+  });
+  host.label = "next";
+  expect(observations).toEqual(["label:next:initial:0:false"]);
+  expect(changed).toHaveBeenCalledWith(host, "label");
+  host.label = "next";
+  expect(changed).toHaveBeenCalledTimes(1);
+  await host.updateComplete;
+  expect(host.querySelector("output")?.textContent).toBe("next:0:false");
+  changed.mockReset();
 });
 
 it("commits Solid DOM before a Lit parent updateComplete resumes", async () => {
@@ -200,6 +243,29 @@ it("delivers the original bubbling, cancelable event with its exact detail", asy
   expect(received?.defaultPrevented).toBe(true);
 });
 
+it("runs nested bridge effects after the parent render scope", () => {
+  const Ready = defineSolidBridge(
+    "openclaw-solid-bridge-effect-test",
+    () => {
+      const [ready, setReady] = createSignal(false);
+      createEffect(
+        () => true,
+        () => {
+          setReady(true);
+        },
+      );
+      return <output>{ready() ? "ready" : "pending"}</output>;
+    },
+    { properties: {} },
+  );
+  const view = render(() => (
+    <section>
+      <Ready />
+    </section>
+  ));
+  expect(view.container.querySelector("output")?.textContent).toBe("ready");
+});
+
 it("uses a single Solid-owned host and preserves reactive props, children, events, and disposal", async () => {
   const [label, setLabel] = createSignal("solid");
   const action = vi.fn();
@@ -233,6 +299,57 @@ it("uses a single Solid-owned host and preserves reactive props, children, event
   await Promise.resolve();
   expect(disposed).toHaveBeenCalledTimes(1);
 });
+
+it("accepts property publication while a Solid owner adopts a mounted bridge", async () => {
+  const host = createHost();
+  document.body.append(host);
+  await host.updateComplete;
+  const view = render(() => {
+    host.label = "adopted";
+    return <div>{host}</div>;
+  });
+  await host.updateComplete;
+  expect(view.container.querySelector("output")?.textContent).toBe("adopted:0:false");
+  expect(mounted).toHaveBeenCalledTimes(1);
+});
+
+it.each(["attribute", "Solid props"])(
+  "honors the public setter when updating %s",
+  async (input) => {
+    const tag = `openclaw-solid-setter-${crypto.randomUUID()}`;
+    const SetterBridge = defineSolidBridge<{ label: string }>(
+      tag,
+      (props, host) => {
+        const property = Object.getOwnPropertyDescriptor(host, "label")!;
+        Object.defineProperty(host, "label", {
+          ...property,
+          set(value: string) {
+            property.set!.call(host, value.toUpperCase());
+          },
+        });
+        onCleanup(() => Object.defineProperty(host, "label", property));
+        return <output>{props.label}</output>;
+      },
+      { properties: { label: { default: "initial" } } },
+    );
+    const [label, setLabel] = createSignal("initial");
+    const view = mountSolid(() =>
+      input === "attribute" ? document.createElement(tag) : <SetterBridge label={label()} />,
+    );
+    const host = view.container.querySelector(tag) as SolidBridgeElement<{ label: string }>;
+    await host.updateComplete;
+
+    if (input === "attribute") {
+      host.setAttribute("label", "normalized");
+    } else {
+      setLabel("normalized");
+      flush();
+    }
+    expect(host.label).toBe("NORMALIZED");
+    await host.updateComplete;
+    expect(host.querySelector("output")?.textContent).toBe("NORMALIZED");
+  },
+);
 
 it("provides the existing Lit application context, rebinds replacements, and unsubscribes", async () => {
   const seen = vi.fn();
@@ -322,6 +439,68 @@ it("releases the old provider when a nearer provider takes over without moving t
   expect(seen).not.toHaveBeenCalled();
 });
 
+it("publishes a Lit-hosted page's layout traits to the existing shell owner", async () => {
+  defineSolidBridge(
+    "openclaw-solid-lit-layout-test",
+    (props: { active: boolean }) => (
+      <ShellLayoutBoundary traits={{ toolbarHeader: props.active }}>
+        <h1>Page header</h1>
+      </ShellLayoutBoundary>
+    ),
+    { properties: { active: { default: true, attribute: false } } },
+  );
+  const main = document.createElement("main");
+  main.className = "content";
+  document.body.append(main);
+  const owner = new ShellLayoutOwner();
+  owner.contentRef(main);
+  const host = document.createElement("openclaw-solid-lit-layout-test") as SolidBridgeElement<{
+    active: boolean;
+  }>;
+  main.append(host);
+  await host.updateComplete;
+  expect(main.classList.contains("content--toolbar-header")).toBe(true);
+  host.active = false;
+  await host.updateComplete;
+  expect(main.classList.contains("content--toolbar-header")).toBe(false);
+  host.active = true;
+  await host.updateComplete;
+  expect(main.classList.contains("content--toolbar-header")).toBe(true);
+  host.remove();
+  await Promise.resolve();
+  expect(main.classList.contains("content--toolbar-header")).toBe(false);
+});
+
+it("preserves the inherited layout scope of a Solid-owned page", () => {
+  const LayoutBridge = defineSolidBridge(
+    "openclaw-solid-owned-layout-test",
+    () => (
+      <ShellLayoutBoundary traits={{ settingsPage: true }}>
+        <h1>Settings</h1>
+      </ShellLayoutBoundary>
+    ),
+    { properties: {} },
+  );
+  const main = document.createElement("main");
+  main.className = "content";
+  const route = document.createElement("div");
+  main.append(route);
+  document.body.append(main);
+  const owner = new ShellLayoutOwner();
+  owner.contentRef(main);
+  const view = mountSolid(
+    () => (
+      <ShellLayoutProvider value={{ owner, host: route }}>
+        <LayoutBridge />
+      </ShellLayoutProvider>
+    ),
+    { container: route },
+  );
+  expect(main.classList.contains("content--settings-page")).toBe(true);
+  view.unmount();
+  expect(main.classList.contains("content--settings-page")).toBe(false);
+});
+
 it("releases a disconnected Solid root while the custom element itself is retained", async () => {
   const host = createHost();
   document.body.append(host);
@@ -337,4 +516,40 @@ it("releases a disconnected Solid root while the custom element itself is retain
   expect(control.deref()).toBeUndefined();
   expect(weak.deref()).toBeUndefined();
   expect(host.isConnected).toBe(false);
+});
+
+it("updates a Lit leaf without replacing its input and releases it with its Solid owner", () => {
+  const [label, setLabel] = createSignal("First");
+  const view = mountSolid(() => (
+    <LitContent render={() => html`<label>${label()}<input /></label>`} />
+  ));
+  try {
+    flush();
+    const input = view.container.querySelector("input")!;
+    input.value = "Draft";
+    setLabel("Second");
+    flush();
+    expect(view.container.textContent).toBe("Second");
+    expect(view.container.querySelector("input")).toBe(input);
+    expect(input.value).toBe("Draft");
+  } finally {
+    view.unmount();
+  }
+  expect(view.container.childNodes).toHaveLength(0);
+});
+
+it("keeps sanitized content directly inside its styled host", () => {
+  const view = mountSolid(() => (
+    <LitContent
+      tag="div"
+      class="chat-text"
+      render={() =>
+        html`<p>Summary</p>
+          <pre>Result</pre>`
+      }
+    />
+  ));
+  flush();
+  expect(view.container.querySelector(".chat-text > p")?.textContent).toBe("Summary");
+  expect(view.container.querySelector(".chat-text > :last-child")?.tagName).toBe("PRE");
 });

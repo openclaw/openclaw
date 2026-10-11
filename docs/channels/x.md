@@ -86,7 +86,7 @@ shared root default `channels.x.autoPublishWorkSessions`) to publish fresh,
 isolated visible work sessions spawned directly by admitted maintainer mentions.
 Guest mentions remain limited to hidden helpers and cannot publish work sessions.
 This is **off by default**. It exposes that child's conversation to anonymous readers
-at the same canonical `/chat` link; it does not change Team collaboration rights.
+at the same `/chat` link; it does not change Team collaboration rights.
 Only enable it for an agent whose work is intended to be public.
 
 Publication requires a configured **app-only** `bearerToken`. Before admission,
@@ -439,7 +439,7 @@ per post; each URL counts as 23 characters. The last chunk receives
 empty string to disable the signature.
 
 When a maintainer turn starts a visible work session, its first session URL is appended
-to the reply unless the text already contains that URL. The canonical link is
+to the reply unless the text already contains that URL. The session link is
 publicly readable only when the creation receipt confirms publication; otherwise
 it is labeled "Work session (sign-in required)." Both use X's URL-containing
 reply price.

@@ -42,6 +42,7 @@ import type {
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import {
   createGoalChatStartRequest,
+  expectGoalChatRetryResponses,
   readGoalChatUserMessages,
   registerGoalChatRestartSettlementCase,
 } from "./server.chat-goal.test-support.js";
@@ -754,17 +755,9 @@ describe("Goal chat admission and continuation", () => {
     const request = goalStart("Finish the release checklist", "goal-identical-retry");
     await withHeldModel(async () => {
       const responses = await Promise.all([rpc("chat.send", request), rpc("chat.send", request)]);
-      expect(responses.some((response) => response.mock.calls[0]?.[0])).toBe(true);
       const goal = loadSessionEntry(scope())?.goal;
       expect(goal?.objective).toBe(request.message);
-      for (const response of responses) {
-        const [ok, result, error] = response.mock.calls[0]!;
-        if (ok) {
-          expect(result).toMatchObject({ status: "started", goalId: goal?.id });
-        } else {
-          expect(error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
-        }
-      }
+      expectGoalChatRetryResponses(responses, request.idempotencyKey, goal?.id);
       await waitForModelRun();
       const replay = await rpc("chat.send", request);
       expect(replay.mock.calls[0]?.[1]).toMatchObject({ replayed: true, goalId: goal?.id });

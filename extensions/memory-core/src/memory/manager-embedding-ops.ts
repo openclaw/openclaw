@@ -29,7 +29,6 @@ import { readSessionResetRecallCutoffMetadata } from "../session-reset-recall-me
 import type { EmbeddingProvider } from "./embeddings.js";
 import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import { prepareMemoryIndexInWorker } from "./manager-cpu-worker-runtime.js";
-import { readMemoryDatabaseRevision } from "./manager-db-kernel.js";
 import {
   MemoryManagerEmbeddingCacheOps,
   type MemoryEmbeddingCacheCandidate,
@@ -150,7 +149,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     const database = this.database;
     const generation = {
       database,
-      databaseRevision: readMemoryDatabaseRevision(database.db),
+      databaseRevision: database.facts.revision,
       cacheWritesInvalidated: false,
       providerKey,
       identities,
@@ -203,7 +202,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       candidates,
       generation,
     );
-    this.assertEmbeddingCacheGenerationCurrent(generation);
     if (missing.length === 0) {
       return embeddings;
     }
