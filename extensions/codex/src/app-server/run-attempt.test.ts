@@ -254,18 +254,20 @@ async function buildCodexTurnContextForTest(
     tools: toolBridge.availableSpecs,
     ringZeroActive: false,
   });
-  const threadDeveloperInstructions = buildThreadStartParams(params, {
-    cwd: workspaceDir,
-    dynamicTools,
-    appServer: resolveCodexAppServerRuntimeOptions({}),
-    developerInstructions: buildDeveloperInstructions(params, { dynamicTools }),
-    refreshableInstructions: [
-      workspaceBootstrapContext.personaInstructions,
-      workspaceBootstrapContext.memoryInstructions,
-    ]
-      .filter(Boolean)
-      .join("\n\n"),
-  }).developerInstructions;
+  const threadDeveloperInstructions = (
+    await buildThreadStartParams(params, {
+      cwd: workspaceDir,
+      dynamicTools,
+      appServer: resolveCodexAppServerRuntimeOptions({}),
+      developerInstructions: buildDeveloperInstructions(params, { dynamicTools }),
+      refreshableInstructions: [
+        workspaceBootstrapContext.personaInstructions,
+        workspaceBootstrapContext.memoryInstructions,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+    })
+  ).developerInstructions;
   assert(typeof threadDeveloperInstructions === "string");
   const openClawPromptContext = buildCodexOpenClawPromptContext({
     params,
@@ -275,7 +277,7 @@ async function buildCodexTurnContextForTest(
     params.prompt,
     openClawPromptContext,
   );
-  const turnStartParams = buildTurnStartParams(params, {
+  const turnStartParams = await buildTurnStartParams(params, {
     threadId: "thread-1",
     cwd: workspaceDir,
     appServer: resolveCodexAppServerRuntimeOptions({}),
@@ -1094,7 +1096,7 @@ describe("runCodexAppServerAttempt", () => {
         userMcpServersEnabled: nativeToolSurfaceEnabled,
         environmentSelection,
       });
-      const turnParams = buildTurnStartParams(params, {
+      const turnParams = await buildTurnStartParams(params, {
         threadId: "thread-1",
         cwd: environment.cwd,
         appServer,

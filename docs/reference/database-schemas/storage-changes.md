@@ -7,6 +7,32 @@ read_when:
 title: "Storage changes and release preflight"
 ---
 
+## Agent JSON predicate columns
+
+[Agent schema 26](/reference/database-schemas/agent-schema-history#json-predicate-columns)
+implements the agent-store portion of the
+[accepted column-promotion design](https://github.com/openclaw/openclaw/issues/169254).
+The JSON remains canonical. Each writer derives its query columns in TypeScript
+and commits them with the JSON in one statement; the session actor reuses that
+derivation. Runtime predicates use columns. No trigger, second persistence owner,
+or read-time backfill is introduced.
+
+The versioned migration uses SQLite JSON functions only to classify existing rows
+and publishes both schema markers after the complete backfill. It preserves
+first-member lookups, legacy last-member transcript navigation, SQLite integer-cast
+semantics, malformed-row handling, payload bytes, and existing retention rules.
+Schema admission and Doctor remain the only migration owners. Optional outbox
+storage stays lazy. Added text and integer fields translate to PostgreSQL text
+with C collation and bigint; supporting engines share the schema version and
+must supply their equivalent forward migration.
+
+SQL projections that bound large payloads before transfer stay in SQL. Current
+writer-authority comparisons also retain their existing implementation rather
+than weakening a real effect boundary. The migration adds storage proportional
+to retained rows, and first-upgrade proof measures time per database and across
+many-agent hosts. Older binaries refuse the new schema; recovery restores a
+verified pre-migration backup and its matching binary.
+
 ## Canonical writer validation
 
 The per-agent session writer owns row validity under the single Gateway writer

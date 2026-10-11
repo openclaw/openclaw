@@ -49,8 +49,10 @@ import {
   updateRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
 import { getSetupCredentialRuntimeProfile, isSetupCredentialAccessible } from "./setup-access.js";
-import { loadAuthProfileStoreForSecretsRuntime } from "./store-runtime.js";
-import { resolvePersistedAuthProfileOwnerAgentDir } from "./store.js";
+import {
+  loadAuthProfileStoreForRuntimeAsync,
+  resolvePersistedAuthProfileOwnerAgentDirAsync,
+} from "./store-runtime.js";
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
 
 const OAUTH_PROVIDER_IDS = new Set<string>(getOAuthProviders().map((provider) => provider.id));
@@ -427,11 +429,15 @@ async function resolveApiKeyForProfileOwned(
         ? error.getRefreshedStore()
         : personalStore
           ? await personalStore.read()
-          : loadAuthProfileStoreForSecretsRuntime(params.agentDir, { profileId });
+          : await loadAuthProfileStoreForRuntimeAsync(params.agentDir, {
+              profileId,
+              readOnly: true,
+              allowKeychainPrompt: false,
+            });
     const surfacedCause =
       error instanceof OAuthManagerRefreshError && error.cause ? error.cause : error;
     if (isRefreshTokenReusedError(surfacedCause)) {
-      const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
+      const ownerAgentDir = await resolvePersistedAuthProfileOwnerAgentDirAsync({
         agentDir: params.agentDir,
         profileId,
       });
@@ -467,7 +473,11 @@ async function resolveApiKeyForProfileOwned(
       if (clearedLastGood) {
         refreshedStore = personalStore
           ? await personalStore.read()
-          : loadAuthProfileStoreForSecretsRuntime(params.agentDir, { profileId });
+          : await loadAuthProfileStoreForRuntimeAsync(params.agentDir, {
+              profileId,
+              readOnly: true,
+              allowKeychainPrompt: false,
+            });
       }
     }
     const fallbackProfileId =

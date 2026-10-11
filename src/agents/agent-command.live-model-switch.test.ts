@@ -608,6 +608,7 @@ vi.mock("./auth-profiles.js", async () => {
   return {
     ...actual,
     ensureAuthProfileStore: () => ({ profiles: {} }),
+    ensureAuthProfileStoreAsync: async () => ({ profiles: {} }),
   };
 });
 
@@ -618,6 +619,11 @@ vi.mock("./auth-profiles/store-runtime.js", async () => {
   return {
     ...actual,
     ensureAuthProfileStore: vi.fn(() => state.authProfileStoreMock),
+    ensureAuthProfileStoreAsync: vi.fn(async () => state.authProfileStoreMock),
+    findPersistedAuthProfileCredentialAsync: vi.fn(
+      async ({ profileId }: { profileId: string }) =>
+        state.authProfileStoreMock.profiles[profileId],
+    ),
   };
 });
 
@@ -3853,8 +3859,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       await runBasicAgentCommand();
 
       expect(state.clearSessionAuthProfileOverrideMock).toHaveBeenCalledTimes(preserve ? 0 : 1);
-      const { ensureAuthProfileStore } = await import("./auth-profiles/store-runtime.js");
-      expect(ensureAuthProfileStore).toHaveBeenCalledWith(
+      const { ensureAuthProfileStoreAsync } = await import("./auth-profiles/store-runtime.js");
+      expect(ensureAuthProfileStoreAsync).toHaveBeenCalledWith(
         "/tmp/agent",
         expect.objectContaining({ profileId, allowKeychainPrompt: false }),
       );

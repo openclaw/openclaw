@@ -589,6 +589,15 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
                   event_zstd: parameter((row) => row.payload!.event_zstd),
                   event_utf8_bytes: parameter((row) => row.payload!.event_utf8_bytes),
                   navigation_json: parameter((row) => row.payload!.navigation_json),
+                  navigation_type: parameter((row) => row.payload!.navigation_type),
+                  navigation_custom_type: parameter((row) => row.payload!.navigation_custom_type),
+                  navigation_display: parameter((row) => row.payload!.navigation_display),
+                  message_role: parameter((row) => row.payload!.message_role),
+                  navigation_last_type: parameter((row) => row.payload!.navigation_last_type),
+                  navigation_last_custom_type: parameter(
+                    (row) => row.payload!.navigation_last_custom_type,
+                  ),
+                  navigation_valid: parameter((row) => row.payload!.navigation_valid),
                 },
           )
           .where("session_id", "=", resolved.sessionId)

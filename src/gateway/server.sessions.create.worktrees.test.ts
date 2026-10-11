@@ -13,7 +13,9 @@ import {
 } from "../agents/worktrees/registry.test-support.js";
 import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
@@ -531,9 +533,41 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
         },
         defaultRuntime,
       );
+      const terminalPersisted = createDeferredCore();
+      const stopTerminalObserver = sessionChanges.subscribe((change) => {
+        if ("sessionKey" in change && change.sessionKey === sessionKey) {
+          const entry = loadSessionEntry({ agentId: "roboclaw", sessionKey, storePath });
+          if (entry?.status === "done" && entry.lastRunId === prepared.runId) {
+            terminalPersisted.resolve();
+          }
+        }
+      });
       try {
+        opts?.onSessionPrepared?.({
+          sessionKey: prepared.sessionKey,
+          sessionId: prepared.sessionId,
+          storePath: prepared.storePath,
+          lifecycleRevision: prepared.sessionEntry?.lifecycleRevision,
+        });
+        opts?.onAgentRunStart?.(prepared.runId);
+        // Completed mock turns must settle the same recovery custody as the real runtime.
+        const lifecycle = {
+          runId: prepared.runId,
+          sessionKey: prepared.sessionKey,
+          sessionId: prepared.sessionId,
+          agentId: prepared.sessionAgentId,
+        };
+        const startedAt = Date.now();
+        emitAgentEvent({ ...lifecycle, stream: "lifecycle", data: { phase: "start", startedAt } });
         preparedRuntime({ cwd: prepared.cwd, workspaceDir: prepared.workspaceDir });
+        emitAgentEvent({
+          ...lifecycle,
+          stream: "lifecycle",
+          data: { phase: "end", startedAt, endedAt: Date.now() },
+        });
+        await terminalPersisted.promise;
       } finally {
+        stopTerminalObserver();
         await prepared.runLease?.release();
       }
       return { text: "ok" };

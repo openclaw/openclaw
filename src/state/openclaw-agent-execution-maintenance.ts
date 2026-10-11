@@ -26,7 +26,6 @@ type MetadataInput =
 /** Metadata preparation and commit share the canonical actor's retained snapshots. */
 export function createAgentDatabaseMaintenanceOwner(context: {
   databaseOptions: ReclamationDatabaseOptions;
-  assertFileIdentity(): void;
   openWriter(): OpenClawAgentDatabase;
   readPreparedDatabase(): OpenClawAgentDatabase;
   admit(stage: "transaction" | "commit", publication?: unknown): void;
@@ -55,7 +54,6 @@ export function createAgentDatabaseMaintenanceOwner(context: {
   };
   const operations = {
     "session.maintenance.read": (plan: SessionMaintenanceReadCommand) => {
-      context.assertFileIdentity();
       const kernel = expectDefined(maintenance, "Session maintenance kernel");
       return {
         kind: "session-maintenance-read" as const,
@@ -69,7 +67,6 @@ export function createAgentDatabaseMaintenanceOwner(context: {
     "session.maintenance.release": ({ id }: { id: string }) => releasePreparation(id),
     "session.maintenance.prepare": (input: PreparationInput) => {
       const kernel = expectDefined(maintenance, "Session maintenance kernel");
-      context.assertFileIdentity();
       if (preparations.has(input.id)) {
         throw new Error("Session maintenance preparation is already retained");
       }

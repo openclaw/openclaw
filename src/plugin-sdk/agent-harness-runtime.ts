@@ -298,7 +298,7 @@ export { readToolOperatorHint } from "../agents/tool-operator-hint.js";
 export { normalizeUsage } from "../agents/usage.js";
 export { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 export { resolveSessionAgentIds } from "./agent-scope-runtime.js";
-export { resolveModelAuthMode } from "../agents/model-auth.js";
+export { resolveModelAuthMode, resolveModelAuthModeAsync } from "../agents/model-auth.js";
 export { supportsModelTools } from "../agents/model-tool-support.js";
 export { isAgentToolReplaySafe } from "../agents/tool-replay-safety.js";
 export { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
