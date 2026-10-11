@@ -218,6 +218,57 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(JSON.stringify(after)).not.toContain("secret-state");
   });
 
+  it.each([
+    {
+      commandText: "/pair",
+      replyText: Buffer.from(
+        JSON.stringify({ url: "wss://example.test", bootstrapToken: "secret-pairing-token" }),
+      ).toString("base64url"),
+      expected: "[pairing code redacted]",
+    },
+    {
+      commandText: "/status",
+      replyText:
+        "Verify: https://example.test/auth?state=secret-state\nHelp: https://example.test/help",
+      expected: "Verify: [login URL redacted]\nHelp: https://example.test/help",
+    },
+  ])("redacts credential-bearing $commandText replies before storage", async (testCase) => {
+    await writeTranscriptStore();
+    expect(
+      (
+        await recordDeliveredCommandExchange({
+          ...testCase,
+          sessionKey,
+          storePath: fixture.storePath(),
+          commandId: "secret-command",
+          replyId: "reply",
+        })
+      ).ok,
+    ).toBe(true);
+    const events = await loadFixtureMessages();
+    expect(events.at(-1)?.message).toEqual(
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: testCase.expected }],
+      }),
+    );
+    expect(JSON.stringify(events)).not.toContain(testCase.replyText);
+  });
+
+  it.each(["/btw hello", "/side hello"])("keeps %s ephemeral", async (commandText) => {
+    await writeTranscriptStore();
+    const before = await loadFixtureMessages();
+    await recordDeliveredCommandExchange({
+      sessionKey,
+      storePath: fixture.storePath(),
+      commandText,
+      replyText: "Side answer",
+      commandId: "side-command",
+      replyId: "reply",
+    });
+    expect(await loadFixtureMessages()).toEqual(before);
+  });
+
   it("uses configured session.store when storePath is omitted", async () => {
     const tempDir = sessionDirs.make();
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;

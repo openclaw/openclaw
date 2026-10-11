@@ -27,12 +27,18 @@ export async function recordDeliveredCommandExchange(
   }
   const redact = (text: string) => {
     const withoutCodes = text.replace(
-      /\b((?:device|pairing|verification|login)\s+code|code)\s*:\s*(?:<code>)?[^\s<]+(?:<\/code>)?/gi,
+      /\b((?:device|pairing|verification|login|setup)\s+code|code)\s*:\s*(?:<code>)?[^\s<]+(?:<\/code>)?/gi,
       "$1: [login code redacted]",
     );
-    return /^\/login(?:@\S+)?(?:\s|$)/i.test(commandText)
-      ? withoutCodes.replace(/https?:\/\/[^\s<>]+/gi, "[login URL redacted]")
+    const withoutPairingPayload = /^\/pair(?:@\S+)?(?:\s|$)/i.test(commandText)
+      ? withoutCodes.replace(/\beyJ[A-Za-z0-9_-]{32,}={0,2}\b/g, "[pairing code redacted]")
       : withoutCodes;
+    return withoutPairingPayload.replace(/https?:\/\/[^\s<>]+/gi, (url) =>
+      /^\/login(?:@\S+)?(?:\s|$)/i.test(commandText) ||
+      /[?&](?:[\w-]*token|state|code|user_code|device_code|secret|key)=/i.test(url)
+        ? "[login URL redacted]"
+        : url,
+    );
   };
   try {
     return await appendAssistantMessageToSessionTranscript({
