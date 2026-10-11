@@ -147,6 +147,7 @@ async function createFixture(createAudio = noAudio, onFailed?: (error: string) =
   const root = tempDirs.make("openclaw-managed-linux-test-");
   const x11SocketDir = path.join(root, "x11");
   await fs.mkdir(x11SocketDir);
+  const unixSocketTable = path.join(root, "unix");
   const fake = createFakeSupervisor();
   let now = 0;
   const runPasswordTool = vi.fn(async () => ({
@@ -176,6 +177,7 @@ async function createFixture(createAudio = noAudio, onFailed?: (error: string) =
       },
       tempRoot: root,
       tryListenOnPort: async () => 45_999,
+      unixSocketTable,
       x11SocketDir,
     },
   });
@@ -186,6 +188,7 @@ async function createFixture(createAudio = noAudio, onFailed?: (error: string) =
     probeRfb,
     root,
     runPasswordTool,
+    unixSocketTable,
     x11SocketDir,
     advanceTime: (ms: number) => {
       now += ms;
@@ -727,6 +730,34 @@ describe("managed Linux desktop", () => {
     await desktop.stop();
   });
 
+  it("skips displays bound by X servers whose socket files are not visible", async () => {
+    const { desktop, fake, unixSocketTable, x11SocketDir } = await createFixture();
+    await fs.writeFile(path.join(x11SocketDir, "X101"), "");
+    await fs.writeFile(
+      unixSocketTable,
+      [
+        "Num       RefCount Protocol Flags    Type St Inode Path",
+        `0000000000000000: 00000002 00000000 00010000 0001 01 145571 @${x11SocketDir}/X99`,
+        `0000000000000000: 00000002 00000000 00010000 0001 01 145572 ${x11SocketDir}/X100`,
+        "0000000000000000: 00000003 00000000 00000000 0001 03 144840",
+        `0000000000000000: 00000002 00000000 00010000 0001 01 145573 @${x11SocketDir}-other/X102`,
+        "",
+      ].join("\n"),
+    );
+    await desktop.acquire();
+    expect((fake.inputs[0] as Extract<SpawnInput, { mode: "child" }>).argv[1]).toBe(":102");
+    await desktop.stop();
+  });
+
+  it("falls back to the socket directory when the kernel socket table is unreadable", async () => {
+    const { desktop, fake, unixSocketTable, x11SocketDir } = await createFixture();
+    await fs.mkdir(unixSocketTable);
+    await fs.writeFile(path.join(x11SocketDir, "X99"), "");
+    await desktop.acquire();
+    expect((fake.inputs[0] as Extract<SpawnInput, { mode: "child" }>).argv[1]).toBe(":100");
+    await desktop.stop();
+  });
+
   it.each(["Xtigervnc", "startxfce4", "tigervncpasswd", "dbus-daemon"] as const)(
     "names a missing %s binary and the install command",
     async (missingBinary) => {
@@ -760,6 +791,7 @@ describe("managed Linux desktop", () => {
           runPasswordTool,
           tempRoot: fixture.root,
           tryListenOnPort: async () => 45_999,
+          unixSocketTable: fixture.unixSocketTable,
           x11SocketDir: fixture.x11SocketDir,
         },
       });
