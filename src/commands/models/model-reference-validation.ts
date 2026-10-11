@@ -5,6 +5,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { planEffectiveModelCatalogRows } from "../../model-catalog/index.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { getProviderRegistryIndex } from "../../plugins/provider-registry-index.js";
+import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-state.js";
 import { createModelCatalogProviderAliasCanonicalizer } from "./provider-aliases.js";
 
 type ModelReferenceInspection = {
@@ -16,7 +18,12 @@ type ModelReferenceInspection = {
    * contributes no catalog rows to compare against (no manifest seed rows and
    * no `models.providers.<id>.models`), so membership cannot be judged offline.
    */
-  status: "known" | "unknown-model" | "uncatalogued-provider" | "unknown-provider";
+  status:
+    | "known"
+    | "unknown-model"
+    | "uncatalogued-provider"
+    | "unknown-provider"
+    | "unverified-provider";
 };
 
 type ModelReferenceInspectionParams = {
@@ -24,6 +31,7 @@ type ModelReferenceInspectionParams = {
   env?: NodeJS.ProcessEnv;
   metadataSnapshot?: PluginMetadataSnapshot;
   workspaceDir?: string;
+  providerRegistryAvailable?: boolean;
 };
 
 function createModelReferenceInspector(params: ModelReferenceInspectionParams) {
@@ -34,8 +42,10 @@ function createModelReferenceInspector(params: ModelReferenceInspectionParams) {
       env: params.env ?? process.env,
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     });
+  const runtimeRegistry = getPluginRuntimeGenerationRegistry();
   const knownProviders = new Set(
     [
+      ...(runtimeRegistry ? getProviderRegistryIndex(runtimeRegistry.providers).refs.keys() : []),
       ...snapshot.owners.providers.keys(),
       ...snapshot.owners.modelCatalogProviders.keys(),
       ...snapshot.owners.cliBackends.keys(),
@@ -64,7 +74,14 @@ function createModelReferenceInspector(params: ModelReferenceInspectionParams) {
     const model = candidate.model.trim();
     const ref = `${provider}/${model}`;
     if (!knownProviders.has(provider)) {
-      return { ref, provider, model, status: "unknown-provider" };
+      const unavailable =
+        params.providerRegistryAvailable === false || snapshot.plugins.length === 0;
+      return {
+        ref,
+        provider,
+        model,
+        status: unavailable ? "unverified-provider" : "unknown-provider",
+      };
     }
     if (knownModels.has(buildModelCatalogMergeKey(provider, model))) {
       return { ref, provider, model, status: "known" };

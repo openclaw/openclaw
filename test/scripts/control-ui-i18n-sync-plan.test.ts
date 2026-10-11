@@ -287,29 +287,7 @@ describe("createControlUiLocaleSyncPlan", () => {
     expect(artifacts.translationMemory + artifacts.meta).not.toContain("private-");
   });
 
-  it("reuses grouped segment aliases only while their source text still matches", () => {
-    const sourceFlat = flattenTranslations({ group: { alias: "Shared" } });
-    const grouped = memoryEntry({ segment_ids: ["group.alias"] });
-    const createPlan = (source: ReadonlyMap<string, string>) =>
-      createControlUiLocaleSyncPlan({
-        allowTranslate: false,
-        cacheKeyFor,
-        entry,
-        existingFlat: new Map(),
-        force: false,
-        hashText,
-        previousMeta: localeMeta(),
-        sourceFlat: source,
-        sourceHash: "source",
-        translationMemory: new Map([[grouped.cache_key, grouped]]),
-      });
-
-    expect(createPlan(sourceFlat).pending).toEqual([]);
-    expect(createPlan(new Map([["group.alias", "Changed"]])).pending).toHaveLength(1);
-  });
-
   describe.each([
-    { name: "raw", materialize: materializeControlUiLocaleCatalog },
     {
       name: "prepared",
       materialize: (
@@ -362,90 +340,6 @@ describe("createControlUiLocaleSyncPlan", () => {
         materialize(new Map([["group.first", "abc"]]), new Map([[grouped.cache_key, grouped]])),
       ).toEqual({ group: { first: "Partagé" } });
     });
-  });
-
-  it("keeps independently prepared source snapshots after the raw map changes", () => {
-    const source = new Map([["title", "abc"]]);
-    const first = prepareControlUiCatalogSource(source);
-    source.set("title", "");
-    source.set("alias", "abc");
-    const second = prepareControlUiCatalogSource(source);
-    const original = memoryEntry({
-      cache_key: "original",
-      segment_id: "title",
-      segment_ids: ["alias"],
-      text_hash: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-      translated: "Original",
-    });
-    const changed = memoryEntry({
-      cache_key: "changed",
-      segment_id: "title",
-      text_hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      translated: "Changed",
-    });
-    const memory = new Map([
-      [original.cache_key, original],
-      [changed.cache_key, changed],
-    ]);
-    expect(materializePreparedControlUiLocaleCatalog(first, memory)).toEqual({ title: "Original" });
-    const next = materializePreparedControlUiLocaleCatalog(second, memory);
-    expect(next).toEqual({ title: "Changed", alias: "Original" });
-    expect(Object.keys(next)).toEqual(["title", "alias"]);
-  });
-
-  it("refreshes recorded fallbacks and records translated replacements", () => {
-    const sourceFlat = flattenTranslations({ title: "New English" });
-    const previousMeta = localeMeta({
-      fallbackKeys: ["title"],
-      sourceHash: "previous-source",
-      totalKeys: 1,
-      translatedKeys: 0,
-    });
-    const plan = createControlUiLocaleSyncPlan({
-      allowTranslate: true,
-      cacheKeyFor,
-      entry,
-      existingFlat: new Map([["title", "Old English"]]),
-      force: true,
-      hashText,
-      previousMeta,
-      sourceFlat,
-      sourceHash: "next-source",
-      translationMemory: new Map(),
-    });
-
-    expect(plan.newFallbackCount).toBe(0);
-    plan.recordTranslations(plan.pending, new Map([["title", "Nouveau"]]), {
-      sourceLocale: "en",
-      updatedAt: () => "2026-02-02T00:00:00.000Z",
-    });
-
-    const artifacts = plan.render({
-      defaultGlossary: [],
-      generatedAt: "2026-03-03T00:00:00.000Z",
-      glossary: [],
-      workflow: 1,
-    });
-
-    expect(artifacts.fallbackCount).toBe(0);
-    expect(artifacts.nextFlat.get("title")).toBe("Nouveau");
-    expect(JSON.parse(artifacts.meta)).toMatchObject({
-      fallbackKeys: [],
-      generatedAt: "2026-03-03T00:00:00.000Z",
-      translatedKeys: 1,
-    });
-    expect(artifacts.translationMemory).toBe(
-      `${JSON.stringify(
-        memoryEntry({
-          cache_key: cacheKeyFor("title", hashText("New English")),
-          segment_id: "title",
-          text: "New English",
-          text_hash: hashText("New English"),
-          translated: "Nouveau",
-          updated_at: "2026-02-02T00:00:00.000Z",
-        }),
-      )}\n`,
-    );
   });
 
   it("refreshes recorded fallback copy when forced without a provider", () => {

@@ -5,10 +5,8 @@ import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { clearGitHubCredentialVerificationCache } from "../../agents/github-oauth-client.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  updateUserGitHubConnection,
-  type UserGitHubConnection,
-} from "../../state/user-github-connections.js";
+import type { UserGitHubConnection } from "../../state/user-github-connections.js";
+import { updateUserGitHubConnection } from "../../state/user-github-connections.test-support.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import * as prRead from "../control-ui-session-pr-read.js";
 import { requestCurrentGitHubOAuthRefresh } from "../github-oauth-lifecycle.js";

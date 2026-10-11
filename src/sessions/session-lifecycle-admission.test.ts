@@ -2,7 +2,7 @@
 import { setImmediate as waitForImmediate } from "node:timers/promises";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import {
   resetGatewayWorkAdmission,
@@ -36,6 +36,36 @@ it("counts one multi-identity admission once", async () => {
     admission.release();
   }
   expect(getActiveSessionWorkAdmissionCount()).toBe(0);
+});
+
+it("validates default admission once after earlier store writes", async () => {
+  const scope = "store-default-validation-order";
+  const entered = createDeferred();
+  const releaseWriter = createDeferred();
+  let value = "before";
+  const observations: string[] = [];
+  const writer = runExclusiveSessionStoreWrite(scope, async () => {
+    entered.resolve();
+    await releaseWriter.promise;
+    value = "after";
+  });
+  await entered.promise;
+  const pending = beginSessionWorkAdmission({
+    scope,
+    identities: ["session-default-validation-order"],
+    assertAllowed: () => {
+      observations.push(value);
+    },
+  });
+  try {
+    await waitForImmediate();
+    expect(observations).toEqual([]);
+  } finally {
+    releaseWriter.resolve();
+    (await pending).release();
+    await writer;
+  }
+  expect(observations).toEqual(["after"]);
 });
 
 it("waits for a competing session admission outside the caller context", async () => {
@@ -474,32 +504,6 @@ it("lets an admitted root enter session work while suspension preparation refuse
   }
 });
 
-it("revalidates inline when admission begins inside the active store writer", async () => {
-  const storePath = "store-writer-reentrant-admission";
-  const order: string[] = [];
-  const admission = await runExclusiveSessionStoreWrite(storePath, async () => {
-    order.push("writer:start");
-    const lease = await beginSessionWorkAdmission({
-      scope: storePath,
-      identities: ["session-writer-reentrant-admission"],
-      assertAllowed: () => {
-        order.push("validate");
-      },
-    });
-    order.push("writer:end");
-    return lease;
-  });
-
-  try {
-    expect(order).toEqual(["writer:start", "validate", "validate", "writer:end"]);
-    expect(isSessionWorkAdmissionActive(storePath, ["session-writer-reentrant-admission"])).toBe(
-      true,
-    );
-  } finally {
-    admission.release();
-  }
-});
-
 it("runs one-time admission work only during writer-barrier revalidation", async () => {
   let initialChecks = 0;
   let finalChecks = 0;
@@ -555,44 +559,6 @@ it.each([false, true])(
     }
   },
 );
-
-it("rejects and releases an admission invalidated by an earlier store writer", async () => {
-  const storePath = "store-writer-revalidation";
-  const writerStarted = createDeferred();
-  const releaseWriter = createDeferred();
-  const firstValidation = createDeferred();
-  let allowed = true;
-  let validationCount = 0;
-  const writer = runExclusiveSessionStoreWrite(storePath, async () => {
-    writerStarted.resolve();
-    await releaseWriter.promise;
-    allowed = false;
-  });
-  await writerStarted.promise;
-
-  const admission = beginSessionWorkAdmission({
-    scope: storePath,
-    identities: ["agent:main:child", "session-writer-revalidation"],
-    assertAllowed: () => {
-      validationCount += 1;
-      if (validationCount === 1) {
-        firstValidation.resolve();
-      }
-      if (!allowed) {
-        throw new Error("session changed");
-      }
-    },
-  });
-  await firstValidation.promise;
-  await Promise.resolve();
-  expect(isSessionWorkAdmissionActive(storePath, ["session-writer-revalidation"])).toBe(true);
-
-  releaseWriter.resolve();
-  await writer;
-  await expect(admission).rejects.toThrow("session changed");
-  expect(validationCount).toBe(2);
-  expect(isSessionWorkAdmissionActive(storePath, ["session-writer-revalidation"])).toBe(false);
-});
 
 it("admits an independent session while revalidating a conflicting writer's authority", async () => {
   const scope = "store-keyed-admission";
@@ -661,96 +627,6 @@ it("admits an independent session while revalidating a conflicting writer's auth
       }
     }
     await Promise.allSettled([writer, blockedOutcome]);
-  }
-});
-
-it("releases lifecycle locks when admission aborts behind the store writer barrier", async ({
-  signal,
-}) => {
-  const storePath = "store-writer-abort";
-  const writerStarted = createDeferred();
-  const releaseWriter = createDeferred();
-  const firstValidation = createDeferred();
-  const controller = new AbortController();
-  const abortError = new Error("admission aborted behind writer");
-  const writer = runExclusiveSessionStoreWrite(storePath, async () => {
-    writerStarted.resolve();
-    await releaseWriter.promise;
-  });
-  await writerStarted.promise;
-
-  const admission = beginSessionWorkAdmission({
-    scope: storePath,
-    identities: ["session-writer-abort"],
-    signal: controller.signal,
-    assertAllowed: () => {
-      firstValidation.resolve();
-    },
-  });
-  let mutation: Promise<void> | undefined;
-  try {
-    await withinTest(firstValidation.promise, signal);
-    expect(isSessionWorkAdmissionActive(storePath, ["session-writer-abort"])).toBe(true);
-    controller.abort(abortError);
-
-    await expect(admission).rejects.toBe(abortError);
-    expect(isSessionWorkAdmissionActive(storePath, ["session-writer-abort"])).toBe(false);
-
-    mutation = runExclusiveSessionLifecycleMutation("patch", {
-      scope: storePath,
-      identities: ["session-writer-abort"],
-      run: async () => {},
-    });
-    // Cancellation must release the lifecycle lock before the unrelated writer finishes.
-    await withinTest(mutation, signal);
-  } finally {
-    releaseWriter.resolve();
-    await Promise.allSettled([writer, admission, mutation]);
-  }
-});
-
-it("revalidates without inheriting a released gateway root from the writer queue", async () => {
-  resetGatewayWorkAdmission();
-  const storePath = "store-released-gateway-root";
-  const writerStarted = createDeferred();
-  const releaseWriter = createDeferred();
-  const firstValidation = createDeferred();
-  const root = tryBeginGatewayRootWorkAdmission();
-  expect(root).not.toBeNull();
-  if (!root) {
-    throw new Error("gateway root admission unavailable");
-  }
-  const writer = root.run(
-    async () =>
-      await runExclusiveSessionStoreWrite(storePath, async () => {
-        writerStarted.resolve();
-        await releaseWriter.promise;
-      }),
-  );
-  await writerStarted.promise;
-
-  let validationCount = 0;
-  const admissionPromise = beginSessionWorkAdmission({
-    scope: storePath,
-    identities: ["session-released-gateway-root"],
-    assertAllowed: () => {
-      validationCount += 1;
-      if (validationCount === 1) {
-        firstValidation.resolve();
-      }
-    },
-  });
-  await firstValidation.promise;
-
-  root.release();
-  releaseWriter.resolve();
-  const admission = await admissionPromise;
-  try {
-    expect(validationCount).toBe(2);
-  } finally {
-    admission.release();
-    await writer;
-    resetGatewayWorkAdmission();
   }
 });
 

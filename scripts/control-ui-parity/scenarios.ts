@@ -134,9 +134,34 @@ const loadingRoutes: Array<{ route: RouteId; method: string; ready: string }> = 
     ready: "#settings-profile-identity .settings-loading-skeleton",
   },
 ];
+const configuredMcpServers = {
+  mcp: {
+    servers: {
+      docs: { url: "https://mcp.example.com/mcp" },
+      workspace: { command: "node", args: ["workspace-tools.mjs"] },
+    },
+  },
+};
 export const scenes: Scene[] = [
   ...chatToolScenes,
   ...APP_ROUTE_IDS.map(routeScene),
+  {
+    ...routeScene("mcp"),
+    id: "mcp-configured",
+    label: "MCP: local and remote servers",
+    ready: ".mcp-server-row",
+    scenario: {
+      methodResponses: {
+        "config.get": {
+          config: configuredMcpServers,
+          raw: JSON.stringify(configuredMcpServers),
+          hash: "parity-mcp-config",
+          valid: true,
+          issues: [],
+        },
+      },
+    },
+  },
   ...["status", "setup", "pat"].map((state): Scene =>
     Object.assign(routeScene("profile"), {
       id: `github-connections-${state}`,

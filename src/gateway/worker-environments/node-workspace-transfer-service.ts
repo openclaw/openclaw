@@ -32,7 +32,6 @@ type TransferBinding = {
   environmentId: string;
   ownerEpoch: number;
   sessionId: string;
-  generation: number;
 };
 
 type DownloadCapability = {
@@ -79,7 +78,7 @@ type TransferAuthorization = {
 
 type TransferPreparation = Pick<
   TransferContext,
-  "environmentId" | "ownerEpoch" | "sessionId" | "generation" | "isAuthorized"
+  "environmentId" | "ownerEpoch" | "sessionId" | "isAuthorized"
 > & { signal?: AbortSignal; authorize?: () => void };
 type RepositoryPreparation = TransferPreparation & { baseCommit: string; baseManifestRef: string };
 type SyncPreparation = TransferPreparation & { localPath: string };

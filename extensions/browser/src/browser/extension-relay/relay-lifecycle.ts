@@ -142,7 +142,6 @@ async function ensureDesiredRelay(params: {
   return await withProfileOperationLease({
     state,
     runtime,
-    configRevision: getProfileLifecycle(runtime).configRevision,
     ownership: "lifecycle",
     run: async (signal) => {
       const map = (state.extensionRelays ??= new Map());

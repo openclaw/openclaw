@@ -241,20 +241,6 @@ function throwIfFlowAborted(api: QaFlowApi, options: QaFlowActionOptions = {}) {
   }
 }
 
-async function runFlowAction(
-  action: unknown,
-  api: QaFlowApi,
-  vars: QaFlowVars,
-  options: QaFlowActionOptions = {},
-) {
-  throwIfFlowAborted(api, options);
-  try {
-    await runFlowActionBody(action, api, vars, options);
-  } finally {
-    throwIfFlowAborted(api, options);
-  }
-}
-
 async function runFlowActions(
   actions: readonly unknown[],
   api: QaFlowApi,
@@ -266,12 +252,13 @@ async function runFlowActions(
   }
 }
 
-async function runFlowActionBody(
+async function runFlowAction(
   action: unknown,
   api: QaFlowApi,
   vars: QaFlowVars,
   options: QaFlowActionOptions,
 ) {
+  throwIfFlowAborted(api, options);
   if (!isPlainObject(action)) {
     throw new Error(`invalid qa flow action: ${JSON.stringify(action)}`);
   }
@@ -433,23 +420,19 @@ export async function runScenarioFlow(params: {
         return undefined;
       }
       throwIfFlowAborted(params.api);
-      try {
-        const details = step.detailsExpr
-          ? formatFlowDetails(await evalExpr(step.detailsExpr, params.api, vars))
-          : undefined;
-        const rtt = step.resultExpr
-          ? resolveFlowResultRtt(await evalExpr(step.resultExpr, params.api, vars))
-          : undefined;
-        if (!rtt) {
-          return details === undefined ? undefined : { details };
-        }
-        return {
-          ...(details === undefined ? {} : { details }),
-          ...rtt,
-        } satisfies QaSuiteStepOutcome;
-      } finally {
-        throwIfFlowAborted(params.api);
+      const details = step.detailsExpr
+        ? formatFlowDetails(await evalExpr(step.detailsExpr, params.api, vars))
+        : undefined;
+      const rtt = step.resultExpr
+        ? resolveFlowResultRtt(await evalExpr(step.resultExpr, params.api, vars))
+        : undefined;
+      if (!rtt) {
+        return details === undefined ? undefined : { details };
       }
+      return {
+        ...(details === undefined ? {} : { details }),
+        ...rtt,
+      } satisfies QaSuiteStepOutcome;
     },
   }));
   const result = await params.api.runScenario(params.scenarioTitle, steps);

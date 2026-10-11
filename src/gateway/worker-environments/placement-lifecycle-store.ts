@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import type { WorkerOperations } from "../../state/worker-operation-registry.js";
 import type { PreparedEnvironmentSelection } from "./environment-record.js";
 import type { WorkerPlacementAuthorization } from "./placement-authorization.js";
@@ -27,7 +28,10 @@ import { createPlacementWorkerMutation } from "./placement-worker-mutation.js";
 import { reserveWorkerEnvironmentNativePublication } from "./store-native-publication.js";
 
 type Moves = ReturnType<typeof createPlacementMoveOps>;
-type Operations = WorkerOperations<typeof placementLifecycleOperations>;
+type Operations = Omit<
+  WorkerOperations<typeof placementLifecycleOperations>,
+  "workerPlacements.clearLocalTurnClaims"
+>;
 type Guard = { assertCurrent?: WorkerPlacementAuthorization };
 
 type RequestedPlacement = Extract<WorkerSessionPlacementRecord, { state: "requested" }>;
@@ -260,6 +264,24 @@ export function createPlacementLifecycleWorkerOps(runtime: {
     return receipt.placement;
   };
   return {
+    async clearLocalTurnClaimsAfterRestartAsync(): Promise<number> {
+      // Startup holds the state-directory lock and has not admitted turns.
+      // An uncertain result aborts startup; the next boot can repeat this clear.
+      const placements = await executeOpenClawStateWorker(context, {
+        type: "workerPlacements.clearLocalTurnClaims",
+        input: { nowMs: runtime.now?.() },
+      });
+      for (const clearedPlacement of placements) {
+        stagePlacementTurnClaimWorkerPublication(
+          context.admission.identity,
+          clearedPlacement,
+          undefined,
+          clearedPlacement.state,
+          clearedPlacement,
+        ).commit();
+      }
+      return placements.length;
+    },
     async startDispatch(input: WorkerSessionPlacementDispatchIdentity, guard: Guard = {}) {
       return placement(
         await execute(

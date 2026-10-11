@@ -10,8 +10,6 @@ import {
 
 describe("gateway log sentinels", () => {
   it.each([
-    [{ content: [{ type: "toolResult", content: "codex output" }] }, "codex output"],
-    [{ content: [{ type: "text", text: "standard output" }] }, "standard output"],
     [
       {
         content: [

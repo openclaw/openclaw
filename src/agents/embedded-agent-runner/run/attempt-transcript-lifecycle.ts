@@ -24,6 +24,8 @@ export function createEmbeddedAttemptTranscriptLifecycle(
   params: {
     runId?: string;
     sessionId?: string;
+    /** Release retained owners after accepted descendants settle, even after a teardown timeout. */
+    onDrained?: () => void | Promise<void>;
   },
   deps: {
     /** Override how the lifecycle owner store is constructed, so tests can hold a reference to the per-attempt AsyncLocalStorage. Defaults to an owned instance. */
@@ -145,6 +147,7 @@ export function createEmbeddedAttemptTranscriptLifecycle(
     cleanupDrain ??= settleWithinTeardownBudget(
       serializeLifecycle(() => {
         lifecycleOwner.disable();
+        return params.onDrained?.();
       }),
     );
     await cleanupDrain;

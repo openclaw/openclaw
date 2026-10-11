@@ -331,7 +331,7 @@ const reviewedOperations = new Map([
       {
         tier: "W",
         operations: [
-          "assertNoRunningWorkerSessionToolOperations",
+          "deleteWorkerTurnToolState",
           "closeWorkerTurnToolAdmission",
           "clearWorkerTurnToolState",
           "createPlacementSessionToolOperationKernel.hasToolAuthority",
@@ -384,9 +384,13 @@ const reviewedOperations = new Map([
           "placement-store.ts:102 selects only native restart/wait/validation; claim/release/cancel mutations run in placement-turn-claims.worker.ts:102,117,191,200,287,355,360",
       },
       {
-        tier: "T2",
-        operations: ["createPlacementTurnClaimOps.clearLocalTurnClaimsAfterRestart"],
-        evidence: "Only server-worker-environment-startup.ts:177 clears restart claims",
+        tier: "T1",
+        operations: [
+          "createPlacementTurnClaimOps.clearLocalTurnClaimsAfterRestart",
+          "clearLocalTurnClaimsInDatabase",
+        ],
+        evidence:
+          "The released placement-store.ts clearLocalTurnClaimsAfterRestart facade retains synchronous native access until the next Plugin SDK major; bundled startup awaits the placement-lifecycle.worker.ts clearLocalTurnClaims operation. The shared kernel remains native compatibility debt.",
       },
     ],
   ],
@@ -1976,6 +1980,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: [
           "resolveUserProfileGitHubAttributionInDatabase",
+          "selectUserProfileRoleAuthority",
           "prepareUserProfileGitHubMerge",
           "readGitHubIdentityBinding",
           "selectGitHubProfileAlias",
@@ -1983,7 +1988,7 @@ const reviewedOperations = new Map([
           "applyVerifiedGitHubIdentity.writeIdentity",
         ],
         evidence:
-          "Read dispatcher src/state/openclaw-state-read.worker.ts:577; mutations user-profile-writes.worker.ts:424,432 and merges :325,375. ensureEmail path user-profiles.worker.ts:61; private writeIdentity only from applyVerifiedGitHubIdentity; private selectGitHubProfileAlias only from readGitHubIdentityBinding and the read-worker cached-binding command (openclaw-state-read.worker.ts:520).",
+          "Read dispatcher src/state/openclaw-state-read.worker.ts:577; mutations user-profile-writes.worker.ts:424,432 and merges :325,375. Role authority runs only through user-profiles.worker.ts:152. ensureEmail path user-profiles.worker.ts:61; private writeIdentity only from applyVerifiedGitHubIdentity; private selectGitHubProfileAlias only from readGitHubIdentityBinding and the read-worker cached-binding command (openclaw-state-read.worker.ts:520).",
       },
     ],
   ],
