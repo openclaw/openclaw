@@ -1966,6 +1966,7 @@ src/config/sessions/session-transcript-authority.ts
 src/config/sessions/session-accessor.sqlite-incognito-sharing.ts
 src/config/sessions/session-accessor.sqlite-maintenance-age-queries.ts
 src/config/sessions/session-accessor.sqlite-maintenance-age.ts
+src/config/sessions/session-accessor.sqlite-metadata-read.ts
 src/config/sessions/session-accessor.sqlite-model-context.ts
 src/config/sessions/session-accessor.sqlite-projection-read.ts
 src/config/sessions/session-accessor.sqlite-read.ts

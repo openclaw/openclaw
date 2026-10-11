@@ -8,6 +8,7 @@ export type SessionTranscriptAnchorFacts = {
   header?: unknown;
   watermark?: SessionTranscriptWatermark;
   messagePresence?: boolean;
+  metadata?: { present: boolean; observedAt: number | null; updatedAt: number | null };
   contextValidated?: true;
   contextAuthority?: {
     entry?: Pick<

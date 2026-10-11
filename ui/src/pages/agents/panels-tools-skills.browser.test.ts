@@ -1,13 +1,23 @@
 import { assert, describe, expect, it, vi } from "vitest";
 import type { ToolsEffectiveResult } from "../../api/types.ts";
 import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
+import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
-// Control UI tests cover agents panels tools skills behavior.
+import { mountSolid as mountConnected } from "../../test-helpers/mount-solid.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { createBaseParams } from "./panels-tools-skills.test-support.ts";
 import { AgentTools } from "./panels-tools-skills.tsx";
 
 installBrowserHistoryIsolation();
+
+async function settleGitHubIdentity(container: HTMLElement) {
+  if (!container.isConnected) {
+    mountConnected(() => container);
+  }
+  const bridge = container.querySelector<SolidBridgeElement<object>>("openclaw-github-identity");
+  assert(bridge, "Missing GitHub identity bridge");
+  await bridge.updateComplete;
+}
 
 const toolPreview: ToolsEffectiveResult = {
   agentId: "main",
@@ -208,7 +218,7 @@ describe("agents tools panel (browser)", () => {
       }),
       container,
     );
-    await Promise.resolve();
+    await settleGitHubIdentity(container);
 
     expect(
       Array.from(container.querySelectorAll(".settings-section__heading")).map((heading) =>
@@ -277,7 +287,7 @@ describe("agents tools panel (browser)", () => {
       effective: nativeIdentity,
     };
     mountSolid(AgentTools, params, container);
-    await Promise.resolve();
+    await settleGitHubIdentity(container);
 
     const section = Array.from(container.querySelectorAll(".settings-section")).find((candidate) =>
       candidate.querySelector(".settings-section__heading")?.textContent?.includes("GitHub"),
@@ -338,7 +348,7 @@ describe("agents tools panel (browser)", () => {
     await githubIdentity.startAuthorization();
 
     mountSolid(AgentTools, createBaseParams({ githubIdentity }), container);
-    await Promise.resolve();
+    await settleGitHubIdentity(container);
 
     expect(container.textContent).toContain("ABCD-1234");
     const link = container.querySelector<HTMLAnchorElement>(
@@ -376,7 +386,7 @@ describe("agents tools panel (browser)", () => {
     };
 
     mountSolid(AgentTools, params, container);
-    await Promise.resolve();
+    await settleGitHubIdentity(container);
 
     expect(container.textContent).toContain("@system-user");
     expect(container.textContent).toContain("System Author · system@example.com");
@@ -408,19 +418,19 @@ describe("agents tools panel (browser)", () => {
     });
 
     const view = mountSolid(AgentTools, createBaseParams({ githubIdentity }), container);
-    await Promise.resolve();
+    await settleGitHubIdentity(container);
     expect(container.querySelector(".settings-secret input")).toBeNull();
     expect(container.textContent).toContain("Use a PAT instead");
 
     githubIdentity.showPatFallback();
     view.update(createBaseParams({ githubIdentity }));
-    await Promise.resolve();
+    await settleGitHubIdentity(container);
     expect(container.querySelector(".settings-secret input")).not.toBeNull();
     expect(container.textContent).not.toContain("Continue with GitHub");
 
     githubIdentity.busy = true;
     view.update(createBaseParams({ githubIdentity }));
-    await Promise.resolve();
+    await settleGitHubIdentity(container);
     const cancel = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
       (button) => button.textContent?.trim() === "Cancel",
     );
