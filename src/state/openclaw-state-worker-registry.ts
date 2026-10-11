@@ -44,6 +44,7 @@ import type { ChannelPairingWorkerOperations } from "../pairing/pairing-store.wo
 import type { PluginBlobWorkerOperations } from "../plugin-state/plugin-blob-store.worker.js";
 import type { PluginRuntimeWorkerOperations } from "../plugins/state.worker-contract.js";
 import type { ProjectRegistryWorkerOperations } from "../projects/project-registry.worker-contract.js";
+import type { GitHubSetupWorkerOperations } from "../secrets/store/secret-store-github-handoff.worker.js";
 import type { SkillLibraryWorkerOperations } from "../skills/library/store.worker-contract.js";
 import type { SkillUploadWorkerOperations } from "../skills/lifecycle/upload-store.worker-contract.js";
 import type { SkillWorkshopWorkerOperations } from "../skills/workshop/changes.worker-contract.js";
@@ -54,6 +55,7 @@ import type { OnboardingRecommendationWriteOperations } from "./onboarding-recom
 import type { AgentDatabaseRegistryWorkerOperations } from "./openclaw-agent-db-contract.js";
 import type { RepositoryWorkspaceWorkerOperations } from "./session-repository-workspaces.worker-contract.js";
 import type { UserBackgroundWorkerOperations } from "./user-background.worker.js";
+import type { UserGitHubConnectionWorkerOperations } from "./user-github-connections.worker.js";
 import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
 import type { WorkerOperations, WorkerWriteOperationContext } from "./worker-operation-registry.js";
 import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
@@ -112,7 +114,9 @@ export type RegisteredStateWorkerOperations = WorkerOperations<typeof gatewayBoo
   WorkerTranscriptCommitOperations &
   RepositoryWorkspaceWorkerOperations &
   UserBackgroundWorkerOperations &
-  UserProfileWorkerOperations;
+  UserProfileWorkerOperations &
+  GitHubSetupWorkerOperations &
+  UserGitHubConnectionWorkerOperations;
 
 export const stateWorkerRegistry = createWorkerOperationRegistry<
   RegisteredStateWorkerOperations,
@@ -155,9 +159,15 @@ export const stateWorkerRegistry = createWorkerOperationRegistry<
     import("../infra/exec-approvals-authorization.worker.js").then(
       (m) => m.execAuthorizationOperations,
     ),
+  userGitHubConnections: () =>
+    import("./user-github-connections.worker.js").then((m) => m.userGitHubConnectionOperations),
   userBackground: async () =>
     (await import("./user-background.worker.js")).userBackgroundOperations,
   userProfiles: () => import("./user-profiles.worker.js").then((m) => m.userProfileOperations),
+  githubSetup: () =>
+    import("../secrets/store/secret-store-github-handoff.worker.js").then(
+      (m) => m.githubSetupOperations,
+    ),
   agentDatabaseRegistry: () =>
     import("./openclaw-agent-db-registry.worker.js").then((m) => m.agentDatabaseRegistryOperations),
   authProfiles: () =>

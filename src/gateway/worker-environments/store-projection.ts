@@ -17,7 +17,6 @@ import {
   encodeWorkerEnvironmentTransferAuthority,
 } from "./store-commit-authority.js";
 import { WorkerEnvironmentInventoryClosedError } from "./store-errors.js";
-import { assertShape } from "./store-validation.js";
 import type { WorkerEnvironmentCommitAdmission, WorkerEnvironmentFacts } from "./store.types.js";
 
 export type WorkerEnvironmentNativePatch = Partial<
@@ -53,25 +52,12 @@ function applyNativeOverlay(
   });
 }
 
-function assertEnvironmentShape(record: WorkerEnvironmentRecord): void {
-  assertShape(
-    record.state,
-    record.leaseId,
-    record.nodeDeviceId,
-    record.sshEndpoint,
-    record.desktop,
-    record.bootstrapReceipt,
-    record.attachedSessionIds,
-  );
-}
-
 const ownAdmission = new AsyncLocalStorage<object>();
 function createWorkerEnvironmentProjection() {
   const environments = new Map<string, WorkerEnvironmentRecord>();
   const credentials = new Map<string, WorkerCredentialRecord>();
   const attachments = new Map<string, WorkerEnvironmentAttachmentRecord>();
   const attachmentAuthorities = new Map<string, string>();
-  const revisions = new Map<string, number>();
   const nativeOverlays = new Map<string, NativeOverlay>();
   const pending = new Map<
     string,
@@ -82,10 +68,6 @@ function createWorkerEnvironmentProjection() {
       transferAuthorityUnchanged: boolean;
       attachmentAuthorityUnchanged: boolean;
     }
-  >();
-  const reconciliations = new Map<
-    object,
-    { ids: string[]; error: unknown; revocationId?: string }
   >();
   const revocationListeners = new Set<(environmentId: string) => void>();
   let sequence = 0;
@@ -122,10 +104,8 @@ function createWorkerEnvironmentProjection() {
     credentials.clear();
     attachments.clear();
     attachmentAuthorities.clear();
-    revisions.clear();
     nativeOverlays.clear();
     pending.clear();
-    reconciliations.clear();
     revocationListeners.clear();
     sorted = undefined;
     reconcilable = undefined;
@@ -163,14 +143,8 @@ function createWorkerEnvironmentProjection() {
       return result;
     },
     async ready() {
-      for (;;) {
-        const current = tail;
-        await current;
-        assertActive();
-        if (current === tail) {
-          return;
-        }
-      }
+      await tail;
+      assertActive();
     },
     nextSequence: () => ++sequence,
     withAdmission<T>(token: object, callback: () => T): T {
@@ -209,27 +183,12 @@ function createWorkerEnvironmentProjection() {
         });
       }
     },
-    retainReconciliation(
-      token: object,
-      ids: readonly string[],
-      error: unknown,
-      revocationId?: string,
-    ) {
-      assertActive();
-      reconciliations.set(token, { ids: [...ids], error, revocationId });
-    },
-    pendingReconciliations() {
-      assertActive();
-      return [...reconciliations].map(([token, recovery]) => Object.assign({ token }, recovery));
-    },
-    hasPendingReconciliation: () => reconciliations.size !== 0,
     release(token: object) {
       for (const [id, value] of pending) {
         if (value.token === token) {
           pending.delete(id);
         }
       }
-      reconciliations.delete(token);
     },
     onCredentialRevoked(listener: (environmentId: string) => void) {
       assertActive();
@@ -246,7 +205,7 @@ function createWorkerEnvironmentProjection() {
     install(facts: WorkerEnvironmentFacts, revision: number, notify = true) {
       assertActive();
       // Worker replies already own their rows; freeze each published revision for shared reads.
-      const changed = new Set(facts.ids.filter((id) => revision >= (revisions.get(id) ?? -1)));
+      const changed = new Set(facts.ids);
       const retainedSessions = new Set(
         facts.attachments
           .filter((row) => changed.has(row.environmentId))
@@ -256,7 +215,6 @@ function createWorkerEnvironmentProjection() {
         environments.delete(id);
         credentials.delete(id);
         attachmentAuthorities.delete(id);
-        revisions.set(id, revision);
       }
       for (const [session, attachment] of attachments) {
         if (changed.has(attachment.environmentId) && !retainedSessions.has(session)) {
@@ -312,9 +270,6 @@ function createWorkerEnvironmentProjection() {
     },
     publishPatch(id: string, patch: WorkerEnvironmentNativePatch, revision: number) {
       assertActive();
-      if (revision <= (revisions.get(id) ?? -1)) {
-        return;
-      }
       const captured = freezeJsonSnapshot(structuredClone(patch));
       const previous = nativeOverlays.get(id);
       const overlay: NativeOverlay = {
@@ -381,11 +336,7 @@ function createWorkerEnvironmentProjection() {
     },
     get(id: string) {
       assertReadable(id, "environment");
-      const record = environments.get(id);
-      if (record) {
-        assertEnvironmentShape(record);
-      }
-      return record;
+      return environments.get(id);
     },
     transferOwner(id: string) {
       assertReadable(id, "transfer");
@@ -428,7 +379,6 @@ function createWorkerEnvironmentProjection() {
       assertActive();
       sorted ??= freezeJsonSnapshot([...environments.values()].toSorted(compare));
       if (!reconcile) {
-        sorted.forEach(assertEnvironmentShape);
         return sorted;
       }
       reconcilable ??= freezeJsonSnapshot(
@@ -439,7 +389,6 @@ function createWorkerEnvironmentProjection() {
               Buffer.compare(Buffer.from(a.providerId), Buffer.from(b.providerId)) || compare(a, b),
           ),
       );
-      reconcilable.forEach(assertEnvironmentShape);
       return reconcilable;
     },
     hasSessionAttachment(environmentId: string) {

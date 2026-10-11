@@ -91,6 +91,7 @@ import { bindReplyOperationTyping } from "./reply-run-typing.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
 import { consumeReplyUsageState } from "./reply-usage-state.js";
+import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 import { buildChannelSourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createMockTypingController } from "./test-helpers.js";
 
@@ -651,13 +652,21 @@ describe("runReplyAgent active steering", () => {
       resetTriggered: false,
     });
     first.setPhase("running");
-    const createController = (
+    const createController = async (
       operation: ReplyOperation,
       initialEntry: SessionEntry,
       sourceTurnId: string,
     ) => {
       let entry = initialEntry;
-      return createReplyAgentRestartRecoveryController({
+      const actor = createReplyRecoveryActorFixture({
+        agentId: "main",
+        storePath,
+        sessionKey: "main",
+        getSessionId: () => operation.sessionId,
+        operation,
+      });
+      await actor.bind();
+      const controller = createReplyAgentRestartRecoveryController({
         activeSessionStore: sessionStore,
         cfg: {},
         followupRun: {
@@ -676,8 +685,11 @@ describe("runReplyAgent active steering", () => {
         },
         storePath,
       });
+      return Object.assign(controller, {
+        [Symbol.asyncDispose]: () => actor[Symbol.asyncDispose](),
+      });
     };
-    const firstController = createController(first, sessionEntry, "source-first");
+    await using firstController = await createController(first, sessionEntry, "source-first");
     attachSourceTurnRecorder({
       followupRun,
       sessionEntry,
@@ -745,9 +757,12 @@ describe("runReplyAgent active steering", () => {
           storePath,
         },
       });
-      await createController(replacement, replacementEntry, "source-replacement").admitUserTurn(
-        replacementRecorder,
+      await using replacementController = await createController(
+        replacement,
+        replacementEntry,
+        "source-replacement",
       );
+      await replacementController.admitUserTurn(replacementRecorder);
       expect(replyRunRegistry.resolveCurrentMessageInjectionTarget("main")).toMatchObject({
         sourceTurnId: "source-replacement",
       });
@@ -3175,6 +3190,14 @@ describe("runReplyAgent pending final delivery capture", () => {
       sessionId: "session",
       resetTriggered: false,
     });
+    await using actor = createReplyRecoveryActorFixture({
+      agentId: "main",
+      sessionKey: "main",
+      storePath,
+      getSessionId: () => replyOperation.sessionId,
+      operation: replyOperation,
+    });
+    await actor.bind();
     replyOperation.setPhase("running");
     state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
       expect(replyOperation.abortByUser()).toBe(true);
