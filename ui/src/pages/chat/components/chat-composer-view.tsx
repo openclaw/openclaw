@@ -114,8 +114,8 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     }),
   );
   const composerControls = createMemo(() => props.composerControls ?? undefined);
-  const composerLeadControl = createMemo(() =>
-    props.permissionPicker ? <ChatPermissionPicker {...props.permissionPicker} /> : undefined,
+  const composerLeadControl = (
+    <Show when={props.permissionPicker}>{(picker) => <ChatPermissionPicker {...picker()} />}</Show>
   );
   const placeholder = createMemo(() =>
     context.goalComposer.active
@@ -518,7 +518,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                       },
                     }}
                   />
-                  {composerLeadControl()}
+                  {composerLeadControl}
                 </div>
                 <div class="agent-chat__composer-trail">
                   <div class="agent-chat__composer-meta agent-chat__composer-context">
@@ -576,7 +576,7 @@ function ComposerTextarea(view: {
   });
   createRenderEffect(value, (next) => {
     // Native edits own their value and undo history until the draft scope changes.
-    if (element && !context.state.composerComposing && element.value !== next) {
+    if (element && !ownerState.composerComposing && element.value !== next) {
       element.value = next;
     }
   });

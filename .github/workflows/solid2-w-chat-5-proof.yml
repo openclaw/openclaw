@@ -192,6 +192,16 @@ jobs:
             ui/src/e2e/chat-composer-input-measurement.e2e.test.ts \
             ui/src/e2e/chat-flow.composer-shortcuts.e2e.test.ts \
             --maxWorkers=1
+          base_chat_gates() {
+            (cd "$BASE_WORKTREE"
+             node scripts/run-vitest.mjs run \
+               --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner \
+               ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts \
+               ui/src/e2e/chat-composer-input-measurement.e2e.test.ts \
+               ui/src/e2e/chat-flow.composer-shortcuts.e2e.test.ts \
+               --maxWorkers=1)
+          }
+          run_phase base-chat-transcript-gates base_chat_gates
           verify_source() {
             test "$(g rev-parse HEAD)" = "$EXPECTED_HEAD"
             g diff --exit-code

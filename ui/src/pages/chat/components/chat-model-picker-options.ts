@@ -3,12 +3,6 @@ import { t } from "../../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import { formatContextTokenCapacity } from "../../../lib/format.ts";
 import type { ModelRuntimeEntry } from "../../../lib/model-runtime-choice.ts";
-import { solidTemplate } from "./chat-composer-interop.tsx";
-import {
-  ChatModelPickerOption as ModelPickerOption,
-  ChatModelPickerTargetOption,
-  ChatModelProviderIcon,
-} from "./chat-model-picker-options.tsx";
 
 registerModelControlsEnglish();
 
@@ -105,15 +99,3 @@ export type ChatModelPickerTargetOptionProps = {
   index: number;
   onSelect: (groupId: string, value: string, event: MouseEvent) => void;
 };
-
-export function renderChatModelProviderIcon(provider: string) {
-  return solidTemplate(ChatModelProviderIcon, { provider });
-}
-
-export function renderChatModelPickerOption(params: ChatModelPickerOptionProps) {
-  return solidTemplate(ModelPickerOption, params);
-}
-
-export function renderChatModelPickerTargetOption(params: ChatModelPickerTargetOptionProps) {
-  return solidTemplate(ChatModelPickerTargetOption, params);
-}

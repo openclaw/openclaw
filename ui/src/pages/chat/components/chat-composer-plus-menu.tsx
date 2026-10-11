@@ -4,6 +4,7 @@ import type { ToolsEffectiveEntry, ToolsEffectiveResult } from "../../../api/typ
 import { pathForRoute } from "../../../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../../../app/context.ts";
 import { icons } from "../../../components/icons.ts";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../i18n/index.ts";
 import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { registerMcpEnglish } from "../../../i18n/locales/en-mcp.ts";
@@ -647,7 +648,7 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
           disabled={props.menu.disabled}
           title={t("chat.composer.addAttachment")}
         >
-          <LitContent value={icons.plus} />
+          <Icon name="plus" />
         </button>{" "}
         {content()}
       </wa-dropdown>

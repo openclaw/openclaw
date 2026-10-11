@@ -97,6 +97,51 @@ it("ends the old IME scope without writing into a newly selected session", () =>
   expect(onNewDraftChange).toHaveBeenCalledWith("second draft edited", undefined);
 });
 
+it("updates follow-up controls during IME without replacing or writing the input", () => {
+  const onDraftChange = vi.fn();
+  const props = createComposerProps({
+    canAbort: true,
+    onAbort: vi.fn(),
+    runActive: true,
+    stream: "Reply in progress",
+    followUpMode: "queue",
+    onDraftChange,
+  });
+  const view = mountSolid(() => <ChatComposer {...props} />);
+  const textarea = view.container.querySelector("textarea")!;
+  expect(view.container.querySelector(".chat-send-btn--stop")).not.toBeNull();
+  textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+  textarea.value = "Composing a follow-up";
+  const writes = vi.spyOn(HTMLTextAreaElement.prototype, "value", "set");
+  textarea.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+  flush();
+  const send = view.container.querySelector<HTMLButtonElement>(".chat-send-btn--send");
+  expect(send).not.toBeNull();
+  expect(send?.disabled).toBe(false);
+  expect(view.container.querySelector("textarea")).toBe(textarea);
+  expect(textarea.value).toBe("Composing a follow-up");
+  expect(writes).not.toHaveBeenCalled();
+  expect(onDraftChange).not.toHaveBeenCalled();
+});
+
+it("keeps the open permission picker through parent updates", () => {
+  const permissionPicker = { canSelectFull: true, onSelect: vi.fn() };
+  const [current, setCurrent] = createSignal(createComposerProps({ permissionPicker }));
+  const view = mountSolid(() => <ChatComposer {...current()} />);
+  const picker = view.container.querySelector<HTMLElement & { open: boolean }>(
+    ".chat-controls__permission-picker",
+  )!;
+  picker.open = true;
+  setCurrent((previous) => ({
+    ...previous,
+    stream: "More response",
+    permissionPicker: { ...permissionPicker },
+  }));
+  flush();
+  expect(view.container.querySelector(".chat-controls__permission-picker")).toBe(picker);
+  expect(picker.open).toBe(true);
+});
+
 it("keeps a pending dictation send bound to the action that started it", async () => {
   const controller = new ComposerDictationController({
     client: null,

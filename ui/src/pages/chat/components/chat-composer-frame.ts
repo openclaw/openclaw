@@ -374,6 +374,7 @@ export function createChatComposerContext(props: ChatComposerProps) {
     const hasInputIntent = consumeComposerInputIntent(state, draftKey);
     if (state.composerComposing || event.isComposing) {
       state.composingDraft = { key: draftKey, value: target.value };
+      requestUpdate();
       return;
     }
     if (state.composingDraft?.key === draftKey) {
