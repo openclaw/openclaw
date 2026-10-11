@@ -134,38 +134,32 @@ describe("Control UI build chunking", () => {
     // Recursive inclusion is a correctness requirement for this group: merging
     // the lazy boot graph without it emitted chunks whose execution order broke
     // at application start.
-    const bootGroup = controlUiCodeSplitting.groups.find(
+    const sharedGroup = controlUiCodeSplitting.groups.find(
       (group) => group.name === "control-ui-boot-shared",
     );
-    expect(bootGroup).toMatchObject({
-      name: "control-ui-boot-shared",
-      includeDependenciesRecursively: true,
-    });
+    expect(sharedGroup).toMatchObject({ includeDependenciesRecursively: true });
+    const bootGroup = sharedGroup as {
+      test: (id: string) => boolean;
+    };
     const repoRoot = new URL("../../..", import.meta.url).pathname.replace(/\/$/, "");
     // Representative always-loaded boot surface and a lazy island that must
     // keep its own chunk (terminal runtime is not part of the default boot).
-    expect(bootGroup?.test?.(`${repoRoot}/ui/src/components/app-sidebar.ts`)).toBe(true);
+    expect(bootGroup.test(`${repoRoot}/ui/src/components/app-sidebar.ts`)).toBe(true);
     // Chat reaches narration through a dynamic import without a request of its own.
-    expect(
-      bootGroup?.test?.(`${repoRoot}/ui/src/components/app-sidebar-session-narration.ts`),
-    ).toBe(true);
-    expect(bootGroup?.test?.(`${repoRoot}/ui/src/pages/chat/chat-page.ts`)).toBe(false);
+    expect(bootGroup.test(`${repoRoot}/ui/src/components/app-sidebar-session-narration.ts`)).toBe(
+      true,
+    );
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/chat/chat-page.ts`)).toBe(false);
     // Fetched shared chunks once co-located the chat view with modules New Session needs.
-    expect(bootGroup?.test?.(`${repoRoot}/ui/src/pages/chat/chat-view.ts`)).toBe(false);
-    expect(bootGroup?.test?.(`${repoRoot}/ui/src/styles/chat.ts`)).toBe(false);
-    expect(bootGroup?.test?.(`${repoRoot}/ui/src/components/assistant-panel-content.ts`)).toBe(
-      false,
-    );
-    expect(bootGroup?.test?.(`${repoRoot}/ui/src/pages/debug/debug-overlay-content.ts`)).toBe(
-      false,
-    );
-    expect(bootGroup?.test?.(`${repoRoot}/ui/src/pages/debug/debug-overlay.ts`)).toBe(false);
-    expect(bootGroup?.test?.(`${repoRoot}/ui/src/pages/debug/debug-overlay-state.ts`)).toBe(true);
-    expect(bootGroup?.test?.(`${repoRoot}/ui/src/pages/debug/debug-overlay-frame.ts`)).toBe(false);
-    expect(bootGroup?.test?.(`${repoRoot}/ui/src/pages/debug/debug-overlay-loading.ts`)).toBe(
-      false,
-    );
-    expect(bootGroup?.test?.(`${repoRoot}/node_modules/ghostty-web/dist/index.js`)).toBe(false);
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/chat/chat-view.ts`)).toBe(false);
+    expect(bootGroup.test(`${repoRoot}/ui/src/styles/chat.ts`)).toBe(false);
+    expect(bootGroup.test(`${repoRoot}/ui/src/components/assistant-panel-content.ts`)).toBe(false);
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-content.ts`)).toBe(false);
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay.ts`)).toBe(false);
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-state.ts`)).toBe(true);
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-frame.ts`)).toBe(false);
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-loading.ts`)).toBe(false);
+    expect(bootGroup.test(`${repoRoot}/node_modules/ghostty-web/dist/index.js`)).toBe(false);
   });
 
   it("derives stable manifest keys across pnpm layouts and platforms", () => {

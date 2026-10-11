@@ -5,6 +5,7 @@ export const GATEWAY_SERVER_CAPS = {
   CONTROL_UI_BROWSER_FOCUS: "control-ui-browser-focus",
   GATEWAY_RESTART_TARGET_SAFE: "gateway-restart-target-safe-v1",
   LOCAL_STATE_OWNER_ROUTING: "local-state-owner-routing-v1",
+  MODELS_AUTH_SET_API_KEY_OWNER: "models-auth-set-api-key-owner-v1",
   CHANNELS_PAIRING_LIST_OWNER: "channels-pairing-list-owner-v1",
   CHANNELS_PAIRING_APPROVE_OWNER: "channels-pairing-approve-owner-v1",
   EXEC_APPROVALS_GET_OWNER: "exec-approvals-get-owner-v1",
