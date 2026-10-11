@@ -41,6 +41,7 @@ import type {
 } from "./session-accessor.sqlite-archive-types.js";
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import { runExclusiveSqliteTranscriptArchiveWorker } from "./session-accessor.sqlite-archive.js";
+import * as sessionDeletion from "./session-accessor.sqlite-deletion.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
 import type { SqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker-lifetime.js";
 import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
@@ -237,6 +238,37 @@ describe("SQLite transcript archive sessions", () => {
     ).toEqual(
       sessionIds.map(() => ({ published_at: expect.any(Number), session_key: sessionKey })),
     );
+  });
+
+  it("publishes archive metadata off the main thread even inside a native deletion scope", async () => {
+    const { sessionId, sessionKey, database, event } = await prepareSession(
+      "native-scope-publication",
+      "synthetic archived payload",
+    );
+    const deleted = await deleteArchivedSession(sessionKey);
+    using nativeScope = vi
+      .spyOn(sessionDeletion, "hasPreparedNativeSessionDeletion")
+      .mockReturnValue(true);
+    using statements = vi.spyOn(database.db, "prepare");
+    await expect(
+      publishSessionStateArchives(
+        { agentId: "main", path: database.path, env: testState.env },
+        deleted.archivedTranscripts,
+      ),
+    ).resolves.toEqual(deleted.archivedTranscripts);
+    expect(
+      statements.mock.calls.filter(([query]) =>
+        /\b(?:update|insert into)\s+"?session_transcript_archives\b/iu.test(query),
+      ),
+    ).toEqual([]);
+    expect(readArchiveLines(deleted.archivedTranscripts[0]?.archivedPath)).toEqual([
+      JSON.stringify(event),
+    ]);
+    expect(
+      database.db
+        .prepare("SELECT publish_attempts FROM session_transcript_archives WHERE session_id = ?")
+        .get(sessionId),
+    ).toEqual({ publish_attempts: 2 });
   });
 
   it("joins a failed publisher and recovers its committed archive after result recording fails", async () => {

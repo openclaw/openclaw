@@ -205,6 +205,17 @@ once while retaining the final caller authorization check. These changes preserv
 schemas, stored bytes, permissions, and update behavior. Released synchronous SDK
 approval and placement contracts retain their native effect guards.
 
+Session maintenance retains its acknowledged active-entry count and conservative
+age deadline on the Gateway. Entry write receipts adjust these scheduling facts;
+removals and unknown outcomes invalidate them. Ordinary activity does not dispatch
+a maintenance read before expiry or capacity pressure. Due work takes its existing
+worker snapshot, and its acknowledgment supplies the next deadline without a
+second verification request. Archive file publication records its metadata through
+the canonical agent worker, including after native deletion preparation. Native
+inline maintenance and archive persistence still share the released opaque SDK
+deletion transaction; moving those calls requires that transaction owner's cutover.
+This changes no schemas, retention, stored bytes, or update behavior.
+
 ## Config CLI ownership
 
 ### Non-session bookkeeping
