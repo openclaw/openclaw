@@ -362,50 +362,57 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/config/mcp.ts",
+      "path": "ui/src/pages/config/mcp.tsx",
       "text": "openclaw mcp doctor --probe"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/config/mcp.ts",
+      "path": "ui/src/pages/config/mcp.tsx",
       "text": "openclaw mcp login &lt;name&gt;"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/config/mcp.ts",
+      "path": "ui/src/pages/config/mcp.tsx",
       "text": "openclaw mcp reload"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/config/mcp.ts",
+      "path": "ui/src/pages/config/mcp.tsx",
       "text": "openclaw mcp status --verbose"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/config/updates.ts",
+      "path": "ui/src/pages/config/updates.tsx",
       "text": "openclaw triage"
     },
     {
       "count": 1,
       "kind": "html-attribute",
       "name": "placeholder",
-      "path": "ui/src/pages/config/view-appearance-preferences.ts",
+      "path": "ui/src/pages/config/view-appearance-preferences.tsx",
       "text": "48rem"
     },
     {
       "count": 1,
       "kind": "html-attribute",
       "name": "placeholder",
-      "path": "ui/src/pages/config/view-appearance.ts",
+      "path": "ui/src/pages/config/view-appearance.tsx",
       "text": "https://tweakcn.com/editor/theme?theme=... or amethyst-haze"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/config/view-appearance.tsx",
+      "text": "tweakcn"
     },
     {
       "count": 1,
