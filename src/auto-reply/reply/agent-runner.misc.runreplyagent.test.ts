@@ -455,6 +455,11 @@ describe("runReplyAgent auto-compaction token update", () => {
         expect(runEmbeddedAgentMock.mock.calls.map(([params]) => params.trigger)).toEqual(["user"]);
         expectReplyText(result, "Two plus two is four.");
         expect(loadSessionEntry(scope)?.memoryFlush).toBeUndefined();
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        operation.completeWithAfterClearBarrier(delivery.promise, 1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(runEmbeddedAgentMock.mock.calls.map(([params]) => params.trigger)).toEqual(["user"]);
+        // Foreground priority has cleared, but maintenance still waits for actual delivery.
         let maintenanceSettled = false;
         const maintenance = waitForSessionMaintenance(sessionKey).then(() => {
           maintenanceSettled = true;
@@ -462,10 +467,6 @@ describe("runReplyAgent auto-compaction token update", () => {
         await Promise.resolve();
         await Promise.resolve();
         expect(maintenanceSettled).toBe(false);
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-        operation.completeWithAfterClearBarrier(delivery.promise, 1);
-        await vi.advanceTimersByTimeAsync(1);
-        expect(runEmbeddedAgentMock.mock.calls.map(([params]) => params.trigger)).toEqual(["user"]);
         if (preempted) {
           releaseForeground = await beginForegroundSessionMaintenance(sessionKey);
         }

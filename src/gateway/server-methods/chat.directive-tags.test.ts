@@ -4884,7 +4884,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       }),
     );
     expect(mockState.loadSessionEntryCalls).toContainEqual({
-      rawKey: requestedSessionKey,
+      rawKey: canonicalSessionKey,
       opts: { agentId: "main" },
     });
     expect(findUserUpdate()?.target).toEqual({
