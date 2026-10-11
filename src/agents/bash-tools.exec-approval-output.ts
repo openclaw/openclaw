@@ -1,4 +1,5 @@
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { ExecAllowlistAnalysis } from "../infra/exec-approvals-allowlist.js";
 import {
   EXEC_AUTO_REVIEW_DENIAL_GUIDANCE,
   formatExecAutoReviewAssessment,
@@ -8,6 +9,54 @@ import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "./tool-result-limits.js";
+
+/** Formats the existing denial from prepared lookup facts without exposing command text. */
+export function buildGatewayExecAllowlistDeniedMessage(evaluation: ExecAllowlistAnalysis): string {
+  const plan = evaluation.authorizationPlan;
+  if (evaluation.analysisOk && plan?.ok) {
+    let segmentIndex = 0;
+    for (const group of plan.groups) {
+      for (const candidate of group.candidates) {
+        const satisfiedBy = evaluation.segmentSatisfiedBy[segmentIndex++];
+        const resolution = candidate.sourceSegment.resolution;
+        if (
+          satisfiedBy === null &&
+          candidate.trustMode === "executable" &&
+          resolution !== null &&
+          resolution.policyBlocked !== true &&
+          !resolution.execution.resolvedPath &&
+          !resolution.execution.resolvedRealPath
+        ) {
+          return "exec denied: executable lookup unresolved; check Gateway PATH or use an absolute executable path";
+        }
+      }
+    }
+  }
+  return "exec denied: allowlist miss";
+}
+
+export function buildGatewayExecApprovalDeniedToolResult(params: {
+  approvalId?: string;
+  deniedReason: string;
+  command: string;
+  cwd: string;
+}): AgentToolResult<ExecToolDetails> {
+  const denialContext = params.approvalId
+    ? `gateway id=${params.approvalId}, ${params.deniedReason}`
+    : params.deniedReason;
+  const text = `Exec denied (${denialContext}): ${params.command}`;
+  return {
+    content: [{ type: "text", text }],
+    details: {
+      status: "failed",
+      exitCode: null,
+      durationMs: 0,
+      aggregated: text,
+      timedOut: params.deniedReason.includes("timeout"),
+      cwd: params.cwd,
+    },
+  };
+}
 
 /** Renders automatic denials consistently for gateway and node tool transports. */
 export function buildExecAutoReviewDeniedToolResult(params: {
