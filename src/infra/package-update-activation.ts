@@ -44,15 +44,33 @@ import {
   assertManagedUpdateLeaseDatabaseIdentity,
   captureManagedUpdateLeaseDatabaseIdentity,
   prepareManagedHandoffLeaseDatabaseIdentity,
-  type ManagedUpdateLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
 import { supportsPostCoreExecutor } from "./update-post-core-capability.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery.js";
 
 export type { PackageActivationStatus } from "./package-update-activation-status.js";
 
+function inspectPackageActivationLease({
+  databasePath,
+  databaseIdentity,
+  parentIdentity,
+}: PackageActivationRecord["descriptor"]["authority"]) {
+  let current: ReturnType<typeof captureManagedUpdateLeaseDatabaseIdentity> | undefined;
+  try {
+    current = captureManagedUpdateLeaseDatabaseIdentity(databasePath);
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT") || fs.lstatSync(databasePath, { throwIfNoEntry: false })) {
+      throw error;
+    }
+  }
+  return {
+    current,
+    changed: !isDeepStrictEqual(current, { databasePath, databaseIdentity, parentIdentity }),
+  };
+}
+
 /** Reconcile completed receipts; unfinished operations still require a live fence. */
-function readPackageActivationContinuation(installKey: string) {
+function readPackageActivationContinuation(installKey: string, dryRun?: boolean) {
   const anchor = resolvePackageActivationAnchor(installKey);
   const released = readReleasedPackageActivationReceipt(installKey);
   if (released) {
@@ -77,8 +95,17 @@ function readPackageActivationContinuation(installKey: string) {
   if (isPackageActivationComplete(anchor, record)) {
     return undefined;
   }
-  if (record.descriptor.authority.installKey !== installKey) {
-    throw new Error("Package publication is incomplete; its original continuation cannot run.");
+  if (
+    dryRun &&
+    ["prepared", "publishing", "publication-complete", "aborted", "superseded"].includes(
+      record.phase,
+    ) &&
+    [record.descriptor.previous.identity, record.descriptor.candidate.identity].includes(
+      packageActivationIdentity(installKey, true),
+    ) &&
+    inspectPackageActivationLease(record.descriptor.authority).changed
+  ) {
+    return undefined;
   }
   assertManagedUpdateLeaseDatabaseIdentity(record.descriptor.authority);
   if (record.phase === "superseded") {
@@ -89,25 +116,26 @@ function readPackageActivationContinuation(installKey: string) {
       `Package publication is incomplete; its original continuation cannot run. With the recorded external runtime, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
     );
   }
-  return record.descriptor.authority;
+  return record;
 }
 
 export function assertNoPendingPackageActivation(
   installKey: string,
-  options?: { continuation?: UpdateRecoveryFence },
+  options?: { continuation?: UpdateRecoveryFence; dryRun?: boolean },
 ): void {
-  const authority = readPackageActivationContinuation(installKey);
-  if (!authority) {
+  const record = readPackageActivationContinuation(installKey, options?.dryRun);
+  if (!record) {
     return;
   }
   if (
     options?.continuation &&
-    isDeepStrictEqual(authority, captureUpdateCommandExecutorAuthority(options.continuation))
+    isDeepStrictEqual(
+      record.descriptor.authority,
+      captureUpdateCommandExecutorAuthority(options.continuation),
+    )
   ) {
     return;
   }
-  const anchor = resolvePackageActivationAnchor(installKey);
-  const record = openPackageActivationJournal(anchor).read();
   throw new Error(
     `Package publication recovery is pending. With the recorded external runtime, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
   );
@@ -205,19 +233,16 @@ export async function settlePendingPackageActivation(
   installKey: string,
   onSettled?: (settlement: PackageActivationSettlement) => void,
   expectedCompleted?: PackageActivationRecord,
-  options?: { onlyStaleLease: boolean },
+  options?: { onlyStaleLease?: boolean; dryRun?: boolean },
 ) {
   const anchor = resolvePackageActivationAnchor(installKey);
   if (!expectedCompleted && !fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
     return undefined;
   }
   const journal = openPackageActivationJournal(anchor);
-  const admission = await journal.readForRecovery();
-  const initial = admission.record;
+  const admission = options?.dryRun ? undefined : await journal.readForRecovery();
+  const initial = admission?.record ?? journal.read();
   const complete = isPackageActivationComplete(anchor, initial);
-  if (options?.onlyStaleLease && complete) {
-    return undefined;
-  }
   if (expectedCompleted && (!complete || !isDeepStrictEqual(initial, expectedCompleted))) {
     throw new Error("Completed package receipt changed; inspect recovery status before retrying.");
   }
@@ -228,7 +253,7 @@ export async function settlePendingPackageActivation(
     initial.phase === "superseded" && initial.intent && "settled" in initial.intent
       ? initial.intent
       : undefined;
-  const receipt =
+  const receipt: PackageActivationSettlement | undefined =
     priorSettlement || complete
       ? {
           operationId: initial.descriptor.operationId,
@@ -237,6 +262,9 @@ export async function settlePendingPackageActivation(
           detail: priorSettlement?.detail,
         }
       : undefined;
+  if (options?.onlyStaleLease && complete) {
+    return options.dryRun ? receipt : undefined;
+  }
   const originalAuthority = initial.descriptor.authority;
   const replacementIdentity = packageActivationIdentity(installKey, true);
   if (
@@ -247,32 +275,11 @@ export async function settlePendingPackageActivation(
   ) {
     return undefined;
   }
-  let currentDatabase: ManagedUpdateLeaseDatabaseIdentity;
-  // A recreated file can reuse the lost inode. Keep the recorded loss when
-  // resuming an interrupted custody transfer.
-  let leaseWasMissing =
-    initial.phase === "superseded" && initial.intent?.kind === "recovery-lease-missing";
-  try {
-    currentDatabase = captureManagedUpdateLeaseDatabaseIdentity(originalAuthority.databasePath);
-  } catch (error) {
-    if (
-      !hasErrnoCode(error, "ENOENT") ||
-      fs.lstatSync(originalAuthority.databasePath, { throwIfNoEntry: false })
-    ) {
-      throw error;
-    }
-    // A reboot can remove the temporary store. Its owner provisions it; the
-    // fresh executor below still fences every change to retained package custody.
-    currentDatabase = await prepareManagedHandoffLeaseDatabaseIdentity(
-      originalAuthority.databasePath,
-    );
-    leaseWasMissing = true;
-  }
-  const leaseIdentityChanged =
-    leaseWasMissing ||
-    currentDatabase.databasePath !== originalAuthority.databasePath ||
-    currentDatabase.databaseIdentity !== originalAuthority.databaseIdentity ||
-    currentDatabase.parentIdentity !== originalAuthority.parentIdentity;
+  const lease = inspectPackageActivationLease(originalAuthority);
+  const leaseWasMissing =
+    !lease.current ||
+    (initial.phase === "superseded" && initial.intent?.kind === "recovery-lease-missing");
+  const leaseIdentityChanged = leaseWasMissing || lease.changed;
   if (options?.onlyStaleLease && !leaseIdentityChanged) {
     return undefined;
   }
@@ -313,13 +320,28 @@ export async function settlePendingPackageActivation(
     assertNoPendingPackageActivation(installKey);
     return undefined;
   }
+  if (options?.dryRun) {
+    if (externalPublication) {
+      await verifyPackagePublicationSettlement(initial, () => journal.assertCurrent(initial));
+    }
+    return {
+      operationId: initial.descriptor.operationId,
+      reason,
+      retained: `${anchor}.superseded-${initial.descriptor.operationId}`,
+      detail: undefined,
+      warning: undefined,
+    };
+  }
+  const currentDatabase =
+    lease.current ??
+    (await prepareManagedHandoffLeaseDatabaseIdentity(originalAuthority.databasePath));
   return withUpdateCommandExecutor(
     randomUUID(),
     async (executor) => {
       const fence = await executor.enter(installKey);
       const assertCurrent = retainMutationAuthority(fence.assertCurrent);
       assertManagedUpdateLeaseDatabaseIdentity(currentDatabase);
-      admission.admit(assertCurrent);
+      admission!.admit(assertCurrent);
       journal.assertCurrent(initial);
       if (packageActivationIdentity(installKey, true) !== replacementIdentity) {
         throw new Error("The installed package changed before recovery settlement.");

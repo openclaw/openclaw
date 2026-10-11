@@ -16,8 +16,7 @@ if (!cut || !root || !encodedAuthority) {
 }
 const authority: ReturnType<typeof captureUpdateCommandExecutorAuthority> =
   JSON.parse(encodedAuthority);
-const replacement = cut.startsWith("replacement-");
-const later = cut.startsWith("transition-") || replacement;
+const later = cut.startsWith("transition-");
 const expectedRecord: PackageActivationRecord | undefined = encodedRecord
   ? JSON.parse(encodedRecord)
   : undefined;
@@ -129,13 +128,9 @@ if (cut.startsWith("transition-")) {
 const { preparePackageActivationJournal } = await import("./package-update-activation-prepare.js");
 const { createPackageSwapFixture } = await import("./package-update-swap.test-support.js");
 const { createPackageIntegrityReader } = await import("./package-update-integrity.js");
-// A completed first operation has published its candidate. Keep that live root
-// untouched; only the next operation's independently staged inputs are new.
-const fixture = await createPackageSwapFixture(replacement ? path.join(root, "replacement") : root);
-const liveRoot = replacement ? authority.installKey : fixture.packageRoot;
-const launcher = replacement
-  ? path.join(expectedRecord!.descriptor.binDir, "openclaw")
-  : fixture.launcher;
+const fixture = await createPackageSwapFixture(root);
+const liveRoot = fixture.packageRoot;
+const launcher = fixture.launcher;
 await withUpdateCommandExecutor(
   randomUUID(),
   async (executor) => {

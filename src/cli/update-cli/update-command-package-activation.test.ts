@@ -3,18 +3,26 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as gatewayService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
-import { resolvePackageActivationJournalPath } from "../../infra/package-update-activation-journal.js";
+import {
+  resolvePackageActivationHelper,
+  resolvePackageActivationJournalPath,
+} from "../../infra/package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "../../infra/package-update-activation-lifetime.test-support.js";
-import { readPackageActivationReceipt } from "../../infra/package-update-activation.js";
+import {
+  readPackageActivationReceipt,
+  runPackageActivationRecovery,
+} from "../../infra/package-update-activation.js";
 import * as packageTarget from "../../infra/update-check-package-target.js";
 import * as updateCheck from "../../infra/update-check.js";
 import * as updateGlobal from "../../infra/update-global.js";
+import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import * as shared from "./shared.js";
+import { prepareUpdateCommand } from "./update-command-run.js";
 import { updateCommand } from "./update-command.js";
 import { createInterruptedPackagePublication } from "./update-package-publication.test-support.js";
 
@@ -41,13 +49,40 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+function snapshot(root: string) {
+  return fs
+    .readdirSync(root, { recursive: true })
+    .map(String)
+    .toSorted()
+    .map((name) => {
+      const file = path.join(root, name);
+      const stat = fs.lstatSync(file);
+      return { name, inode: stat.ino, bytes: stat.isFile() ? fs.readFileSync(file) : undefined };
+    });
+}
+
+function preparePreview(
+  f: Pick<Awaited<ReturnType<typeof fixtures.prepare>>, "params" | "packageRoot">,
+) {
+  mocks.root.mockResolvedValue(f.packageRoot);
+  vi.spyOn(shared, "resolveGlobalManager").mockResolvedValue("npm");
+  vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
+  vi.spyOn(updateGlobal, "resolveGlobalInstallTarget").mockResolvedValue(f.params.installTarget);
+  vi.spyOn(packageTarget, "fetchNpmPackageTargetStatus").mockResolvedValue({
+    version: "3.0.0",
+    nodeEngine: ">=24.16.0",
+  });
+  vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(createMockGatewayService());
+  vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
+}
+
 describe.skipIf(process.platform === "win32")("package activation admission", () => {
   it.each(
     (["missing", "replaced"] as const).flatMap((lease) =>
       (["candidate", "previous", "damaged candidate"] as const).map((live) => ({ lease, live })),
     ),
   )(
-    "dry-run reconciles a publication-complete receipt with a $lease lease and $live live",
+    "dry-run preserves a publication-complete receipt with a $lease lease and $live live",
     async ({ lease, live }) => {
       const f = await createInterruptedPackagePublication(fixtureRoot, "publication-complete");
       mocks.root.mockResolvedValue(f.packageRoot);
@@ -76,19 +111,10 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
         fs.copyFileSync(`${databasePath}.lost`, databasePath);
         fs.chmodSync(databasePath, 0o600);
       }
-      vi.spyOn(shared, "resolveGlobalManager").mockResolvedValue("npm");
-      vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
-      vi.spyOn(updateGlobal, "resolveGlobalInstallTarget").mockResolvedValue(
-        f.params.installTarget,
-      );
-      vi.spyOn(packageTarget, "fetchNpmPackageTargetStatus").mockResolvedValue({
-        version: "3.0.0",
-        nodeEngine: ">=24.16.0",
-      });
-      vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(createMockGatewayService());
-      vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
+      preparePreview(f);
       const packageBytes = fs.readFileSync(path.join(f.packageRoot, "dist/index.js"));
       const journalBytes = fs.readFileSync(resolvePackageActivationJournalPath(f.anchor));
+      const before = snapshot(fixtureRoot);
 
       if (live === "damaged candidate") {
         await expect(
@@ -104,14 +130,33 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
           journalBytes,
         );
         expect(fs.readFileSync(retainedPrevious)).toEqual(previousBytes);
+        expect(snapshot(fixtureRoot)).toEqual(before);
         return;
       }
 
       await updateCommand({ dryRun: true, json: true, tag: "3.0.0" });
 
+      expect(snapshot(fixtureRoot)).toEqual(before);
       expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({ dryRun: true, targetVersion: "3.0.0" }),
+        expect.objectContaining({
+          dryRun: true,
+          targetVersion: "3.0.0",
+          notes: expect.arrayContaining([
+            expect.stringMatching(/Would settle.*update can proceed/),
+          ]),
+        }),
       );
+      const previousPostCore = process.env[POST_CORE_UPDATE_ENV];
+      vi.stubEnv(POST_CORE_UPDATE_ENV, "1");
+      try {
+        await expect(prepareUpdateCommand({ dryRun: true, json: true })).rejects.toMatchObject({
+          name: "UpdateCommandPendingRecoveryFailure",
+        });
+      } finally {
+        vi.stubEnv(POST_CORE_UPDATE_ENV, previousPostCore);
+      }
+      expect(snapshot(fixtureRoot)).toEqual(before);
+      await prepareUpdateCommand({ json: true });
       expect(readPackageActivationReceipt(f.packageRoot)).toBeUndefined();
       expect(fs.readFileSync(path.join(f.packageRoot, "dist/index.js"))).toEqual(packageBytes);
       if (live === "candidate") {
@@ -122,8 +167,38 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
         ).toEqual(previousBytes);
       }
       expect(defaultRuntime.error).toHaveBeenCalledWith(
-        expect.stringContaining("previous package update"),
+        expect.stringContaining("Settled previous package update"),
       );
     },
   );
+  it("previews archival of a completed receipt without changing a leftover helper", async () => {
+    const f = await fixtures.prepare();
+    await runPackageActivationRecovery(f.anchor, "repair", f.operationId);
+    await runPackageActivationRecovery(f.anchor, "retire", f.operationId);
+    fs.writeFileSync(resolvePackageActivationHelper(f.anchor), "retained helper");
+    fs.writeFileSync(path.join(f.packageRoot, "openclaw.mjs"), "export {};\n");
+    fs.writeFileSync(
+      path.join(f.packageRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "1.0.0",
+        type: "module",
+        bin: { openclaw: "openclaw.mjs" },
+      }),
+    );
+    fs.unlinkSync(f.launcher);
+    fs.symlinkSync("../lib/node_modules/openclaw/openclaw.mjs", f.launcher);
+    preparePreview(f);
+    const before = snapshot(fixtureRoot);
+
+    await updateCommand({ dryRun: true, json: true, tag: "3.0.0" });
+
+    expect(snapshot(fixtureRoot)).toEqual(before);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dryRun: true,
+        notes: expect.arrayContaining([expect.stringContaining("publication-retired")]),
+      }),
+    );
+  });
 });

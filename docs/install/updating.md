@@ -537,14 +537,14 @@ ownership; it is not authority to mutate an installation. Historical filesystem
 or executor-store identities do not have to match today's identities. Reboots,
 remounts, or removal of already-retained evidence do not reopen a closed operation.
 Reading a completed receipt does not rewrite it.
-A new update archives completed receipts with leftover helpers or recovery
-directories before preparing its own operation, preserving those files as evidence.
+A new update archives the completed receipt before preparing its own operation,
+preserving the journal and any leftover helpers or recovery directories as evidence.
 
 Explicit repair preserves settled evidence, including the entire control journal,
 inside the operation's retained recovery directory. The completed journal leaves
 the active admission path, so an older updater does not need to understand a newer
-settlement reason. Ordinary successful retirement still reuses the bounded last
-receipt described above.
+settlement reason. Ordinary successful retirement retains the last receipt until the next update
+archives it.
 Explicit repair verifies an installed candidate under current executor ownership,
 even when the old lease store disappeared or was replaced. It does not execute
 the old helper, so a changed or missing helper and changed retained directories
@@ -552,13 +552,14 @@ are preserved as evidence rather than required as proof of the live package.
 An unfinished rollback cannot be settled merely because its lease or installation
 was replaced.
 
-`openclaw update`, including `--dry-run`, uses the same settlement before admission
+`openclaw update` uses the same settlement before admission
 when the recorded lease database is missing or its identity has changed and the
 live installation is still the recorded previous or candidate package. Candidate
 content and launchers must pass verification. Settlement preserves recovery
 evidence, reports a warning, and does not restart the Gateway or install a package.
-Other pending operations still require `openclaw update repair` or the recorded
-package recovery command. The lease database stays at its existing location.
+`--dry-run` verifies and reports the planned settlement without changing the
+journal, lease database, or recovery evidence. Other pending operations still
+require `openclaw update repair` or the recorded package recovery command. The lease database stays at its existing location.
 
 After the transaction verifies its selected installation, cleanup failures are
 warnings. Changed old package trees, old helpers, and unexpected backup contents
