@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CommandTurnContext } from "../command-turn-context.js";
 import {
   resolveSourceReplyDeliveryMode,
+  resolveSourceReplyExpectation,
   resolveSourceReplyVisibilityPolicy,
 } from "./source-reply-delivery-mode.js";
 
@@ -569,5 +570,81 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
         deliverySuppressionReason: "sourceReplyDeliveryMode: message_tool_only",
       },
     );
+  });
+});
+
+describe("resolveSourceReplyExpectation", () => {
+  const groupAllow = {
+    agents: { defaults: { silentReply: { group: "allow" } } },
+  } as OpenClawConfig;
+  const surfaceDisallow = {
+    agents: { defaults: { silentReply: { group: "allow" } } },
+    surfaces: { telegram: { silentReply: { group: "disallow" } } },
+  } as OpenClawConfig;
+  const botReplyPing = {
+    ChatType: "group",
+    Provider: "telegram",
+    SenderIsBot: true,
+    WasMentioned: true,
+    MentionSource: "implicit_thread",
+  } as const;
+
+  it.each([
+    {
+      label: "bot unmentioned group turn",
+      cfg: groupAllow,
+      ctx: { ...botReplyPing, WasMentioned: false, MentionSource: undefined },
+      expected: "optional",
+    },
+    {
+      label: "bot reply-only group ping",
+      cfg: groupAllow,
+      ctx: botReplyPing,
+      expected: "optional",
+    },
+    {
+      label: "bot reply-only ping, default group policy",
+      cfg: emptyConfig,
+      ctx: botReplyPing,
+      expected: "required",
+    },
+    {
+      label: "bot reply-only ping, surface disallow",
+      cfg: surfaceDisallow,
+      ctx: botReplyPing,
+      expected: "required",
+    },
+    {
+      label: "bot explicit group mention",
+      cfg: groupAllow,
+      ctx: { ...botReplyPing, MentionSource: "explicit_bot" },
+      expected: "required",
+    },
+    {
+      label: "bot mention without a mention source",
+      cfg: groupAllow,
+      ctx: { ...botReplyPing, MentionSource: undefined },
+      expected: "required",
+    },
+    {
+      label: "human reply-only group ping",
+      cfg: groupAllow,
+      ctx: { ...botReplyPing, SenderIsBot: false },
+      expected: "required",
+    },
+    {
+      label: "bot direct message",
+      cfg: groupAllow,
+      ctx: { ChatType: "direct", SenderIsBot: true },
+      expected: "required",
+    },
+    {
+      label: "bot authorized group command",
+      cfg: groupAllow,
+      ctx: { ...botReplyPing, CommandAuthorized: true, CommandBody: "/status" },
+      expected: "required",
+    },
+  ] as const)("expects a $expected reply for a $label", ({ cfg, ctx, expected }) => {
+    expect(resolveSourceReplyExpectation({ cfg, ctx })).toBe(expected);
   });
 });

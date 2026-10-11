@@ -19,6 +19,7 @@ import type {
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { classifyPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
+import { isOptionalBotSenderReply } from "./source-reply-delivery-mode.js";
 
 /** Settles abort, lifecycle, and terminal failure state after fallback execution. */
 export async function settleAgentFallbackCycle(params: {
@@ -144,6 +145,10 @@ export async function settleAgentFallbackCycle(params: {
       successfulSourceReplyDelivery,
       isHeartbeat: turn.isHeartbeat,
       isRoomEvent: turn.sessionCtx.InboundEventKind === "room_event",
+      optionalBotSenderReply: isOptionalBotSenderReply({
+        senderIsBot: turn.followupRun.run.senderIsBot,
+        replyExpectation: turn.followupRun.run.terminalReplyExpectation,
+      }),
       finalText,
     }) === "short"
       ? ({ disposition: "empty", code: "message-tool-not-called" } as const)

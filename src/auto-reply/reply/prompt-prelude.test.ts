@@ -1,6 +1,9 @@
 // Tests prompt prelude construction for sender, routing, and context metadata.
 import { describe, expect, it } from "vitest";
-import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
+import {
+  BOT_SENDER_DELIVERY_HINT,
+  MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+} from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { buildInboundUserContextPrefix } from "./inbound-meta.js";
 import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
@@ -65,6 +68,45 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.transcriptCommandBody).toBe("what changed?");
     expect(envelope.transcriptCommandBody).not.toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
   });
+
+  it.each([
+    { SenderIsBot: true, replyExpectation: "optional", bot: true },
+    { SenderIsBot: true, replyExpectation: "required", bot: false },
+    { SenderIsBot: false, replyExpectation: "optional", bot: false },
+    { SenderIsBot: undefined, replyExpectation: "optional", bot: false },
+  ] as const)(
+    "says a reply is optional only on an optional bot-sender turn: bot=$SenderIsBot $replyExpectation",
+    ({ SenderIsBot, replyExpectation, bot }) => {
+      const sessionCtx = finalizeInboundContext({
+        Body: "thanks!",
+        BodyStripped: "thanks!",
+        Provider: "telegram",
+        ChatType: "group",
+        InboundEventKind: "user_request",
+        SenderIsBot,
+      });
+
+      const envelope = buildReplyPromptEnvelope({
+        ctx: sessionCtx,
+        sessionCtx,
+        baseBody: "thanks!",
+        prefixedBody: "thanks!",
+        hasUserBody: true,
+        inboundUserContext: "Current message:\nchat_id=-100123",
+        isBareSessionReset: false,
+        startupAction: "new",
+        inboundEventKind: "user_request",
+        sourceReplyDeliveryMode: "message_tool_only",
+        replyExpectation,
+      });
+
+      const [hint, other] = bot
+        ? [BOT_SENDER_DELIVERY_HINT, MESSAGE_TOOL_ONLY_DELIVERY_HINT]
+        : [MESSAGE_TOOL_ONLY_DELIVERY_HINT, BOT_SENDER_DELIVERY_HINT];
+      expect(countOccurrences(envelope.currentInboundContext?.text, hint)).toBe(1);
+      expect(envelope.currentInboundContext?.text).not.toContain(other);
+    },
+  );
 
   it.each(["pending", "recent"] as const)(
     "keeps %s room history in the initial prompt but not the resumed prompt",

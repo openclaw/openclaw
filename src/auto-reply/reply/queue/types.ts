@@ -260,6 +260,8 @@ export type FollowupRun = {
     senderName?: string;
     senderUsername?: string;
     senderE164?: string;
+    /** The channel marked the sender as a bot; see `isOptionalBotSenderReply`. */
+    senderIsBot?: boolean;
     traceAuthorized?: boolean;
     /** Inline choice stays on this run; omission follows the live session preference. */
     traceLevelOverride?: TraceLevel;
