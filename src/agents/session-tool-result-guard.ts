@@ -543,7 +543,7 @@ export function installSessionToolResultGuard(
       }
       return undefined;
     }
-    let finalMessage = finalWrite.message;
+    const finalMessage = finalWrite.message;
     if (
       finalMessage.role === "assistant" &&
       toolCalls.length === 0 &&
@@ -556,15 +556,7 @@ export function installSessionToolResultGuard(
       assistantErrorTranscript &&
       finalMessage.stopReason === "error"
     ) {
-      const target = sessionManager.getSessionTarget();
-      if (target) {
-        const replayMessage = assistantErrorTranscript.record(finalMessage, target, message);
-        if (!replayMessage) {
-          return undefined;
-        }
-        copyCodeModeSourceAppend(finalMessage, replayMessage, sourceAppend);
-        finalMessage = replayMessage;
-      }
+      assistantErrorTranscript.record(message);
     }
     if (finalMessage.role === "user") {
       const suppress = nextUserMessagePersistence === "suppress";

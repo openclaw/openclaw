@@ -5,8 +5,15 @@ import type { ApplicationGateway } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { BoardWidgetCellCallbacks } from "./board-widget-cell.ts";
 import "./board-widget-cell.ts";
+
+const disposers: Array<() => void> = [];
+function mount(element: HTMLElement): void {
+  disposers.push(mountSolid(() => element, { container: document.body }).unmount);
+}
 
 function callbacks(): BoardWidgetCellCallbacks {
   const noAction = vi.fn(async () => undefined);
@@ -30,6 +37,9 @@ function callbacks(): BoardWidgetCellCallbacks {
 }
 
 afterEach(() => {
+  for (const dispose of disposers.splice(0)) {
+    dispose();
+  }
   document.body.replaceChildren();
 });
 
@@ -39,6 +49,36 @@ afterEach(() => {
 const CHUNK_LOAD_WAIT = { timeout: 10_000 };
 
 describe("plugin board widget cells", () => {
+  it("updates a healthy frame when only its URL resolver changes", async () => {
+    const widget: BoardWidget = {
+      name: "external-report",
+      tabId: "main",
+      contentKind: "plugin",
+      pluginKind: "reports:external",
+      frameUrl: "https://reports.example.test/report",
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "none",
+      revision: 1,
+    };
+    const cell = document.createElement("openclaw-board-widget-cell");
+    cell.widget = widget;
+    cell.rect = { name: widget.name, x: 0, y: 0, w: 6, h: 4 };
+    cell.callbacks = callbacks();
+    cell.widgetFrameUrl = () => "/report/initial";
+    mount(cell);
+    await cell.updateComplete;
+    const frame = cell.querySelector("iframe")!;
+    expect(frame.getAttribute("src")).toBe("/report/initial");
+
+    cell.widgetFrameUrl = () => "/report/refreshed";
+    await cell.updateComplete;
+    await waitForSolid(() => expect(frame.getAttribute("src")).toBe("/report/refreshed"));
+    expect(cell.querySelector("iframe")).toBe(frame);
+    expect(cell.widget).toBe(widget);
+  });
+
   it.each([false, true])(
     "preserves a removable unavailable widget (Labs disabled: %s)",
     async (labsDisabled) => {
@@ -82,7 +122,7 @@ describe("plugin board widget cells", () => {
       cell.sessionKey = "agent:main:test";
       cell.callbacks = cellCallbacks;
       provider.append(cell);
-      document.body.append(provider);
+      mount(provider);
       await cell.updateComplete;
 
       const placeholder = cell.querySelector('[data-test-id="board-disabled-plugin"]');
@@ -143,7 +183,7 @@ describe("plugin board widget cells", () => {
     cell.sessionKey = "agent:main:dashboard";
     cell.callbacks = callbacks();
     provider.append(cell);
-    document.body.append(provider);
+    mount(provider);
     await vi.waitFor(
       () =>
         expect(cell.querySelector("openclaw-report-widget")?.textContent).toContain(
@@ -315,7 +355,7 @@ describe("plugin board widget cells", () => {
       cell.active = index !== 0;
       cell.callbacks = callbacks();
       provider.append(cell);
-      document.body.append(provider);
+      mount(provider);
 
       if (index === 0) {
         await cell.updateComplete;
@@ -436,7 +476,7 @@ describe("plugin board widget cells", () => {
     cell.session = { sessionKey: "agent:main:dashboard", agentId: "main" };
     cell.callbacks = callbacks();
     provider.append(cell);
-    document.body.append(provider);
+    mount(provider);
 
     await vi.waitFor(
       () => expect(cell.querySelector('[data-test-id="session-progress-error"]')).not.toBeNull(),
@@ -600,7 +640,7 @@ describe("plugin board widget cells", () => {
     cell.active = true;
     cell.callbacks = callbacks();
     provider.append(cell);
-    document.body.append(provider);
+    mount(provider);
 
     await vi.waitFor(
       () =>

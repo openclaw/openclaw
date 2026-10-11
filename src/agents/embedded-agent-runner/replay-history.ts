@@ -54,6 +54,7 @@ import {
   extractToolResultId,
   sanitizeToolCallIdsForCloudCodeAssist,
 } from "../tool-call-id.js";
+import { createCompletedToolCallPredicate } from "../tool-call-shared.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import type { TranscriptPolicy } from "../transcript-policy.types.js";
 import {
@@ -321,16 +322,38 @@ function normalizeAssistantReplayMessage(
 
 export function normalizeAssistantReplayContent(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
+  let isCompletedToolCall: ReturnType<typeof createCompletedToolCallPredicate> | undefined;
   const out: AgentMessage[] = [];
   for (const message of messages) {
     if (message?.role !== "user" && message?.role !== "assistant") {
       out.push(message);
       continue;
     }
-    const normalized =
+    let normalized =
       message.role === "user"
         ? sanitizeUserReplayContent(message)
         : normalizeAssistantReplayMessage(message, out);
+    if (
+      normalized?.role === "assistant" &&
+      (normalized.stopReason === "error" || normalized.stopReason === "aborted") &&
+      normalized.content.some((block) => block.type === "toolCall")
+    ) {
+      const completedToolCall = (isCompletedToolCall ??=
+        createCompletedToolCallPredicate(messages));
+      if (
+        normalized.content.some((block) => block.type === "toolCall" && completedToolCall(block))
+      ) {
+        // Signed thinking belongs to the completed calls; the failed source stays intact for display.
+        const completed = normalized.content.filter(
+          (block) =>
+            block.type !== "text" && (block.type !== "toolCall" || completedToolCall(block)),
+        );
+        normalized = {
+          ...replaceCompactionReplayOwnerContent(normalized, completed),
+          stopReason: "toolUse",
+        };
+      }
+    }
     if (normalized) {
       out.push(normalized);
     }

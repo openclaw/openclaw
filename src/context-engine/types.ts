@@ -251,7 +251,6 @@ type ContextEnginePromptCacheObservationChangeCode =
   | "compaction"
   | "pruning"
   | "runtimeContextCarrier"
-  | "imageCleanup"
   | "aggregateToolResultTruncation"
   | "cacheRetention"
   | "model"

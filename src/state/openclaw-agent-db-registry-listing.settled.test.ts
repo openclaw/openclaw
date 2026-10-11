@@ -9,8 +9,13 @@ import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "./openclaw-agent-db-registry-listing.js";
+import {
+  registerOpenClawAgentDatabase,
+  unregisterOpenClawAgentDatabase,
+} from "./openclaw-agent-db-registry.js";
 import { readRegisteredAgentDatabaseRows } from "./openclaw-agent-db-registry.read.js";
 import { readOpenClawStateReadOnlyLocation } from "./openclaw-state-db-read-connection.js";
+import * as stateReads from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -36,6 +41,43 @@ function createRegistry(malformed: boolean) {
   closeOpenClawStateDatabaseForTest();
   return options;
 }
+
+it("discovers the published registry across overlapping creation and deletion", async () => {
+  const options = createRegistry(false);
+  const target = (agentId: string) => ({
+    agentId,
+    env: options.env,
+    path: path.join(
+      options.env.OPENCLAW_STATE_DIR,
+      "agents",
+      agentId,
+      "agent",
+      "openclaw-agent.sqlite",
+    ),
+  });
+  registerOpenClawAgentDatabase(target("main"));
+  registerOpenClawAgentDatabase(target("temporary-0"));
+  const read = stateReads.executeExistingOpenClawStateRead;
+  let publications = 0;
+  const reads = vi
+    .spyOn(stateReads, "executeExistingOpenClawStateRead")
+    .mockImplementation(async (...args) => {
+      const reply = await read(...args);
+      if (args[1].type === "agentDatabaseRegistry.read" && publications < 3) {
+        registerOpenClawAgentDatabase(target(`temporary-${publications + 1}`));
+        unregisterOpenClawAgentDatabase(target(`temporary-${publications}`));
+        publications++;
+      }
+      return reply;
+    });
+  const snapshot = await prepareOpenClawAgentDatabaseRegistrySnapshotRead(options).read();
+  expect(snapshot.result).toMatchObject({
+    status: "available",
+    entries: [{ agentId: "main" }, { agentId: "temporary-3" }],
+  });
+  expect(snapshot.assertCurrent).not.toThrow();
+  expect(reads).toHaveBeenCalledTimes(4);
+});
 
 it("reuses migration admission across registry writes and refuses a changed legacy schema", () => {
   const options = createRegistry(false);

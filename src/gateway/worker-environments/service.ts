@@ -23,7 +23,7 @@ import {
   joinInferenceOperations,
   registerWorkerInferenceSessionControl,
 } from "./inference-control-internal.js";
-import { createWorkerInferenceManager } from "./inference.js";
+import { createWorkerInferenceManager, executeWorkerInference } from "./inference.js";
 import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
@@ -65,8 +65,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const now = options.now ?? Date.now;
   const tunnelLifecycle = createWorkerEnvironmentTransportLifecycle(options);
   const inference = createWorkerInferenceManager({
-    execute: options.executeInference,
-    getConfig: options.getConfig,
+    execute: executeWorkerInference,
     ...(options.inferenceStore ? { store: options.inferenceStore } : {}),
   });
   let reconcileInFlight: Promise<void> | undefined;
