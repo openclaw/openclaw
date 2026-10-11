@@ -684,6 +684,7 @@ export function createChatComposerContext(props: ChatComposerProps) {
   return {
     props,
     state,
+    attachmentReadRevision: props.attachmentReads?.revision,
     canCompose,
     showAbortableUi,
     visibleDraft,

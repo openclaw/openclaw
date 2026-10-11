@@ -326,7 +326,7 @@ describe("composer overflow presentation", () => {
       ],
     });
     const part = render(renderChatComposer(props), container);
-    const strip = container.querySelector<HTMLElement>('[role="status"]')!;
+    let strip = container.querySelector<HTMLElement>('[role="status"]')!;
     const visibleNames = () =>
       [...strip.querySelectorAll<HTMLElement>(".composer-context-strip__person")]
         .filter((person) => !person.hidden)
@@ -357,7 +357,7 @@ describe("composer overflow presentation", () => {
     }
     container.style.width = "300px";
     await expect.poll(visibleNames).toEqual(["@Jordan Rivera"]);
-    const more = strip.querySelector<HTMLElement>(".composer-context-strip__more")!;
+    let more = strip.querySelector<HTMLElement>(".composer-context-strip__more")!;
     expect(more.hidden).toBe(false);
     expect(more.textContent).toBe("+1");
     expect(more.title).toBe("@Morgan Williams");
@@ -365,6 +365,8 @@ describe("composer overflow presentation", () => {
     part.setConnected(false);
     container.style.width = "760px";
     part.setConnected(true);
+    strip = container.querySelector<HTMLElement>('[role="status"]')!;
+    more = strip.querySelector<HTMLElement>(".composer-context-strip__more")!;
     await expect.poll(visibleNames).toEqual(["@Jordan Rivera", "@Morgan Williams"]);
     expect(more.hidden).toBe(true);
     const longName = "Morgan Alexandra Penelope Williams ".repeat(3).trim();

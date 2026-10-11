@@ -41,7 +41,7 @@ import {
   ComposerProgress,
   ComposerGoal,
 } from "./chat-composer-regions.tsx";
-import { renderSelectedHumanMentionsSolid } from "./chat-composer-selected-mentions.tsx";
+import { SelectedHumanMentions } from "./chat-composer-selected-mentions.tsx";
 import { resetSkillMenuState, SkillMenu, type SkillMenuHost } from "./chat-composer-skill-menu.tsx";
 import { SlashMenu, resetSlashMenuState, type SlashMenuHost } from "./chat-composer-slash-menu.tsx";
 import { commitComposerDraft } from "./chat-composer-state.ts";
@@ -60,6 +60,7 @@ import { renderChatVoiceStatus } from "./chat-voice-activity.ts";
 type ChatComposerViewContext = {
   props: ChatComposerProps;
   state: ChatComposerState;
+  attachmentReadRevision: number | undefined;
   canCompose: boolean;
   showAbortableUi: boolean;
   visibleDraft: string;
@@ -108,6 +109,11 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
 
   const activeSession = createMemo(() => props.selectedSession);
   const composerControls = createMemo(() => props.composerControls ?? undefined);
+  const attachmentPreview = createMemo(() => {
+    // Read entries mutate without replacing the lifecycle or attachment array.
+    void context.attachmentReadRevision;
+    return renderAttachmentPreview(props);
+  });
   const composerLeadControl = (
     <Show when={props.permissionPicker}>{(picker) => <ChatPermissionPicker {...picker()} />}</Show>
   );
@@ -359,15 +365,15 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                   </>
                 )}
                 <GoalComposerMode controller={context.goalComposer} />
-                {renderSelectedHumanMentionsSolid(
-                  context.visibleDraft,
-                  props.mentions,
-                  () => {
+                <SelectedHumanMentions
+                  text={context.visibleDraft}
+                  mentions={props.mentions}
+                  onRemove={() => {
                     commitComposerDraft(props, props.getDraft?.() ?? props.draft, []);
                     context.requestUpdate();
-                  },
-                  context.state.mentionMenu.selectedAvatarUrls,
-                )}
+                  }}
+                  avatarUrls={context.state.mentionMenu.selectedAvatarUrls}
+                />
                 {props.replyTarget ? (
                   <>
                     <div class="chat-reply-preview composer-context-strip">
@@ -405,7 +411,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     ></openclaw-mcp-app-context-strip>
                   </>
                 )}
-                <LitContent value={renderAttachmentPreview(props)} />
+                <LitContent value={attachmentPreview()} />
                 <LitContent
                   value={renderAttachmentReadStatus(
                     props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0,

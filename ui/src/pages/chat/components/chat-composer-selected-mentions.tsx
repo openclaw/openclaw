@@ -1,4 +1,4 @@
-import { For, onCleanup } from "solid-js";
+import { createMemo, createRenderEffect, For, onCleanup, Show, type Accessor } from "solid-js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
@@ -7,7 +7,9 @@ import "../../../styles/chat/composer-context-strip.css";
 import { solidTemplate } from "./chat-composer-controls.ts";
 import { LitContent } from "./chat-composer-interop.tsx";
 
-function mentionOverflow() {
+type MentionPerson = { profileId: string; label: string; name: string; avatarUrl?: string };
+
+function mentionOverflow(readPeople: Accessor<readonly MentionPerson[]>) {
   let element: HTMLElement | undefined;
   let disposed = false;
   const sync = () => {
@@ -52,6 +54,7 @@ function mentionOverflow() {
       .join(", ");
     people[0]!.style.maxWidth = `${Math.max(0, available - (more.hidden ? 0 : moreWidth + gap))}px`;
   };
+  createRenderEffect(readPeople, sync);
   const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(sync);
   onCleanup(() => {
     disposed = true;
@@ -69,70 +72,97 @@ function mentionOverflow() {
   };
 }
 
-export function renderSelectedHumanMentionsSolid(
+type SelectedHumanMentionsProps = {
+  text: string;
+  mentions: readonly HumanMention[] | undefined;
+  onRemove: () => void;
+  avatarUrls?: ReadonlyMap<string, string>;
+};
+
+export function SelectedHumanMentions(props: SelectedHumanMentionsProps) {
+  const people = createMemo(
+    () => {
+      const recipients = new Map(props.mentions?.map((mention) => [mention.profileId, mention]));
+      return [...recipients.values()].map((mention) => {
+        const label = props.text.slice(mention.start, mention.end);
+        return {
+          profileId: mention.profileId,
+          label,
+          name: label.replace(/^@/u, ""),
+          avatarUrl: props.avatarUrls?.get(mention.profileId),
+        };
+      });
+    },
+    {
+      equals: (previous, next) =>
+        previous.length === next.length &&
+        previous.every((person, index) => {
+          const current = next[index]!;
+          return (
+            person.profileId === current.profileId &&
+            person.label === current.label &&
+            person.avatarUrl === current.avatarUrl
+          );
+        }),
+    },
+  );
+  return (
+    <Show when={people().length > 0}>
+      <div class="chat-reply-preview composer-context-strip" role="status">
+        <span class="composer-context-strip__label">
+          <span class="composer-context-strip__icon" aria-hidden="true">
+            <LitContent value={icons.bell} />
+          </span>
+          <span class="composer-context-strip__label-text">{t("chat.mentions.selectedLabel")}</span>
+        </span>
+        <span class="sr-only">
+          {people()
+            .map((person) => person.name)
+            .join(", ")}
+        </span>
+        <span
+          class="composer-context-strip__people"
+          aria-hidden="true"
+          ref={mentionOverflow(people)}
+        >
+          <For keyed={(person) => person.profileId} each={people()}>
+            {(person, index) => (
+              <span class="composer-context-strip__person" title={person().label}>
+                <LitContent
+                  value={renderChatAuthorAvatar({
+                    id: person().profileId,
+                    name: person().name,
+                    identity: { type: "profile", id: person().profileId },
+                    profileAvatarUrl: person().avatarUrl,
+                  })}
+                />
+                <bdi class="composer-context-strip__person-name">
+                  {person().name}
+                  {index() < people().length - 1 ? "," : ""}
+                </bdi>
+              </span>
+            )}
+          </For>
+          <span class="composer-context-strip__more" dir="ltr" hidden></span>
+        </span>
+        <button
+          type="button"
+          class="chat-reply-preview__dismiss composer-context-strip__dismiss"
+          aria-label={t("chat.mentions.remove")}
+          onClick={() => props.onRemove()}
+        >
+          <LitContent value={icons.x} />
+        </button>
+      </div>
+    </Show>
+  );
+}
+
+export function renderSelectedHumanMentions(
   text: string,
   mentions: readonly HumanMention[] | undefined,
   onRemove: () => void,
   avatarUrls?: ReadonlyMap<string, string>,
 ) {
-  if (!mentions?.length) {
-    return null;
-  }
-  const recipients = new Map(mentions.map((mention) => [mention.profileId, mention]));
-  const people = [...recipients.values()].map((mention) => {
-    const label = text.slice(mention.start, mention.end);
-    return { profileId: mention.profileId, label, name: label.replace(/^@/u, "") };
-  });
-  return (
-    <div class="chat-reply-preview composer-context-strip" role="status">
-      <span class="composer-context-strip__label">
-        <span class="composer-context-strip__icon" aria-hidden="true">
-          <LitContent value={icons.bell} />
-        </span>
-        <span class="composer-context-strip__label-text">{t("chat.mentions.selectedLabel")}</span>
-      </span>
-      <span class="sr-only">{people.map((person) => person.name).join(", ")}</span>
-      <span class="composer-context-strip__people" aria-hidden="true" ref={mentionOverflow()}>
-        <For keyed={(item) => item} each={people}>
-          {(menuItem, menuIndex) => (
-            <span class="composer-context-strip__person" title={menuItem().label}>
-              <LitContent
-                value={renderChatAuthorAvatar({
-                  id: menuItem().profileId,
-                  name: menuItem().name,
-                  identity: { type: "profile", id: menuItem().profileId },
-                  profileAvatarUrl: avatarUrls?.get(menuItem().profileId),
-                })}
-              />
-              <bdi class="composer-context-strip__person-name">
-                {menuItem().name}
-                {menuIndex() < people.length - 1 ? "," : ""}
-              </bdi>
-            </span>
-          )}
-        </For>
-        <span class="composer-context-strip__more" dir="ltr" hidden></span>
-      </span>
-      <button
-        type="button"
-        class="chat-reply-preview__dismiss composer-context-strip__dismiss"
-        aria-label={t("chat.mentions.remove")}
-        onClick={onRemove}
-      >
-        <LitContent value={icons.x} />
-      </button>
-    </div>
-  );
-}
-
-function renderSelectedHumanMentionsContent(props: {
-  args: Parameters<typeof renderSelectedHumanMentionsSolid>;
-}) {
-  return <>{renderSelectedHumanMentionsSolid(...props.args)}</>;
-}
-
-export function renderSelectedHumanMentions(
-  ...args: Parameters<typeof renderSelectedHumanMentionsSolid>
-) {
-  return solidTemplate(renderSelectedHumanMentionsContent, { args });
+  return solidTemplate(SelectedHumanMentions, { text, mentions, onRemove, avatarUrls });
 }
