@@ -637,7 +637,6 @@ export function captureSessionWorkRunInterruptions(params: {
   const currentAdmissions = CURRENT_SESSION_WORK_ADMISSIONS.getStore();
   const isCurrent = (admission: SessionWorkAdmission) =>
     !admission.interrupted &&
-    admission.lifecycleGeneration === getAgentRunLifecycleGeneration() &&
     identities.some((identity) => ACTIVE_SESSION_WORK_ADMISSIONS.get(identity)?.has(admission));
   const admissions = collectSessionWorkAdmissions(
     identities,

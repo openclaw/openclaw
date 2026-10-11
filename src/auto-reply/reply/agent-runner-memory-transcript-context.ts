@@ -8,6 +8,7 @@ import {
   type SessionTranscriptAccountingSnapshot,
   type SessionTranscriptUsageSnapshot,
 } from "../../config/sessions/session-transcript-accounting.types.js";
+import { SessionTranscriptReadFenceError } from "../../config/sessions/session-transcript-read-fence.js";
 import {
   readSessionMessagesAsync,
   readSessionTranscriptAccountingAsync,
