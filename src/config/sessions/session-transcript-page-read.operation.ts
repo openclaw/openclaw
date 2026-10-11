@@ -31,6 +31,9 @@ export function startTranscriptPageRead(
       `Transcript page read deadline exceeds the ${MAX_TRANSCRIPT_PAGE_READ_WINDOW_MS} ms operation budget`,
     );
   }
+  if (!Number.isFinite(input.deadlineAt)) {
+    throw new RangeError("Transcript page read deadline must be a finite timestamp");
+  }
   const resource = acquireHistoryDatabaseResource(target);
   const previous = pageReadOperationTails.get(resource);
   const priorFailure = pageReadOperationFailures.get(resource);
@@ -82,6 +85,9 @@ export function startTranscriptPageRead(
         retained.release();
       },
     );
+    // settled observes the primary outcome first; this observer only prevents
+    // an unhandled rejection when the response already rejected.
+    void cleanup.catch(() => undefined);
     return read;
   })();
   const settled = (async (): Promise<TranscriptReadAccounting> => {

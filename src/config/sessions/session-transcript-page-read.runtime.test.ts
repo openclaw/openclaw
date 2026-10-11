@@ -8,6 +8,7 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { startTranscriptPageRead } from "./session-transcript-page-read.operation.js";
 import {
+  acquireHistoryDatabaseResource,
   historyLane,
   type SessionHistoryDatabaseTarget,
 } from "./session-transcript-worker-resources.js";
@@ -116,6 +117,9 @@ it("rejects deadline windows beyond the five-second operation budget", async () 
     expect(() =>
       startTranscriptPageRead(fixture.target, operationInput(fixture, performance.now() + 5001)),
     ).toThrow(/deadline/);
+    expect(() =>
+      startTranscriptPageRead(fixture.target, operationInput(fixture, Number.NaN)),
+    ).toThrow(/finite/);
   });
 });
 
@@ -252,11 +256,36 @@ it("settles a canceled operation across a mid-flight source replacement", async 
           ...operationInput(fixture, performance.now() + 5000),
           expectedIdentity: readDatabasePathIdentitySync(originalPath),
         });
-        await expect(replaced.response).resolves.toMatchObject({ ok: false });
+        await expect(replaced.response).resolves.toMatchObject({ ok: false, error: "read_failed" });
         await expect(replaced.settled).resolves.toMatchObject({ final: false });
       } finally {
         fs.rmSync(originalPath + ".original", { force: true });
       }
+    },
+  );
+});
+
+it("holds the resource for the whole native read", async () => {
+  const bulky = Array.from({ length: 40 }, (_, index) => ({
+    type: "message",
+    id: `bulky-${index}`,
+    message: { role: "user", content: "x".repeat(400_000) },
+  }));
+  await withPageFixture(
+    [{ type: "session", id: "page-runtime", version: 3 }, ...bulky],
+    async (fixture) => {
+      const resource = acquireHistoryDatabaseResource(fixture.target);
+      const operation = startTranscriptPageRead(
+        fixture.target,
+        operationInput(fixture, performance.now() + 5000, bigLimits),
+      );
+      const pendingDuringFlight = await new Promise<number>((resolve) => {
+        setImmediate(() => resolve(resource.pending));
+      });
+      expect(pendingDuringFlight).toBeGreaterThan(0);
+      const response = await operation.response;
+      expect(response.ok).toBe(true);
+      await operation.settled;
     },
   );
 });

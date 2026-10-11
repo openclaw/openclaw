@@ -235,6 +235,9 @@ it("refuses a newer schema through the worker without migrating it", async () =>
         }),
     );
     expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe("read_failed");
+    }
     expect(await fs.readFile(scope.path)).toEqual(originalBytes);
     const verify = new (requireNodeSqlite().DatabaseSync)(scope.path, { readOnly: true });
     try {
@@ -272,6 +275,48 @@ it("refuses a store without the agent schema without adopting it", async () => {
         }),
     );
     expect(result.ok).toBe(false);
+    if (!result.ok) {
+      // Schema probes on a foreign store throw rather than return
+      // schema-missing; both schema refusal forms map to read_failed.
+      expect(result.error).toBe("read_failed");
+    }
     expect(await fs.readFile(bare)).toEqual(originalBytes);
+  });
+});
+
+it("maps an unwritable coordination directory to unsupported without creating state", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const writer = openOpenClawAgentDatabase({ agentId: "main", env });
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:locked-dir",
+      sessionId: "locked-dir",
+      path: writer.path,
+      env,
+    };
+    writeSessionEntry(writer, scope.sessionKey, {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      lifecycleRevision: "original",
+    });
+    await closeOpenClawAgentDatabaseByPathAsync(writer.path);
+    const directory = path.dirname(scope.path);
+    await fs.chmod(directory, 0o500);
+    try {
+      const result = await withSessionHistoryWorkerDatabase(
+        { agentId: "main", path: scope.path, env },
+        (owner) =>
+          owner.readTranscriptPage({
+            request: { scope, expectedLifecycleRevision: "original", limits },
+            expectedIdentity: readDatabasePathIdentitySync(scope.path),
+          }),
+      );
+      expect(result).toMatchObject({ ok: false, error: "unsupported" });
+      const names = await fs.readdir(directory);
+      expect(names).not.toContain(path.basename(scope.path) + "-wal");
+      expect(names).not.toContain(path.basename(scope.path) + "-shm");
+    } finally {
+      await fs.chmod(directory, 0o700);
+    }
   });
 });

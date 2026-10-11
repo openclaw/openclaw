@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok } from "@openclaw/normalization-core/result";
+import { sqlitePrimaryResultCode } from "../../infra/sqlite-error-diagnostics.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
@@ -32,6 +33,11 @@ export type SessionHistoryWorkerRequestRunner = <TResult>(
 ) => Promise<TResult>;
 
 type SessionHistoryWorkerValue = SessionTranscriptWorkerValues[SessionHistoryWorkerInput["kind"]];
+
+/** Coordination failures (read-only family) are an admission condition, not a read defect. */
+function isSqliteReadonlyAdmissionError(error: unknown): boolean {
+  return sqlitePrimaryResultCode(error) === 8;
+}
 
 function assertResultKind<K extends Extract<SessionHistoryWorkerValue, { kind: string }>["kind"]>(
   value: SessionHistoryWorkerValue,
@@ -118,7 +124,9 @@ export function createSessionHistoryWorkerReaders(
               : error instanceof WorkerTaskError &&
                   (error.code === "timeout" || signal?.aborted === true)
                 ? "timed_out"
-                : "read_failed",
+                : isSqliteReadonlyAdmissionError(error)
+                  ? "unsupported"
+                  : "read_failed",
           budget,
         };
       }
