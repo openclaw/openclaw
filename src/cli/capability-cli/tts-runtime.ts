@@ -16,12 +16,12 @@ import { canonicalizeSpeechProviderId, listSpeechProviders } from "../../tts/pro
 import type { TtsResult } from "../../tts/tts-runtime-types.js";
 import { isTtsConfigReservedKey, resolveTtsPersonaList } from "../../tts/tts-settings.js";
 import {
-  getTtsProvider,
+  getTtsProviderAsync,
   listTtsPersonas,
   listSpeechVoices,
-  resolveExplicitTtsOverrides,
+  resolveExplicitTtsOverridesAsync,
   resolveTtsConfig,
-  resolveTtsPrefsPath,
+  resolveTtsPrefsPathAsync,
   setTtsEnabled,
   setTtsPersona,
   setTtsProvider,
@@ -73,12 +73,12 @@ export async function runTtsConvert(params: {
       commandName: "infer tts convert",
       targetIds: getTtsCommandSecretTargetIds(),
     });
-    let ttsProvider =
-      params.provider ?? resolveModelRefOverride(normalizeOptionalString(params.modelId)).provider;
-    if (!ttsProvider) {
-      const ttsConfig = resolveTtsConfig(cfg, { channelId: params.channel });
-      ttsProvider = getTtsProvider(ttsConfig, resolveTtsPrefsPath(ttsConfig));
-    }
+    const ttsConfig = resolveTtsConfig(cfg, { channelId: params.channel });
+    const prefsPath = await resolveTtsPrefsPathAsync(ttsConfig);
+    const ttsProvider =
+      params.provider ??
+      resolveModelRefOverride(normalizeOptionalString(params.modelId)).provider ??
+      (await getTtsProviderAsync(ttsConfig, prefsPath));
     const effectiveCfg = await injectTtsAuthProfileApiKey({
       cfg,
       provider: ttsProvider,
@@ -87,8 +87,9 @@ export async function runTtsConvert(params: {
     if (effectiveCfg !== cfg) {
       pinRuntimeConfigSnapshot(effectiveCfg);
     }
-    const overrides = resolveExplicitTtsOverrides({
+    const overrides = await resolveExplicitTtsOverridesAsync({
       cfg: effectiveCfg,
+      prefsPath,
       provider: params.provider,
       modelId: params.modelId,
       voiceId: params.voiceId,
@@ -102,6 +103,7 @@ export async function runTtsConvert(params: {
     const localResult = await textToSpeech({
       text: params.text,
       cfg: effectiveCfg,
+      prefsPath,
       channel: params.channel,
       overrides,
       disableFallback: hasExplicitSelection,
@@ -278,8 +280,8 @@ export async function runTtsProviders(transport: CapabilityTransport, rawAgentId
   }
   const agentId = resolveCapabilityProviderAgentId(cfg, rawAgentId);
   const config = resolveTtsConfig(cfg);
-  const prefsPath = resolveTtsPrefsPath(config);
-  const active = getTtsProvider(config, prefsPath);
+  const prefsPath = await resolveTtsPrefsPathAsync(config);
+  const active = await getTtsProviderAsync(config, prefsPath);
   return {
     providers: listSpeechProviders(cfg).map((provider) => ({
       available: true,
@@ -313,8 +315,9 @@ export async function runTtsVoices(providerRaw?: string) {
     targetIds: getTtsCommandSecretTargetIds(),
   });
   const config = resolveTtsConfig(cfg);
-  const prefsPath = resolveTtsPrefsPath(config);
-  const provider = normalizeOptionalString(providerRaw) || getTtsProvider(config, prefsPath);
+  const prefsPath = await resolveTtsPrefsPathAsync(config);
+  const provider =
+    normalizeOptionalString(providerRaw) || (await getTtsProviderAsync(config, prefsPath));
   return await listSpeechVoices({
     provider,
     cfg,
@@ -351,7 +354,7 @@ export async function runTtsStateMutation(params: {
 
   const cfg = getRuntimeConfig();
   const config = resolveTtsConfig(cfg);
-  const prefsPath = resolveTtsPrefsPath(config);
+  const prefsPath = await resolveTtsPrefsPathAsync(config);
   if (params.capability === "tts.enable" || params.capability === "tts.disable") {
     const enabled = params.capability === "tts.enable";
     setTtsEnabled(prefsPath, enabled);

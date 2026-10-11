@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show } from "solid-js";
+import { children, For, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -201,6 +201,7 @@ function SettingsRowText(
 }
 
 export function SettingsRow(props: SettingsRowProps & { role?: "alert" | "status" }) {
+  const control = children(() => props.control);
   return (
     <div
       class={[
@@ -219,9 +220,9 @@ export function SettingsRow(props: SettingsRowProps & { role?: "alert" | "status
         description={props.description}
         carapace={props.carapace}
       />
-      <Show when={props.control !== undefined && props.control !== null && props.control !== false}>
+      <Show when={control() !== undefined && control() !== null && control() !== false}>
         <div class={["settings-row__control", { "oc-settings-row-control": props.carapace }]}>
-          {props.control}
+          {control()}
         </div>
       </Show>
     </div>

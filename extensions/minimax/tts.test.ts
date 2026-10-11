@@ -2,7 +2,10 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { isProviderAuthProfileConfigured } from "openclaw/plugin-sdk/provider-auth";
+import {
+  isProviderAuthProfileConfigured,
+  isProviderAuthProfileConfiguredAsync,
+} from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -146,6 +149,7 @@ async function runMinimaxLoopbackFixture(fixture: MinimaxWireFixture): Promise<B
     if (fixture.entryPoint === "speech") {
       const result = await buildMinimaxSpeechProvider({
         isProviderAuthProfileConfigured,
+        isProviderAuthProfileConfiguredAsync,
       }).synthesize({
         text: "loopback fixture",
         cfg: {},

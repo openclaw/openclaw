@@ -23,7 +23,12 @@ it("keeps distinct peer avatars and focused message content across group updates
   const group = createMessageGroup(message("Peer image"), "user", {
     key: "peer-group",
     senderLabel: "Peer",
-    sender: { id: "peer", name: "Peer", identity: { type: "profile", id: "peer" } },
+    sender: {
+      id: "peer",
+      name: "Peer",
+      identity: { type: "profile", id: "peer" },
+      profileAvatarUrl: "/api/users/peer/avatar?v=1",
+    },
     messages: [
       { key: "peer-first", message: message("Peer image") },
       {

@@ -258,7 +258,7 @@ async function executeMainSessionCronJob(
     job,
     state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
   );
-  const deliveryContext = resolveMainSessionCronDeliveryContext(state, job);
+  const deliveryContext = await resolveMainSessionCronDeliveryContext(state, job);
   const queuedSystemEvent = normalizeQueuedSystemEventHandle(
     state.deps.enqueueSystemEvent(text, {
       agentId,
@@ -520,7 +520,9 @@ async function executeScriptCronJob(
       state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
     );
     const deliveryContext =
-      job.sessionTarget === "main" ? resolveMainSessionCronDeliveryContext(state, job) : undefined;
+      job.sessionTarget === "main"
+        ? await resolveMainSessionCronDeliveryContext(state, job)
+        : undefined;
     const eventOptions = { agentId, ...(deliveryContext ? { deliveryContext } : {}) };
     if (job.sessionTarget === "main" && notify) {
       state.deps.enqueueSystemEvent(notify, {

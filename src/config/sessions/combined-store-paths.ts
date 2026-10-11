@@ -3,10 +3,10 @@ import {
   createRetainedAgentDatabaseMatcher,
   createRetainedAgentDatabaseMatcherFromSnapshot,
 } from "../../state/agent-deletion-discovery.js";
-import type { AgentDatabaseDeletionSnapshot } from "../../state/agent-deletion-journal.types.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import type { GatewaySessionStoreDiscovery } from "./combined-store.types.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import { resolvePersistedSessionStoreOwner } from "./session-store-owner.js";
 import { resolveConfiguredAgentDatabaseTargets, type SessionStoreTarget } from "./targets.js";
@@ -43,15 +43,11 @@ export function resolveCombinedDatabasePath(
   return paths.length === 1 ? expectDefined(paths[0], "database path at 0") : "(multiple)";
 }
 
-export type GatewaySessionStoreDiscovery = {
-  env: NodeJS.ProcessEnv;
-  snapshot: AgentDatabaseDeletionSnapshot | undefined;
-};
-
 export function discoveryReadOptions(discovery?: GatewaySessionStoreDiscovery) {
   return discovery
     ? {
         env: discovery.env,
+        readCandidates: discovery.readCandidates,
         registeredDatabases: (discovery.snapshot?.registeredAgentDatabases ?? []).filter(
           (entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION,
         ),
