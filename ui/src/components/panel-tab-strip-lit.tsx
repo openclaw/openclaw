@@ -1,40 +1,28 @@
-import { html, nothing, render as renderLit, type TemplateResult } from "lit";
-import { Directive, directive, type Part } from "lit/directive.js";
+import type { TemplateResult } from "lit";
 import { Show, createEffect, createMemo, onCleanup } from "solid-js";
 import { defineSolidBridge } from "../lit/solid-bridge.ts";
 import { PanelTabStrip } from "./panel-tab-strip-solid.tsx";
-import type { PanelTabStripParams, PanelTabStripTab } from "./panel-tab-strip-types.ts";
+import type {
+  LegacyPanelTabStripParams,
+  PanelTabStripContentRenderer,
+} from "./panel-tab-strip-types.ts";
 
-type LegacyTab = PanelTabStripTab & { controls: string };
-type LegacyParams = Omit<PanelTabStripParams, "tabs" | "ariaControls"> & {
-  tabs: LegacyTab[];
-  renderHost?: object;
-};
-
-/** Preserve the originating Lit event/ref receiver inside the owned leaf roots. */
-class RenderHostParamsDirective extends Directive {
-  render(params: LegacyParams) {
-    return params;
-  }
-
-  override update(part: Part, [params]: [LegacyParams]) {
-    return { ...params, renderHost: part.options?.host };
-  }
-}
-
-const withRenderHost = directive(RenderHostParamsDirective);
-
-/** Lit owns only this leaf's descendants; Solid owns the surrounding tab UI. */
-function LitContent(props: { value: TemplateResult | typeof nothing; host?: object }) {
+/** The callback owns this leaf's descendants; Solid owns the surrounding tab UI. */
+function LitContent(props: {
+  value: TemplateResult | undefined;
+  renderContent: PanelTabStripContentRenderer;
+}) {
   let container!: HTMLSpanElement;
+  let renderContent: PanelTabStripContentRenderer | undefined;
   createEffect(
-    () => ({ value: props.value, host: props.host }),
-    ({ value, host }) => {
-      renderLit(value, container, { host });
+    () => ({ value: props.value, renderContent: props.renderContent }),
+    (content) => {
+      renderContent = content.renderContent;
+      renderContent(content.value, container);
     },
   );
   onCleanup(() => {
-    renderLit(nothing, container);
+    renderContent?.(undefined, container);
   });
   return (
     <span
@@ -46,19 +34,22 @@ function LitContent(props: { value: TemplateResult | typeof nothing; host?: obje
   );
 }
 
-function LegacyPanelTabStrip(props: { params: LegacyParams }) {
+function LegacyPanelTabStrip(props: { params: LegacyPanelTabStripParams }) {
   const tabs = createMemo(() =>
     props.params.tabs.map((tab) => ({
       ...tab,
       icon:
-        tab.icon == null || tab.icon === nothing ? undefined : (
-          <LitContent value={tab.icon} host={props.params.renderHost} />
+        tab.icon === undefined ? undefined : (
+          <LitContent value={tab.icon} renderContent={props.params.renderContent} />
         ),
     })),
   );
   // Keep interactive caller content in the same Lit root across tab updates.
   const newControl = (
-    <LitContent value={props.params.newControl ?? nothing} host={props.params.renderHost} />
+    <LitContent
+      value={props.params.newControl ?? undefined}
+      renderContent={props.params.renderContent}
+    />
   );
   return (
     <PanelTabStrip
@@ -72,11 +63,7 @@ function LegacyPanelTabStrip(props: { params: LegacyParams }) {
       newDisabled={props.params.newDisabled}
       newTabAction={props.params.newTabAction}
       newControl={
-        props.params.newControl === nothing
-          ? null
-          : props.params.newControl
-            ? newControl
-            : undefined
+        props.params.newControl === null ? null : props.params.newControl ? newControl : undefined
       }
       separateTabs={props.params.separateTabs}
       onReorder={props.params.onReorder}
@@ -84,26 +71,10 @@ function LegacyPanelTabStrip(props: { params: LegacyParams }) {
   );
 }
 
-defineSolidBridge<{ params: LegacyParams | null }>(
+defineSolidBridge<{ params: LegacyPanelTabStripParams | null }>(
   "openclaw-panel-tab-strip",
   (props) => (
     <Show when={props.params}>{(params) => <LegacyPanelTabStrip params={params()} />}</Show>
   ),
   { properties: { params: { default: null, attribute: false } } },
 );
-
-/** Transitional adapter for the remaining Lit headers; the tab UI has one owner. */
-export function renderPanelTabStrip<T extends PanelTabStripTab>(params: PanelTabStripParams<T>) {
-  const bridgeParams: LegacyParams = {
-    ...params,
-    tabs: params.tabs.map((tab) => ({
-      ...tab,
-      controls:
-        typeof params.ariaControls === "string" ? params.ariaControls : params.ariaControls(tab),
-    })),
-  };
-  return html`<openclaw-panel-tab-strip
-    style="display: contents"
-    .params=${withRenderHost(bridgeParams)}
-  ></openclaw-panel-tab-strip>`;
-}

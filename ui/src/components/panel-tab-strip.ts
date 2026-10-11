@@ -1,7 +1,52 @@
-import { css } from "lit";
+import { css, html, nothing, render as renderLit, type TemplateResult } from "lit";
+import { Directive, directive, type Part } from "lit/directive.js";
+import type {
+  LegacyPanelTabStripParams,
+  PanelTabStripParams,
+  PanelTabStripTab,
+} from "./panel-tab-strip-types.ts";
+import "./panel-tab-strip-lit.tsx";
 
-export { renderPanelTabStrip } from "./panel-tab-strip-lit.tsx";
 export type { PanelTabStripParams, PanelTabStripTab } from "./panel-tab-strip-types.ts";
+
+type LegacyInputs = Omit<LegacyPanelTabStripParams, "renderContent">;
+
+/** Preserve the originating Lit event/ref receiver inside the owned leaf roots. */
+class RenderHostParamsDirective extends Directive {
+  render(params: LegacyInputs) {
+    return params;
+  }
+
+  override update(part: Part, [params]: [LegacyInputs]): LegacyPanelTabStripParams {
+    const host = part.options?.host;
+    return {
+      ...params,
+      renderContent: (value: TemplateResult | undefined, container: HTMLElement) => {
+        renderLit(value ?? nothing, container, { host });
+      },
+    };
+  }
+}
+
+const withRenderHost = directive(RenderHostParamsDirective);
+
+/** Transitional adapter for the remaining Lit headers; the tab UI has one owner. */
+export function renderPanelTabStrip<T extends PanelTabStripTab>(params: PanelTabStripParams<T>) {
+  const bridgeParams: LegacyInputs = {
+    ...params,
+    tabs: params.tabs.map((tab) => ({
+      ...tab,
+      icon: tab.icon == null || tab.icon === nothing ? undefined : tab.icon,
+      controls:
+        typeof params.ariaControls === "string" ? params.ariaControls : params.ariaControls(tab),
+    })),
+    newControl: params.newControl === nothing ? null : params.newControl,
+  };
+  return html`<openclaw-panel-tab-strip
+    style="display: contents"
+    .params=${withRenderHost(bridgeParams)}
+  ></openclaw-panel-tab-strip>`;
+}
 
 export const panelTabStripStyles = css`
   :where(.tp-header, .bp-header) {

@@ -33,3 +33,18 @@ export type PanelTabStripParams<T extends PanelTabStripTab = PanelTabStripTab> =
   separateTabs?: boolean;
   onReorder?: (sourceId: string, targetId: string, placement: "before" | "after") => void;
 };
+
+/** Transitional Lit leaf boundary; undefined clears the owned content. */
+export type PanelTabStripContentRenderer = (
+  value: TemplateResult | undefined,
+  container: HTMLElement,
+) => void;
+
+export type LegacyPanelTabStripParams = Omit<
+  PanelTabStripParams,
+  "tabs" | "ariaControls" | "newControl"
+> & {
+  tabs: (Omit<PanelTabStripTab, "icon"> & { icon?: TemplateResult; controls: string })[];
+  newControl?: TemplateResult | null;
+  renderContent: PanelTabStripContentRenderer;
+};
