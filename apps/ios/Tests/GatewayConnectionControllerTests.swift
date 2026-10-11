@@ -1461,6 +1461,36 @@ private func pendingHandoffDiagnostic(
         }
     }
 
+    @Test @MainActor func `onboarding reset forgets saved chat focus for every paired gateway`() async throws {
+        let registryIsolation = await GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let temporaryState = try TemporaryOpenClawState()
+        defer { temporaryState.restore() }
+        let gatewayIDs = (0..<2).map { "manual|reset-\($0)-\(UUID().uuidString).example.com|443" }
+        defer {
+            for stableID in gatewayIDs {
+                GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
+            }
+        }
+        for stableID in gatewayIDs {
+            #expect(saveActiveManualGateway(
+                host: "reset.example.com", port: 443, useTLS: true, stableID: stableID))
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(
+                stableID: stableID, sessionKey: "agent:main:reset-proof")
+            #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID) != nil)
+        }
+        let defaults = try #require(UserDefaults(suiteName: "onboarding-reset-\(UUID().uuidString)"))
+        let appModel = NodeAppModel()
+        await GatewayOnboardingReset.reset(appModel: appModel, instanceId: "", defaults: defaults)
+
+        #expect(GatewaySettingsStore.loadGatewayRegistry().entries.isEmpty)
+        for stableID in gatewayIDs {
+            #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID) == nil)
+            appModel.prepareForGatewayConnect(stableID: stableID)
+            #expect(appModel.chatSessionKey == appModel.mainSessionKey)
+        }
+    }
+
     @Test @MainActor func `bootstrap pairing clears only the target gateway`() async throws {
         let temporaryState = try TemporaryOpenClawState()
         defer { temporaryState.restore() }
