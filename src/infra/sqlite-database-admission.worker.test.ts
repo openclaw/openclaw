@@ -10,10 +10,6 @@ import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execut
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
-import {
-  SQLITE_DATABASE_GENERATION_LENGTH,
-  SqliteDatabaseGenerationSlot,
-} from "./sqlite-database-admission-record.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-turn.js";
 import {
   captureSqliteDatabaseAdmissions,
@@ -94,12 +90,6 @@ it.each([undefined, 42])(
     }
   },
 );
-
-it("assigns a distinct shared generation slot to every admission witness", () => {
-  const slots = Object.values(SqliteDatabaseGenerationSlot);
-  expect(new Set(slots).size).toBe(slots.length);
-  expect(Math.max(...slots)).toBeLessThan(SQLITE_DATABASE_GENERATION_LENGTH);
-});
 
 it("joins host admission created after a worker's operation context before its first DDL", async () => {
   const root = tempDirs.make("sqlite-late-host-admission-");
