@@ -73,7 +73,7 @@ export async function withManagedImageSessionRead<T>(
       }
     }
   };
-  return inventoryRead.withRead(async (inventory, assertDiscoveryCurrent) => {
+  const result = inventoryRead.withRead(async (inventory, assertDiscoveryCurrent) => {
     const source = inventory.agents[0];
     if (!source?.result.available) {
       return params.unavailable ?? null;
@@ -111,6 +111,7 @@ export async function withManagedImageSessionRead<T>(
           } catch (error) {
             assertCurrent();
             if (
+              params.unavailable !== undefined ||
               extractErrorCode(error) === "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED" ||
               (error instanceof SessionMetadataUnavailableError &&
                 error.reason === "schema-missing")
@@ -128,9 +129,14 @@ export async function withManagedImageSessionRead<T>(
           }
           let entry = exact.entries[0]?.entry;
           if (!entry) {
-            const read = await reader.readEntryResult({ scope });
+            const read = await reader.readEntryResult({ scope }).catch((error: unknown) => {
+              if (params.unavailable !== undefined) {
+                return undefined;
+              }
+              throw error;
+            });
             assertCurrent();
-            if (!read.ok) {
+            if (!read?.ok) {
               return params.unavailable ?? null;
             }
             entry = read.value;
@@ -170,13 +176,18 @@ export async function withManagedImageSessionRead<T>(
               storePath: database.path,
               env: prepared.env,
             };
-            const read = await reader!.readEntryResult({ scope });
+            const read = await reader!.readEntryResult({ scope }).catch((error: unknown) => {
+              if (params.unavailable !== undefined) {
+                return undefined;
+              }
+              throw error;
+            });
             const assertFallbackCurrent = () => {
               assertCurrent();
               reader!.assertCurrent();
             };
             assertFallbackCurrent();
-            if (!read.ok) {
+            if (!read?.ok) {
               return params.unavailable ?? null;
             }
             if (!read.value) {
@@ -196,4 +207,14 @@ export async function withManagedImageSessionRead<T>(
       },
     );
   }, assertSelectionCurrent);
+  return result.catch((error: unknown) => {
+    if (
+      params.unavailable !== undefined &&
+      (error instanceof SessionMetadataUnavailableError ||
+        extractErrorCode(error) === "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED")
+    ) {
+      return params.unavailable;
+    }
+    throw error;
+  });
 }
