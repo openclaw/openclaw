@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearCronJobActive, markCronJobActive } from "../cron/active-jobs.js";
 import { registerActiveCronTaskRun } from "../cron/service/active-run-cancellation.js";
 import type { RetainedWorkerTransactionAdmission } from "../infra/sqlite-worker-operation-settlement.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
+import { isSessionStoreTopologyChange, sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createAgentDatabaseInspectionRefusal,
@@ -262,7 +262,7 @@ describe("agent lifecycle registry", () => {
     });
     const changes: unknown[] = [];
     const unsubscribe = sessionChanges.subscribe((change) => {
-      if ("all" in change && change.scope === "stores") {
+      if (isSessionStoreTopologyChange(change)) {
         changes.push(change);
       }
     });

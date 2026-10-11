@@ -192,8 +192,7 @@ export async function prepareCronRunContext(params: {
       hookExternalContentSource,
     });
     const sourceEntry = sourceSessionKey ? cronSession.store[sourceSessionKey] : undefined;
-    const completionSource =
-      input.job.sessionTarget === "isolated" ? input.job.sourceConversation : sourceEntry;
+    const completionSource = input.job.sourceConversation ?? sourceEntry;
     const sourceSessionGeneration = completionSource
       ? {
           sessionId: completionSource.sessionId,
@@ -630,10 +629,7 @@ export async function prepareCronRunContext(params: {
           agentCfg,
           agentDir,
           agentSessionKey,
-          sourceSessionKey:
-            input.job.sessionTarget === "isolated"
-              ? input.job.sourceConversation?.sessionKey
-              : sourceSessionKey,
+          sourceSessionKey: input.job.sourceConversation?.sessionKey ?? sourceSessionKey,
           sourceSessionGeneration,
           runSessionId,
           currentRunSessionId,

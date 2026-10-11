@@ -251,6 +251,7 @@ export async function admitReplyTurn(
               isSettling: () =>
                 operation !== undefined &&
                 (operation.result !== null || hasCommittedReplyOperationOutcome(operation)),
+              getAbortReason: () => operation?.abortSignal.reason,
               resolveGatewayContext,
               identities: [params.sessionKey],
               storeWriterIdentities:
@@ -545,7 +546,12 @@ export async function admitReplyTurn(
           throw error;
         }
         const { operationAdmission, releaseWorkerDatabaseClaim } =
-          bindReplyOperationDatabaseAdmission(operation, params, admission, admittedDatabaseClaim);
+          bindReplyOperationDatabaseAdmission(
+            operation,
+            { sessionKey: params.sessionKey, workSignal },
+            admission,
+            admittedDatabaseClaim,
+          );
         if (releaseWorkerDatabaseClaim) {
           const admittedOperation = operation;
           let releasingForRestart = false;

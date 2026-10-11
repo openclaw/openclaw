@@ -73,6 +73,7 @@ export function createMessageToolTurnAuthority(params: {
         assertDashboardReadCurrent: isRead ? dashboardRead : undefined,
       };
     },
+    isScheduledRun: Boolean(scheduled),
     hasCurrentPromptReaction: Boolean(lookup && resolveCurrentPromptReaction(lookup)),
     scheduledAccountScope:
       policy?.mode === "account" && (origin?.kind === "local" || channels.length > 0)

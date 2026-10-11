@@ -372,6 +372,18 @@ Failed fact installation retires the affected scope before notification. If its
 owner cannot fence that failure, the batch suppresses public notification and
 reports the failure without replaying the mutation.
 
+Worker backends can use `runSqliteSingleStatementSync` from
+`openclaw/plugin-sdk/sqlite-worker-runtime` for one complete synchronous statement.
+It uses SQLite autocommit while retaining the post-commit publication scope;
+inside an existing transaction it retains the savepoint and outer publication
+owner. Prepare inputs before calling and do no fallible work after the native
+statement in its callback. The native write observer advances the managed write
+token on settlement, without an extra SQL query. Memory source refresh, index
+metadata, and worker-owned heartbeat outcome writes use this path; compound
+writes retain their transactions. Heartbeat claims remain one conditional update,
+so competing runs cannot claim the same outcome.
+Schemas, stored bytes, retention, permissions, and update behavior are unchanged.
+
 Private receipt envelopes identify the operation, physical source and connection
 incarnation, domain, and exact affected keys. Each key contains a postimage,
 explicit absence, unchanged facts, or unknown coverage. Missing coverage is never
@@ -4407,8 +4419,10 @@ read worker outside agent writer admission. The retained provider capture checks
 live ownership and publication changes through commit, then releases its custody
 after settlement. Cold protection never reloads the subagent registry on the
 Gateway main thread; no-op planning still avoids that preparation entirely.
-A publication during preparation revokes the capture instead of starting another
-read; the automatic maintenance owner retains its existing bounded retry policy.
+Committed registry publications update the retained capture before the final host
+maintenance grant, without another candidate read or worker-side registry digest.
+Protection published after that grant is ordered after the admitted maintenance
+operation; outside writers must hold exclusive ownership while the Gateway is stopped.
 Slow native transaction diagnostics identify the executing worker; metadata
 requests do not log caller-side elapsed time as reclamation execution time.
 Commit receipts publish archived-entry facts before releasing
@@ -5070,7 +5084,8 @@ and lifecycle authority; the worker compares the durable descendant rows after
 that grant and before committing. Registry preparation preserves unpublished
 intent and current live objects without treating a stale resident snapshot as
 fresh durable state. Reaper maintenance uses the existing compact subagent
-projection, with a fresh protection check at the worker commit boundary.
+projection and owner-published changes at its final host grant. It does not repeat
+the registry scan inside the session worker.
 The batch keeps one synchronous transaction and the existing archive,
 publication, rollback, and uncertain-outcome owners. Native harness mutation
 objects remain with their process-held owner. No cross-database atomicity,

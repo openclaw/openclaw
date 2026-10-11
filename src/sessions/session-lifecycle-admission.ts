@@ -1,5 +1,6 @@
 // Serializes lifecycle mutations and work admission for logical session identities.
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isAgentRunDirectAbortReason } from "../agents/run-termination.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -67,7 +68,6 @@ type SessionWorkAdmission = HandoffSessionWorkAdmission & {
   phase: "pending" | "acquired";
   owner?: symbol;
   released: Promise<void>;
-  isSettling?: () => boolean;
 };
 
 type SessionLifecycleMutationOwner = {
@@ -371,6 +371,15 @@ export function hasOnlySessionLifecycleMutationKindActive(
   );
 }
 
+function isRestartRecoverableAdmission(admission: SessionWorkAdmission): boolean {
+  // Finished execution can still owe delivery; only a settled explicit stop ends that custody.
+  const abortReason = admission.getAbortReason?.() ?? admission.interrupted;
+  return (
+    admission.phase === "acquired" &&
+    (!admission.isSettling?.() || !isAgentRunDirectAbortReason(abortReason))
+  );
+}
+
 function isSessionWorkAdmissionTargetActive(params: {
   scope: string;
   sessionKey: string;
@@ -386,7 +395,7 @@ function isSessionWorkAdmissionTargetActive(params: {
   return identities.some((identity) =>
     Array.from(ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? []).some(
       (admission) =>
-        admission.phase === "acquired" &&
+        isRestartRecoverableAdmission(admission) &&
         (!params.owners || params.owners.has(admission)) &&
         (admission.identities.size === 1 ||
           identities.every((target) => admission.identities.has(target))),
@@ -399,7 +408,8 @@ export function captureGatewaySessionWorkAdmissions(resolveGatewayContext: Gatew
   const owners = collectSessionWorkAdmissions(
     ACTIVE_SESSION_WORK_ADMISSIONS.keys(),
     (admission) =>
-      admission.phase === "acquired" && hasGatewayContextOwner(admission, resolveGatewayContext),
+      isRestartRecoverableAdmission(admission) &&
+      hasGatewayContextOwner(admission, resolveGatewayContext),
   );
   return {
     targets: collectActiveSessionWorkAdmissions(owners),
@@ -433,6 +443,8 @@ export async function beginSessionWorkAdmission(params: {
   owner?: symbol;
   /** The execution owner has committed its terminal outcome; cleanup still retains this lease. */
   isSettling?: () => boolean;
+  /** Borrow the execution owner's current abort reason, including after admission handoff. */
+  getAbortReason?: () => unknown;
   /** Queue behind earlier admissions of the same owner, including pending work. */
   serializeOwner?: boolean;
   resolveGatewayContext?: GatewayContextResolver;
@@ -480,6 +492,7 @@ export async function beginSessionWorkAdmission(params: {
     run: params.run ? Object.freeze({ ...params.run }) : undefined,
     phase: "pending",
     isSettling: params.isSettling,
+    getAbortReason: params.getAbortReason ?? (() => signal.reason),
     ...(params.owner ? { owner: params.owner } : {}),
     handoffIds: new Set(),
     identities: new Set(identities),
