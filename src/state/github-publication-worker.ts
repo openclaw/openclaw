@@ -26,6 +26,7 @@ type MutationCommand = SqliteWorkerCommand<
     | "githubPublications.repository"
     | "githubPublications.shared"
     | "githubPublications.insert"
+    | "githubPublications.maintenance"
   >
 >;
 

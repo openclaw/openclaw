@@ -20,7 +20,7 @@ type MessageReactionPickerProps = {
   compact: boolean;
 };
 
-export const MessageReactionPicker = defineSolidBridge<MessageReactionPickerProps>(
+defineSolidBridge<MessageReactionPickerProps>(
   "openclaw-message-reaction-picker",
   (props, host) => {
     const [custom, setCustom] = createSignal(false);

@@ -48,11 +48,7 @@ function requiresSource(
   if (input.operation === "claim") {
     return kind === "personal";
   }
-  return (
-    input.operation === "bindWorkspaceSnapshot" ||
-    input.operation === "updatePublishingFacts" ||
-    input.operation === "checkpoint"
-  );
+  return input.operation === "bindWorkspaceSnapshot" || input.operation === "checkpoint";
 }
 
 function mutate(
@@ -91,6 +87,9 @@ function assertMutationSource(
   result: PublicationMutationResult,
   source: GitHubPublicationSourcePredicate,
 ): void {
+  if (result.kind === "maintenance") {
+    return;
+  }
   const { selector } = source;
   // Validate authoritative postimages before COMMIT, so even a mismatched input
   // receipt cannot use a different session's live source capability.
@@ -326,6 +325,32 @@ function sharedMutation(database: OpenClawStateDatabase, input: SharedPublicatio
 export const publicationOperations = {
   ...publicationReadOperations,
   ...publicationRequestOperations,
+  "githubPublications.maintenance": (
+    input: PublicationWorkerOperations["githubPublications.maintenance"]["input"],
+    { open },
+  ) => {
+    const database = open();
+    return mutate(database, input.operation, () => {
+      if (input.operation === "report") {
+        personalMutation(database, input);
+        sharedMutation(database, input);
+        repositoryMutation(database, input);
+      } else {
+        const deferred = {
+          operation: "defer",
+          selection: { kind: "claim", claim: input.claim },
+        } as const;
+        sharedMutation(database, deferred);
+        repositoryMutation(database, deferred);
+      }
+      return {
+        operationId: input.operationId,
+        operation: input.operation,
+        kind: "maintenance",
+        rows: [],
+      };
+    });
+  },
   "githubPublications.shared": (
     input: PublicationWorkerOperations["githubPublications.shared"]["input"],
     { open },

@@ -8,6 +8,7 @@ import type {
 import { preparePersonalGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import { acquireWorktreeRunLease } from "../agents/worktrees/run-lease.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import {
   readGitHubPublicationSessionLifecycle,
   readGitHubPublicationSessionLifecycleInWorker,
@@ -54,6 +55,7 @@ import { resolveReceiptOwner } from "./github-repository-publication-workspace.j
 import type { RepositoryGitHubPublicationStatusRow } from "./github-repository-publication.kernel.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
+/** @deprecated Use PersonalGitHubSessionActionV2; removed in the next Plugin SDK major. */
 export type PersonalGitHubSessionAction = PersonalGitHubAction & {
   sessionId: string;
   sessionKey: string;
@@ -446,6 +448,7 @@ export function createPersonalGitHubPublicationCoordinator(
     }
   };
   const methods = {
+    /** @deprecated Use requestPersonalForSessionV2; removed in the next Plugin SDK major. */
     async requestPersonalForSession(
       input: SessionGitHubPublishParams,
       action: PersonalGitHubSessionAction | PersonalGitHubSessionActionV2,
@@ -578,7 +581,7 @@ export function createPersonalGitHubPublicationCoordinator(
       });
       return row ? status(row, action, session) : null;
     },
-
+    /** @deprecated Use confirmPersonalV2; removed in the next Plugin SDK major. */
     async confirmPersonal(
       input: SessionGitHubConfirmParams,
       action: PersonalGitHubSessionAction | PersonalGitHubSessionActionV2,
@@ -627,15 +630,25 @@ export function createPersonalGitHubPublicationCoordinator(
   };
   return {
     ...methods,
-
+    /** @deprecated Use requestPersonalForSessionV2; removed in the next Plugin SDK major. */
     requestPersonalForSession(
       input: SessionGitHubPublishParams,
       action: PersonalGitHubSessionAction,
     ) {
+      warnPluginSdkDeprecation({
+        family: "github-publication",
+        method: "requestPersonalForSession",
+        replacement: "requestPersonalForSessionV2",
+      });
       return methods.requestPersonalForSession(input, action);
     },
-
+    /** @deprecated Use confirmPersonalV2; removed in the next Plugin SDK major. */
     confirmPersonal(input: SessionGitHubConfirmParams, action: PersonalGitHubSessionAction) {
+      warnPluginSdkDeprecation({
+        family: "github-publication",
+        method: "confirmPersonal",
+        replacement: "confirmPersonalV2",
+      });
       return methods.confirmPersonal(input, action);
     },
     requestPersonalForSessionV2(
