@@ -27,10 +27,8 @@ export async function openHomeFullPage(page: Page, agentId = "main"): Promise<vo
   await waitForControlUiRoute(page, { pathname, routeId: "chat" });
 }
 
-/** Cross-owner scenarios choose the All view explicitly instead of broadening the default. */
+/** Cross-owner scenarios choose All owners explicitly instead of broadening the default. */
 export async function selectAllSidebarSessions(page: Page): Promise<void> {
-  await page
-    .locator(".sidebar-navigation-scope")
-    .getByRole("button", { name: "All", exact: true })
-    .click();
+  await page.locator("#sidebar-session-owner-title").click();
+  await page.locator('.sidebar-session-owner-filter [role="option"][data-value="all"]').click();
 }

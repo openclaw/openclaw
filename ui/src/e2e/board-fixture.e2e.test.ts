@@ -899,7 +899,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     const page = await browser.newPage();
     try {
       await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
-      // External catalog sessions are unowned and are intentionally outside Mine.
+      // External catalog sessions have no human owner.
       await selectAllSidebarSessions(page);
       await page.getByText("Release checklist sweep", { exact: true }).click();
 

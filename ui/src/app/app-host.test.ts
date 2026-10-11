@@ -489,7 +489,7 @@ describe("OpenClaw shell server preferences", () => {
       expect(method).toBe("users.prefs.get");
       return {
         status: "ok",
-        entries: { "ui.sidebarEntries": sidebarEntries, "ui.navigationScope": "mine" },
+        entries: { "ui.sidebarEntries": sidebarEntries },
       };
     });
     const client = createTestGatewayClient(request);

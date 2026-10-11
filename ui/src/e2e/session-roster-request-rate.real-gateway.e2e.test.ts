@@ -71,8 +71,6 @@ suite.define(() => {
     const key = "agent:main:rate-proof";
     const otherKey = "agent:research:rate-proof";
     try {
-      // This contract covers unfiltered snapshots; Mine requires authoritative reads.
-      await emitter.request("users.prefs.set", { entries: { "ui.navigationScope": "all" } });
       for (const [agentId, sessionKey] of [
         ["main", key],
         ["research", otherKey],

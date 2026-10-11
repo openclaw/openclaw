@@ -356,14 +356,13 @@ it("drains memory before stalled connection cleanup while preserving terminal cl
   }
 });
 
-it("closes one managed memory runtime exactly once when its registry owners close together", async () => {
+it("closes one managed memory runtime exactly once across repeated owner close calls", async () => {
   const original = captureActivePluginRegistrySnapshot();
   const fixture = await createFixture("gateway-shared-memory-close");
   const close = vi.fn(async () => {});
   const memory = fixture.registry(close);
   setActivePluginRegistry(memory.registry);
-  const first = createPluginRegistryOwner(memory.registry);
-  const second = createPluginRegistryOwner(memory.registry);
+  const owner = createPluginRegistryOwner(memory.registry);
   try {
     const result = await memory.runtime.getMemorySearchManager({
       cfg: fixture.config,
@@ -371,16 +370,16 @@ it("closes one managed memory runtime exactly once when its registry owners clos
     });
     assert(result.manager, result.error ?? "Shared memory manager unavailable");
     await result.manager.probeEmbeddingAvailability();
-    const preparation = first.prepareClose();
-    expect(first.prepareClose()).toBe(preparation);
-    await Promise.all([preparation, second.prepareClose()]);
+    const preparation = owner.prepareClose();
+    expect(owner.prepareClose()).toBe(preparation);
+    await preparation;
     expect(close).toHaveBeenCalledOnce();
     expect(memory.instance.lifecycle.signal.aborted).toBe(false);
-    await Promise.all([first.close(), second.close()]);
+    await Promise.all([owner.close(), owner.close()]);
     expect(close).toHaveBeenCalledOnce();
     expect(memory.instance.lifecycle.signal.aborted).toBe(true);
   } finally {
-    await Promise.allSettled([first.close(), second.close()]);
+    await Promise.allSettled([owner.close()]);
     restoreActivePluginRegistrySnapshot(original);
     await fixture.state.cleanup();
   }

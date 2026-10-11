@@ -38,7 +38,6 @@ declare module "@solidjs/web" {
       "openclaw-assistant-panel": ShellElementAttributes;
       "openclaw-exec-approval": ShellElementAttributes;
       "openclaw-onboarding-memory-import": ShellElementAttributes;
-      "openclaw-toast-host": ShellElementAttributes;
       "openclaw-plugin-view": ShellElementAttributes;
     }
   }

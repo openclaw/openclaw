@@ -140,7 +140,7 @@ suite.define(() => {
           await navigate(foreign);
           await expect.poll(() => composer.isDisabled()).toBe(true);
         }
-        const newSession = page.locator(".sidebar-brand__new-thread");
+        const newSession = page.locator(".sidebar-session-toolbar .sidebar-new-session");
         await expect.poll(() => newSession.isEnabled()).toBe(true);
         await newSession.click();
         const draft = page.locator(".new-session-page__message");

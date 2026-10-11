@@ -3,11 +3,11 @@ import { insert, render, spread } from "@solidjs/web";
 import { nothing, render as renderLit } from "lit";
 import {
   createComponent,
-  createEffect,
   createRenderEffect,
   createRoot,
   createSignal,
   flush,
+  getOwner,
   onCleanup,
   runWithOwner,
   untrack,
@@ -37,17 +37,21 @@ export function connectLegacyApplicationContext(
 
 /** Temporary renderer island; remove with the last Lit route and template caller. */
 export function createLitContentRef(value: () => unknown): (element: HTMLElement) => void {
+  const owner = getOwner();
   let host: HTMLElement;
   let part: ReturnType<typeof renderLit> | undefined;
-  createEffect(value, (next) => {
-    part = renderLit(next, host, { host });
-  });
   onCleanup(() => {
     part?.setConnected(false);
     renderLit(nothing, host);
   });
   return (element) => {
     host = element;
+    // Refs run unowned; commit Lit before this owner's post-render observers.
+    runWithOwner(owner, () => {
+      createRenderEffect(value, (next) => {
+        part = renderLit(next, host, { host });
+      });
+    });
   };
 }
 
@@ -66,6 +70,8 @@ export type SolidBridgeElement<Props, Methods = object> = HTMLElement &
 
 type Spec<Props, Methods> = {
   properties: { [Key in keyof Props]-?: Property<Props[Key]> };
+  connected?: (host: SolidBridgeElement<Props, Methods>) => void;
+  disconnected?: (host: SolidBridgeElement<Props, Methods>) => void;
   propertyChanged?: (host: SolidBridgeElement<Props, Methods>, key: keyof Props) => void;
   methods?: {
     [Key in keyof Methods]: Methods[Key] extends (...args: infer Args) => infer Result
@@ -194,6 +200,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     }
 
     connectedCallback() {
+      spec.connected?.(this.#host);
       if (this.#solidOwned) {
         return;
       }
@@ -223,6 +230,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     }
 
     disconnectedCallback() {
+      spec.disconnected?.(this.#host);
       if (!this.#solidOwned) {
         // Reparenting within a turn keeps the root (and the live sidebar) intact.
         queueMicrotask(() => {
@@ -372,5 +380,6 @@ export function LitContent(props: {
     host.className = className;
   }
   createLitContentRef(() => props.render())(host);
+
   return host;
 }

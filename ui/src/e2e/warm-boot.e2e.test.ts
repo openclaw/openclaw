@@ -293,7 +293,7 @@ suite.define(() => {
             path: path.join(suite.artifactDir, "bootstrap-before-hello.png"),
           });
           expect(bootstrapRequests).toBe(0);
-          await sidebar.getByText("Observatory", { exact: true }).waitFor();
+          await sidebar.getByRole("button", { name: /^Observatory ·/u }).waitFor();
         }
         if (profile === "matching") {
           await expectOwnMessageAlignment(page);
