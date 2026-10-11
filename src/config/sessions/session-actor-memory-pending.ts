@@ -3,7 +3,7 @@ import { classifyAgentRunTerminalOutcome } from "@openclaw/normalization-core/ag
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/server-constants.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
-import type { SessionActorMemoryState } from "./session-actor-memory-state.js";
+import type { SessionActorMemoryWindow } from "./session-actor-memory-state.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
@@ -39,7 +39,7 @@ type PendingIdentity = Pick<PendingInputRead, "sessionKey" | "sessionId" | "idem
 
 /** The memory owner lends its working state and installs it only after the phase commits. */
 export function createSessionActorMemoryPending(
-  state: SessionActorMemoryState,
+  state: SessionActorMemoryWindow,
   options: {
     agentId: string;
     path: string;

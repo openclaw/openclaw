@@ -43,22 +43,24 @@ export function DashboardPreviewContent(props: DashboardPreviewProps, host: HTML
           </div>
         }
       >
-        {createErrorBoundary(
-          () => (
-            <Loading>
-              <BoardDocument
-                passive={true}
-                gatewaySnapshot={props.gatewaySnapshot}
-                preparedSession={{ sessionKey: props.sessionKey ?? "", agentId: props.agentId }}
-              />
-            </Loading>
-          ),
-          (error) => (
-            <div class="dashboard-preview__error">
-              {t("dashboardDocument.loadFailed", { error: formatUiError(error()) })}
-            </div>
-          ),
-        )}
+        <>
+          {createErrorBoundary(
+            () => (
+              <Loading>
+                <BoardDocument
+                  passive={true}
+                  gatewaySnapshot={props.gatewaySnapshot}
+                  preparedSession={{ sessionKey: props.sessionKey ?? "", agentId: props.agentId }}
+                />
+              </Loading>
+            ),
+            (error) => (
+              <div class="dashboard-preview__error">
+                {t("dashboardDocument.loadFailed", { error: formatUiError(error()) })}
+              </div>
+            ),
+          )}
+        </>
       </Show>
     </Show>
   );

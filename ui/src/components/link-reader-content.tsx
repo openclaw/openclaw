@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
@@ -11,6 +12,10 @@ type ControlUiLinkReaderComment = NonNullable<ControlUiLinkReaderDocument["comme
 type ControlUiLinkReaderFile = NonNullable<ControlUiLinkReaderDocument["files"]>[number];
 
 registerEnglishCatalog(registerLinkReaderEnglish);
+
+function ReaderLink(props: JSX.IntrinsicElements["a"]) {
+  return <a {...props} target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" />;
+}
 
 function DateLabel(props: { value: string | undefined }) {
   return (
@@ -105,45 +110,25 @@ function CommentContent(props: {
     <article class="lr-comment" id={props.comment.id}>
       <header class="lr-meta">
         <strong>{props.comment.author}</strong>{" "}
-        <a
-          href={permalink()}
-          target="_blank"
-          rel="noopener noreferrer"
-          referrerpolicy="no-referrer"
-          title={t("linkReader.commentPermalink")}
-        >
+        <ReaderLink href={permalink()} title={t("linkReader.commentPermalink")}>
           <Show when={props.comment.createdAt} fallback={t("linkReader.commentPermalink")}>
             {(value) => <DateLabel value={value()} />}
           </Show>
-        </a>{" "}
+        </ReaderLink>{" "}
         <Show when={props.comment.label}>
           {(label) => <span class="lr-comment-kind">{label()}</span>}
         </Show>
       </header>
       <Show when={location() || props.comment.context?.label}>
         <p class="lr-review-location">
-          <a
-            href={permalink()}
-            target="_blank"
-            rel="noopener noreferrer"
-            referrerpolicy="no-referrer"
-          >
-            {location()}
-          </a>{" "}
-          {props.comment.context?.label}
+          <ReaderLink href={permalink()}>{location()}</ReaderLink> {props.comment.context?.label}
         </p>
       </Show>
       <Show when={reply()}>
         {(url) => (
-          <a
-            class="lr-meta"
-            href={url()}
-            target="_blank"
-            rel="noopener noreferrer"
-            referrerpolicy="no-referrer"
-          >
+          <ReaderLink class="lr-meta" href={url()}>
             {props.comment.context?.replyLabel ?? t("linkReader.replyContext")}
-          </a>
+          </ReaderLink>
         )}
       </Show>
       <Show when={props.comment.context?.diff}>
@@ -234,16 +219,10 @@ function ChecksContent(props: { checks: ReaderChecks; base: string }) {
                 <span class="lr-check-copy">
                   <Show when={url()} fallback={<span>{item.name}</span>}>
                     {(href) => (
-                      <a
-                        href={href()}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        referrerpolicy="no-referrer"
-                        data-link-reader-external=""
-                      >
+                      <ReaderLink href={href()} data-link-reader-external="">
                         {item.name}
                         <Icon name="externalLink" />
-                      </a>
+                      </ReaderLink>
                     )}
                   </Show>
                   <span class="lr-meta">{item.detail ?? t(checkLabels[item.state])}</span>
@@ -264,16 +243,10 @@ function ChecksContent(props: { checks: ReaderChecks; base: string }) {
         </Show>
         <Show when={source()}>
           {(url) => (
-            <a
-              href={url()}
-              target="_blank"
-              rel="noopener noreferrer"
-              referrerpolicy="no-referrer"
-              data-link-reader-external=""
-            >
+            <ReaderLink href={url()} data-link-reader-external="">
               {t("linkReader.checksSource")}
               <Icon name="externalLink" />
-            </a>
+            </ReaderLink>
           )}
         </Show>
       </footer>
@@ -301,6 +274,39 @@ function SectionLink(props: { section: string; label: string; count?: number }) 
         <span class="lr-count">{props.count}</span>
       </Show>
     </button>
+  );
+}
+
+function ListSection(props: {
+  kind: "files" | "comments";
+  count: number;
+  total?: number;
+  truncated?: boolean;
+  children: JSX.Element;
+}) {
+  return (
+    <section
+      aria-label={t(`linkReader.${props.kind}`)}
+      class={`lr-${props.kind}`}
+      id={props.kind === "files" ? "files" : undefined}
+      data-reader-section={props.kind}
+      tabindex={-1}
+    >
+      <h2>
+        {t(`linkReader.${props.kind}`)}
+        <span class="lr-count">
+          {props.count}
+          {props.total !== undefined && props.total !== props.count ? " / " + props.total : ""}
+        </span>
+      </h2>
+      {props.children}
+      <TruncationNote truncated={props.truncated} label={`linkReader.${props.kind}Truncated`} />
+      <Show when={props.count === 0 && !props.truncated}>
+        <p class="lr-meta">
+          {t(props.kind === "files" ? "linkReader.noFiles" : "linkReader.noComments")}
+        </p>
+      </Show>
+    </section>
   );
 }
 
@@ -421,55 +427,28 @@ export function LinkReaderContent(props: {
       </section>
       <Show when={props.detail.files}>
         {(files) => (
-          <section
-            aria-label={t("linkReader.files")}
-            class="lr-files"
-            id="files"
-            data-reader-section="files"
-            tabindex={-1}
+          <ListSection
+            kind="files"
+            count={files().length}
+            total={props.detail.filesTotal}
+            truncated={props.detail.filesTruncated}
           >
-            <h2>
-              {t("linkReader.files")}
-              <span class="lr-count">
-                {files().length}
-                {props.detail.filesTotal !== undefined && props.detail.filesTotal !== files().length
-                  ? " / " + props.detail.filesTotal
-                  : ""}
-              </span>
-            </h2>
             <For each={files()} keyed={(file) => file.path}>
               {(file) => (
                 <FileContent file={file()} expanded={props.detail.filesExpanded === true} />
               )}
             </For>
-            <TruncationNote
-              truncated={props.detail.filesTruncated}
-              label="linkReader.filesTruncated"
-            />
-            <Show when={files().length === 0 && !props.detail.filesTruncated}>
-              <p class="lr-meta">{t("linkReader.noFiles")}</p>
-            </Show>
-          </section>
+          </ListSection>
         )}
       </Show>
       <Show when={props.detail.comments}>
         {(comments) => (
-          <section
-            aria-label={t("linkReader.comments")}
-            class="lr-comments"
-            data-reader-section="comments"
-            tabindex={-1}
+          <ListSection
+            kind="comments"
+            count={comments().length}
+            total={props.detail.commentsTotal}
+            truncated={props.detail.commentsTruncated}
           >
-            <h2>
-              {t("linkReader.comments")}
-              <span class="lr-count">
-                {comments().length}
-                {props.detail.commentsTotal !== undefined &&
-                props.detail.commentsTotal !== comments().length
-                  ? " / " + props.detail.commentsTotal
-                  : ""}
-              </span>
-            </h2>
             <For each={comments()} keyed={(comment) => comment.id}>
               {(comment) => (
                 <CommentContent
@@ -479,14 +458,7 @@ export function LinkReaderContent(props: {
                 />
               )}
             </For>
-            <TruncationNote
-              truncated={props.detail.commentsTruncated}
-              label="linkReader.commentsTruncated"
-            />
-            <Show when={comments().length === 0 && !props.detail.commentsTruncated}>
-              <p class="lr-meta">{t("linkReader.noComments")}</p>
-            </Show>
-          </section>
+          </ListSection>
         )}
       </Show>
     </article>
