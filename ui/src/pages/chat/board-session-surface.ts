@@ -19,16 +19,13 @@ type BoardSessionSurfaceProps = {
   widgetFrameUrl: BoardWidgetFrameUrl;
 };
 
-let boardViewLoad: Promise<unknown> | null = null;
-
-export async function ensureBoardViewElement(): Promise<boolean> {
-  if (customElements.get("openclaw-board-view")) {
-    return false;
-  }
-  boardViewLoad ??= import("../../components/board/board-view.ts");
-  await boardViewLoad;
-  return true;
-}
+export const BOARD_VIEW_ELEMENT = {
+  tagName: "openclaw-board-view",
+  get label() {
+    return t("chat.sidePanel.dashboard");
+  },
+  loadModule: () => import("../../components/board/board-view.ts"),
+};
 
 export function renderBoardSessionSurface(props: BoardSessionSurfaceProps) {
   return html`

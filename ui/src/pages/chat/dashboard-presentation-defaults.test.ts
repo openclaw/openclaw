@@ -3,12 +3,13 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionsPatchResult } from "../../api/types.ts";
+import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { showToast } from "../../lib/toast.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { ensureBoardViewElement } from "./board-session-surface.ts";
+import { BOARD_VIEW_ELEMENT } from "./board-session-surface.ts";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
 import { sidebarRegionCallbacks } from "./chat-pane-sidebar-layout.ts";
 import {
@@ -95,7 +96,7 @@ describe("dashboard default activation and personal layout persistence", () => {
   );
 
   it("relocates a visible full-width singleton in split and fullscreen views when a task menu exists", async () => {
-    await ensureBoardViewElement();
+    await ensureCustomElementDefined(BOARD_VIEW_ELEMENT.tagName, BOARD_VIEW_ELEMENT.loadModule);
     const { pane } = createDashboardHarness();
     const board = { ...pane.resolveBoardView(), activeTabId: "research" };
     const expanded = openDashboardPresentation({ columns: [] }, "expanded");

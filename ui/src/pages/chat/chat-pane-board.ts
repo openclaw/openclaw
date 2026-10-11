@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { LazyCustomElementRequestController } from "../../app/lazy-custom-element.ts";
 import { hasOperatorApprovalsAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { BoardWidgetPageMenu } from "../../components/board/board-widget-cell-render.ts";
@@ -32,7 +33,7 @@ import {
   resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import { ensureBoardViewElement, renderBoardSessionSurface } from "./board-session-surface.ts";
+import { BOARD_VIEW_ELEMENT, renderBoardSessionSurface } from "./board-session-surface.ts";
 import { ChatPaneHistory } from "./chat-pane-history.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -51,6 +52,7 @@ import {
 } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneBoard extends ChatPaneHistory {
+  private readonly boardViewLoader = new LazyCustomElementRequestController(this);
   private dashboardDefaultWrite?: { owner: string };
 
   private get dashboardDefaultWriteOwner(): string {
@@ -408,11 +410,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       isSidebarSlotVisible(this.state.sidebarLayout, "dashboard") &&
       !customElements.get("openclaw-board-view")
     ) {
-      void ensureBoardViewElement().then((loaded) => {
-        if (loaded) {
-          this.requestUpdate();
-        }
-      });
+      this.boardViewLoader.preload(BOARD_VIEW_ELEMENT);
     }
   }
 

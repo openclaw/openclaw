@@ -122,6 +122,24 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     this.paneLifecycleRoot?.dispatchEvent(new Event(CHAT_PANE_LIFECYCLE_CHANGED_EVENT));
   }
   protected override async scheduleUpdate() {
+    // Keep first paint immediate; fold later async publications into one paint.
+    if (
+      this.hasUpdated &&
+      this.isConnected &&
+      this.presented &&
+      document.visibilityState !== "hidden"
+    ) {
+      await new Promise<void>((resolve) => {
+        const frame = requestAnimationFrame(() => {
+          this.hiddenUpdateResume = undefined;
+          resolve();
+        });
+        this.hiddenUpdateResume = () => {
+          cancelAnimationFrame(frame);
+          resolve();
+        };
+      });
+    }
     while (
       this.hasUpdated &&
       this.isConnected &&

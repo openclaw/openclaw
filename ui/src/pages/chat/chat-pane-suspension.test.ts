@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-suspension.test/"} */
 
+import { html } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
@@ -15,6 +16,49 @@ afterEach(() => {
 });
 
 describe("chat pane suspension", () => {
+  it("paints the latest async publications together and releases a frame on disconnect", async () => {
+    const frames = new Map<number, FrameRequestCallback>();
+    let frameId = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.set(++frameId, callback);
+      return frameId;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+    const { pane, state } = createTestChatPane({
+      client: { request: vi.fn() } as unknown as GatewayBrowserClient,
+    });
+    const render = vi.fn(() => html`<p>${state.chatMessage}</p>`);
+    const lifecycle = Object.assign(pane, { render });
+    ChatPaneBase.prototype.connectedCallback.call(lifecycle);
+    await lifecycle.updateComplete;
+    render.mockClear();
+    try {
+      state.chatMessage = "First publication";
+      lifecycle.requestUpdate();
+      await Promise.resolve();
+      state.chatMessage = "Latest publication";
+      lifecycle.requestUpdate();
+      await Promise.resolve();
+      expect(render).not.toHaveBeenCalled();
+      expect(frames.size).toBe(1);
+      const [id, callback] = [...frames][0]!;
+      frames.delete(id);
+      callback(0);
+      await lifecycle.updateComplete;
+      expect(render).toHaveBeenCalledOnce();
+      expect(lifecycle.textContent).toBe("Latest publication");
+      lifecycle.requestUpdate();
+      await Promise.resolve();
+      expect(frames.size).toBe(1);
+    } finally {
+      Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: false });
+      ChatPaneBase.prototype.disconnectedCallback.call(lifecycle);
+      await lifecycle.updateComplete;
+      expect(frames.size).toBe(0);
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("pauses minute updates while hidden and refreshes once on return", async () => {
     vi.useFakeTimers();
     let visibility: DocumentVisibilityState = "visible";
