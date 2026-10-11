@@ -685,7 +685,6 @@ export class HovercardOwner {
 
     const controller = new AbortController();
     const client = this.client;
-    const context = this.previewContext;
     const agentId = this.agentId;
     const load = async (): Promise<ControlUiLinkReaderPreview> => {
       const method = target.reader.linkReader.previewMethod;
@@ -709,14 +708,7 @@ export class HovercardOwner {
       subscribers: new Set(),
       promise: load()
         .then((preview) => {
-          if (
-            !controller.signal.aborted &&
-            this.cache.get(key) === entry &&
-            client === this.client &&
-            agentId === this.agentId &&
-            client &&
-            previewContextFor(client, agentId) === context
-          ) {
+          if (!controller.signal.aborted && this.cache.get(key) === entry) {
             entry.preview = preview;
             this.syncInlineStates();
           }

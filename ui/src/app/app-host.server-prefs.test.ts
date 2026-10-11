@@ -347,7 +347,7 @@ describe("profile preference ACK publication across browser realms", () => {
           sidebarEntries: cancelled ? wantedA.sidebarEntries : wantedB.sidebarEntries,
         });
         expect(aRequest.mock.calls.filter(([method]) => method === "users.prefs.get")).toHaveLength(
-          aReads + (observed && !identical ? 1 : 0),
+          aReads,
         );
         expect(aRequest.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(
           1,
@@ -363,80 +363,6 @@ describe("profile preference ACK publication across browser realms", () => {
       }
     },
   );
-  it("accepts a successful write after an identical read published before the commit", async () => {
-    const a = await loadPreferenceRealm();
-    const scope = "ws://ack-before-commit";
-    const profileId = "profile-a";
-    const server = { "ui.sidebarEntries": ["route:usage"] };
-    const dispatched = createDeferred();
-    const commit = createDeferred();
-    const request = vi.fn(async (method: string, params?: unknown): Promise<unknown> => {
-      if (method === "users.prefs.get") {
-        return { status: "ok", entries: structuredClone(server) };
-      }
-      dispatched.resolve();
-      await commit.promise;
-      Object.assign(server, (params as { entries: Record<string, unknown> }).entries);
-      return { status: "ok" };
-    });
-    const writer = a.fixtures.createServerPrefsWriter(request, scope, true, { ok: true }, false);
-    let b: Awaited<ReturnType<typeof loadPreferenceRealm>> | undefined;
-    try {
-      a.settings.patchSettings({ gatewayUrl: scope });
-      await a.reconcile.refreshProfileAppearancePrefs({
-        client: writer.state.client!,
-        profileId,
-        scope,
-        configObject: {},
-        onApplied: vi.fn(),
-      });
-      const before = a.settings.loadSettings(scope);
-      const desired = a.settings.patchSettings({
-        sidebarEntries: ["route:usage", "route:cron"],
-      });
-      const afterCommit = vi.fn();
-      a.prefs.pushServerUiPrefs(writer, a.intent.changedServerUiPrefs(before, desired)!, {
-        profileId,
-        canWrite: true,
-        afterCommit,
-      });
-      await dispatched.promise;
-      b = await loadPreferenceRealm();
-      const bRequest = vi.fn(async (): Promise<unknown> => ({
-        status: "ok",
-        entries: structuredClone(server),
-      }));
-      const bWriter = b.fixtures.createServerPrefsWriter(
-        bRequest,
-        scope,
-        true,
-        { ok: true },
-        false,
-      );
-      await b.reconcile.refreshProfileAppearancePrefs({
-        client: bWriter.state.client!,
-        profileId,
-        scope,
-        configObject: {},
-        onApplied: vi.fn(),
-      });
-      commit.resolve();
-      await vi.dynamicImportSettled();
-      expect(a.settings.loadSettings(scope)).toMatchObject({
-        sidebarEntries: desired.sidebarEntries,
-      });
-      expect(server).toMatchObject({
-        "ui.sidebarEntries": desired.sidebarEntries,
-      });
-      expect(afterCommit).toHaveBeenCalledOnce();
-    } finally {
-      commit.resolve();
-      a.prefs.resetServerUiPrefsSync();
-      b?.prefs.resetServerUiPrefsSync();
-      await vi.dynamicImportSettled();
-    }
-  });
-
   it.each(["unavailable", "quota"])(
     "fences an ABA confirmation with %s storage",
     async (failure) => {

@@ -52,8 +52,6 @@ type ServerUiPrefsPushHooks = {
 };
 export type { ServerUiPrefProvenance } from "./server-prefs-state.ts";
 
-const CONFLICT_REDRAIN_DELAY_MS = 1_000;
-const MAX_CONFLICT_REDRAINS = 5;
 const preferenceWriteListeners = new Set<() => void>();
 export function subscribeServerUiPrefWrites(listener: () => void): () => void {
   preferenceWriteListeners.add(listener);
@@ -79,8 +77,6 @@ class ServerUiPrefsOutbox implements ServerUiPrefsSync {
   pushDraining = false;
   drainRequested = false;
   pushEpoch = 0;
-  conflictRedrainTimer: ReturnType<typeof setTimeout> | null = null;
-  consecutiveConflictRedrains = 0;
   confirmedPrefsFallback: ServerUiPrefsSync["confirmedPrefsFallback"] = null;
   lastReconciledScope: string | null = null;
   lastReconciledConfigObject: unknown = null;
@@ -91,8 +87,6 @@ class ServerUiPrefsOutbox implements ServerUiPrefsSync {
   cancelPendingKeys = cancelPendingKeys;
   updateRetainedLocalKeys = updateRetainedLocalKeys;
   publishPreferenceWrites = publishPreferenceWrites;
-  clearConflictRedrain = clearConflictRedrain;
-  scheduleConflictRedrain = scheduleConflictRedrain;
   mergePendingIntoStorage = mergePendingIntoStorage;
   startPendingDrain = startPendingDrain;
   batchIsCurrent = batchIsCurrent;
@@ -119,13 +113,6 @@ function recordPreferenceWriteFailures(
     });
   }
   sync.preferenceWriteFailures.set(scope, failures);
-}
-function clearConflictRedrain(): void {
-  if (sync.conflictRedrainTimer !== null) {
-    clearTimeout(sync.conflictRedrainTimer);
-    sync.conflictRedrainTimer = null;
-  }
-  sync.consecutiveConflictRedrains = 0;
 }
 function updateRetainedLocalKeys(
   scope: string,
@@ -282,7 +269,6 @@ function batchIsCurrent(batch: ServerUiPrefs): boolean {
   );
 }
 export function resetServerUiPrefsSync() {
-  clearConflictRedrain();
   sync.applyingServerPrefs = sync.pushDraining = sync.drainRequested = false;
   sync.pendingScope = "";
   sync.pendingPrefs = sync.pushWriter = null;
@@ -337,7 +323,6 @@ function adoptPushWriter(writer: ServerUiPrefsWriter, hooks: ServerUiPrefsPushHo
           ...sync.pendingPrefs,
         }
       : null;
-  clearConflictRedrain();
   sync.pushEpoch += 1;
   sync.pushWriter = writer;
   sync.pushClient = writer.state.client;
@@ -361,24 +346,6 @@ function adoptPushWriter(writer: ServerUiPrefsWriter, hooks: ServerUiPrefsPushHo
     writeStorage(PENDING_KEY, "", null);
   }
 }
-// Conflicts mean another writer committed, so bounded rescheduling converges under progress.
-// The cap prevents an endlessly conflicting server from keeping a timer chain alive.
-function scheduleConflictRedrain(writer: ServerUiPrefsWriter, epoch: number): void {
-  if (
-    sync.conflictRedrainTimer !== null ||
-    sync.consecutiveConflictRedrains >= MAX_CONFLICT_REDRAINS
-  ) {
-    return;
-  }
-  sync.consecutiveConflictRedrains += 1;
-  sync.conflictRedrainTimer = setTimeout(() => {
-    sync.conflictRedrainTimer = null;
-    if (sync.pushWriter === writer && sync.pushEpoch === epoch && sync.pendingPrefs) {
-      startPendingDrain(writer);
-    }
-  }, CONFLICT_REDRAIN_DELAY_MS);
-}
-
 function startPendingDrain(writer: ServerUiPrefsWriter): void {
   // Offline intent must not load dispatch or invalidate another profile.
   if (!writer.state.connected) {
@@ -425,7 +392,6 @@ export function pushServerUiPrefs(
   hooks: ServerUiPrefsPushHooks = {},
 ): void {
   adoptPushWriter(writer, hooks);
-  clearConflictRedrain();
   sync.pushAfterCommit = hooks.afterCommit;
   const keys = SYNCED_PREF_KEYS.filter((key) => Object.hasOwn(prefs, key));
   for (const key of keys) {
@@ -480,7 +446,6 @@ export function flushServerUiPrefs(
 ): void {
   adoptPushWriter(writer, hooks);
   reconcilePersistedPendingPrefs(SYNCED_PREF_KEYS);
-  clearConflictRedrain();
   sync.pushEpoch += 1;
   sync.pushDraining = sync.drainRequested = false;
   sync.composeSidebar = null;
