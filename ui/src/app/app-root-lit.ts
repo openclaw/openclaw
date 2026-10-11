@@ -17,7 +17,6 @@ declare module "@solidjs/web" {
       "openclaw-login-gate": RootElementAttributes;
       "openclaw-approval-page": RootElementAttributes;
       "openclaw-question-page": RootElementAttributes;
-      "openclaw-link-reader-hovercard-provider": RootElementAttributes;
       "openclaw-session-progress-hovercard-provider": RootElementAttributes;
     }
   }

@@ -17,6 +17,7 @@ import type {
   WorkerEnvironmentRecord,
 } from "./environment-record.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
+import { isWorkerEnvironmentAttachedTo } from "./placement-target.js";
 import type { WorkerEnvironmentStore } from "./store.js";
 
 export type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -54,13 +55,9 @@ export function requireCurrentWorkerTurnEnvironment(params: {
     throw new StaleWorkerBuildError();
   }
   if (
-    !environment ||
-    environment.state !== "attached" ||
-    environment.ownerEpoch !== placement.activeOwnerEpoch ||
+    !isWorkerEnvironmentAttachedTo(environment, placement) ||
     !bootstrapReceipt ||
-    bootstrapReceipt.bundleHash !== placement.workerBundleHash ||
-    environment.attachedSessionIds.length !== 1 ||
-    environment.attachedSessionIds[0] !== placement.sessionId
+    bootstrapReceipt.bundleHash !== placement.workerBundleHash
   ) {
     throw new Error("Active worker placement does not match its attached environment");
   }

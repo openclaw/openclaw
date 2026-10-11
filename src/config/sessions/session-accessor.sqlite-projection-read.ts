@@ -9,6 +9,7 @@ import {
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { captureSqliteReaderOwner } from "../../infra/sqlite-reader-lifecycle.js";
+import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { TranscriptReadWindow } from "../../sessions/transcript-read-window.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -20,6 +21,7 @@ import type {
 import type { UnindexedHistoryControl } from "./session-accessor.sqlite-history-navigation.types.js";
 import type { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
+import { retainTranscriptContextFacts } from "./session-transcript-context-facts.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { readTranscriptPayload, type TranscriptPayloadRecord } from "./transcript-payload.js";
@@ -435,6 +437,18 @@ export function readCurrentProjectionSnapshot<T>(
     if (snapshot.cold) {
       throw new SessionTranscriptColdError(resolved.sessionId);
     }
+    const version = {
+      generation: snapshot.generation ?? null,
+      rawSeq: snapshot.latestSeq,
+      updatedAt: snapshot.updatedAt,
+    };
+    retainTranscriptContextFacts(
+      database,
+      resolved.sessionId,
+      version,
+      getSqliteReadScopeRevision(database.db),
+      false,
+    );
     const empty = snapshot.latestSeq === null;
     const state = empty ? EMPTY_PROJECTION_STATE : snapshot.state;
     if (
@@ -449,11 +463,7 @@ export function readCurrentProjectionSnapshot<T>(
       value: read({
         database,
         generation: snapshot.generation,
-        version: {
-          generation: snapshot.generation ?? null,
-          rawSeq: snapshot.latestSeq,
-          updatedAt: snapshot.updatedAt,
-        },
+        version,
         hasUnindexedPrefix: !empty && snapshot.hasUnindexedPrefix,
         latestIndexedReset: empty ? null : snapshot.latestIndexedReset,
         resolved,

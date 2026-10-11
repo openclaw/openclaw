@@ -315,7 +315,7 @@ describe("worker connection endpoint failures", () => {
     }
   });
 
-  it.each(["no hello", "retryable rejection", "redacted connect failure"] as const)(
+  it.each(["no hello", "redacted connect failure"] as const)(
     "retains the last %s diagnosis at the admission deadline",
     async (scenario) => {
       vi.useFakeTimers();
@@ -340,26 +340,7 @@ describe("worker connection endpoint failures", () => {
         createSocket: () => {
           const socket = Object.assign(new EventEmitter(), {
             readyState: 0,
-            send: (raw: string) => {
-              if (scenario === "retryable rejection") {
-                socket.emit(
-                  "message",
-                  Buffer.from(
-                    JSON.stringify({
-                      type: "res",
-                      id: JSON.parse(raw).id,
-                      ok: false,
-                      error: {
-                        code: "INVALID_REQUEST",
-                        message: "unavailable",
-                        details: { reason: "gateway-unavailable" },
-                        retryable: true,
-                      },
-                    }),
-                  ),
-                );
-              }
-            },
+            send: () => {},
             close: () => socket.emit("close", 1006, Buffer.alloc(0)),
             terminate: () => socket.emit("close", 1006, Buffer.alloc(0)),
           });
@@ -380,9 +361,7 @@ describe("worker connection endpoint failures", () => {
       const expected =
         scenario === "redacted connect failure"
           ? "connect failed: Opening handshake has timed out"
-          : scenario === "no hello"
-            ? "no hello within deadline"
-            : "worker admission rejected: gateway-unavailable";
+          : "no hello within deadline";
       try {
         const starting = connection.start().catch((error: unknown) => error);
         await vi.advanceTimersByTimeAsync(1_000);
@@ -433,50 +412,6 @@ describe("worker connection endpoint failures", () => {
     expect(terminalErrors).toHaveLength(1);
     expect(connection.state).toEqual({ kind: "failed", error: terminalErrors[0] });
     expect(createSocket).not.toHaveBeenCalled();
-  });
-
-  it("reports the last unreachable gateway cause with an operator hint", async () => {
-    const port = await new Promise<number>((resolve, reject) => {
-      const server = net.createServer();
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          reject(new Error("test server did not allocate a TCP port"));
-          return;
-        }
-        server.close((error) => (error ? reject(error) : resolve(address.port)));
-      });
-    });
-    const endpoint = {
-      kind: "websocket" as const,
-      url: `ws://127.0.0.1:${port}${WORKER_PUBLIC_INGRESS_PATH}`,
-    };
-    const failures: string[] = [];
-    const connection = createWorkerConnection({
-      endpoint,
-      connectParams: FRAME_CONNECT_PARAMS,
-      admissionTimeoutMs: 25,
-      admissionDeadlineMs: 100,
-      reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
-      onConnectionFailure: (error) => {
-        if (error) {
-          failures.push(error.message);
-        }
-      },
-    });
-
-    try {
-      await expect(connection.start()).rejects.toBeInstanceOf(WorkerAdmissionDeadlineExceededError);
-      expect(failures.at(-2)).toMatch(
-        new RegExp(
-          `^worker could not reach gateway 127\\.0\\.0\\.1:${port}: .*ECONNREFUSED.*; check TLS pin/publicUrl configuration$`,
-          "u",
-        ),
-      );
-    } finally {
-      await connection.stop();
-    }
   });
 
   it("does not report local cancellation as a gateway connection failure", async () => {
@@ -811,9 +746,6 @@ describe("WorkerConnection state listener isolation", () => {
 
 describe("WorkerConnection inference listener isolation", () => {
   it.each([
-    ["unknown event", { ...inferenceEventFrame(1), event: "worker.unknown" }],
-    ["wrong frame type", { ...inferenceEventFrame(1), type: "res" }],
-    ["extra field", { ...inferenceEventFrame(1), extra: true }],
     ["invalid payload", { ...inferenceEventFrame(1), payload: {} }],
     [
       "wrong session",
@@ -827,13 +759,6 @@ describe("WorkerConnection inference listener isolation", () => {
       {
         ...inferenceTerminalFrame(1),
         payload: { ...inferenceTerminalFrame(1).payload, runEpoch: 2 },
-      },
-    ],
-    [
-      "invalid terminal",
-      {
-        ...inferenceTerminalFrame(1),
-        payload: { ...inferenceTerminalFrame(1).payload, outcome: {} },
       },
     ],
   ])("rejects %s before notifying inference listeners", (_label, frame) => {

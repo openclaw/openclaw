@@ -473,9 +473,7 @@ export function renderPluginSettingsDetail(props: DetailProps): JSX.Element {
           />
         </SettingsPage>
       ) : (
-        <>
-          <PluginOverview {...props} />
-        </>
+        <PluginOverview {...props} />
       )}
     </>
   );
