@@ -4,14 +4,13 @@ import { Directive, directive } from "lit/directive.js";
 import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
-import { removePathValue, setPathValue } from "../lib/config-form-utils.ts";
+import { copyWithPathPatch, removePathValue, setPathValue } from "../lib/config-form-utils.ts";
 import { ConfigFormArrayIdentity } from "./config-form-array-identity.ts";
 import {
   openCollectionDraft,
   type ConfigFormCollectionDraftCommit,
   type ConfigFormCollectionDraftProps,
 } from "./config-form-collection-draft.ts";
-import { copyWithPathPatch } from "./config-form-copy-on-write.ts";
 import { arrayItemSchema } from "./config-form.array-items.ts";
 import {
   arrayConstraintCandidates,
