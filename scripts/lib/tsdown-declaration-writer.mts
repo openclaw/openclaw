@@ -175,8 +175,8 @@ export async function writeTsdownDeclarations(
         previousOutputs(root).map((file) => portableRelativePath(liveDist, file)),
         () => {
           for (const group of prepared) {
+            const inputs = readDeclarationInputs(group.output, group.name);
             if (group.state) {
-              const inputs = readDeclarationInputs(group.output, group.name);
               group.state.signature = before.signature(
                 "tsconfig.json",
                 group.identity,

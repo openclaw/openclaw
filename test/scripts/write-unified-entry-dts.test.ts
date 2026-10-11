@@ -401,25 +401,27 @@ describe("write-unified-entry-dts", () => {
       expectStagingClean(root);
     }));
 
-  it.concurrent.for(["compiler failure", "missing successful receipt"])(
-    "preserves the previous generation on %s",
-    (failure, { command }) =>
-      command.lifetime.run(async () => {
-        const { root, write, declarations } = createFixture(
-          command,
-          TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
-        );
-        write("dist/index.d.ts", "previous root declaration");
-        write("dist/extensions/retained/index.d.ts", "previous plugin declaration");
-        const before = treeHashes(path.join(root, "dist"));
-        const cached: Record<string, string> = {};
-        const last = TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.at(-1)!;
-        if (failure === "compiler failure") {
-          write(declarations[last]![0]!, 'export type { Missing } from "@openclaw/llm-core";');
-        } else {
-          write(
-            "tsdown.config.ts",
-            `${fs.readFileSync(path.join(root, "tsdown.config.ts"), "utf8")}
+  it.concurrent.for([
+    "compiler failure",
+    "missing successful receipt",
+    "missing successful receipt without cache",
+  ])("preserves the previous generation on %s", (failure, { command }) =>
+    command.lifetime.run(async () => {
+      const { root, write, declarations } = createFixture(
+        command,
+        TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
+      );
+      write("dist/index.d.ts", "previous root declaration");
+      write("dist/extensions/retained/index.d.ts", "previous plugin declaration");
+      const before = treeHashes(path.join(root, "dist"));
+      const cached: Record<string, string> = {};
+      const last = TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.at(-1)!;
+      if (failure === "compiler failure") {
+        write(declarations[last]![0]!, 'export type { Missing } from "@openclaw/llm-core";');
+      } else {
+        write(
+          "tsdown.config.ts",
+          `${fs.readFileSync(path.join(root, "tsdown.config.ts"), "utf8")}
 const selected = configs.find(config => config.name === ${JSON.stringify(last)});
 const register = selected.hooks;
 selected.hooks = async hooks => {
@@ -427,17 +429,21 @@ selected.hooks = async hooks => {
   hooks.clearHook("build:done");
 };
 `,
-          );
-        }
-        const failed = await runUnifiedWriter(command, root);
-        expect(failed.status, failed.stdout + failed.stderr).toBeGreaterThan(0);
-        expect(failed.stdout + failed.stderr).toContain("invocation 1/1 finished");
-        expect(failed.stdout + failed.stderr).toContain(
-          failure === "compiler failure" ? "TS2305" : "Missing successful compiler membership",
         );
-        expect(treeHashes(path.join(root, "dist"))).toEqual(before);
-        expect(treeHashes(path.join(root, ".artifacts/build-all-cache"))).toEqual(cached);
-        expectStagingClean(root);
-      }),
+      }
+      const failed = await runUnifiedWriter(
+        command,
+        root,
+        failure === "missing successful receipt without cache" ? { OPENCLAW_BUILD_CACHE: "0" } : {},
+      );
+      expect(failed.status, failed.stdout + failed.stderr).toBeGreaterThan(0);
+      expect(failed.stdout + failed.stderr).toContain("invocation 1/1 finished");
+      expect(failed.stdout + failed.stderr).toContain(
+        failure === "compiler failure" ? "TS2305" : "Missing successful compiler membership",
+      );
+      expect(treeHashes(path.join(root, "dist"))).toEqual(before);
+      expect(treeHashes(path.join(root, ".artifacts/build-all-cache"))).toEqual(cached);
+      expectStagingClean(root);
+    }),
   );
 });
