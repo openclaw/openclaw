@@ -42,6 +42,7 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
     | "sessionId"
     | "sessionKey"
     | "sessionManager"
+    | "sessionPersistence"
     | "sessionTarget"
     | "preparedSessionTarget"
   > & { admittedRunContext?: EmbeddedRunAttemptParams["admittedRunContext"] };
@@ -139,68 +140,71 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
       ownedTranscriptWriteContext.assertCommitAllowed?.();
     };
     assertCurrent();
-    const reader = ownedTranscriptWriteContext.sessionReader;
-    if (reader) {
-      assertSessionEntryCohortScope(reader, fencedSessionTarget);
-    }
-    const options =
-      reader?.database ?? toDatabaseOptions(resolveSqliteReadScope(fencedSessionTarget));
-    const database = {
-      ...options,
-      env: Object.freeze({ ...(options.env ?? process.env) }),
-      path: resolveOpenClawAgentSqlitePath(options),
-    };
-    const lifetime = { assertCurrent, assertReadable: assertCurrent };
-    const incognito = captureSessionManagerIncognitoBinding(
-      fencedSessionTarget,
-      attempt.sessionManager,
-    );
-    if (incognito) {
-      const execution = await captureOpenClawAgentDatabaseExecution({
-        kind: "ephemeral",
-        agentId: incognito.actor.agentId,
-        env: database.env,
-        authority: lifetime,
-        existingOnly: true,
-      });
-      if (!execution) {
-        throw new Error("Attempt lost its captured incognito owner");
+    // Detached helpers keep their caller-owned transcript and never open durable storage.
+    if (attempt.sessionPersistence !== "detached") {
+      const reader = ownedTranscriptWriteContext.sessionReader;
+      if (reader) {
+        assertSessionEntryCohortScope(reader, fencedSessionTarget);
       }
-      releaseIncognito = () => execution.release();
-      ownedTranscriptWriteContext.sessionActor = {
-        actor: await execution.sessionActors.acquire(
-          { database: incognito.actor.identity, sessionKey: sessionTarget.sessionKey },
-          lifetime,
-        ),
-        database,
+      const options =
+        reader?.database ?? toDatabaseOptions(resolveSqliteReadScope(fencedSessionTarget));
+      const database = {
+        ...options,
+        env: Object.freeze({ ...(options.env ?? process.env) }),
+        path: resolveOpenClawAgentSqlitePath(options),
       };
-    } else if (!isIncognitoOpenClawAgentSqlitePath(database.path, database)) {
-      // Native incognito retains its existing transcript owner until the worker cutover.
-      let identity = readDatabasePathIdentitySync(database.path);
-      if (identity.key.startsWith("path:")) {
-        await prepareSessionEntryReplacementDatabase(database, assertCurrent);
-        assertCurrent();
-        identity = readDatabasePathIdentitySync(database.path);
-      }
-      const actor = await createSessionActorFactory(database).acquire(
-        {
-          database: {
-            kind: "file",
-            physicalIdentity: identity.key.slice("file:".length),
-            birthtime: identity.birthtime,
-            nativeLocation: identity.canonicalPath,
-          },
-          sessionKey: sessionTarget.sessionKey,
-        },
-        lifetime,
+      const lifetime = { assertCurrent, assertReadable: assertCurrent };
+      const incognito = captureSessionManagerIncognitoBinding(
+        fencedSessionTarget,
+        attempt.sessionManager,
       );
-      if ("kind" in actor) {
-        throw new Error("Durable session actor acquisition was declined");
+      if (incognito) {
+        const execution = await captureOpenClawAgentDatabaseExecution({
+          kind: "ephemeral",
+          agentId: incognito.actor.agentId,
+          env: database.env,
+          authority: lifetime,
+          existingOnly: true,
+        });
+        if (!execution) {
+          throw new Error("Attempt lost its captured incognito owner");
+        }
+        releaseIncognito = () => execution.release();
+        ownedTranscriptWriteContext.sessionActor = {
+          actor: await execution.sessionActors.acquire(
+            { database: incognito.actor.identity, sessionKey: sessionTarget.sessionKey },
+            lifetime,
+          ),
+          database,
+        };
+      } else if (!isIncognitoOpenClawAgentSqlitePath(database.path, database)) {
+        // Native incognito retains its existing transcript owner until the worker cutover.
+        let identity = readDatabasePathIdentitySync(database.path);
+        if (identity.key.startsWith("path:")) {
+          await prepareSessionEntryReplacementDatabase(database, assertCurrent);
+          assertCurrent();
+          identity = readDatabasePathIdentitySync(database.path);
+        }
+        const actor = await createSessionActorFactory(database).acquire(
+          {
+            database: {
+              kind: "file",
+              physicalIdentity: identity.key.slice("file:".length),
+              birthtime: identity.birthtime,
+              nativeLocation: identity.canonicalPath,
+            },
+            sessionKey: sessionTarget.sessionKey,
+          },
+          lifetime,
+        );
+        if ("kind" in actor) {
+          throw new Error("Durable session actor acquisition was declined");
+        }
+        ownedTranscriptWriteContext.sessionActor = {
+          actor,
+          database,
+        };
       }
-      ownedTranscriptWriteContext.sessionActor = {
-        actor,
-        database,
-      };
     }
     externalAbortController.arm();
     await externalAbortController.throwIfFiredAfterPrepCleanup();
