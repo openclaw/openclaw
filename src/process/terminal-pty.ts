@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isNodeRuntime } from "../daemon/runtime-binary.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
 import {
   materializeWindowsSpawnProgram,
@@ -33,10 +34,10 @@ export type TerminalPtyHandle = {
 function resolveTerminalNodeExecutable(env: NodeJS.ProcessEnv): string {
   // Packaged OpenClaw/Bun hosts cannot interpret npm's JavaScript entrypoint.
   // Use the running binary only when it is Node; otherwise require PATH node.exe.
-  const candidate =
-    path.win32.basename(process.execPath).toLowerCase() === "node.exe"
-      ? process.execPath
-      : resolveWindowsExecutablePath("node", env);
+  if (isNodeRuntime(process.execPath)) {
+    return process.execPath;
+  }
+  const candidate = resolveWindowsExecutablePath("node", env);
   if (path.win32.basename(candidate).toLowerCase() === "node.exe") {
     return candidate;
   }
