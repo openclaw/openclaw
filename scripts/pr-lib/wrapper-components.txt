@@ -614,6 +614,7 @@ src/config/sessions/session-entry-cohort.worker.ts
 src/config/sessions/session-entry-json.ts
 src/config/sessions/session-entry-snapshots.ts
 src/config/sessions/session-entry-state-format.ts
+src/config/sessions/session-entry-window.types.ts
 src/config/sessions/types.ts
 src/config/sessions/session-history-worker-errors.ts
 src/acp/runtime/session-meta-worker-mutation.ts
