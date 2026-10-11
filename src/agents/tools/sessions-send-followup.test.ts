@@ -249,6 +249,44 @@ describe("followup retained session authorization", () => {
       );
     },
   );
+  describe("operator admitted without a role actor or profile", () => {
+    // Device-token and control-plane connections carry neither, like the backend client
+    // that drives a parent turn from the Gateway host.
+    const deviceOperator = (): GatewayClient => ({
+      connId: "device-operator",
+      isDeviceTokenAuth: true,
+      connect: {
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: { id: "gateway-client", version: "test", platform: "linux", mode: "backend" },
+        role: "operator",
+        scopes: ["operator.admin", "operator.read", "operator.write"],
+      },
+      internal: { authenticatedOperator: true },
+    });
+
+    it("retains the Gateway's unidentified-operator policy when roles are off", async () => {
+      mocks.config.mockReturnValue({ agents: { entries: { main: {} } } });
+      mocks.client.mockReturnValue(deviceOperator());
+      const request = await prepare();
+      expect(() => request.custody.assertCurrent()).not.toThrow();
+      expect(mocks.profile).not.toHaveBeenCalled();
+    });
+
+    it("denies the same caller once roles are configured", async () => {
+      mocks.client.mockReturnValue(deviceOperator());
+      await expect(prepareSessionsSendFollowup(input)).rejects.toThrow("revoked");
+      expect(mocks.profile).not.toHaveBeenCalled();
+    });
+  });
+
+  it("refuses a capture without a retained caller", async () => {
+    mocks.client.mockReturnValue(null);
+    await expect(prepareSessionsSendFollowup(input)).rejects.toThrow(
+      "no retained original caller policy",
+    );
+  });
+
   it("refuses missing captured authority rather than selecting a System caller", async () => {
     mocks.capture.mockReturnValue(undefined);
     await expect(prepareSessionsSendFollowup(input)).rejects.toThrow("in-process caller custody");

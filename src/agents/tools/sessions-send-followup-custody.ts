@@ -1,5 +1,10 @@
 import { getRuntimeConfig } from "../../config/config.js";
 import {
+  onGatewayDeviceSourceRevoked,
+  readGatewayDeviceSourceAuthority,
+  retainGatewayDeviceRevocation,
+} from "../../gateway/device-revocation.js";
+import {
   resolveGatewayOperatorRoleActor,
   resolveOperatorRolePolicyForAssignment,
 } from "../../gateway/operator-role-policy.js";
@@ -48,6 +53,8 @@ export async function prepareSessionsSendFollowup(params: {
   const revoked = new AbortController();
   const signal = AbortSignal.any([captured.signal, revoked.signal]);
   let stopAccessWatch: (() => void) | undefined;
+  let stopDeviceWatch: (() => void) | undefined;
+  let releaseDevice: (() => void) | undefined;
   let released = false;
   let observationReleased = false;
   let authorityReleased = true;
@@ -58,6 +65,8 @@ export async function prepareSessionsSendFollowup(params: {
     }
     released = true;
     stopAccessWatch?.();
+    stopDeviceWatch?.();
+    releaseDevice?.();
     for (const read of facts) {
       read.release();
     }
@@ -74,21 +83,32 @@ export async function prepareSessionsSendFollowup(params: {
   try {
     assertInvocation?.();
     const cfg = getRuntimeConfig();
-    const client = captured.run(() => getPluginRuntimeGatewayRequestScope()?.client);
-    const actor = resolveGatewayOperatorRoleActor(client ?? null);
-    if (!client || !actor) {
+    const scope = captured.run(() => getPluginRuntimeGatewayRequestScope());
+    const client = scope?.client;
+    if (!client) {
       throw new Error("Followup has no retained original caller policy.");
     }
+    // Device-token and control-plane operators are admitted without a role actor or
+    // profile; they keep the Gateway's unidentified-operator policy on every check.
+    const actor = resolveGatewayOperatorRoleActor(client);
+    // Without operator run authority the continuation leaves the caller's device grant on
+    // its scope. Hold it here: revocation ends the followup, transport loss alone does not.
+    const deviceGuard = captured.operatorAuthority ? undefined : scope.hasCurrentClientAuthority;
+    releaseDevice = retainGatewayDeviceRevocation(deviceGuard);
+    const isDeviceSourceCurrent = readGatewayDeviceSourceAuthority(deviceGuard);
+    stopDeviceWatch = onGatewayDeviceSourceRevoked(deviceGuard, () =>
+      revoked.abort(new FollowupAccessChangedError("Followup caller access was revoked.")),
+    );
     const policyClient = {
       ...client,
       connect: { ...client.connect, scopes: [...(client.connect.scopes ?? [])] },
-      internal: { ...client.internal, operatorRoleActor: { ...actor } },
+      internal: { ...client.internal, ...(actor ? { operatorRoleActor: { ...actor } } : {}) },
     };
     const profile =
-      actor.kind === "operator"
+      actor?.kind === "operator"
         ? await prepareUserProfileRoleAuthority(actor.profileId)
         : undefined;
-    if (actor.kind === "operator" && (!profile || profile.profileId !== actor.profileId)) {
+    if (actor?.kind === "operator" && (!profile || profile.profileId !== actor.profileId)) {
       throw new FollowupAccessChangedError("Followup requester profile is unavailable.");
     }
     assertInvocation?.();
@@ -106,6 +126,9 @@ export async function prepareSessionsSendFollowup(params: {
         throw new Error("Followup completion custody was released.");
       }
       captured.assertCurrent();
+      if (isDeviceSourceCurrent?.() === false) {
+        throw new FollowupAccessChangedError("Followup caller access was revoked.");
+      }
       if (profile && !profile.isCurrent()) {
         throw new FollowupAccessChangedError("Followup requester identity changed.");
       }
@@ -127,10 +150,10 @@ export async function prepareSessionsSendFollowup(params: {
           currentFacts,
           {
             policy:
-              actor.kind === "system"
+              actor?.kind === "system"
                 ? undefined
                 : resolveOperatorRolePolicyForAssignment(
-                    actor.profileId,
+                    actor?.profileId,
                     profile?.role ?? null,
                     currentConfig,
                     profile?.githubLogin ?? null,
