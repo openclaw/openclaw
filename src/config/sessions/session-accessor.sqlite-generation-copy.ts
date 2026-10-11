@@ -16,7 +16,7 @@ import type {
 } from "./session-accessor.sqlite-generation.types.js";
 import { readSessionInputArtifactRows } from "./session-accessor.sqlite-pending-inputs-repair.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { createTranscriptIdentityInserter } from "./session-accessor.sqlite-transcript-store.js";
+import { createTranscriptIdentityInserter } from "./session-accessor.sqlite-transcript-identity.js";
 import {
   assertSessionTranscriptHot,
   readSessionColdTranscript,

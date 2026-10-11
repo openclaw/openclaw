@@ -27,9 +27,21 @@ function harness(sessionUpdate: AgentSideConnection["sessionUpdate"] = vi.fn(asy
 }
 
 describe("AcpTranslatorSessionUpdates", () => {
-  it("blocks ledger reads and writes after shutdown starts", async () => {
+  it("joins admitted ledger work and blocks reads and writes after shutdown starts", async () => {
+    const reading = createDeferred<{ complete: boolean; events: [] }>();
     const { updates, ledger, sessionUpdate } = harness();
-    updates.stop();
+    ledger.readReplay.mockReturnValueOnce(reading.promise);
+    const replay = updates.readLedgerReplay(session);
+    let stopped = false;
+    const closing = updates.stop().then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    reading.resolve({ complete: true, events: [] });
+    await replay;
+    await closing;
+    ledger.readReplay.mockClear();
     await updates.startLedgerSession({ ...session, cwd: "/tmp" }, { complete: true });
     await updates.recordUserPrompt(session, "run-1", []);
     await updates.emit(emission);

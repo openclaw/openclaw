@@ -109,19 +109,19 @@ suite.define(() => {
                 return false;
               }
               if (
-                !(await indexedDB.databases()).some((db) => db.name === "openclaw-session-roster")
+                !(await indexedDB.databases()).some((db) => db.name === "openclaw-chat-snapshots")
               ) {
                 return false;
               }
               return new Promise<boolean>((resolve, reject) => {
-                const open = indexedDB.open("openclaw-session-roster");
+                const open = indexedDB.open("openclaw-chat-snapshots");
                 open.addEventListener("error", () =>
-                  reject(open.error ?? new Error("Roster cache open failed")),
+                  reject(open.error ?? new Error("Boot snapshot open failed")),
                 );
                 open.addEventListener("success", () => {
                   const db = open.result;
-                  const transaction = db.transaction("rosters", "readonly");
-                  const request = transaction.objectStore("rosters").count();
+                  const transaction = db.transaction("sidebarSnapshots", "readonly");
+                  const request = transaction.objectStore("sidebarSnapshots").count();
                   transaction.addEventListener("complete", () => {
                     db.close();
                     resolve(request.result > 0);
