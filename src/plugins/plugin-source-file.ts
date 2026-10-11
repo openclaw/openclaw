@@ -55,12 +55,6 @@ function withPluginSourceFile<T>(source: string, boundary: string, read: (fd: nu
   }
 }
 
-export function pluginSourceFileIdentity(source: string, boundary: string): string {
-  return withPluginSourceFile(source, boundary, (fd) =>
-    pluginSourceStatIdentity(fs.fstatSync(fd, { bigint: true })),
-  );
-}
-
 export function isPluginNativeExecutable(source: string, boundary: string): boolean {
   return withPluginSourceFile(source, boundary, isPluginNativeDescriptor);
 }

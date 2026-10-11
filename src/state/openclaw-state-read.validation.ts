@@ -526,6 +526,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       isTuiLastSessionReadCommand(input.command) ||
       input.command.type === "nodeHost.config" ||
       input.command.type === "tts.prefsPath" ||
+      input.command.type === "voicewake.triggers" ||
+      input.command.type === "voicewake.routing" ||
       input.command.type === "operator.channelPolicy" ||
       input.command.type === "preparedPoolPresence.read" ||
       (input.command.type === "onboardingRecommendations.read" &&

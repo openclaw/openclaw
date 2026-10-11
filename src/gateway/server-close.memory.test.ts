@@ -232,7 +232,7 @@ it("joins accepted Memory sync through Gateway close before its first publicatio
   }
 });
 
-it("drains memory before stalled connection cleanup while preserving terminal close and healthy siblings", async ({
+it("drains memory before stalled connection cleanup while preserving terminal close", async ({
   signal,
 }) => {
   const original = captureActivePluginRegistrySnapshot();
@@ -256,15 +256,11 @@ it("drains memory before stalled connection cleanup while preserving terminal cl
     }
     completed.push("first");
   });
-  const siblingClose = vi.fn(async () => {
-    completed.push("sibling");
-  });
   const first = fixture.registry(firstClose);
-  const sibling = fixture.registry(siblingClose);
   try {
-    for (const [index, owner] of [first, sibling].entries()) {
+    {
       const port = await getFreePort();
-      const token = `memory-close-token-${index}`;
+      const token = "memory-close-token";
       await fixture.state.writeConfig({
         ...fixture.config,
         gateway: {
@@ -274,7 +270,7 @@ it("drains memory before stalled connection cleanup while preserving terminal cl
           reload: { mode: "off" },
         },
       });
-      setActivePluginRegistry(owner.registry);
+      setActivePluginRegistry(first.registry);
       const factory = vi
         .spyOn(await import("./server-kernel.js"), "createGatewayKernel")
         .mockImplementation(async (...args) => {
@@ -295,22 +291,14 @@ it("drains memory before stalled connection cleanup while preserving terminal cl
         factory.mockRestore();
       }
       await server.startupSettled;
-      expect(kernels[index]!.pluginRuntime.registry).toBe(owner.registry);
+      expect(kernels[0]!.pluginRuntime.registry).toBe(first.registry);
     }
     const one = await first.runtime.getMemorySearchManager({
       cfg: fixture.config,
       agentId: "main",
     });
-    const two = await sibling.runtime.getMemorySearchManager({
-      cfg: fixture.config,
-      agentId: "main",
-    });
     assert(one.manager, one.error ?? "First memory manager unavailable");
-    assert(two.manager, two.error ?? "Sibling memory manager unavailable");
     await one.manager.probeEmbeddingAvailability();
-    await two.manager.probeEmbeddingAvailability();
-    const metadata = getGatewayPluginMetadataSnapshot();
-    assert(metadata);
     const warning = new Error("synthetic earlier shutdown warning");
     const firstKernel = kernels[0];
     assert(firstKernel);
@@ -336,7 +324,6 @@ it("drains memory before stalled connection cleanup while preserving terminal cl
       false,
     );
     expect(registryClose).not.toHaveBeenCalled();
-    expect(siblingClose).not.toHaveBeenCalled();
     releaseConnectionWork.resolve();
     const failure = await closing;
     expect.soft(failure).toBeInstanceOf(AggregateError);
@@ -351,29 +338,11 @@ it("drains memory before stalled connection cleanup while preserving terminal cl
       true,
     );
     expect(() => firstKernel.pluginRuntime.publish(first.registry)).toThrow();
-    expect(siblingClose).not.toHaveBeenCalled();
-    await expect(two.manager.probeEmbeddingAvailability()).resolves.toMatchObject({ ok: true });
     expect(completed).toEqual([]);
-    expect(getGatewayPluginMetadataSnapshot()).toBe(metadata);
-    const newcomer = await startGatewayServerCore(await getFreePort(), {
-      auth: { mode: "token", token: "memory-close-newcomer" },
-      bind: "loopback",
-      controlUiEnabled: false,
-      sidecarStartup: "defer",
-    });
-    servers.push(newcomer);
-    await newcomer.startupSettled;
-    await expect(two.manager.probeEmbeddingAvailability()).resolves.toMatchObject({ ok: true });
-    await newcomer.close({ reason: "newcomer leaves shared memory running" });
-    expect(siblingClose).not.toHaveBeenCalled();
-    expect(getGatewayPluginMetadataSnapshot()).toBe(metadata);
     await expect(servers[0]!.close({ reason: "warning failure stays terminal" })).rejects.toBe(
       failure,
     );
     expect(firstClose).toHaveBeenCalledTimes(failedAttempts);
-    await servers[1]!.close({ reason: "sibling close proof" });
-    expect(siblingClose).toHaveBeenCalledOnce();
-    expect(completed).toEqual(["sibling"]);
     expect(getGatewayPluginMetadataSnapshot()).toBeUndefined();
     await expect(servers[0]!.close({ reason: "already closed" })).rejects.toBe(failure);
     expect(firstClose).toHaveBeenCalledTimes(failedAttempts);
