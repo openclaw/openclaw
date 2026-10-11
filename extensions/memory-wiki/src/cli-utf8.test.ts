@@ -113,4 +113,29 @@ describe("memory-wiki cli UTF-8 refusals", () => {
       name: "WikiPageNotUtf8Error",
     });
   });
+
+  it("prints the refusal when another action compiles the vault", async () => {
+    const { rootDir, config } = await createCliVault();
+    const entityDir = path.join(rootDir, "entities");
+    await fs.mkdir(entityDir, { recursive: true });
+    const entityPath = path.join(entityDir, "router.md");
+    const malformed = malformedPage(ENTITY_HEADER);
+    await fs.writeFile(entityPath, malformed);
+    const notePath = path.join(suiteRoot, "ingest-note.md");
+    await fs.writeFile(notePath, "# Alpha\n\nLocal note.\n");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await parseWiki(config, ["ingest", notePath]);
+
+    const stderr = consoleError.mock.calls.map(([chunk]) => String(chunk)).join("\n");
+    expect(process.exitCode).toBe(1);
+    expect(stderr).toContain("Wiki page is not valid UTF-8 and cannot be rewritten safely");
+    expect(stderr).toContain(path.join("entities", "router.md"));
+    expect(stderr).toContain("The file was left unchanged.");
+    expect(await fs.readFile(entityPath)).toEqual(malformed);
+
+    await expect(parseWiki(config, ["ingest", notePath, "--json"])).rejects.toMatchObject({
+      name: "WikiPageNotUtf8Error",
+    });
+  });
 });
