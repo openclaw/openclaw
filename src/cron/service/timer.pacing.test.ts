@@ -198,10 +198,14 @@ describe("applyJobResult dynamic cadence", () => {
       });
       expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
       expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
-      expect(deferredNotifications).toHaveLength(1);
+      // A failed one-shot that is disabled also sends its terminal failure alert.
+      const terminalOneShot = scenario === "one-shot retry";
+      expect(deferredNotifications.map((notification) => notification.kind)).toEqual(
+        terminalOneShot ? ["auto-disabled", "failure-alert"] : ["auto-disabled"],
+      );
 
       runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
-      expect(state.deps.enqueueSystemEvent).toHaveBeenCalledOnce();
+      expect(state.deps.enqueueSystemEvent).toHaveBeenCalledTimes(terminalOneShot ? 2 : 1);
       expect(state.deps.requestHeartbeat).toHaveBeenCalledOnce();
     },
   );
