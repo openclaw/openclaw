@@ -35,6 +35,10 @@ sandboxRegistryPublication.subscribeFacts((change) => {
     }
     return;
   }
+  // No-op settlement carries no row change to supersede an in-flight read.
+  if (change.facts.size === 0) {
+    return;
+  }
   const facts = factsFor(String(change.source.identity));
   facts.revision++;
   for (const [key, fact] of change.facts) {
