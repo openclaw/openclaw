@@ -103,7 +103,7 @@ export function kickSessionEntryMaintenanceAfterWrite(
   if (params.skipMaintenance) {
     return;
   }
-  if (owner && isMaintenanceOwnerCurrent(databasePath, owner)) {
+  if (owner) {
     owner.activeSessionKeys.add(params.activeSessionKey);
     Object.assign(owner, params, { scope: owner.scope, generation: owner.generation + 1 });
     const maintenance = owner.maintenanceConfig
@@ -140,9 +140,6 @@ export function kickSessionEntryMaintenanceAfterWrite(
       }
     }
     return;
-  }
-  if (owner) {
-    retireMaintenanceOwner(databasePath, owner);
   }
   const env = cloneEnvWithPlatformSemantics(params.scope.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
