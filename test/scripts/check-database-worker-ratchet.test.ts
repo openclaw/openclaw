@@ -26,6 +26,7 @@ it("limits unadmitted mutation classification to its synchronous guarded branch"
   git("init");
   git("add", ".");
   git("commit", "-m", "unconditional runtime update");
+  expect(inventory(root)).toEqual(inventory(root, "HEAD"));
   const guarded = `
 function advanceTranscriptMutationAtInTransaction(database) {
   if (!findOpenClawAgentDatabaseIdentity(database)) {
