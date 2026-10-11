@@ -10,6 +10,7 @@ import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-load
 import { normalizeAnyChannelId } from "../channels/registry-normalize.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
+import type { SessionDeliveryGeneration } from "../config/sessions/session-delivery-generation.types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
 import { outboundDeliveryQueueName } from "../infra/outbound/delivery-queue-namespaces.js";
@@ -58,6 +59,7 @@ export async function sendCronAnnouncePayloadStrict(params: {
   bestEffort?: boolean;
   tts?: { auto?: TtsAutoMode };
   inspectionUrl?: string;
+  sessionGeneration?: SessionDeliveryGeneration;
   completion?: {
     job: CronJob;
     runStartedAt: number;
@@ -88,7 +90,7 @@ export async function sendCronAnnouncePayloadStrict(params: {
         delivery,
       })
     : undefined;
-  const queueName = outboundDeliveryQueueName({});
+  const queueName = outboundDeliveryQueueName({ sessionGeneration: params.sessionGeneration });
   if (id) {
     try {
       if (await isCompletedDirectCronDelivery(id, queueName)) {
@@ -141,36 +143,41 @@ export async function sendCronAnnouncePayloadStrict(params: {
       await fence?.beforeAttempt();
       params.abortSignal.throwIfAborted();
       fence?.assertCurrent();
-      const result = await sendDurableMessageBatchCore({
-        cfg: params.cfg,
-        channel: delivery.channel,
-        to: delivery.to,
-        accountId: delivery.accountId,
-        threadId: delivery.threadId,
-        payloads,
-        session,
-        identity,
-        bestEffort: params.bestEffort === true,
-        durability: params.bestEffort === true ? "best_effort" : "required",
-        ...(id
-          ? {
-              deliveryIntentId: id,
-              reusePendingDeliveryIntent: true,
-              completionRetention: DIRECT_CRON_DELIVERY_COMPLETION_RETENTION,
+      const result = await sendDurableMessageBatchCore(
+        {
+          cfg: params.cfg,
+          channel: delivery.channel,
+          to: delivery.to,
+          accountId: delivery.accountId,
+          threadId: delivery.threadId,
+          payloads,
+          session,
+          identity,
+          bestEffort: params.bestEffort === true,
+          durability: params.bestEffort === true ? "best_effort" : "required",
+          ...(id
+            ? {
+                deliveryIntentId: id,
+                reusePendingDeliveryIntent: true,
+                completionRetention: DIRECT_CRON_DELIVERY_COMPLETION_RETENTION,
+              }
+            : {}),
+          deps: createOutboundSendDeps(params.deps),
+          signal: params.abortSignal,
+          assertDirectAdapterHandoff: fence?.assertCurrent,
+          onDeliveredPayload: ({ hookContent, ...payload }) =>
+            deliveredPayloads.push({ ...payload, spokenText: hookContent }),
+          onDeliveryResult: () => {
+            if (!recipientReached) {
+              recipientReached = true;
+              params.onDeliveryAttempt?.(true);
             }
-          : {}),
-        deps: createOutboundSendDeps(params.deps),
-        signal: params.abortSignal,
-        assertDirectAdapterHandoff: fence?.assertCurrent,
-        onDeliveredPayload: ({ hookContent, ...payload }) =>
-          deliveredPayloads.push({ ...payload, spokenText: hookContent }),
-        onDeliveryResult: () => {
-          if (!recipientReached) {
-            recipientReached = true;
-            params.onDeliveryAttempt?.(true);
-          }
+          },
         },
-      });
+        undefined,
+        undefined,
+        params.sessionGeneration,
+      );
       if (!recipientReached) {
         recipientReached = durableMessageBatchMayHaveReachedRecipient(result);
         params.onDeliveryAttempt?.(recipientReached);

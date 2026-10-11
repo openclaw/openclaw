@@ -14,6 +14,7 @@ import {
   logCronDeliveryWarn,
   normalizeSilentReplyText,
   resolveDescendantSubagentFollowup,
+  resolveDirectCronDeliveryGeneration,
   resolveStaleCronDeliveryError,
 } from "./delivery-dispatch-policy.js";
 import type {
@@ -295,6 +296,7 @@ export async function dispatchCronDelivery(
           sessionKey: params.resolvedDelivery.sessionRoute?.sessionKey,
         },
         payload: deliveryPayloads,
+        sessionGeneration: resolveDirectCronDeliveryGeneration(params),
         tts: { auto: params.ttsAuto },
         inspectionUrl: resolveControlUiSessionUrl(params.cfgWithAgentDefaults, {
           sessionKey: params.runSessionKey,
