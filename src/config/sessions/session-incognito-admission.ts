@@ -54,7 +54,8 @@ type IncognitoReceiptOperation =
   | "session.rewrite.commit"
   | "session.event.append"
   | "session.correction.commit"
-  | "session.lock.replace";
+  | "session.lock.replace"
+  | "session.workerTranscript.commit";
 
 export function readIncognitoGrantFacts<Key extends keyof IncognitoSessionOperations>(
   received: unknown,
@@ -95,6 +96,35 @@ export function readIncognitoGrantFacts<Key extends keyof IncognitoSessionOperat
     throw new Error("Incognito session grant changed its target set");
   }
   return facts;
+}
+
+/** Install a detached publication without extending its existing session expiry. */
+export function installIncognitoSessionFacts(
+  identity: IncognitoSessionFacts["identity"],
+  entries: Map<string, IncognitoSessionFacts>,
+  facts: IncognitoSessionFacts,
+) {
+  if (!isDeepStrictEqual(facts.identity, identity)) {
+    throw new Error("Incognito publication belongs to another actor");
+  }
+  const previous = entries.get(facts.sessionKey);
+  if (previous && previous.revision > facts.revision) {
+    throw new Error("Incognito publication is older than committed facts");
+  }
+  const next = structuredClone(facts);
+  if (previous?.sharing?.entry?.sessionId === next.sharing?.entry?.sessionId && previous) {
+    next.expiresAt = previous.expiresAt;
+  }
+  const topologyChanged =
+    previous?.sharing?.entry?.sessionId !== next.sharing?.entry?.sessionId ||
+    previous?.sharing?.entry?.lifecycleRevision !== next.sharing?.entry?.lifecycleRevision;
+  // Misses belong to their scoped claim, not an ever-growing negative cache.
+  if (next.sharing?.entry) {
+    entries.set(next.sessionKey, next);
+  } else {
+    entries.delete(next.sessionKey);
+  }
+  return { revision: next.revision, topologyChanged };
 }
 
 /** Entry receipts publish the paired kernel's acknowledged result without replay. */

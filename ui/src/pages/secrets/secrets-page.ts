@@ -120,18 +120,17 @@ class SecretsPage extends OpenClawLightDomElement {
   }
 
   private patchDraft(patch: Partial<SecretsStoreDraft>) {
+    if (patch.kind !== undefined) {
+      this.secretKindOverridden = true;
+    }
+    if (patch.name !== undefined) {
+      patch.name = patch.name.toUpperCase();
+      if (!this.secretKindOverridden) {
+        patch.kind = isSensitiveEnvName(patch.name) ? "secret" : "env";
+      }
+    }
     this.draft = { ...this.draft, ...patch };
     this.formError = null;
-  }
-
-  private changeDraftName(name: string) {
-    const normalized = name.toUpperCase();
-    this.patchDraft({
-      name: normalized,
-      ...(!this.secretKindOverridden
-        ? { kind: isSensitiveEnvName(normalized) ? ("secret" as const) : ("env" as const) }
-        : {}),
-    });
   }
 
   private validateValue(value: string, kind: SecretsStoreDraft["kind"]): string | null {
@@ -300,13 +299,7 @@ class SecretsPage extends OpenClawLightDomElement {
       onOpenAdd: () => this.openEntry(),
       onOpenEdit: (entry) => this.openEntry(entry),
       onCloseDialog: () => this.closeDialog(),
-      onDraftNameChange: (name) => this.changeDraftName(name),
-      onDraftValueChange: (value) => this.patchDraft({ value }),
-      onDraftAllowedHostsChange: (allowedHosts) => this.patchDraft({ allowedHosts }),
-      onDraftKindChange: (kind) => {
-        this.secretKindOverridden = true;
-        this.patchDraft({ kind });
-      },
+      onDraftChange: (patch) => this.patchDraft(patch),
       onSubmitDraft: () => this.submitDraft(),
       onOpenBulk: () => this.openBulk(),
       onCloseBulk: () => this.closeDialog(true),

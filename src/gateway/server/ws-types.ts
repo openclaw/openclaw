@@ -1,6 +1,6 @@
 import type { WebSocket } from "ws";
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
-import type { PairedDeviceTokenIdentity } from "../../infra/device-pairing-identity.js";
+import type { PairedDeviceTokenIdentity } from "../../infra/device-pairing-core.types.js";
 import type { UserProfileIdentity } from "../../state/user-profiles.types.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { GatewayAuthPolicy } from "../auth-policy.types.js";

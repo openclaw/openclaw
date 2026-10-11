@@ -189,7 +189,7 @@ export async function resolveUpdateRunNoticeTarget(params: {
       ? { kind: "internal", session: { ...session, entry: session.entry } }
       : { kind: "none", reason: "no delivery target" };
   }
-  const route = resolveGatewayLifecycleNoticeRoute({
+  const route = await resolveGatewayLifecycleNoticeRoute({
     cfg: params.cfg,
     deliveryContext: origin,
     // Ambient recovery keeps the persisted system route thread; origin keys can supply hints.

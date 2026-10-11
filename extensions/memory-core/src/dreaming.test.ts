@@ -13,6 +13,7 @@ import {
   createTestPluginApi,
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -20,13 +21,13 @@ import { registerShortTermPromotionDreaming } from "./dreaming.js";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness, shortTermTestState } from "./test-helpers.js";
 
-// `runDreamingSweepPhases` is the only binding the dreaming trigger imports from this module.
 const runDreamingSweepPhasesMock = vi.hoisted(() =>
-  vi.fn(async (_params: { agentId?: string; workspaceDir: string }) => ({
-    degradedPhases: 0,
-    pendingNarratives: 0,
+  vi.fn<typeof import("./dreaming-phases.js").runDreamingSweepPhases>(async () => ({
+    narratives: [],
+    failed: false,
   })),
 );
+// mock-isolation: Scheduler tests isolate phase preparation; the real sweep has separate coverage.
 vi.mock("./dreaming-phases.js", () => ({
   runDreamingSweepPhases: runDreamingSweepPhasesMock,
 }));
@@ -129,14 +130,9 @@ function createCronHarness(initialJobs: CronJobLike[] = [], opts?: CronHarnessOp
       mutationCalls.push("add");
       addCalls.push(input);
       jobs.push({
+        ...input,
         id: `job-${jobs.length + 1}`,
-        declarationKey: input.declarationKey,
-        name: input.name,
-        description: input.description,
-        enabled: input.enabled,
         schedule: { ...input.schedule },
-        sessionTarget: input.sessionTarget,
-        wakeMode: input.wakeMode,
         payload: { ...input.payload },
         ...(input.delivery ? { delivery: { ...input.delivery } } : {}),
         createdAtMs: Date.now(),
@@ -216,7 +212,6 @@ function createDreamingTestContext(
 ) {
   const logger = createLogger();
   const harness = createCronHarness(params.initialJobs, params.cronOptions);
-  const onMock = vi.fn();
   const api: DreamingPluginApiTestDouble = {
     ...createTestPluginApi({
       config: params.config ?? createDreamingConfig(),
@@ -224,11 +219,11 @@ function createDreamingTestContext(
       logger,
     }),
     logger,
-    on: onMock,
+    on: vi.fn<DreamingPluginApi["on"]>(),
     scheduler: createTestPluginServiceScheduler(),
     registerService: vi.fn<DreamingPluginApi["registerService"]>(),
   };
-  Object.assign(api.runtime, params.runtime);
+  Object.assign(api.runtime, { agent: createPluginRuntimeMock().agent }, params.runtime);
   return { api, harness, logger };
 }
 
@@ -270,7 +265,13 @@ function getBeforeAgentReplyHandler(onMock: ReturnType<typeof vi.fn>) {
   );
   return call[1] as (
     event: { cleanedBody: string },
-    ctx: { agentId?: string; trigger?: string; workspaceDir?: string; sessionKey?: string },
+    ctx: {
+      agentId?: string;
+      trigger?: string;
+      workspaceDir?: string;
+      sessionKey?: string;
+      heartbeatEventQueueSessionKey?: string;
+    },
   ) => Promise<unknown>;
 }
 
@@ -585,7 +586,7 @@ describe("dreaming service reconciliation", () => {
 
   it("only triggers managed dreaming when the queued cron event is still pending", async () => {
     const { api, harness } = createDreamingTestContext({
-      config: createDreamingConfig({ enabled: false }),
+      config: createDreamingConfig({ enabled: true, phases: { deep: { limit: 0 } } }),
     });
 
     registerShortTermPromotionDreamingForTest(api);
@@ -608,7 +609,7 @@ describe("dreaming service reconciliation", () => {
 
     expect(first).toEqual({
       handled: true,
-      reason: "memory-core: short-term dreaming disabled",
+      reason: "memory-core: short-term dreaming disabled by limit",
     });
 
     resetSystemEventsForTest();
@@ -623,7 +624,7 @@ describe("dreaming service reconciliation", () => {
 
   it("resolves queued managed dreaming cron events from the base session for isolated heartbeats", async () => {
     const { api, harness } = createDreamingTestContext({
-      config: createDreamingConfig({ enabled: false }),
+      config: createDreamingConfig({ enabled: true, phases: { deep: { limit: 0 } } }),
     });
 
     registerShortTermPromotionDreamingForTest(api);
@@ -640,12 +641,17 @@ describe("dreaming service reconciliation", () => {
     const beforeAgentReply = getBeforeAgentReplyHandler(api.on);
     const result = await beforeAgentReply(
       { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-      { trigger: "heartbeat", workspaceDir: ".", sessionKey: "agent:main:main:heartbeat" },
+      {
+        trigger: "heartbeat",
+        workspaceDir: ".",
+        sessionKey: "agent:main:main:heartbeat",
+        heartbeatEventQueueSessionKey: "agent:main:main",
+      },
     );
 
     expect(result).toEqual({
       handled: true,
-      reason: "memory-core: short-term dreaming disabled",
+      reason: "memory-core: short-term dreaming disabled by limit",
     });
   });
 
@@ -873,37 +879,6 @@ describe("dreaming service reconciliation", () => {
     )[0];
     expect(sweepArgs.agentId).toBe("researcher");
     expect(sweepArgs.workspaceDir).toBe(workspaceDir);
-  });
-
-  it("reports a degraded sweep when narrative cleanup fails", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-cleanup-degraded-");
-    runDreamingSweepPhasesMock.mockResolvedValueOnce({
-      degradedPhases: 1,
-      pendingNarratives: 0,
-    });
-    const { api, harness, logger } = createDreamingTestContext({
-      config: createDreamingConfig(
-        {
-          enabled: true,
-          limit: 1,
-          phases: { light: { enabled: false }, rem: { enabled: false } },
-        },
-        { agents: { defaults: { workspace: workspaceDir } } },
-      ),
-    });
-
-    registerShortTermPromotionDreamingForTest(api);
-    await triggerDreamingServiceStart(api, { config: api.config, getCron: () => harness.cron });
-    const result = await getBeforeAgentReplyHandler(api.on)(
-      { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-      { trigger: "cron", agentId: "main", workspaceDir },
-    );
-
-    expect(result).toEqual({
-      handled: true,
-      reason: "memory-core: short-term dreaming degraded",
-    });
-    expectLogContains(logger.warn, "failed=0, degraded=1, narrativesPending=0");
   });
 
   it.each([{ label: "mixed outcomes", rejected: 1, promoted: 1 }])(

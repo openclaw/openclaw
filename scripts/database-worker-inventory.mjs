@@ -174,6 +174,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/plugin-state/plugin-state-store.reads.ts",
+    [
+      {
+        tier: "W",
+        operations: ["selectPluginStateBatchRows"],
+        evidence:
+          "Only the invocation-bound plugin-state-operation.kernel.ts facade calls this row reader; that facade executes in plugin-state.worker.ts. Existing native scalar readers remain separately classified.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-transcript-state.ts",
     [
       {
@@ -662,17 +673,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/secrets/store/secret-store.ts",
-    [
-      {
-        tier: "T3",
-        operations: ["updateSecretStoreAllowedHosts"],
-        evidence:
-          "Only cli/secrets-store-cli.ts:251 mutates allowed hosts; runtime reads and other writes remain T1",
-      },
-    ],
-  ],
-  [
     "src/secrets/store/secret-store-write.ts",
     [
       {
@@ -681,6 +681,7 @@ const reviewedOperations = new Map([
           "writeSecretStoreEntriesInDatabase",
           "rollbackSecretStoreEntryWriteInDatabase",
           "deleteSecretStoreEntryInDatabase",
+          "updateSecretStoreAllowedHostsInDatabase",
         ],
         evidence:
           "Only openclaw-state-worker-runtime.ts calls these ordinary secret mutation kernels",
@@ -925,17 +926,6 @@ const reviewedOperations = new Map([
         binding: "existing",
         evidence:
           "node-artifacts.ts:151 is shared, but entry-store.ts:372 runtime alias moves pass the same database and return at pending-inputs-repair.ts:130. The existing initializer is cross-database Doctor repair only, via canonical-repair.ts:514,521 and legacy-main-session-migration-operations.ts:343.",
-      },
-    ],
-  ],
-  [
-    "src/config/sessions/session-accessor.sqlite-transcript-write.ts",
-    [
-      {
-        tier: "T3",
-        operations: ["replaceTranscriptEvents"],
-        evidence:
-          "Only production invocations are developer benchmarks scripts/bench-agent-database-holds.ts:142 and scripts/bench-session-history.ts:383; remaining references are internal reexports and excluded test helpers. Synchronous replacement is separately retained.",
       },
     ],
   ],
@@ -2085,6 +2075,7 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/state/user-background.store.ts", // Background read/write workers; preference validation and profile merge/link/GitHub-sync also run in shared-state workers.
   "src/gateway/worker-environments/local-workspace-store.kernel.ts", // Projection read/write workers and worktree retirement worker only.
   "src/skills/library/import.kernel.ts", // Upload commands execute only in the shared-state writer.
   "src/skills/library/service.kernel.ts", // Library catalog and revision reads use the shared-state read registry.

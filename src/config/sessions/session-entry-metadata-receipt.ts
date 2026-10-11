@@ -7,10 +7,15 @@ import {
 import type { SessionRowChange, SessionRowFacts } from "../../sessions/session-row-changes.js";
 import { preparedSharingChanges } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import type { SessionEntryPublicationSource } from "./session-accessor.sqlite-entry-cache.types.js";
+import {
+  hasSessionEntryPublicationCapacity,
+  sealSessionEntryPublicationSource,
+} from "./session-entry-publication-source.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionEntryMetadataFact = {
   entry: SessionEntry;
+  fullEntry?: SessionEntry;
   previous?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
   facts: Extract<SessionRowFacts, { kind: "entry" }>;
   sharingChange: "changed" | "unchanged";
@@ -47,6 +52,7 @@ export function captureSessionEntryMetadataReceipts(changes: readonly SessionRow
       source: publication.prepared.source,
       value: {
         entry,
+        fullEntry: publication.prepared.fullEntries?.get(change.sessionKey),
         previous: previous ? previous.value.previous : publication.previous,
         sharingChange:
           previous?.value.sharingChange === "changed" ? "changed" : publication.sharingChange,
@@ -61,14 +67,40 @@ export function captureSessionEntryMetadataReceipts(changes: readonly SessionRow
       },
     });
   }
-  return [...latest].map(([key, { source, value }]) =>
-    createSqliteCommitReceipt({
+  const receipts = [...latest].map(([key, { source, value }]) => {
+    sealSessionEntryPublicationSource(source);
+    return createSqliteCommitReceipt({
       source,
       domain: "session-entry-metadata",
       keys: [key],
       readFact: () => ({ kind: "postimage", value }),
-    }),
+    });
+  });
+  boundSessionEntryMetadataReceipts(receipts);
+  return receipts;
+}
+
+/** Metadata shares an envelope with transcript authority; only full-entry enrichment may be shed. */
+export function boundSessionEntryMetadataReceipts(
+  receipts: readonly SessionEntryMetadataReceipt[],
+  envelope: unknown = receipts,
+): void {
+  const enriched = receipts.some((receipt) =>
+    [...receipt.facts.values()].some(
+      (fact) => fact.kind === "postimage" && fact.value.fullEntry !== undefined,
+    ),
   );
+  if (!enriched || hasSessionEntryPublicationCapacity(envelope)) {
+    return;
+  }
+  for (const receipt of receipts) {
+    delete receipt.source.writeToken;
+    for (const fact of receipt.facts.values()) {
+      if (fact.kind === "postimage") {
+        delete fact.value.fullEntry;
+      }
+    }
+  }
 }
 
 export function parseSessionEntryMetadataReceipts(
@@ -112,6 +144,10 @@ export function parseSessionEntryMetadataReceipts(
         !isRecord(row.entry) ||
         typeof row.entry.sessionId !== "string" ||
         typeof row.entry.updatedAt !== "number" ||
+        (row.fullEntry !== undefined &&
+          (!isRecord(row.fullEntry) ||
+            row.fullEntry.sessionId !== row.entry.sessionId ||
+            row.fullEntry.updatedAt !== row.entry.updatedAt)) ||
         !isRecord(row.facts) ||
         row.facts.kind !== "entry" ||
         row.facts.sessionId !== row.entry.sessionId ||

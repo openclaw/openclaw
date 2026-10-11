@@ -19,7 +19,10 @@ import {
   sqliteExtendedResultCode,
   sqlitePrimaryResultCode,
 } from "./sqlite-error-diagnostics.js";
-import { discardSqliteTransactionState } from "./sqlite-post-commit.js";
+import {
+  discardSqliteTransactionState,
+  withSqlitePostCommitPublications,
+} from "./sqlite-post-commit.js";
 import {
   captureSqliteReaderOwner,
   currentSqliteOperationTiming,
@@ -384,7 +387,6 @@ function runSqliteTransactionSync<T>(
   mode: SqliteTransactionMode,
   options?: SqliteTransactionOptions,
 ): T {
-  assertTransactionUsable(db);
   if (db.isTransaction) {
     // SQLite targets the most recent matching savepoint. Reusing its name keeps
     // nested native/SDK calls correct without module-local depth or counters.
@@ -420,6 +422,32 @@ function runSqliteTransactionSync<T>(
     sql: mode === "immediate" ? "BEGIN IMMEDIATE" : "BEGIN",
     step: "begin",
   });
+  return settleSqliteTransactionSync(db, operation, mode, beginMs, prepareMs, options);
+}
+
+/** Settle a reservation acquired by the closed, multi-database worker fence. */
+export function runSqliteReservedTransactionSync<T>(
+  db: DatabaseSync,
+  operation: () => T,
+  options: SqliteTransactionOptions,
+): T {
+  assertTransactionUsable(db);
+  if (isMainThread || !db.isTransaction) {
+    throw new Error("SQLite reserved settlement requires a worker-owned transaction");
+  }
+  return settleSqliteTransactionSync(db, operation, "immediate", 0, undefined, options, true);
+}
+
+function settleSqliteTransactionSync<T>(
+  db: TransactionDatabase,
+  operation: () => T,
+  mode: SqliteTransactionMode,
+  beginMs: number,
+  prepareMs: number | undefined,
+  options: SqliteTransactionOptions | undefined,
+  reservedSourceFence = false,
+): T {
+  const timing = currentSqliteOperationTiming();
   const transactionStartedAt = Date.now();
   const admissionWaitBefore = timing?.hostAdmissionWaitMs ?? 0;
   let commitMs = 0;
@@ -433,9 +461,8 @@ function runSqliteTransactionSync<T>(
   };
   let commitStarted = false;
   try {
-    // BEGIN may wait for a foreign writer. Admit its committed schema inside
-    // rollback protection, then share that snapshot's facts with all kernels.
-    const result = runSqliteReadOperationSync(db, operation, "fresh");
+    // Share admitted schema inside rollback protection unless the source fence already owns it.
+    const result = reservedSourceFence ? operation() : runSqliteReadOperationSync(db, operation);
     assertSyncTransactionResult(result);
     assertTransactionUsable(db);
     commitStarted = true;
@@ -480,7 +507,26 @@ export function runSqliteDeferredTransactionSync<T>(
   operation: () => T,
   options?: SqliteTransactionOptions,
 ): T {
-  return runSqliteTransactionSync(db, operation, "deferred", options);
+  assertTransactionUsable(db);
+  return withSqlitePostCommitPublications(db, () =>
+    runSqliteTransactionSync(db, operation, "deferred", options),
+  );
+}
+
+/** Read-only composition reuses the caller's snapshot and rollback owner. */
+export function runSqliteReadSnapshotSync<T>(
+  db: DatabaseSync,
+  operation: () => T,
+  options?: SqliteTransactionOptions,
+): T {
+  assertTransactionUsable(db);
+  if (!db.isTransaction) {
+    return runSqliteDeferredTransactionSync(db, operation, options);
+  }
+  const result = runSqliteReadOperationSync(db, operation);
+  assertSyncTransactionResult(result);
+  assertTransactionUsable(db);
+  return result;
 }
 
 export function runSqliteImmediateTransactionSync<T>(
@@ -488,7 +534,10 @@ export function runSqliteImmediateTransactionSync<T>(
   operation: () => T,
   options?: SqliteTransactionOptions,
 ): T {
-  return runSqliteTransactionSync(db, operation, "immediate", options);
+  assertTransactionUsable(db);
+  return withSqlitePostCommitPublications(db, () =>
+    runSqliteTransactionSync(db, operation, "immediate", options),
+  );
 }
 
 /** Admit the borrowed worker connection after BEGIN and before its physical commit. */

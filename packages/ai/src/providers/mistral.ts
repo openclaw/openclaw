@@ -46,7 +46,7 @@ import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { requireApiKey } from "../utils/required-api-key.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
-import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
+import { boundResponseBody } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import { buildBaseOptions, clampMaxTokensToModel } from "./simple-options.js";
@@ -68,32 +68,10 @@ export function createBoundedMistralFetcher(
 ): Fetcher {
   return async (input, init) => {
     const response = init == null ? await upstreamFetch(input) : await upstreamFetch(input, init);
-    if (!response.body || typeof response.body.getReader !== "function") {
-      return response;
-    }
-    const reader = response.body.getReader();
-    const guard = createSseByteGuard(reader, {
+    return boundResponseBody(response, {
       maxBytes,
       onOverflow: ({ size, maxBytes: cap }) =>
         new Error(`mistral: stream body exceeds ${cap} bytes (got ${size})`),
-    });
-    const guardedStream = new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        const { done, value } = await guard.read();
-        if (done) {
-          controller.close();
-          return;
-        }
-        controller.enqueue(value);
-      },
-      async cancel(reason) {
-        await guard.cancel(reason);
-      },
-    });
-    return new Response(guardedStream, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
     });
   };
 }
@@ -351,7 +329,7 @@ async function consumeChatStream(
   const blocks = output.content;
   const blockIndex = () => blocks.length - 1;
   type ToolBlock = {
-    block: ToolCall & { partialArgs?: string };
+    block: ToolCall & { partialJson?: string };
     contentIndex: number;
     preview: ToolArgumentPreviewSchedule;
     explicitIds: Set<string>;
@@ -573,7 +551,7 @@ async function consumeChatStream(
           id: providedCallId ?? createMissingToolCallId(contentIndex),
           name: functionName ?? "",
           arguments: {},
-          partialArgs: "",
+          partialJson: "",
         };
         output.content.push(block);
         identity = {
@@ -610,11 +588,11 @@ async function consumeChatStream(
         typeof toolCall.function.arguments === "string"
           ? toolCall.function.arguments
           : JSON.stringify(toolCall.function.arguments || {});
-      block.partialArgs = (block.partialArgs || "") + argsDelta;
+      block.partialJson = (block.partialJson || "") + argsDelta;
       // Preview refresh is scheduled geometrically; the terminal strict parse
       // below re-reads the full buffer authoritatively either way.
-      if (identity.preview(block.partialArgs.length)) {
-        block.arguments = parseStreamingJson(block.partialArgs);
+      if (identity.preview(block.partialJson.length)) {
+        block.arguments = parseStreamingJson(block.partialJson);
       }
       stream.push({
         type: "toolcall_delta",
@@ -636,13 +614,13 @@ async function consumeChatStream(
   }
   finalizeTerminalToolCallArguments(
     toolBlocks.map(({ block }) => block),
-    (block) => block.partialArgs ?? "",
+    (block) => block.partialJson ?? "",
     "Mistral completed tool call has invalid JSON arguments",
   );
   for (const { block, contentIndex } of toolBlocks) {
     // Finalize in-place and strip the scratch buffer so replay only
     // carries parsed arguments.
-    delete block.partialArgs;
+    delete block.partialJson;
     stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial: output });
   }
 }

@@ -212,6 +212,60 @@ describe("sessions page managed roster", () => {
 });
 
 describe("Sessions page typing ownership", () => {
+  it.each(["click", "Escape"])(
+    "retires selected rows and stale requests when clearing via %s",
+    async (action) => {
+      vi.useFakeTimers();
+      const { page, requests, pending, input, edit, cleanup } = await mountTypingPage();
+      try {
+        const limit = page.querySelector<HTMLInputElement>(".session-filter-input--limit")!;
+        limit.value = "25";
+        limit.dispatchEvent(new Event("input", { bubbles: true }));
+        await vi.advanceTimersByTimeAsync(0);
+        pending.at(-1)!.resolve(result("agent:main:limited"));
+        await vi.advanceTimersByTimeAsync(0);
+        await edit("older");
+        await vi.advanceTimersByTimeAsync(200);
+        const oldRequest = pending.at(-1)!;
+        page.selectedSessions = new Map([["agent:main:limited", { key: "agent:main:limited" }]]);
+        await page.updateComplete;
+        input().focus();
+        if (action === "click") {
+          const clear = page.querySelector<HTMLButtonElement>('button[aria-label="Clear search"]');
+          expect(clear).not.toBeNull();
+          clear!.click();
+        } else {
+          input().dispatchEvent(
+            new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+          );
+        }
+        await page.updateComplete;
+        expect(input().value).toBe("");
+        expect(document.activeElement).toBe(input());
+        expect(page.selectedSessions.size).toBe(0);
+        expect(page.result).toBeNull();
+        const count = requests.length;
+        await vi.advanceTimersByTimeAsync(200);
+        expect(requests).toHaveLength(count);
+        oldRequest.resolve(result("agent:main:retired"));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(page.textContent).not.toContain("agent:main:retired");
+        expect(requests).toHaveLength(count + 1);
+        expect(requests.at(-1)).not.toHaveProperty("search");
+        pending.at(-1)!.resolve(result("agent:main:cleared"));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(input().value).toBe("");
+        expect(page.querySelector<HTMLInputElement>(".session-filter-input--limit")?.value).toBe(
+          "25",
+        );
+        expect(requests.at(-1)).toMatchObject({ limit: 25 });
+        expect(page.result?.sessions[0]?.key).toBe("agent:main:cleared");
+      } finally {
+        await cleanup();
+      }
+    },
+  );
+
   it.each([
     { timing: "queued", resubscribe: true, hidden: false },
     { timing: "timer", resubscribe: false, hidden: false },
@@ -501,14 +555,10 @@ describe("Sessions page typing ownership", () => {
       await edit("latest");
       setScope(null);
       await page.updateComplete;
-      const statusGroup = page.querySelector<HTMLElement & { value: string }>(
-        ".sessions-view-segment",
-      )!;
-      statusGroup.value = "archived";
-      statusGroup.dispatchEvent(new Event("change", { bubbles: true }));
+      const statusGroup = page.querySelector<HTMLElement>(".sessions-view-segment")!;
+      statusGroup.querySelector<HTMLInputElement>('input[value="archived"]')!.click();
       await page.updateComplete;
-      statusGroup.value = "all";
-      statusGroup.dispatchEvent(new Event("change", { bubbles: true }));
+      statusGroup.querySelector<HTMLInputElement>('input[value="all"]')!.click();
       await page.updateComplete;
       expect(requests).toHaveLength(2);
       expect(page.result).toBeNull();

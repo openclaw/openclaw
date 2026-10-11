@@ -805,6 +805,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     const onResponse = vi.fn();
 
     try {
+      const entered = createDeferred<void>();
       const result = codexControlRequest(
         {},
         "thread/resume",
@@ -818,6 +819,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
               method: "thread/read",
               requestParams: { threadId: "thread-1", includeTurns: false },
             });
+            entered.resolve();
             await preflight;
           },
           onResponse,
@@ -827,6 +829,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
         (value) => ({ status: "fulfilled", value }),
         (error: unknown) => ({ status: "rejected", error }),
       );
+      await entered.promise;
       await vi.advanceTimersByTimeAsync(50);
       expect(await settled).toMatchObject({
         status: "rejected",

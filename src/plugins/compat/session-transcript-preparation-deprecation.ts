@@ -7,6 +7,6 @@ export function warnSessionTranscriptPreparationDeprecation(): void {
   warnSessionPersistenceDeprecation(
     "Transcript transaction callbacks and withSessionTranscriptWriteLock",
     "withSessionTranscriptWrite with preparation.prepareMessage / preparation.source",
-    pluginId === undefined ? undefined : { pluginId },
+    { pluginId, family: "session-transcript" },
   );
 }

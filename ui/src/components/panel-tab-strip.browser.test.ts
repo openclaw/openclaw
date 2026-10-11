@@ -12,10 +12,6 @@ type RenderedTab = HTMLElement & {
   panel: string;
 };
 
-type RenderedTabGroup = HTMLElement & {
-  active: string;
-};
-
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
 
 function tab(id: string): PanelTabStripTab {
@@ -50,7 +46,32 @@ function renderControlledStrip(params: {
 }
 
 function renderedTabs(container: ParentNode): RenderedTab[] {
-  return [...container.querySelectorAll<RenderedTab>("wa-tab")];
+  return [...container.querySelectorAll<RenderedTab>(".tabstrip-tab")];
+}
+
+function tabWithId(container: ParentNode, id: string): RenderedTab | undefined {
+  return renderedTabs(container).find((candidate) => candidate.panel === id);
+}
+
+async function settleTabLayout(container: ParentNode) {
+  await container.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(".tabstrip")
+    ?.updateComplete;
+  await new Promise(requestAnimationFrame);
+}
+
+async function expectOverflowTabVisible(container: ParentNode, selectedTab: HTMLElement) {
+  await settleTabLayout(container);
+  const viewport = container
+    .querySelector(".tabstrip")
+    ?.shadowRoot?.querySelector<HTMLElement>(".nav");
+  if (!viewport) {
+    throw new Error("expected rendered tab strip viewport");
+  }
+  const viewportRect = viewport.getBoundingClientRect();
+  const tabRect = selectedTab.getBoundingClientRect();
+  expect(viewport.scrollWidth).toBeGreaterThan(viewport.clientWidth);
+  expect(tabRect.left).toBeGreaterThanOrEqual(viewportRect.left - 1);
+  expect(tabRect.right).toBeLessThanOrEqual(viewportRect.right + 1);
 }
 
 async function expectControlledSelection(
@@ -66,12 +87,12 @@ async function expectControlledSelection(
         candidate.hasAttribute("active") ||
         candidate.getAttribute("aria-selected") === "true",
     );
-    active = tabs.find((candidate) => candidate.panel === activeId);
+    active = tabWithId(container, activeId);
     expect(selected).toEqual([active]);
     expect(active?.tabIndex).toBe(0);
     expect(
       tabs
-        .filter((candidate) => candidate.panel !== activeId)
+        .filter((candidate) => candidate !== active)
         .every((candidate) => candidate.tabIndex === -1),
     ).toBe(true);
   });
@@ -128,10 +149,7 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
       onSelect: vi.fn(),
     });
     expect(await expectControlledSelection(container, "b")).toBe(initialActive);
-    await container.querySelector<RenderedTabGroup & { updateComplete: Promise<boolean> }>(
-      "wa-tab-group",
-    )?.updateComplete;
-    await new Promise(requestAnimationFrame);
+    await settleTabLayout(container);
     expect(document.activeElement).toBe(unrelated);
   });
 
@@ -163,22 +181,11 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
     const arrowActive = await expectControlledSelection(container, activeId);
     expect(document.activeElement).toBe(arrowActive);
 
-    const last = renderedTabs(container).find((candidate) => candidate.panel === "8");
+    const last = tabWithId(container, "8");
     last?.click();
     await vi.waitFor(() => expect(activeId).toBe("8"));
     const lastActive = await expectControlledSelection(container, activeId);
-    const group = container.querySelector<RenderedTabGroup>("wa-tab-group");
-    const nav = group?.shadowRoot?.querySelector<HTMLElement>(".nav");
-    if (!group || !nav) {
-      throw new Error("expected rendered tab group navigation");
-    }
-    await new Promise(requestAnimationFrame);
-    const navRect = nav.getBoundingClientRect();
-    const activeRect = lastActive.getBoundingClientRect();
-
-    expect(nav.scrollWidth).toBeGreaterThan(nav.clientWidth);
-    expect(activeRect.left).toBeGreaterThanOrEqual(navRect.left - 1);
-    expect(activeRect.right).toBeLessThanOrEqual(navRect.right + 1);
+    await expectOverflowTabVisible(container, lastActive);
   });
 
   it.each(["shared", "per-tab"])(
@@ -237,11 +244,7 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
       await Promise.resolve();
 
       const fallback = await expectControlledSelection(container, activeId);
-      const group = container.querySelector<
-        RenderedTabGroup & { updateComplete: Promise<boolean> }
-      >("wa-tab-group");
-      await group?.updateComplete;
-      await new Promise(requestAnimationFrame);
+      await settleTabLayout(container);
       expect(document.activeElement).toBe(fallback);
     },
   );

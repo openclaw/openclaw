@@ -57,6 +57,10 @@ behaviors:
 Relative catalog cache TTLs start when a successful load completes. Cache hits
 preserve that deadline, and explicit absolute provider deadlines remain unchanged.
 Pending loads retain their initial expiry so stalled work can be replaced.
+An explicit refresh through the prepared catalog owner bypasses completed
+response-cache entries only for the keys acquired by that request. Repeated
+reads within the same acquisition share the refreshed value; concurrent callers
+share pending work. Ordinary acquisition keeps its existing cache lifetime.
 
 Bundled providers set `discoveryMode: "strict"` in their catalog options.
 This code option keeps successful empty results empty and reports failed
@@ -293,10 +297,14 @@ The private `createUpstreamProviderCatalog` helper keeps this snapshot lifecycle
 owner. Supply the trusted seed, provider routes, metadata and model-list
 endpoints, discovery and starter-model audit labels, static-entry eligibility,
 and any model decoration. An optional
-`upstreamSeed` controls which seed lifecycle facts survive an upstream refresh.
+`upstreamSeed` controls which seed lifecycle facts survive an upstream refresh,
+and an optional `projectRows` replaces the default selection of listed rows
+(`projectProviderCatalogSnapshotRows`) when the plugin admits listed IDs the
+metadata does not describe. Model-list requests carry the provider's attribution
+headers from the same owner inference uses.
 The owner exposes `getSnapshot`, `refreshMetadata`, `buildStaticProvider`, and
 `buildLiveProvider`; credentials belong to each build call. Live builds refresh
-metadata before deriving static eligibility and intersecting advertised IDs.
+metadata before deriving static eligibility and projecting advertised IDs.
 Metadata acquisition failure retains the previous snapshot; model-list failures
 and empty results remain strict. `refreshMetadata` returns `undefined` when the
 feed lacks the provider, so explicit model preparation cannot mistake retained

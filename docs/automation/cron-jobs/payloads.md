@@ -95,6 +95,12 @@ jobs use the current operator read policy. Agent-created jobs retain their recor
 creator origin and account, and the channel's delegated read restrictions still
 apply. Delivery settings do not grant read access.
 
+Manual runs use the same scheduled execution context as timer-fired runs after
+the request passes admission. Ending the chat turn or tool call that started a
+run does not expire the job's tool access. The job still uses its stored authority
+and current tool restrictions; starting it manually does not grant the caller's
+extra permissions to the job.
+
 Current global, agent, profile, and provider tool policy is checked when each new
 scheduled message invocation starts. Configuration changes apply to later invocations;
 an invocation already admitted retains its configuration. Disabling or removing a job,
@@ -153,6 +159,8 @@ current invocation. A confirmed write still returns its result if authority ends
 while the response is pending.
 
 `--model` sets the job's primary model; it does not replace a session `/model` override, so configured fallback chains still apply on top of it. An unresolved or disallowed model fails the run with an explicit validation error rather than silently falling back to the default. If a job has `--model` but no explicit or configured fallback list, OpenClaw passes an empty fallback override instead of silently appending the agent primary as a hidden retry target.
+
+A fallback after a provider timeout continues the same scheduled turn and reuses its saved user input. Failed attempts do not complete the turn or duplicate the scheduled prompt.
 
 Pick the model for the job's difficulty, not the agent's default. Routine
 automation - summaries, triage, classification, status checks - runs well on a

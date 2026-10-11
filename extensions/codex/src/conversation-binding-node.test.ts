@@ -1,23 +1,31 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createCodexTestBindingStore } from "./app-server/session-binding.test-helpers.js";
+import {
+  createCodexTestBindingStore,
+  createConversationInspection,
+} from "./app-server/session-binding.test-helpers.js";
 import { handleCodexConversationInboundClaim } from "./conversation-binding-hooks.js";
 
 const publicBindingMocks = vi.hoisted(() => ({
-  resolveByConversation: vi.fn<() => { bindingId: string } | null>(),
+  readBinding: vi.fn<() => { bindingId: string } | null>(),
 }));
 
-vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", () => ({
-  getSessionBindingService: () => ({
-    resolveByConversation: publicBindingMocks.resolveByConversation,
-  }),
-}));
+vi.mock("openclaw/plugin-sdk/conversation-binding-inspection-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("openclaw/plugin-sdk/conversation-binding-inspection-runtime")
+    >();
+  return {
+    ...actual,
+    inspectConversationBinding: (
+      conversation: Parameters<typeof actual.inspectConversationBinding>[0],
+    ) => createConversationInspection(conversation, publicBindingMocks.readBinding()?.bindingId),
+  };
+});
 
 describe("Codex node conversation bindings", () => {
   beforeEach(() => {
-    publicBindingMocks.resolveByConversation
-      .mockReset()
-      .mockReturnValue({ bindingId: "binding-1" });
+    publicBindingMocks.readBinding.mockReset().mockReturnValue({ bindingId: "binding-1" });
   });
 
   it.each(["unchanged", "detached", "replaced"])(
@@ -76,7 +84,7 @@ describe("Codex node conversation bindings", () => {
       await vi.waitFor(() => expect(resumeCodexCliSessionOnNode).toHaveBeenCalledOnce());
       const queued = claim();
       if (bindingState !== "unchanged") {
-        publicBindingMocks.resolveByConversation.mockReturnValue(
+        publicBindingMocks.readBinding.mockReturnValue(
           bindingState === "detached" ? null : { bindingId: "replacement-binding" },
         );
       }

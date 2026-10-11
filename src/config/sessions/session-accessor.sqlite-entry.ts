@@ -449,7 +449,10 @@ async function patchSqliteSessionEntrySnapshot(
         assertCurrent?.();
         options.workerGuard?.assertCurrent?.();
       },
-      assertCommitAllowed: options.assertCommitAllowed,
+      assertCommitAllowed: () => {
+        options.assertCommitAllowed?.();
+        options.workerGuard?.assertMutationAllowed?.();
+      },
       shouldCommit: options.shouldCommit,
       source: options.workerGuard?.source,
       prepare,
@@ -563,6 +566,7 @@ async function patchSqliteSessionEntrySnapshot(
                   ...options,
                   assertCommitAllowed: () => {
                     options.assertCommitAllowed?.();
+                    options.workerGuard?.assertMutationAllowed?.();
                     options.workerGuard?.source?.();
                   },
                 },
@@ -667,7 +671,7 @@ export async function recordInboundSessionMeta(
       // Inbound metadata must not refresh activity timestamps; idle reset
       // evaluation relies on updatedAt from actual session turns.
       preserveActivity: true,
-      workerGuard: {},
+      workerGuard: { assertMutationAllowed: params.assertCommitAllowed },
       ...(createIfMissing ? { fallbackEntry: mergeSessionEntry(undefined, {}) } : {}),
     },
   );

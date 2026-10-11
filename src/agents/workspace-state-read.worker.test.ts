@@ -70,6 +70,42 @@ async function withoutMainThreadSql<T>(read: () => Promise<T>): Promise<T> {
   }
 }
 
+it("reuses unchanged workspace facts and refreshes them after each owning write", async () => {
+  expect((await readWorkspaceStateSnapshot(state.workspaceDir)).setupExists).toBe(false);
+  const initial = await seed();
+  expect(initial.setup.bootstrapSeededAt).toBe("2026-07-16T01:00:00.000Z");
+  const execute = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+  const unchanged = await withoutMainThreadSql(() =>
+    readWorkspaceStateSnapshot(state.workspaceDir),
+  );
+  expect(unchanged).toEqual(initial);
+  expect(execute).not.toHaveBeenCalled();
+  unchanged.setup.bootstrapSeededAt = "2026-07-17T01:00:00.000Z";
+  expect(await readWorkspaceStateSnapshot(state.workspaceDir)).toEqual(initial);
+
+  await mergeWorkspaceSetupState(state.workspaceDir, {
+    setupCompletedAt: "2026-07-16T02:00:00.000Z",
+  });
+  expect((await readWorkspaceStateSnapshot(state.workspaceDir)).setup.setupCompletedAt).toBe(
+    "2026-07-16T02:00:00.000Z",
+  );
+  await replaceWorkspaceAttestation({
+    workspaceDir: state.workspaceDir,
+    attestedAtMs: 2_000,
+    nowMs: 2_000,
+    generatedHashes: new Map([["TOOLS.md", "b".repeat(64)]]),
+  });
+  expect((await readWorkspaceStateSnapshot(state.workspaceDir)).attestation).toEqual({
+    attestedAtMs: 2_000,
+    generatedHashes: new Map([["TOOLS.md", "b".repeat(64)]]),
+  });
+  await deleteWorkspaceState(prepareWorkspaceStateDeletion(state.workspaceDir));
+  expect(await readWorkspaceStateSnapshot(state.workspaceDir)).toMatchObject({
+    setupExists: false,
+    setup: { version: 1 },
+  });
+});
+
 it("rolls back setup when a recovery hold arrives after caller preparation", async () => {
   const before = await seed();
   const recoveryHoldPredicate = { agentId: "new", held: [], applies: true };
@@ -247,7 +283,14 @@ it("joins a granted workspace mutation before closing its database", async () =>
       { setupCompletedAt: "2026-07-16T02:00:00.000Z" },
       2_000,
     ),
-  ).rejects.toThrow("read admission is closed");
+  ).rejects.toMatchObject({
+    message: "SQLite committed facts publication failed",
+    code: "outcome-unknown",
+    cause: {
+      message: "OpenClaw state database read admission is closed",
+      code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
+    },
+  });
   expect(close).toBeDefined();
   await close;
   spy.mockRestore();

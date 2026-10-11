@@ -283,6 +283,15 @@ export async function loadChatRoute(
     return notFound({ routeId: face });
   }
   const { target } = resolvedTarget;
+  if (
+    target.kind === "literal" &&
+    !target.slugCandidate &&
+    context.sessions.cachedRoutingDefaults
+  ) {
+    // Exact URLs need no discovery, but their first header needs the scoped cached row.
+    await context.sessions.whenCachedRosterSettled();
+    signal.throwIfAborted();
+  }
   const routeLocation = resolvedTarget.location;
   const preferenceDerived = isPreferenceDerivedFace(routeLocation);
   const presentation = {
