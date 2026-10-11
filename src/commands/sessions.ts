@@ -328,13 +328,24 @@ export async function sessionsCommand(
     })),
   });
   const catalogs = new Map<string, Promise<ModelCatalogSnapshot | undefined>>();
+  let catalogWarningShown = false;
+  const warnCatalogUnavailable = () => {
+    if (!catalogWarningShown) {
+      catalogWarningShown = true;
+      runtime.error(
+        "Could not read the active Gateway model catalog; showing configured or last verified capacity. Retry when the Gateway is reachable.",
+      );
+    }
+  };
   const gatewayOwner =
     opts.store === undefined &&
     sessionEntries.length > 0 &&
     (await isImplicitLocalGatewayTarget({ config: cfg }))
-      ? await readActiveGatewayLockIdentity({ requireInspection: true })
+      ? await readActiveGatewayLockIdentity({ requireInspection: true }).catch(() => {
+          warnCatalogUnavailable();
+          return undefined;
+        })
       : undefined;
-  let catalogWarningShown = false;
   const rows = await Promise.all(
     sessionEntries.map(async ({ acpSessionKey, agentId, entry, row }) => {
       const acpMeta = acpSessionMetaByEntry.get(entry);
@@ -395,12 +406,7 @@ export async function sessionsCommand(
                 ),
               }))
               .catch(() => {
-                if (!catalogWarningShown) {
-                  catalogWarningShown = true;
-                  runtime.error(
-                    "Could not read the active Gateway model catalog; showing configured or last verified capacity. Retry when the Gateway is reachable.",
-                  );
-                }
+                warnCatalogUnavailable();
                 return readSavedCatalog();
               })
           : readSavedCatalog();

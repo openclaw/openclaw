@@ -348,12 +348,16 @@ describe("sessionsCommand", () => {
     },
   );
 
-  it.each(["absent", "unreachable", "other-workspace"])(
+  it.each(["absent", "unreachable", "uninspectable", "other-workspace"])(
     "preserves verified capacity for auto runtime when the Gateway is %s",
     async (gatewayState) => {
       const spawnedWorkspaceDir =
         gatewayState === "other-workspace" ? "/workspace/spawned" : undefined;
-      if (gatewayState !== "absent") {
+      if (gatewayState === "uninspectable") {
+        catalogState.readActiveGatewayLockIdentity.mockRejectedValue(
+          new Error("Gateway lock payload could not be verified"),
+        );
+      } else if (gatewayState !== "absent") {
         catalogState.readActiveGatewayLockIdentity.mockResolvedValue({
           pid: 123,
           port: 19461,
@@ -393,13 +397,17 @@ describe("sessionsCommand", () => {
           contextTokens: 16_384,
           agentRuntime: { id: "openclaw" },
         });
-        expect(errors).toHaveLength(gatewayState === "unreachable" ? 1 : 0);
+        const gatewayUnavailable = ["unreachable", "uninspectable"].includes(gatewayState);
+        expect(errors).toHaveLength(gatewayUnavailable ? 1 : 0);
+        if (gatewayState === "uninspectable") {
+          expect(catalogState.callGateway).not.toHaveBeenCalled();
+        }
         if (spawnedWorkspaceDir) {
           expect(loadPreparedModelCatalogSnapshot).toHaveBeenCalledWith(
             expect.objectContaining({ workspaceDir: spawnedWorkspaceDir, readOnly: true }),
           );
         }
-        if (gatewayState === "unreachable") {
+        if (gatewayUnavailable) {
           expect(errors[0]).toContain("showing configured or last verified capacity");
         }
       } finally {
