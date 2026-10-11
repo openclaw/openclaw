@@ -593,11 +593,28 @@ it("revokes prepared sources when canonical deletion commits before its ordinary
       ],
     });
     expect(() => bindGitHubPublicationSource(source)).not.toThrow();
+    const installed = createDeferredCore();
+    onTestFinished(
+      githubPublicationReceipts.subscribeFacts((change) => {
+        if (
+          change.kind === "committed" &&
+          change.receipt.source.identity === context.admission.identity.key &&
+          change.receipt.facts.get(JSON.stringify(["repository", row.request_id]))?.kind ===
+            "absent"
+        ) {
+          installed.resolve();
+        }
+      }),
+    );
     const reply = holdNextReply("githubPublication.deleteSessionReceipts");
     const deletion = remove();
     try {
       await withinTest(
-        awaitGateBeforeSettlement(reply.ready, deletion, "deletion reply was not held"),
+        awaitGateBeforeSettlement(
+          Promise.all([reply.ready, installed.promise]),
+          deletion,
+          "deletion receipt was not installed before its reply",
+        ),
         signal,
       );
       expect(() => bindGitHubPublicationSource(source)).toThrow("source authority changed");

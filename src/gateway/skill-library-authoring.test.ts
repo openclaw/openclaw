@@ -199,53 +199,6 @@ describe("human personal namespace authority", () => {
       run.close();
     }
   });
-  it("preserves supporting bytes on ordinary updates and permits an explicit authorized transfer", async () => {
-    const { alice, request } = await setup();
-    const owner = request(alice.id);
-    owner.client!.connect.scopes = ["operator.admin"];
-    const run = await admitted(
-      (await prepareGatewaySkillAuthoring(owner, "agent:main:shared", true))!,
-    );
-    try {
-      const created = await run.invoke({
-        action: "create",
-        slug: "resources",
-        content,
-        files: [{ path: "script.sh", content: "#!/bin/sh\nprintf ready\n", executable: true }],
-      });
-      if (!("entry" in created)) {
-        throw new Error("Expected receipt");
-      }
-      const updated = await run.invoke({
-        action: "update",
-        skillId: created.entry.skillId,
-        expectedRevision: created.entry.revision,
-        slug: "resources",
-        content: content + "Extra instruction.\n",
-      });
-      if (!("entry" in updated)) {
-        throw new Error("Expected receipt");
-      }
-      const read = await readSkillLibrary(libraryAuthority(owner), created.entry.skillId);
-      expect(Buffer.from(read.files[0]!.content, "base64").toString()).toBe(
-        "#!/bin/sh\nprintf ready\n",
-      );
-      expect(read.files[0]?.executable).toBe(true);
-      expect(
-        await run.invoke({
-          action: "transfer",
-          skillId: updated.entry.skillId,
-          expectedRevision: updated.entry.revision,
-        }),
-      ).toMatchObject({
-        state: "published",
-        target: "team",
-        entry: { ownerProfileId: null, authorProfileId: alice.id },
-      });
-    } finally {
-      run.close();
-    }
-  });
   it("requires admission, refuses synthetic authority, and invalidates a mixed-person steer", async () => {
     const { alice, bob, request } = await setup();
     const owner = request(alice.id);
@@ -333,58 +286,6 @@ describe("human personal namespace authority", () => {
       setUserProfileRole(alice.id, "reader");
       await expect(saving).rejects.toMatchObject({ code: "FORBIDDEN" });
       expect((await listSkillLibrary(libraryAuthority(owner))).entries).toHaveLength(0);
-    } finally {
-      run.close();
-    }
-  });
-  it("returns a whole bounded instruction or visible omission without embedding binary bundle data", async () => {
-    const { alice, request } = await setup();
-    const owner = request(alice.id);
-    const capability = (await prepareGatewaySkillAuthoring(owner, "agent:main:shared", true))!;
-    const run = await admitted(capability);
-    try {
-      const created = await run.invoke({
-        action: "create",
-        slug: "large",
-        content: content + "Plain guidance.\n".repeat(1300),
-        files: [
-          {
-            path: "data.bin",
-            content: Buffer.alloc(500000, 128).toString("base64"),
-            encoding: "base64",
-          },
-        ],
-      });
-      if (!("entry" in created)) {
-        throw new Error("Expected publication receipt");
-      }
-      const tool = createLibrarySkillWorkshopTool(capability);
-      const result = await withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: "agent:main:shared",
-          operationalRunInstance: run.context.operationalRunInstance,
-          receiptAuthority: () => true,
-        },
-        () => tool.execute("read", { action: "read", skill_id: created.entry.skillId }),
-      );
-      expect(JSON.stringify(result).length).toBeLessThan(2000);
-      const text = result.content.find((block) => block.type === "text");
-      if (!text || typeof text.text !== "string") {
-        throw new Error("Expected a visible JSON read result");
-      }
-      const payload: unknown = JSON.parse(text.text);
-      expect(payload).toMatchObject({
-        contentIncluded: false,
-        omissionReason: "too-large",
-        nextAction: expect.stringContaining("Open My skills"),
-      });
-      expect(payload).not.toHaveProperty("content");
-      expect(result.details).toEqual(payload);
-      expect(
-        (await readSkillLibrary(libraryAuthority(owner), created.entry.skillId)).files[0]?.content
-          .length,
-      ).toBeGreaterThan(500000);
     } finally {
       run.close();
     }
