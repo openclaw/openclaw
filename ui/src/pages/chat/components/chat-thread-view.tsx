@@ -104,7 +104,7 @@ export function ChatThread(input: {
       : null;
   const sentinel = () =>
     input.props.historyPagination ? <div class="chat-history-sentinel" /> : undefined;
-  const contents = () => {
+  const contents = createMemo(() => {
     if (routeLoading()) {
       return <LoadingState />;
     }
@@ -126,7 +126,12 @@ export function ChatThread(input: {
       );
     }
     return current().projection.renderRows(sentinel(), historyHeader());
-  };
+  });
+  const announcement = createMemo(() => {
+    // The row owner records the accepted announcement while rendering its rows.
+    contents();
+    return current().session.liveAnnouncementText;
+  });
   return (
     <div class="chat-thread-viewport">
       <div
@@ -202,7 +207,7 @@ export function ChatThread(input: {
           aria-live={input.props.announceTranscript !== false ? "polite" : "off"}
           aria-atomic="true"
         >
-          {current().session.liveAnnouncementText}
+          {announcement()}
         </span>
         <ChatPositionRail
           positions={current().projection.positionIndex}

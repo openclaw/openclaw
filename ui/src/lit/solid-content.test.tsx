@@ -6,6 +6,7 @@ import { Show, createMemo, createSignal, onCleanup } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
+import { LitContent as LegacyOutlet } from "./solid-bridge.ts";
 import { LitContent, mountLitContent, solidContent } from "./solid-content.tsx";
 
 describe("Lit and Solid content boundaries", () => {
@@ -167,6 +168,30 @@ describe("Lit and Solid content boundaries", () => {
     expect(article.isConnected).toBe(false);
   });
 
+  it("reveals the current roots after an eager hidden outlet updates", () => {
+    const [shown, setShown] = createSignal(false);
+    const [value, setValue] = createSignal(html`<p>Original</p>`);
+    const view = mountSolid(() => {
+      const content = <LitContent value={value()} />;
+      return (
+        <section>
+          <Show when={shown()}>{content}</Show>
+          <footer>Retained</footer>
+        </section>
+      );
+    });
+    setValue(html`<article>Replacement</article>`);
+    flush();
+    setShown(true);
+    flush();
+    expect(view.container.querySelector("section > article")?.textContent).toBe("Replacement");
+    expect(view.container.querySelector("p")).toBeNull();
+    setValue(html`<div>Updated</div>`);
+    flush();
+    expect(view.container.querySelector("section > div")?.textContent).toBe("Updated");
+    expect(view.container.querySelector("article")).toBeNull();
+  });
+
   it("updates a stable Solid component through Lit without resetting focus or local state", () => {
     const disposed = vi.fn();
     function Counter(props: { label: string }) {
@@ -204,4 +229,58 @@ describe("Lit and Solid content boundaries", () => {
       container.remove();
     }
   });
+});
+
+it("updates an isolated Lit outlet and retires its directives without replacing Solid siblings", () => {
+  const disconnected = vi.fn();
+  class ObserveRemoval extends AsyncDirective {
+    render(value: string) {
+      return value;
+    }
+
+    override disconnected() {
+      disconnected();
+    }
+  }
+  const observeRemoval = directive(ObserveRemoval);
+  const [label, setLabel] = createSignal("First");
+  const onClick = vi.fn(() => setLabel("Second"));
+  const container = document.createElement("div");
+  document.body.append(container);
+  const { unmount } = mountSolid(
+    () => (
+      <section>
+        <input aria-label="Solid sibling" />
+        <LegacyOutlet
+          render={() => html`<button @click=${onClick}>${observeRemoval(label())}</button>`}
+        />
+      </section>
+    ),
+    { container },
+  );
+  flush();
+  const sibling = container.querySelector("input")!;
+  const button = container.querySelector("button")!;
+  const outlet = button.parentElement!;
+  try {
+    sibling.value = "Typed value";
+    expect(button.textContent).toBe("First");
+    button.click();
+    flush();
+    expect(onClick).toHaveBeenCalledOnce();
+    expect(button.textContent).toBe("Second");
+    expect(container.querySelector("button")).toBe(button);
+    expect(container.querySelector("input")).toBe(sibling);
+    expect(sibling.value).toBe("Typed value");
+    expect(disconnected).not.toHaveBeenCalled();
+  } finally {
+    unmount();
+  }
+  expect(disconnected).toHaveBeenCalledOnce();
+  expect(outlet.querySelector("button")).toBeNull();
+  expect(container.childNodes).toHaveLength(0);
+  setLabel("After disposal");
+  flush();
+  expect(outlet.textContent).toBe("");
+  expect(disconnected).toHaveBeenCalledOnce();
 });

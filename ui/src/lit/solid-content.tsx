@@ -26,6 +26,7 @@ export const emptyLegacyContent = nothing;
 
 type LitContentMount = {
   update: (value: unknown) => void;
+  nodes: () => Node[];
   setConnected: (connected: boolean) => void;
   dispose: () => void;
 };
@@ -36,7 +37,7 @@ const litContentMounts = new WeakMap<HTMLElement | DocumentFragment, LitContentM
 export function mountLitContent(
   value: unknown,
   container: HTMLElement | DocumentFragment,
-  options: { isConnected?: boolean } = {},
+  options: { isConnected?: boolean; host?: object } = {},
 ): LitContentMount {
   const existing = litContentMounts.get(container);
   if (existing) {
@@ -68,6 +69,14 @@ export function mountLitContent(
     update(next) {
       commit(next);
       ownedNodes = readOwnedNodes();
+    },
+    nodes() {
+      const nodes = [...readOwnedNodes()];
+      if (part.startNode) {
+        nodes.unshift(part.startNode);
+      }
+      nodes.push(end);
+      return nodes;
     },
     setConnected: (connected) => runWithOwner(null, () => part.setConnected(connected)),
     dispose() {
@@ -103,6 +112,7 @@ export function LitContent(props: { value: unknown }): JSX.Element {
       isConnected: untrack(presented),
     },
   );
+  const [nodes, setNodes] = createSignal(mount.nodes(), { ownedWrite: true });
   createEffect(
     () => ({ value: props.value, active: presented() }),
     ({ value, active }) => {
@@ -110,6 +120,10 @@ export function LitContent(props: { value: unknown }): JSX.Element {
         mount.setConnected(false);
       }
       mount.update(value);
+      // Keep the pending handoff current; Lit owns mutations after the range is inserted.
+      if (fragment.hasChildNodes()) {
+        setNodes(mount.nodes());
+      }
       // Catch up props while disconnected before restarting retained directives.
       if (active) {
         mount.setConnected(true);
@@ -117,7 +131,7 @@ export function LitContent(props: { value: unknown }): JSX.Element {
     },
   );
   onCleanup(mount.dispose);
-  return Array.from(fragment.childNodes);
+  return <>{nodes()}</>;
 }
 
 class SolidContent extends AsyncDirective {

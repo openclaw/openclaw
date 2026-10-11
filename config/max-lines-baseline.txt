@@ -443,7 +443,6 @@ src/infra/diagnostic-events.ts
 src/infra/exec-approvals-allowlist.ts
 src/infra/exec-authorization-plan.ts
 src/infra/infra-runtime.test.ts
-src/infra/npm-managed-root.test.ts
 src/infra/npm-managed-root.ts
 src/infra/outbound/deliver.test.ts
 src/infra/outbound/delivery-queue-recovery.ts
@@ -555,5 +554,4 @@ ui/src/pages/chat/talk/gateway-relay.test.ts
 ui/src/pages/config/config-page.ts
 ui/src/pages/config/view.browser.test.ts
 ui/src/pages/sessions/sessions-page.ts
-ui/src/pages/usage/view.ts
 ui/src/test-helpers/control-ui-e2e.ts

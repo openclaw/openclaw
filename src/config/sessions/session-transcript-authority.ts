@@ -159,6 +159,26 @@ export function readStagedSessionTranscriptAuthority(database: { db: DatabaseSyn
   return transferable.length ? transferable : undefined;
 }
 
+/** A following entry write consumes the transcript owner's staged watermark. */
+export function readStagedSessionTranscriptUpdatedAt(
+  database: { db: DatabaseSync },
+  sessionId: string,
+): number | undefined {
+  let updatedAt: number | undefined;
+  for (const receipt of readStagedSessionTranscriptAuthority(database) ?? []) {
+    for (const fact of receipt.facts.values()) {
+      if (
+        fact.kind === "postimage" &&
+        fact.value.sessionId === sessionId &&
+        fact.value.updatedAt !== null
+      ) {
+        updatedAt = Math.max(updatedAt ?? 0, fact.value.updatedAt);
+      }
+    }
+  }
+  return updatedAt;
+}
+
 export function parseSessionTranscriptAuthorityReceipts(
   value: unknown,
 ): readonly SessionTranscriptAuthorityReceipt[] | undefined {

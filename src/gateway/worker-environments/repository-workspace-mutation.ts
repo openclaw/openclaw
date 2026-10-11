@@ -189,11 +189,11 @@ export function createRepositoryWorkspaceMutationService(options: {
                 journal: journal.adapter,
                 stagedResult: {
                   ref: stagedResultRef,
-                  record: (ref) =>
+                  record: (ref, workspaceId) =>
                     placements.recordStagedWorkspaceResult(
                       claim,
                       ref,
-                      workspace.repository.workspaceId,
+                      workspaceId,
                       assertWorkerCurrent,
                       currentCheck,
                     ),

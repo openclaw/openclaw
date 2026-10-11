@@ -1,4 +1,3 @@
-import type { TemplateResult } from "lit";
 import { createComponent, createMemo } from "solid-js";
 import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
@@ -7,7 +6,7 @@ import type { ImageBlock, ImageRenderOptions } from "./chat-message-media.ts";
 type LegacyMessageImagesProps = {
   images: ImageBlock[];
   options?: ImageRenderOptions;
-  previews: TemplateResult[];
+  previews: unknown[];
 };
 function LegacyMessageImages(props: LegacyMessageImagesProps) {
   const previewCount = createMemo(() => props.previews.length);
@@ -35,7 +34,7 @@ function LegacyMessageImages(props: LegacyMessageImagesProps) {
 export function renderMessageImages(
   images: ImageBlock[],
   options?: ImageRenderOptions,
-  previews: TemplateResult[] = [],
+  previews: unknown[] = [],
 ) {
   return solidContent(LegacyMessageImages, { images, options, previews });
 }
