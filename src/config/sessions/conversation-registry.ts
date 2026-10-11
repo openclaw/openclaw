@@ -441,7 +441,7 @@ export async function resolveCurrentConversationSessionAsync(
   scope: ConversationRegistryScope,
   conversationRef: string,
 ): Promise<{ sessionKey: string; sessionId: string } | undefined> {
-  const [conversation] = await selectConversationRowsInWorker(scope, {
+  const [conversation] = await readConversationsAsync(scope, {
     conversationRef,
     currentBindingOnly: true,
     limit: 1,
