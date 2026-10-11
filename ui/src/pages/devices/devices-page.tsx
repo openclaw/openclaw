@@ -1,28 +1,20 @@
-import { consume } from "@lit/context";
-import { initialState, Task, TaskStatus } from "@lit/task";
 import type {
   EnvironmentSummary,
   EnvironmentsListResult,
   SystemInfoResult,
 } from "@openclaw/gateway-protocol";
-import { html, type PropertyValues } from "lit";
-import { property, state } from "lit/decorators.js";
+import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import { GATEWAY_EVENT_DEVICE_PAIR_CHANGED } from "../../../../src/gateway/events.js";
 import type { PresenceEntry } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context-types.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
-import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { showSecretRevealDialog } from "../../components/secret-reveal-dialog.ts";
-import { renderLearnMoreLink } from "../../components/settings-ui.ts";
-import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
-import { t } from "../../i18n/index.ts";
+import { LearnMoreLink } from "../../components/solid/settings-ui.tsx";
+import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
@@ -41,18 +33,19 @@ import {
   type ExecApprovalsTarget,
   type DevicesPageDataState,
 } from "../../lib/nodes/page-operations.ts";
+import { useApplication } from "../../lib/reactive/context.ts";
+import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
+import { useGatewayPage, type GatewayPageChange } from "../../lib/reactive/gateway-page.ts";
+import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
-import {
-  GatewayPageController,
-  type GatewayPageChange,
-} from "../../lit/gateway-page-controller.ts";
-import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import { PollController } from "../../lit/poll-controller.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { DevicesDialogController } from "./devices-dialogs.ts";
-import { renderDevices } from "./view.ts";
+import { createPageRequest } from "./page-request.ts";
+import { DevicesView } from "./view.tsx";
+import type { DevicesProps } from "./view.types.ts";
 
-registerDevicesEnglish();
+registerEnglishCatalog(registerDevicesEnglish);
 
 const DEVICES_DOCS_URL = "https://docs.openclaw.ai/nodes";
 
@@ -66,21 +59,21 @@ export type DevicesRouteData = {
 const DEVICES_ACTIVE_POLL_INTERVAL_MS = 30_000;
 const SYSTEM_INFO_POLL_INTERVAL_MS = 60_000;
 
-class DevicesPage extends OpenClawLightDomElement {
-  @consume({ context: applicationContext, subscribe: true })
-  private context!: ApplicationContext;
+class DevicesPageController {
+  constructor(
+    public context: ApplicationContext,
+    private readonly publish: () => void,
+  ) {}
 
-  @property({ attribute: false }) routeData?: DevicesRouteData;
-
-  @state() presence: PresenceEntry[] = [];
-  @state() private gatewaySystemInfo: SystemInfoResult | null = null;
-  @state() private desktopEnvironments: EnvironmentSummary[] = [];
+  presence: PresenceEntry[] = [];
+  private gatewaySystemInfo: SystemInfoResult | null = null;
+  private desktopEnvironments: EnvironmentSummary[] = [];
   private systemInfoUnavailable = false;
-  @state() private pageState = createInitialDevicesState();
-  @state() private canManagePairing = false;
-  @state() private canAdmin = false;
-  @state() private execApprovalsTarget: "gateway" | "node" = "gateway";
-  @state() private execApprovalsTargetNodeId: string | null = null;
+  private pageState = createInitialDevicesState();
+  private canManagePairing = false;
+  private canAdmin = false;
+  private execApprovalsTarget: "gateway" | "node" = "gateway";
+  private execApprovalsTargetNodeId: string | null = null;
   private readonly dialogs = new DevicesDialogController({
     canManagePairing: () => this.canManagePairing,
     gatewayConnected: () => this.gateway.connected,
@@ -92,26 +85,28 @@ class DevicesPage extends OpenClawLightDomElement {
       this.pageState.devicesError = message;
       // The controller writes outside the page's task cycle; the callout must
       // render without waiting for the next unrelated update.
-      this.requestUpdate();
+      this.publish();
     },
   });
 
   private routeDataInitialized = false;
-  private readonly gateway = new GatewayPageController(this, {
-    getGateway: () => this.context?.gateway,
-    onIdentityChange: (change) => this.resetServerState(change.snapshot),
-    invalidateRequests: (change) => {
-      this.pageState.requestGeneration = this.gateway.epoch;
-      if (!change.identityChanged && change.snapshot.phase !== "connected") {
-        this.resetServerState(change.snapshot);
-      }
-      void this.presenceTask.run([null, null]);
-    },
-    onSnapshot: (change) => this.handleGatewaySnapshot(change),
-    ensureInitialData: () => this.ensureInitialData(),
-  });
-  private readonly presenceTask = new Task(this, {
-    autoRun: false,
+  gateway!: ReturnType<typeof useGatewayPage>;
+  bindGateway() {
+    this.gateway = useGatewayPage({
+      getGateway: () => this.context.gateway,
+      onIdentityChange: (change) => this.resetServerState(change.snapshot),
+      invalidateRequests: (change) => {
+        this.pageState.requestGeneration = this.gateway.epoch;
+        if (!change.identityChanged && change.snapshot.phase !== "connected") {
+          this.resetServerState(change.snapshot);
+        }
+        this.presenceTask.cancel();
+      },
+      onSnapshot: (change) => this.handleGatewaySnapshot(change),
+      ensureInitialData: () => this.ensureInitialData(),
+    });
+  }
+  private readonly presenceTask = createPageRequest({
     // Gateway identity invalidates same-client reconnects and source replacements.
     args: () =>
       [
@@ -119,76 +114,77 @@ class DevicesPage extends OpenClawLightDomElement {
         this.gateway.connected ? this.gateway.client : null,
       ] as const,
     task: ([gateway, client], { signal }) =>
-      gateway && client ? client.request("system-presence", {}, { signal }) : initialState,
+      gateway && client ? client.request("system-presence", {}, { signal }) : undefined,
     onComplete: (response) => {
       if (Array.isArray(response)) {
+        // SAFETY: system-presence returns listSystemPresence() rows conforming to PresenceEntry.
         this.presence = response as PresenceEntry[];
+        this.publish();
       }
     },
     onError: (error) => {
       if (isMissingOperatorReadScopeError(error)) {
         this.presence = [];
+        this.publish();
       }
     },
   });
-  private readonly systemInfoTask = new Task(this, {
+  private readonly systemInfoTask = createPageRequest({
     args: () =>
       [this.gateway.gateway, this.canLoadSystemInfo ? this.gateway.client : null] as const,
     task: ([gateway, client], { signal }) =>
       gateway && client
         ? readSystemInfo(gateway, signal).then((sample) => sample.value)
-        : initialState,
+        : undefined,
     onComplete: (result) => {
       this.gatewaySystemInfo = result;
       // Quiet node reloads also fetch stats; a fresh snapshot restarts the periodic deadline.
       this.systemInfoPolling.stop();
       this.systemInfoPolling.start();
+      this.publish();
     },
     onError: (error) => {
       if (isMissingOperatorReadScopeError(error)) {
         this.gatewaySystemInfo = null;
         this.systemInfoUnavailable = true;
         this.systemInfoPolling.stop();
+        this.publish();
       }
     },
   });
-  private readonly environmentsTask = new Task(this, {
+  private readonly environmentsTask = createPageRequest({
     args: () =>
       [this.gateway.gateway, this.canLoadDesktopEnvironments ? this.gateway.client : null] as const,
     task: ([gateway, client], { signal }) =>
       gateway && client
         ? client.request<EnvironmentsListResult>("environments.list", {}, { signal })
-        : initialState,
+        : undefined,
     onComplete: (result) => {
       this.desktopEnvironments = result.environments;
+      this.publish();
     },
     onError: () => {
       this.desktopEnvironments = [];
+      this.publish();
     },
   });
-  private readonly systemInfoPolling = new PollController(
-    this,
-    SYSTEM_INFO_POLL_INTERVAL_MS,
-    () => this.refreshSystemInfo(),
-    false,
-    "visible",
-  );
-  private readonly polling = new PollController(
-    this,
-    DEVICES_ACTIVE_POLL_INTERVAL_MS,
-    () => {
+  private systemInfoPolling!: ReturnType<typeof useVisiblePoll>;
+  private polling!: ReturnType<typeof useVisiblePoll>;
+
+  bindPolling() {
+    this.systemInfoPolling = useVisiblePoll(SYSTEM_INFO_POLL_INTERVAL_MS, () =>
+      this.refreshSystemInfo(),
+    );
+    this.polling = useVisiblePoll(DEVICES_ACTIVE_POLL_INTERVAL_MS, () => {
       this.refreshNodeInventory(true);
       if (this.canManagePairing) {
         void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
       }
-    },
-    false,
-    "visible",
-  );
-  private readonly subscriptions = new SubscriptionsController(this)
-    .watchStore(() => this.context?.runtimeConfig)
-    .effect(
-      () => this.context?.gateway,
+    });
+  }
+  bindEvents() {
+    createEffect(
+      () => this.context.gateway,
       (gateway) =>
         gateway.subscribeEvents((event) => {
           if (this.gateway.gateway !== gateway || this.context.gateway !== gateway) {
@@ -199,8 +195,9 @@ class DevicesPage extends OpenClawLightDomElement {
             const connectivityChanged =
               presenceConnectivitySignature(presence) !==
               presenceConnectivitySignature(this.presence);
-            void this.presenceTask.run([null, null]);
+            this.presenceTask.cancel();
             this.presence = presence;
+            this.publish();
             if (connectivityChanged) {
               if (this.canManagePairing) {
                 void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
@@ -227,28 +224,21 @@ class DevicesPage extends OpenClawLightDomElement {
           }
         }),
     );
-
-  override willUpdate(changed: PropertyValues<this>) {
-    if (changed.has("routeData")) {
-      this.applyRouteData();
-    }
   }
 
-  override updated(changed: PropertyValues<this>) {
-    if (changed.has("routeData")) {
-      this.ensureInitialData();
-    }
-  }
-
-  override disconnectedCallback() {
+  dispose() {
     this.dialogs.cancel();
-    this.subscriptions.clear();
-    void this.presenceTask.run([null, null]);
+    this.presenceTask.cancel();
     this.resetInventoryDetails();
     this.presence = [];
     this.canManagePairing = false;
     this.canAdmin = false;
-    super.disconnectedCallback();
+  }
+
+  setRouteData(data: DevicesRouteData | undefined) {
+    this.applyRouteData(data);
+    this.ensureInitialData();
+    this.publish();
   }
 
   get requestGeneration(): number {
@@ -265,11 +255,11 @@ class DevicesPage extends OpenClawLightDomElement {
     this.canAdmin = connected && hasOperatorAdminAccess(auth);
     this.canManagePairing = connected && (!auth || hasOperatorPairingAccess(auth));
     if (!this.canLoadSystemInfo) {
-      void this.systemInfoTask.run([null, null]);
+      this.systemInfoTask.cancel();
       this.gatewaySystemInfo = null;
     }
     if (!this.canLoadDesktopEnvironments) {
-      void this.environmentsTask.run([null, null]);
+      this.environmentsTask.cancel();
       this.desktopEnvironments = [];
     }
     if (
@@ -282,11 +272,17 @@ class DevicesPage extends OpenClawLightDomElement {
       this.presence = initialPresence ?? [];
       void this.loadPresence();
     }
+    if (change.initial || change.identityChanged || change.connectionChanged) {
+      this.refreshSystemInfo();
+      if (this.canLoadDesktopEnvironments) {
+        void this.environmentsTask.run();
+      }
+    }
     this.syncPolling();
+    this.publish();
   }
 
-  private applyRouteData() {
-    const data = this.routeData;
+  private applyRouteData(data: DevicesRouteData | undefined) {
     if (!data) {
       return;
     }
@@ -296,7 +292,6 @@ class DevicesPage extends OpenClawLightDomElement {
       this.resetServerState(snapshot);
       this.presence = readPresenceEntries(snapshot.hello?.snapshot) ?? [];
       void this.loadPresence();
-      this.ensureInitialData();
       return;
     }
     this.pageState = {
@@ -321,7 +316,7 @@ class DevicesPage extends OpenClawLightDomElement {
     });
     next.requestGeneration = this.gateway.epoch;
     this.pageState = next;
-    void this.presenceTask.run([null, null]);
+    this.presenceTask.cancel();
     this.presence = [];
     this.resetInventoryDetails();
   }
@@ -333,12 +328,12 @@ class DevicesPage extends OpenClawLightDomElement {
     try {
       const result = task(pageState);
       if (this.pageState === pageState) {
-        this.requestUpdate();
+        this.publish();
       }
       return await result;
     } finally {
       if (this.pageState === pageState) {
-        this.requestUpdate();
+        this.publish();
       }
     }
   }
@@ -406,23 +401,23 @@ class DevicesPage extends OpenClawLightDomElement {
 
   private get canLoadSystemInfo(): boolean {
     const snapshot = this.gateway.snapshot;
-    return this.isConnected && !this.systemInfoUnavailable && canReadSystemInfo(snapshot);
+    return this.gateway.connected && !this.systemInfoUnavailable && canReadSystemInfo(snapshot);
   }
 
   private get canLoadDesktopEnvironments(): boolean {
     const snapshot = this.gateway.snapshot;
-    return this.isConnected && Boolean(snapshot && isDesktopPanelAvailable(snapshot));
+    return this.gateway.connected && Boolean(snapshot && isDesktopPanelAvailable(snapshot));
   }
 
   private refreshSystemInfo() {
-    if (this.canLoadSystemInfo && this.systemInfoTask.status !== TaskStatus.PENDING) {
+    if (this.canLoadSystemInfo && !this.systemInfoTask.pending) {
       void this.systemInfoTask.run();
     }
   }
 
   private refreshNodeInventory(quiet = false) {
     this.refreshSystemInfo();
-    if (this.canLoadDesktopEnvironments && this.environmentsTask.status !== TaskStatus.PENDING) {
+    if (this.canLoadDesktopEnvironments && !this.environmentsTask.pending) {
       void this.environmentsTask.run();
     }
     void this.runPageTask((pageState) => loadNodes(pageState, { quiet }));
@@ -430,8 +425,8 @@ class DevicesPage extends OpenClawLightDomElement {
 
   private resetInventoryDetails() {
     // A replacement source or reconnect must retire callbacks before its data can arrive.
-    void this.systemInfoTask.run([null, null]);
-    void this.environmentsTask.run([null, null]);
+    this.systemInfoTask.cancel();
+    this.environmentsTask.cancel();
     this.systemInfoPolling.stop();
     this.gatewaySystemInfo = null;
     this.desktopEnvironments = [];
@@ -499,7 +494,7 @@ class DevicesPage extends OpenClawLightDomElement {
   private async changeExecApprovalsTarget(kind: "gateway" | "node", nodeId: string | null) {
     const devices = this.pageState;
     if (devices.execApprovalsDirty && !(await this.dialogs.confirmExecApprovalsDiscard())) {
-      this.requestUpdate();
+      this.publish();
       return;
     }
     if (this.pageState !== devices) {
@@ -511,7 +506,7 @@ class DevicesPage extends OpenClawLightDomElement {
     devices.execApprovalsForm = null;
     devices.execApprovalsDirty = false;
     devices.execApprovalsSelectedAgent = null;
-    this.requestUpdate();
+    this.publish();
   }
 
   private resolveExecApprovalsTarget(): ExecApprovalsTarget {
@@ -520,7 +515,7 @@ class DevicesPage extends OpenClawLightDomElement {
       : { kind: "gateway" };
   }
 
-  override render() {
+  viewProps(): DevicesProps {
     const devices = this.pageState;
     const config = this.context.runtimeConfig.state;
     const gatewaySnapshot = this.context.gateway.snapshot;
@@ -528,105 +523,131 @@ class DevicesPage extends OpenClawLightDomElement {
       gatewaySnapshot.phase === "connected"
         ? gatewaySnapshot.hello?.server?.version?.trim() || null
         : null;
-    return html`
-      <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
-        <div>
-          <div class="page-title">${titleForRoute("devices")}</div>
-          <div class="page-subtitle">
-            ${subtitleForRoute("devices")} ${renderLearnMoreLink(DEVICES_DOCS_URL)}
-          </div>
-        </div>
-      </section>
-      ${renderSettingsWorkspace(
-        renderDevices({
-          loading: devices.nodesLoading,
-          nodes: devices.nodes,
-          presence: this.presence,
-          gatewayVersion,
-          basePath: this.context.basePath,
-          gatewaySystemInfo: this.gatewaySystemInfo,
-          desktopEnvironments: this.desktopEnvironments,
-          lastError: devices.lastError,
-          devicesLoading: devices.devicesLoading,
-          devicesError: devices.devicesError,
-          devicesList: devices.devicesList,
-          canPairDevice: this.canAdmin,
-          canManagePairing: this.canManagePairing,
-          canAdmin: this.canAdmin,
-          configForm: currentConfigObject(config),
-          configLoading: config.configLoading,
-          configSaving: config.configSaving,
-          configDirty: config.configFormDirty,
-          configFormMode: config.configFormMode,
-          execApprovalsLoading: devices.execApprovalsLoading,
-          execApprovalsSaving: devices.execApprovalsSaving,
-          execApprovalsDirty: devices.execApprovalsDirty,
-          execApprovalsSnapshot: devices.execApprovalsSnapshot,
-          execApprovalsForm: devices.execApprovalsForm,
-          execApprovalsSelectedAgent: devices.execApprovalsSelectedAgent,
-          execApprovalsTarget: this.execApprovalsTarget,
-          execApprovalsTargetNodeId: this.execApprovalsTargetNodeId,
-          onDevicePairSetupOpen: () => {
-            if (this.canAdmin) {
-              void this.context.overlays.openDevicePairSetup();
-            }
-          },
-          onDeviceApprove: (requestId) => {
-            if (this.canManagePairing) {
-              void this.runPageTask((pageState) => approveDevicePairing(pageState, requestId));
-            }
-          },
-          onDeviceReject: (requestId) =>
-            void this.dialogs.confirmPairingReject("device", requestId),
-          onNodeApprove: (requestId) => {
-            if (this.canManagePairing) {
-              void this.runPageTask((pageState) => approveNodePairingRequest(pageState, requestId));
-            }
-          },
-          onNodeReject: (requestId) => void this.dialogs.confirmPairingReject("node", requestId),
-          onInventoryRemove: (entry) =>
-            void this.dialogs.confirmInventoryRemoval({ kind: "entry", entry }),
-          onInventoryCleanup: (entries) => {
-            if (entries.length > 0) {
-              void this.dialogs.confirmInventoryRemoval({ kind: "stale", entries });
-            }
-          },
-          onDeviceRotate: (device, role, scopes) =>
-            void this.reportRotationOutcome(device, role, scopes),
-          onDeviceRevoke: (deviceId, role) => void this.dialogs.confirmTokenRevoke(deviceId, role),
-          onDeviceRename: (device) => void this.dialogs.editAlias(device),
-          onLoadConfig: () => void this.context.runtimeConfig.discardDraft({ reloadOnly: true }),
-          onLoadExecApprovals: () =>
-            this.runAdminTask((pageState) =>
-              loadExecApprovals(pageState, this.resolveExecApprovalsTarget()),
-            ),
-          onBindDefault: (nodeId) => this.bindNode(nodeId),
-          onBindAgent: (agentId, nodeId) => this.bindNode(nodeId, agentId),
-          onSaveBindings: () => {
-            if (this.canAdmin) {
-              void this.context.runtimeConfig.save();
-            }
-          },
-          onExecApprovalsTargetChange: (kind, nodeId) =>
-            void this.changeExecApprovalsTarget(kind, nodeId),
-          onExecApprovalsSelectAgent: (agentId) => {
-            devices.execApprovalsSelectedAgent = agentId;
-            this.requestUpdate();
-          },
-          onExecApprovalsPatch: (path, value) =>
-            this.runAdminTask((pageState) => updateExecApprovalsFormValue(pageState, path, value)),
-          onExecApprovalsRemove: (path) =>
-            this.runAdminTask((pageState) => removeExecApprovalsFormValue(pageState, path)),
-          onSaveExecApprovals: () =>
-            this.runAdminTask((pageState) =>
-              saveExecApprovals(pageState, this.resolveExecApprovalsTarget()),
-            ),
-        }),
-      )}
-    `;
+    return {
+      loading: devices.nodesLoading,
+      nodes: devices.nodes,
+      presence: this.presence,
+      gatewayVersion,
+      basePath: this.context.basePath,
+      gatewaySystemInfo: this.gatewaySystemInfo,
+      desktopEnvironments: this.desktopEnvironments,
+      lastError: devices.lastError,
+      devicesLoading: devices.devicesLoading,
+      devicesError: devices.devicesError,
+      devicesList: devices.devicesList,
+      canPairDevice: this.canAdmin,
+      canManagePairing: this.canManagePairing,
+      canAdmin: this.canAdmin,
+      configForm: currentConfigObject(config),
+      configLoading: config.configLoading,
+      configSaving: config.configSaving,
+      configDirty: config.configFormDirty,
+      configFormMode: config.configFormMode,
+      execApprovalsLoading: devices.execApprovalsLoading,
+      execApprovalsSaving: devices.execApprovalsSaving,
+      execApprovalsDirty: devices.execApprovalsDirty,
+      execApprovalsSnapshot: devices.execApprovalsSnapshot,
+      execApprovalsForm: devices.execApprovalsForm,
+      execApprovalsSelectedAgent: devices.execApprovalsSelectedAgent,
+      execApprovalsTarget: this.execApprovalsTarget,
+      execApprovalsTargetNodeId: this.execApprovalsTargetNodeId,
+      onDevicePairSetupOpen: () => {
+        if (this.canAdmin) {
+          void this.context.overlays.openDevicePairSetup();
+        }
+      },
+      onDeviceApprove: (requestId) => {
+        if (this.canManagePairing) {
+          void this.runPageTask((pageState) => approveDevicePairing(pageState, requestId));
+        }
+      },
+      onDeviceReject: (requestId) => void this.dialogs.confirmPairingReject("device", requestId),
+      onNodeApprove: (requestId) => {
+        if (this.canManagePairing) {
+          void this.runPageTask((pageState) => approveNodePairingRequest(pageState, requestId));
+        }
+      },
+      onNodeReject: (requestId) => void this.dialogs.confirmPairingReject("node", requestId),
+      onInventoryRemove: (entry) =>
+        void this.dialogs.confirmInventoryRemoval({ kind: "entry", entry }),
+      onInventoryCleanup: (entries) => {
+        if (entries.length > 0) {
+          void this.dialogs.confirmInventoryRemoval({ kind: "stale", entries });
+        }
+      },
+      onDeviceRotate: (device, role, scopes) =>
+        void this.reportRotationOutcome(device, role, scopes),
+      onDeviceRevoke: (deviceId, role) => void this.dialogs.confirmTokenRevoke(deviceId, role),
+      onDeviceRename: (device) => void this.dialogs.editAlias(device),
+      onLoadConfig: () => void this.context.runtimeConfig.discardDraft({ reloadOnly: true }),
+      onLoadExecApprovals: () =>
+        this.runAdminTask((pageState) =>
+          loadExecApprovals(pageState, this.resolveExecApprovalsTarget()),
+        ),
+      onBindDefault: (nodeId) => this.bindNode(nodeId),
+      onBindAgent: (agentId, nodeId) => this.bindNode(nodeId, agentId),
+      onSaveBindings: () => {
+        if (this.canAdmin) {
+          void this.context.runtimeConfig.save();
+        }
+      },
+      onExecApprovalsTargetChange: (kind, nodeId) =>
+        void this.changeExecApprovalsTarget(kind, nodeId),
+      onExecApprovalsSelectAgent: (agentId) => {
+        devices.execApprovalsSelectedAgent = agentId;
+        this.publish();
+      },
+      onExecApprovalsPatch: (path, value) =>
+        this.runAdminTask((pageState) => updateExecApprovalsFormValue(pageState, path, value)),
+      onExecApprovalsRemove: (path) =>
+        this.runAdminTask((pageState) => removeExecApprovalsFormValue(pageState, path)),
+      onSaveExecApprovals: () =>
+        this.runAdminTask((pageState) =>
+          saveExecApprovals(pageState, this.resolveExecApprovalsTarget()),
+        ),
+    };
   }
 }
 
-if (!customElements.get("openclaw-devices-page")) {
-  customElements.define("openclaw-devices-page", DevicesPage);
-}
+export const DevicesPage = defineSolidBridge<{ routeData?: DevicesRouteData }>(
+  "openclaw-devices-page",
+  (props) => {
+    const context = useApplication();
+    // This signal publishes changes from the synchronous page owner, including lifecycle effects.
+    const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+    const controller = new DevicesPageController(context, () => setRevision((value) => value + 1));
+    controller.bindPolling();
+    controller.bindGateway();
+    controller.bindEvents();
+    const config = projectRuntimeConfig(context.runtimeConfig);
+    createEffect(
+      () => props.routeData,
+      (data) => controller.setRouteData(data),
+    );
+    onCleanup(() => controller.dispose());
+    const view = createMemo(() => {
+      revision();
+      config.read();
+      void controller.gateway.snapshot;
+      return controller.viewProps();
+    });
+    return (
+      <>
+        <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
+          <section class="content-header">
+            <div>
+              <div class="page-title">{titleForRoute("devices", t)}</div>
+              <div class="page-subtitle">
+                {subtitleForRoute("devices", t)} <LearnMoreLink url={DEVICES_DOCS_URL} />
+              </div>
+            </div>
+          </section>
+        </ShellLayoutBoundary>
+        <SettingsWorkspace>
+          <DevicesView {...view()} />
+        </SettingsWorkspace>
+      </>
+    );
+  },
+  { properties: { routeData: { default: undefined, attribute: false } } },
+);

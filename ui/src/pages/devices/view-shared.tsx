@@ -1,14 +1,14 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { html, nothing, type TemplateResult } from "lit";
+import type { JSX } from "@solidjs/web";
+import { Match, Switch } from "solid-js";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
-import { deviceIcons } from "../../components/icons-devices.ts";
-import { icons } from "../../components/icons.ts";
-import { t } from "../../i18n/index.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { resolveMacFormFactor } from "../../lib/mac-form-factor.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 
 type NodeTargetOption = {
   id: string;
@@ -104,7 +104,7 @@ const TERMINAL_CLIENT_IDS: ReadonlySet<string> = new Set([
 ]);
 
 /** Prefer client identity for browser/terminal sessions, then the machine's form factor. */
-export function deviceIcon(source: DeviceIconSource): TemplateResult {
+export function deviceIcon(source: DeviceIconSource): JSX.Element {
   const platform = source.platform?.trim().toLowerCase() ?? "";
   const model = source.modelIdentifier?.trim() ?? "";
   const clientId = source.clientId?.trim().toLowerCase() ?? "";
@@ -116,61 +116,103 @@ export function deviceIcon(source: DeviceIconSource): TemplateResult {
     WATCH_PLATFORM_PATTERN.test(platform) ||
     clientId === GATEWAY_CLIENT_IDS.WATCHOS_APP
   ) {
-    return deviceIcons.watch;
+    return <DeviceGlyph kind="watch" />;
   }
   if (model.startsWith("iPad") || TABLET_PLATFORM_PATTERN.test(platform)) {
-    return deviceIcons.tablet;
+    return <DeviceGlyph kind="tablet" />;
   }
   if (
     model.startsWith("iPhone") ||
     PHONE_PLATFORM_PATTERN.test(platform) ||
     PHONE_CLIENT_IDS.has(clientId)
   ) {
-    return deviceIcons.smartphone;
+    return <Icon name="smartphone" />;
   }
   if (BROWSER_CLIENT_IDS.has(clientId) || mode === GATEWAY_CLIENT_MODES.WEBCHAT) {
-    return deviceIcons.browser;
+    return <Icon name="globe" />;
   }
   if (TERMINAL_CLIENT_MODES.has(mode) || TERMINAL_CLIENT_IDS.has(clientId)) {
-    return deviceIcons.terminal;
+    return <Icon name="terminal" />;
   }
   if (mode === "gateway") {
-    return deviceIcons.server;
+    return <Icon name="server" />;
   }
   switch (resolveMacFormFactor(model)) {
     case "laptop":
-      return deviceIcons.laptop;
+      return <DeviceGlyph kind="laptop" />;
     case "mini":
-      return deviceIcons.macMini;
+      return <DeviceGlyph kind="macMini" />;
     case "studio":
     case "pro":
-      return deviceIcons.pcCase;
+      return <DeviceGlyph kind="pcCase" />;
     case "imac":
-      return deviceIcons.allInOne;
+      return <Icon name="monitor" />;
     default:
-      return icons.monitor;
+      return <Icon name="monitor" />;
   }
 }
 
 /* Connectivity state lives in the row's renderSettingsStatus dot + text, so
    the tile stays a purely decorative form-factor glyph. */
-export function renderDeviceTile(icon: TemplateResult) {
-  return html`
+export function DeviceTile(props: { icon: JSX.Element }) {
+  return (
     <div class="device-entry__tile" aria-hidden="true">
-      <span class="device-entry__tile-icon">${icon}</span>
+      <span class="device-entry__tile-icon">{props.icon}</span>
     </div>
-  `;
+  );
 }
 
-export function renderDeviceIdentityFacts(id: string, remoteIp?: string) {
-  return html`
-    <dt class="settings-row__desc">${t("devices.inventory.deviceIdLabel")}</dt>
-    <dd class="settings-row__value settings-row__value--mono" title=${id}>${id}</dd>
-    ${
-      remoteIp
-        ? html`<dt class="settings-row__desc">${t("devices.inventory.remoteIpLabel")}</dt>
-            <dd class="settings-row__value settings-row__value--mono">${remoteIp}</dd>`
-        : nothing
-    }
-  `;
+export function DeviceIdentityFacts(props: { id: string; remoteIp?: string }) {
+  return (
+    <>
+      <dt class="settings-row__desc">{t("devices.inventory.deviceIdLabel")}</dt>
+      <dd class="settings-row__value settings-row__value--mono" title={props.id}>
+        {props.id}
+      </dd>
+      {props.remoteIp ? (
+        <>
+          <dt class="settings-row__desc">{t("devices.inventory.remoteIpLabel")}</dt>
+          <dd class="settings-row__value settings-row__value--mono">{props.remoteIp}</dd>
+        </>
+      ) : undefined}
+    </>
+  );
+}
+
+function DeviceGlyph(props: { kind: "watch" | "tablet" | "laptop" | "macMini" | "pcCase" }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <Switch>
+        <Match when={props.kind === "watch"}>
+          <circle cx="12" cy="12" r="6" />
+          <polyline points="12 10 12 12 13 13" />
+          <path d="m16.13 7.66-.81-4.05a2 2 0 0 0-2-1.61h-2.68a2 2 0 0 0-2 1.61l-.78 4.05" />
+          <path d="m7.88 16.36.8 4a2 2 0 0 0 2 1.61h2.72a2 2 0 0 0 2-1.61l.81-4.05" />
+        </Match>
+        <Match when={props.kind === "tablet"}>
+          <rect width="16" height="20" x="4" y="2" rx="2" ry="2" />
+          <path d="M12 18h.01" />
+        </Match>
+        <Match when={props.kind === "laptop"}>
+          <path d="M18 5a2 2 0 0 1 2 2v8.526a2 2 0 0 0 .212.897l1.068 2.127a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45l1.068-2.127A2 2 0 0 0 4 15.526V7a2 2 0 0 1 2-2z" />
+          <path d="M20.054 15.987H3.946" />
+        </Match>
+        <Match when={props.kind === "pcCase"}>
+          <rect width="14" height="20" x="5" y="2" rx="2" />
+          <path d="M15 14h.01M9 6h6M9 10h6" />
+        </Match>
+        <Match when={props.kind === "macMini"}>
+          <path d="M2.212 11.577a2 2 0 0 0-.212.896V18a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5.527a2 2 0 0 0-.212-.896L18.55 5.11A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+          <path d="M21.946 12.013H2.054M6 16h.01M10 16h.01" />
+        </Match>
+      </Switch>
+    </svg>
+  );
 }
