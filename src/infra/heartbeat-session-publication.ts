@@ -16,6 +16,7 @@ import {
   readTranscriptEventMessage,
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import { readCommittedTranscriptMessageSequence } from "../config/sessions/session-accessor.sqlite-transcript-sequences.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
 import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type { SessionTranscriptAssistantMessage } from "../config/sessions/transcript.js";
@@ -60,7 +61,7 @@ export async function publishHeartbeatSessionReply(params: {
     const assertOwnedWrite = captureOwnedTranscriptWriteAssertion(scope);
     const metadata = getReplyPayloadMetadata(params.payload);
     const authority = metadata?.sessionWriterDeliveryAuthority;
-    const initial = loadSessionEntryReadOnly({ ...scope, readConsistency: "latest" });
+    const initial = await readSessionEntryReadOnlyInWorker({ ...scope, readConsistency: "latest" });
     const writerRunId = authority?.expectedWriterRunId ?? initial?.activeWriterRunId;
     const expected = {
       expectedSessionId: scope.sessionId,

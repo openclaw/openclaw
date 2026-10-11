@@ -94,7 +94,7 @@ describe("update.run acknowledgement", () => {
     },
   ])("honors update notice send policy ($name)", async ({ base, account, accountId, allowed }) => {
     const sessions = await import("../../config/sessions.js");
-    vi.mocked(sessions.extractDeliveryInfo).mockReturnValueOnce({
+    vi.mocked(sessions.extractDeliveryInfo).mockResolvedValueOnce({
       deliveryContext: { channel: "telegram", to: "12345", accountId },
       threadId: undefined,
     });

@@ -123,7 +123,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     }
     const restartDelayMs = normalizeGatewayRestartDelayMs(requestedRestartDelayMs);
     const { deliveryContext: sessionDeliveryContext, threadId: sessionThreadId } =
-      extractDeliveryInfo(sessionKey, { cfg: config });
+      await extractDeliveryInfo(sessionKey, { cfg: config });
     let deliveryContext = mergeDeliveryContext(requestedDeliveryContext, sessionDeliveryContext);
     const threadId = requestedThreadId ?? sessionThreadId;
     const timeoutMs = params.timeoutMs === undefined ? undefined : Math.max(1000, params.timeoutMs);

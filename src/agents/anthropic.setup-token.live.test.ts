@@ -188,7 +188,7 @@ describeLive("live anthropic setup-token", () => {
         const cfg = await readLiveTestConfig();
         await ensureOpenClawModelsJson(cfg, tokenSource.agentDir);
 
-        const { authStorage } = discoverAuthStorageFacts(tokenSource.agentDir);
+        const { authStorage } = await discoverAuthStorageFacts(tokenSource.agentDir);
         const modelRegistry = discoverModels(authStorage, tokenSource.agentDir);
         const all = Array.isArray(modelRegistry) ? modelRegistry : modelRegistry.getAll();
         const candidates = all.filter(

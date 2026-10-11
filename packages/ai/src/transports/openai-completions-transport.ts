@@ -501,7 +501,9 @@ export function streamOpenAICompletionsRequest(
           if (mode === "direct") {
             for (const block of output.content) {
               delete (block as { index?: number }).index;
-              delete (block as { partialJson?: string }).partialJson;
+              if (block.type === "toolCall") {
+                delete block.partialJson;
+              }
               delete (block as { streamIndex?: number }).streamIndex;
             }
           }
