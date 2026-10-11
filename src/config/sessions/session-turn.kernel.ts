@@ -263,10 +263,11 @@ export function createSessionTranscriptTurnKernel(
           : appendedEntry;
         const currentIdentity = new Map(previousIdentity);
         currentIdentity.set(resolved.sessionKey, persisted);
-        if (!writesEntry && snapshot?.window?.row && snapshot.sideTables) {
+        if (!writesEntry && appended && snapshot?.window?.row && snapshot.sideTables) {
           postimages.set(resolved.sessionKey, {
             changed: true,
             entry: appendedEntry,
+            row: appended.row,
             window: snapshot.window.row,
             sideTables: snapshot.sideTables,
           });
