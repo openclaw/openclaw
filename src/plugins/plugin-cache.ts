@@ -233,6 +233,15 @@ export function getScopedPluginCache(): PluginCache | undefined {
   return getPluginExecutionFrame()?.cacheScope?.cache;
 }
 
+/** An explicit install refreshes its enclosing command's metadata phases. */
+export function getScopedPluginCaches(): PluginCache[] {
+  const caches: PluginCache[] = [];
+  for (let scope = getPluginExecutionFrame()?.cacheScope; scope; scope = scope.parent) {
+    caches.push(scope.cache);
+  }
+  return caches;
+}
+
 export function getPluginCache(): PluginCache {
   return getScopedPluginCache() ?? getProcessPluginCache();
 }
@@ -240,7 +249,10 @@ export function getPluginCache(): PluginCache {
 export function withPluginCache<T>(cache: PluginCache, run: () => T): T {
   const current = getPluginExecutionFrame();
   return runWithPluginExecutionFrame(
-    createPluginExecutionFrame({ ...current, cacheScope: { cache } }, current),
+    createPluginExecutionFrame(
+      { ...current, cacheScope: { cache, parent: current?.cacheScope } },
+      current,
+    ),
     run,
   );
 }

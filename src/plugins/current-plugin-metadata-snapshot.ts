@@ -15,6 +15,7 @@ import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-
 import { resolveInstalledManifestRegistryIndexFingerprint } from "./manifest-registry-installed.js";
 import {
   getPluginMetadataSnapshotCache,
+  getScopedPluginCaches,
   invalidatePluginCacheMetadata,
   getProcessPluginCache,
   getScopedPluginCache,
@@ -192,19 +193,28 @@ export function adoptCurrentPluginMetadataSnapshotIfAbsent(
   prepareCurrentPluginMetadataSnapshotPublication(snapshot, options)();
 }
 
-/** Explicit installation refreshes the operation's cached discovery facts. */
+/** Explicit installation refreshes the command before its next metadata phase. */
 function clearCurrentPluginMetadataOperation(): void {
-  const cache = getScopedPluginCache();
-  if (
-    cache?.kind === "operation" &&
-    !getPluginExecutionFrame()?.metadataScope?.immutableRuntimeGeneration
-  ) {
-    invalidatePluginCacheMetadata(cache);
+  const caches = new Set(getScopedPluginCaches());
+  const runtimeCaches = new Set();
+  for (let scope = getPluginExecutionFrame()?.metadataScope; scope; scope = scope.parent) {
+    if (scope.immutableRuntimeGeneration) {
+      runtimeCaches.add(scope.cache);
+    } else {
+      caches.add(scope.cache);
+    }
+  }
+  for (const cache of caches) {
+    if (cache.kind === "operation" && !runtimeCaches.has(cache)) {
+      invalidatePluginCacheMetadata(cache);
+    }
   }
 }
 
 function isScopedSnapshotInCurrentCache(scoped: ScopedPluginMetadataSnapshot): boolean {
-  // A running scope keeps its captured metadata across an explicit cache refresh.
+  if (!scoped.immutableRuntimeGeneration && scoped.metadata !== scoped.cache.metadata) {
+    return false;
+  }
   const cache = getScopedPluginCache();
   return cache?.kind !== "operation" || scoped.cache === cache;
 }
@@ -252,7 +262,7 @@ export function createPluginMetadataSnapshotFrame(
   return createPluginExecutionFrame(
     {
       ...current,
-      cacheScope: { cache },
+      cacheScope: { cache, parent: current?.cacheScope },
       metadataScope: {
         snapshot,
         cache,
