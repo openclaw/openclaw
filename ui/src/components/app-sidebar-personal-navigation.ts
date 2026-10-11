@@ -59,7 +59,7 @@ export async function openPersonalPinnedSession(
       return;
     }
     if (!result.session) {
-      showToast({ message: t("presence.sessions.unavailable") });
+      showToast({ message: t("chat.sessionRoute.notFoundTitle") });
       return;
     }
     host.selectSession(
@@ -69,7 +69,7 @@ export async function openPersonalPinnedSession(
     );
   } catch {
     if (isCurrent()) {
-      showToast({ message: t("presence.sessions.unavailable") });
+      showToast({ message: t("sessionsView.openFailed") });
     }
   }
 }

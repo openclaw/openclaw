@@ -943,6 +943,7 @@ export const en: TranslationMap & {
     runErrorUnknown: "Unknown error",
     attentionRequired: "Session needs attention",
     openSession: "Open session",
+    openFailed: "Could not open this session. Try again.",
     model: "Model",
     provider: "Provider",
     runtime: "Runtime",

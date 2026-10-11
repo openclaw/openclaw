@@ -110,7 +110,10 @@ function renderRailPin(
       ? titleForRoute(entry.route)
       : entry.type === "person"
         ? owner?.label || (online ? presenceViewerLabel(online) : t("nav.owner"))
-        : session?.label || plugin?.value.label || tab?.label || t("presence.sessions.unavailable");
+        : session?.label ||
+          plugin?.value.label ||
+          tab?.label ||
+          t(entry.type === "session" ? "sessionsView.openSession" : "tabs.plugin");
   const person =
     entry.type === "person"
       ? personActivityLink(
