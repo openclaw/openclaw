@@ -436,15 +436,12 @@ async function persistPluginInstallOwned(
       if (activationWarning) {
         warn(activationWarning, activationWarning);
       } else {
-        params.deferRuntime?.record(
-          {
-            operation: "install",
-            pluginId: params.pluginId,
-            sourceDigests: source?.sourceDigests ?? {},
-            write: receipt,
-          },
-          source?.assertSourceCurrent,
-        );
+        params.deferRuntime?.record({
+          operation: "install",
+          pluginId: params.pluginId,
+          sourceDigests: source?.sourceDigests ?? {},
+          write: receipt,
+        });
         await refreshManagedPluginMetadata({
           config: next,
           assertCurrent: params.beforePersistentApply,

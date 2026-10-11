@@ -283,8 +283,9 @@ The private SQLite SDK's `openOpenClawAgentSqliteWorkerStoreV2` captures the
 existing agent executor without opening a host writer. Its required live
 authority remains bound through preparation, transaction, commit, and close;
 explicit preparation can create storage, while existing-only commands preserve
-absence. Memory Core sends lineage-origin, standing-intent, and Forget commands
-through that owner.
+absence. Memory Core sends vector/schema, metadata, lineage-origin,
+standing-intent, and Forget commands through that owner. Its published host
+reader is physically read-only and retires with the agent lifecycle.
 Logbook and Workboard already keep native SQL inside their worker backends.
 
 Released raw SQLite and opaque approval callbacks remain named native
@@ -666,6 +667,14 @@ evicting resident entries, while a before/after write-token check preserves one
 consistent cohort. Physical-source and live-authority checks remain with the
 caller. Schemas, stored data, and update behavior are unchanged.
 
+Session rows also reuse the replica's Board presence and transcript watermark,
+avoiding a history-worker request when those facts are resident. Exact metadata
+receipts preserve Board presence for the same session lifecycle; summaries need
+a complete watermark from an actor or projection receipt. Board writes and
+unknown publications invalidate that coverage. Row reads omit the large saved
+prompt snapshots before cloning and retain their existing shared-fact and access
+owners.
+
 Confirmed rollback leaves committed state intact. A lost reply reconciles
 against native commit evidence; an unknown outcome fences further commands and
 disclosure until a read rehydrates the original owner. Neither path replays the
@@ -698,6 +707,17 @@ authority. Pre- and post-hook checkpoints remain separate when the hook is an
 external effect. Actor-bound acceptance does not hold a legacy writer reservation
 around its commands. Unbound native and SDK callers retain their compatibility
 adapters, whose committed writes invalidate actor facts.
+
+Input staging, transcript acceptance, and run adoption rebase once on an explicit
+stale-version refusal, including when deferred participant recording commits
+ahead of admission. They retain the original lifecycle and pending-input
+predicates, prepared message bytes, and live authority checks. Committed and
+unknown outcomes never replay. Durable commands retain the physical writer FIFO
+across snapshot selection, command settlement, and the single rebase, so another
+queued writer cannot invalidate the refused postimage before its retry enters.
+Transcript appends and terminal accounting use the same command owner. Message
+preparation and external hooks remain outside this reservation; each native
+transaction still settles before another command starts.
 
 Canonical retry payloads stay with the existing bounded reader. A fresh input
 can prove absence from complete MAIN pending, completion, and idempotency facts;
@@ -2865,7 +2885,12 @@ Incognito, maintenance, and opaque or cross-store SDK guards retain native atomi
 Receipt validity, retry behavior, schemas, retention, and update behavior are unchanged.
 
 Durable Board writes prepare exact session existence in the session reader and carry
-its session and lifecycle identity into transaction and commit checks. Session
+its session and lifecycle identity into one kernel check before mutation. The synchronous
+worker transaction cannot switch sessions between that check and commit. Layout updates
+write only changed widget rows; a widget upsert does not rewrite the same row or untouched
+siblings. Board reads retain their selected target and disclosure authority without a
+second native mutation witness: a concurrent update after the read can return the captured
+snapshot, and the next read observes the committed write. Session
 presentation consumes worker-prepared Board membership through its existing row
 projection; unavailable facts stay dirty until preparation finishes. Process-held
 incognito retains its native reader. Board request authority prepares session and
@@ -4306,6 +4331,11 @@ callers recheck current run authority before using a prepared recorder. All call
 await preparation, including local test helpers. Process-held incognito data retains
 its existing native owner.
 
+Runtime trajectory event reads dispatch through the existing read-only session-history
+worker. The worker enforces byte/count limits and reads the payload in one snapshot;
+separate reads see committed in-process appends without retaining a row cache. CLI
+session-tail polling retains its synchronous one-shot reader.
+
 Durable trajectory flushes use the same agent database executor for sequence
 allocation, event insertion, and retention. The recorder captures its pending
 prefix inside the physical store's writer FIFO and retains the host metadata
@@ -5529,3 +5559,21 @@ credentials together in one auth-worker request. Catalog composition retains the
 original credential and link authority through that read and checks it before
 publication. These changes preserve schemas, stored bytes, retention, and update
 behavior.
+
+### Shared-state query consolidation
+
+ACP replay recording and replay reads run through the shared-state worker. An
+append updates sequence, metadata, and byte accounting together before inserting
+the event in the same transaction; a failed insert rolls that bookkeeping back.
+Replay eligibility and events share one statement, including complete empty
+replays. Plugin-state keyed lookup and lookupMany reuse the same bounded receipt
+postimages and tombstones as observe when every key is resident. Cold batches
+still read through the worker; expiry and committed native or worker writes
+invalidate or replace cached values. Returned JSON remains caller-owned.
+
+Voice-wake reads and writes, configuration-write metadata, and Claw MCP/package
+adoption use the existing shared-state workers. Voice-wake writes return the
+committed timestamp without a follow-up read. Generic synchronous machine-state
+APIs retain other callers pending their owner-level cutover; these changes do not
+classify those callers as worker-only. Schemas, retention, stored bytes, and
+update behavior are unchanged.

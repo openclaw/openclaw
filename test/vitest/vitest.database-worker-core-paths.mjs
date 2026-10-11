@@ -1,5 +1,18 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/acp/event-ledger.prepared.test.ts",
+  "src/acp/event-ledger.test.ts",
+  "src/acp/translator.cancel-scoping.test.ts",
+  "src/acp/translator.commentary-producer.test.ts",
+  "src/acp/translator.commentary.test.ts",
+  "src/acp/translator.disconnects.test.ts",
+  "src/acp/translator.error-kind.test.ts",
+  "src/acp/translator.event-ledger.test.ts",
+  "src/acp/translator.final-snapshots.test.ts",
+  "src/acp/translator.lifecycle.test.ts",
+  "src/acp/translator.permission-relay.test.ts",
+  "src/acp/translator.session-setup.test.ts",
+  "src/acp/translator.stop-reason.test.ts",
   "src/agents/embedded-agent-runner.prompt-cache.test.ts",
   "src/agents/bash-tools.exec-approval-followup.incognito.test.ts",
   "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
@@ -1183,6 +1196,12 @@ const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);
 
 // Preserve watch admission for consumers previously inferred into fast lanes.
 export const databaseWorkerCoreFormerFastKinds = new Map([
+  ["src/acp/event-ledger.prepared.test.ts", "unitFastIsolated"],
+  ["src/acp/event-ledger.test.ts", "unitFastIsolated"],
+  ["src/acp/translator.error-kind.test.ts", "unitFastIsolated"],
+  ["src/acp/translator.final-snapshots.test.ts", "unitFastIsolated"],
+  ["src/acp/translator.session-setup.test.ts", "unitFastIsolated"],
+  ["src/acp/translator.stop-reason.test.ts", "unitFastFakeTimers"],
   ["src/talk/agent-consult-runtime.test.ts", "unitFast"],
   ["src/agents/sandbox/runtime-status.session-override.test.ts", "unitFast"],
   ["src/system-agent/audit.test.ts", "unitFastIsolated"],

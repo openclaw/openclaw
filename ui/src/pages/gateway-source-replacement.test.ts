@@ -12,8 +12,12 @@ import { sessionsResult } from "../lib/sessions/session-capability.test-support.
 import { clawhubVerdictKey } from "../lib/skills/index.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { ModelProvidersData } from "./model-providers/load.ts";
-import { createEmptyModelProvidersRouteData } from "./model-providers/model-providers-page.test-support.ts";
-import type { ModelProvidersRouteData } from "./model-providers/route.ts";
+import {
+  createEmptyModelProvidersRouteData,
+  createPage as createModelProvidersPage,
+  mountPage as mountModelProvidersPage,
+  unmountPage as unmountModelProvidersPage,
+} from "./model-providers/model-providers-page.test-support.tsx";
 import {
   createContext as createSessionsContext,
   createPage as createSessionsPage,
@@ -26,7 +30,7 @@ import type { UsageRefreshPolicy } from "./usage/refresh-policy.ts";
 import { cacheSnapshot } from "./usage/usage-page.test-support.ts";
 import type { UsageRouteData } from "./usage/usage-page.ts";
 import "./logs/logs-page.ts";
-import "./model-providers/model-providers-page.ts";
+import "./model-providers/model-providers-page.tsx";
 import "./skills/skills-page.ts";
 import "./usage/usage-page.ts";
 
@@ -406,24 +410,32 @@ describe("gateway source replacement across reconnect with a reused client", () 
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const agentsList = { defaultId: "main", agents: [{ id: "main" }] };
-    const page = createPage(
-      "openclaw-model-providers-page",
+    const page = createModelProvidersPage(
       contextWithClient(client, { connected: true, agentsList, selectedAgentId: "main" }),
-    ) as TestPage & {
-      data: ModelProvidersData | null;
-      routeData: ModelProvidersRouteData;
-    };
+    );
     page.routeData = createEmptyModelProvidersRouteData(page.context);
-    document.body.append(page);
+    mountModelProvidersPage(page);
     await waitForFast(() => expect(authCalls).toBe(1));
 
-    await replaceContext(page, client, { connected: true, agentsList, selectedAgentId: "main" });
-    await waitForFast(() => expect(page.data?.authStatus?.ts).toBe(2));
+    const previous = page.context.gateway.snapshot;
+    createGatewayMetadataObserver(() => true).synchronize(previous, {
+      ...previous,
+      phase: "stopped",
+    });
+    unmountModelProvidersPage(page);
+    page.context = contextWithClient(client, {
+      connected: true,
+      agentsList,
+      selectedAgentId: "main",
+    });
+    mountModelProvidersPage(page);
+    await page.updateComplete;
+    await waitForFast(() => expect(page.state.data?.authStatus?.ts).toBe(2));
 
     staleAuth.resolve({ ts: 1, providers: [] });
     await Promise.resolve();
     await Promise.resolve();
-    expect(page.data?.authStatus?.ts).toBe(2);
+    expect(page.state.data?.authStatus?.ts).toBe(2);
   });
 
   it("rejects Model Providers route data from an earlier same-client gateway epoch", async () => {
@@ -451,10 +463,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       selectedAgentId: "main",
     });
     const staleData = { authStatus: { ts: 1, providers: [] } } as unknown as ModelProvidersData;
-    const page = createPage("openclaw-model-providers-page", context) as TestPage & {
-      routeData: ModelProvidersRouteData;
-      data: ModelProvidersData | null;
-    };
+    const page = createModelProvidersPage(context);
     page.routeData = {
       gateway: context.gateway,
       gatewaySnapshot: { ...context.gateway.snapshot },
@@ -464,9 +473,9 @@ describe("gateway source replacement across reconnect with a reused client", () 
       selectionIntentRevision: context.settingsAgentSelection.intentRevision,
     };
 
-    document.body.append(page);
-    await waitForFast(() => expect(page.data?.authStatus?.ts).toBe(2));
-    expect(page.data).not.toBe(staleData);
+    mountModelProvidersPage(page);
+    await waitForFast(() => expect(page.state.data?.authStatus?.ts).toBe(2));
+    expect(page.state.data).not.toBe(staleData);
   });
 
   it("hydrates linked skill verdicts without reloading accepted route data", async () => {

@@ -4,7 +4,7 @@ import { undo } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing, render, type LitElement } from "lit";
-import "./components/chat-detail-panel.ts";
+import "./components/chat-detail-panel.tsx";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult } from "../../api/types.ts";
@@ -48,7 +48,7 @@ import {
   threadProps,
 } from "./components/chat-transcript.test-support.ts";
 import "./components/chat-sidebar-region.runtime.ts";
-import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
+import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import {
   closeSlot,
   ensureSidebarConversation,

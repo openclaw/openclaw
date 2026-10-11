@@ -36,13 +36,14 @@ import {
   type GitHubPublicationClaimRequest,
   type GitHubPublicationSessionRequest as SharedRequest,
 } from "./github-publication-coordinator-methods.js";
+import { matchesRepositoryGitHubPublicationClaim } from "./github-publication-defer.kernel.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
-import { restoreGitHubPublicationRequester } from "./github-publication-requester.js";
 import {
   matchesGitHubPublicationIdentityRow,
-  markGitHubPublicationReported,
   projectGitHubPublicationResult,
-} from "./github-publication-store.js";
+} from "./github-publication-receipt.js";
+import { restoreGitHubPublicationRequester } from "./github-publication-requester.js";
+import { markGitHubPublicationReported } from "./github-publication-store.js";
 import { assertGitHubPublicationWorkflowChangesAllowed } from "./github-publication-workflows.js";
 import {
   executeRepositoryGitHubPublication,
@@ -50,7 +51,6 @@ import {
 } from "./github-repository-publication-executor.js";
 import {
   createRepositoryGitHubPublicationRecovery,
-  matchesRepositoryGitHubPublicationClaim,
   settleDeniedRepositoryGitHubPublication,
 } from "./github-repository-publication-recovery.js";
 import {

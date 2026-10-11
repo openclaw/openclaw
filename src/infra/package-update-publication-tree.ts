@@ -14,7 +14,6 @@ import {
 } from "./package-update-filesystem.js";
 import {
   createPackageIntegrityReader,
-  isPackageIntegrityResourceError,
   packageIntegrityDifferences,
   type PackageIntegrityFingerprint,
   PackageIntegrityMismatchError,
@@ -115,6 +114,7 @@ export async function copyPackagePublicationTree(
 export function createPackagePublicationTreeMatcher(
   descriptor: Pick<PackageActivationDescriptor, "candidate" | "previous" | "helperDigest">,
   onWarning: (message: string) => void,
+  privateCandidate: () => boolean = () => false,
 ) {
   let candidateWarningRecorded = false;
   const verified = new WeakMap<PackageIntegrityFingerprint, PackageIntegrityFingerprint>();
@@ -138,31 +138,25 @@ export function createPackagePublicationTreeMatcher(
     }
     // Legacy package code is reinstallable; accept its previous identity/version without the stale seal.
     const legacyPrevious = legacy && expected === descriptor.previous;
-    // A prepared descriptor carries its in-process observation, so settled unchanged
-    // files are not re-read. A recovery process parses one without and re-reads all.
-    if ("digest" in expected && !legacyPrevious) {
-      try {
-        const observed = await createPackageIntegrityReader().tree(
-          file,
-          logical,
-          verified.get(expected) ?? expected,
-          legacy,
+    // Same-window content drift of our own private candidate is not detected; recovery still verifies fully.
+    const checkContents = !(expected === descriptor.candidate && privateCandidate());
+    if (checkContents && "digest" in expected && !legacyPrevious) {
+      const observed = await createPackageIntegrityReader().tree(
+        file,
+        logical,
+        verified.get(expected) ?? expected,
+        legacy,
+      );
+      if (!isDeepStrictEqual(observed, expected)) {
+        throw new PackageIntegrityMismatchError(
+          `Package publication object changed: ${file}`,
+          packageIntegrityDifferences(expected, observed),
         );
-        if (!isDeepStrictEqual(observed, expected)) {
-          throw new PackageIntegrityMismatchError(
-            `Package publication object changed: ${file}`,
-            packageIntegrityDifferences(expected, observed),
-          );
-        }
-        // A fresh preparation read may predate digest reuse eligibility. Keep
-        // later settled observations, but always compare with the original bytes.
-        verified.set(expected, observed);
-        return true;
-      } catch (error) {
-        if (expected !== descriptor.candidate || !isPackageIntegrityResourceError(error)) {
-          throw error;
-        }
       }
+      // A fresh preparation read may predate digest reuse eligibility. Keep
+      // later settled observations, but always compare with the original bytes.
+      verified.set(expected, observed);
+      return true;
     }
     const observed = await createPackageIntegrityReader().directoryIdentity(file);
     if (observed?.identity !== expected.identity || observed.version !== expected.version) {
@@ -176,7 +170,7 @@ export function createPackagePublicationTreeMatcher(
       }
       return true;
     }
-    if (!candidateWarningRecorded) {
+    if (checkContents && !candidateWarningRecorded) {
       onWarning(
         "candidate package fingerprint incomplete; activation requires the directory identity, package version and launchers; full package contents are unverified",
       );
