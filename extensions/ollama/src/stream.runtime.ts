@@ -40,6 +40,10 @@ import {
   OLLAMA_CLOUD_PROVIDER_ID,
   OLLAMA_DEFAULT_BASE_URL,
 } from "./defaults.js";
+import {
+  detectFencedOllamaToolCall,
+  formatFencedOllamaToolCallDiagnostic,
+} from "./fenced-tool-call-diagnostic.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
 import { applyOllamaThinkingFloor } from "./model-reasoning.js";
 import { resolveOllamaBaseUrlForRun } from "./provider-base-url.js";
@@ -953,6 +957,24 @@ function createRawOllamaStreamFn(
             ...toolCallNameOptions,
             sanitizeVisibleContent: false,
           });
+          if (finalResponse.done_reason !== "length" && accumulatedToolCalls.length === 0) {
+            const fencedToolCall = detectFencedOllamaToolCall(
+              accumulatedVisibleContent,
+              availableToolNames,
+            );
+            const lastUserMessage = [...ollamaMessages]
+              .reverse()
+              .find((message) => message.role === "user");
+            const userPrompt =
+              typeof lastUserMessage?.content === "string"
+                ? lastUserMessage.content
+                : JSON.stringify(lastUserMessage?.content ?? "");
+            const requestsExample =
+              /\b(example|sample|snippet|literal|show|print|explain|documentation|code block)\b/i.test(userPrompt);
+            if (fencedToolCall && !requestsExample) {
+              throw new Error(formatFencedOllamaToolCallDiagnostic(fencedToolCall.name));
+            }
+          }
           closeThinkingBlock();
           closeTextBlock();
 
