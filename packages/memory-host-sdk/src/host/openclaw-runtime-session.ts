@@ -35,7 +35,7 @@ export function assertBoundIncognitoMemorySyncAccess(
   replacement: string,
 ) {
   if (
-    getSessionActorStorageBinding({ agentId: scope.agentId, storePath: scope.storePath }) ||
+    getSessionActorStorageBinding({ agentId: scope?.agentId, storePath: scope?.storePath }) ||
     captureIncognitoSessionSource(scope)
   ) {
     throw new IncognitoSessionSyncAccessError(method, replacement);

@@ -632,12 +632,10 @@ export async function appendSessionTurnInWorker(
                 undefined,
                 (facts) => {
                   if (isRecord(facts) && facts.kind === "session-turn") {
+                    // SAFETY: The paired turn kernel supplies these transaction-local custody facts.
+                    const authority = facts.authority as SessionPendingInputAuthorityFacts;
                     if (custodyRequired) {
-                      custody?.assertCurrent(
-                        // SAFETY: The paired turn kernel supplies these transaction-local custody facts.
-                        facts.authority as SessionPendingInputAuthorityFacts,
-                        assertCurrent,
-                      );
+                      custody?.assertCurrent(authority, assertCurrent);
                     }
                   } else {
                     operation.onTransactionFacts(facts);

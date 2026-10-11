@@ -68,7 +68,7 @@ function createMemoryCompletionCapabilityStore(): SessionCapabilityLookup | unde
         owners.set(agentId, captureSessionActorStorageOwner({ agentId, sessionActor: memory }));
       }
       const selected = owners.get(agentId);
-      const entry = selected?.owner.readSession(sessionKey, selected.authority)?.entry;
+      const entry = selected?.owner?.readSession(sessionKey, selected.authority)?.entry;
       return entry && projectSessionEntryCapabilityFacts(entry);
     },
     getById(sessionId) {

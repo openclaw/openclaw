@@ -17,7 +17,9 @@ const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
 const owners: Array<{ agentId: string; path: string }> = [];
 afterEach(() => {
-  for (const options of owners.splice(0)) memorySessionActorOwners.closeDatabase(options);
+  for (const options of owners.splice(0)) {
+    memorySessionActorOwners.closeDatabase(options);
+  }
 });
 
 it("serves exact entry wrappers and projections from the selected memory owner after writes", async () => {

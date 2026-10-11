@@ -56,7 +56,10 @@ export function commitSessionActorMemoryWorkerTranscript(
     const events = createSessionActorMemoryEvents(context);
     const { appendMessage } = createSessionActorMemoryMessages(context, events);
     const { batch, preparedMessages } = input;
-    const preparedInput = { ...batch, scope: { ...scope, agentId } };
+    const preparedInput = {
+      ...batch,
+      scope: { ...scope, agentId, sessionKey: scope.sessionKey ?? state.hot.target.sessionKey },
+    };
     const plan = prepareTranscriptCommitFromSnapshot(preparedInput, entry, () => ({
       events: state.events.map((row) => row.event),
       version: events.version(),

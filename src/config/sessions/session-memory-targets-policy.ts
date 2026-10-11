@@ -72,11 +72,11 @@ export function selectMemorySessionTargets(
     );
   for (const instance of instances) {
     const identities = [...(source.participants.get(instance.sessionKey) ?? [])];
-    const source = instance.sourceMetadata.hookExternalContentSource;
+    const hookSource = instance.sourceMetadata.hookExternalContentSource;
     if (
       !sessionIds.includes(instance.sessionId) &&
       !sessionIds.includes(instance.sessionKey) &&
-      !(source && hookSources.includes(source)) &&
+      !(hookSource && hookSources.includes(hookSource)) &&
       !identities.some((identity) => participants.includes(identity.id))
     ) {
       continue;

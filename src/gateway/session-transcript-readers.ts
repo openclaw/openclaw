@@ -128,7 +128,7 @@ export async function readSessionMessagesAsync(
       captured.mode === "recent"
         ? (await readers.readRecentSessionMessagesWithStatsAsync(scope, captured)).messages
         : await collectSessionTranscriptMessages(
-            readers.readSessionMessagesWithSourceAsync,
+            (...args) => readers.readSessionMessagesWithSourceAsync(...args),
             scope,
             captured,
           );

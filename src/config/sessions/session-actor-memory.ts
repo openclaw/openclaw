@@ -178,15 +178,14 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
                           {
                             conversations,
                             entries: () =>
-                              sessions
-                                .entries()
-                                .map(
-                                  ([key, record]) =>
-                                    [key, key === sessionKey ? working : record.state] as [
-                                      string,
-                                      typeof working,
-                                    ],
-                                ),
+                              Array.from(
+                                sessions,
+                                ([key, record]) =>
+                                  [key, key === sessionKey ? working : record.state] as [
+                                    string,
+                                    typeof working,
+                                  ],
+                              ),
                             get: (key) => (key === sessionKey ? working : sessions.get(key)?.state),
                           },
                           query,
@@ -297,9 +296,10 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
         {
           conversations,
           entries: () =>
-            sessions
-              .entries()
-              .map(([key, record]) => [key, record.state] as [string, typeof record.state]),
+            Array.from(
+              sessions,
+              ([key, record]) => [key, record.state] as [string, typeof record.state],
+            ),
           get(key) {
             readSession(key, authority);
             return sessions.get(key)?.state;

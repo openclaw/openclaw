@@ -60,8 +60,9 @@ function document(
         interactive: stored.content.interactive,
       };
     case "plugin":
-      return undefined;
+      break;
   }
+  return undefined;
 }
 
 export function readSessionActorBoardQuery(
@@ -156,11 +157,11 @@ export function executeSessionActorBoardCommand(
       state.board = { snapshot: next, content };
       return createBoardWidgetPutResult(next, params.name);
     }
-    case "boards.grant": {
-      const { name, decision, revision, instanceId } = command.input;
-      const next = createBoardGrantSnapshot(snapshot, name, decision, revision, instanceId);
-      state.board = { snapshot: next, content: new Map(previous?.content) };
-      return next;
-    }
+    case "boards.grant":
+      break;
   }
+  const { name, decision, revision, instanceId } = command.input;
+  const next = createBoardGrantSnapshot(snapshot, name, decision, revision, instanceId);
+  state.board = { snapshot: next, content: new Map(previous?.content) };
+  return next;
 }

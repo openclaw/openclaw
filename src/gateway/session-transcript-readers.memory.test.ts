@@ -43,7 +43,7 @@ afterEach(() => memorySessionActorOwners.reset());
 
 const messageIds = (messages: readonly unknown[]) =>
   messages.map((message) =>
-    isRecord(message) && isRecord(message.__openclaw) ? message.__openclaw.id : undefined,
+    isRecord(message) && isRecord(message["__openclaw"]) ? message["__openclaw"].id : undefined,
   );
 
 function event(id: string, parentId: string | null, message: Record<string, unknown>) {

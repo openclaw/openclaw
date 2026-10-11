@@ -6,7 +6,6 @@ import {
   resolveSessionStoreCompatibilityAgentId,
   tryResolveLegacyCompatibilityAgentId,
 } from "../config/legacy.default-agent-owner.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { readPreparedSessionSharingChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import {
   assertSessionEntryCreationPublication,
@@ -51,10 +50,9 @@ import {
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   captureIncognitoSessionMutationFacts,
-  captureSessionActorMutationFacts,
-  captureSessionSharingActorBinding,
   SessionMutationFactsUnavailableError,
 } from "./session-sharing-incognito.js";
+import { prepareMemorySessionMutationFacts } from "./session-sharing-memory-facts.js";
 import type { PreparedSessionMutationFacts } from "./session-sharing-policy.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
@@ -124,40 +122,12 @@ export async function prepareSessionMutationFacts(
 ): Promise<SessionFactsRead<PreparedSessionSourceFacts>> {
   const assertRoutingCurrent = captureSessionMutationRouting(params.cfg);
   const { canonicalKey, agentId } = resolveSessionStoreIdentity(params);
-  const memoryBinding = captureSessionSharingActorBinding({
-    agentId,
-    sessionKey: canonicalKey,
-    resolved: null,
-  });
-  if (memoryBinding) {
-    const memory = captureSessionActorMutationFacts(
-      memoryBinding,
-      canonicalKey,
-      Boolean(params.allowMissing),
-      params.cfg.session?.store &&
-        resolveSessionStorePathCore(params.cfg.session.store, { agentId }),
-    );
-    let active = true;
-    const readCurrent = (cfg: OpenClawConfig) => {
-      if (!active) {
-        throw new SessionMutationFactsUnavailableError();
-      }
-      assertRoutingCurrent(cfg);
-      return memory.readCurrent();
-    };
-    if (params.storageReady) {
-      await params.storageReady;
-    }
-    readCurrent(params.cfg);
-    return {
-      storageTarget: { agentId, canonicalKey, storePath: memory.location.path },
-      // The actor installs creation and its sharing facts together before acknowledgement.
-      bindCreation() {},
-      readCurrent,
-      release() {
-        active = false;
-      },
-    };
+  const memory = prepareMemorySessionMutationFacts(
+    { ...params, agentId, canonicalKey },
+    assertRoutingCurrent,
+  );
+  if (memory) {
+    return memory;
   }
   const initialStoreKeys = [params.sessionKey.trim(), canonicalKey];
   const incognito = isIncognitoSessionKey(canonicalKey);

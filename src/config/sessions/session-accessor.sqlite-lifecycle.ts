@@ -1,4 +1,5 @@
 import { isMainThread } from "node:worker_threads";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -600,7 +601,7 @@ function deleteMemorySessionEntryLifecycle(
         },
         authorize(stage, facts, publication) {
           memory.authority.authorize(stage, facts, publication);
-          if (!allowLocked) {
+          if (!allowLocked && facts.entry) {
             assertModelSelectionUnlocked(facts.entry, MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
           }
         },
@@ -608,7 +609,7 @@ function deleteMemorySessionEntryLifecycle(
     )
     .then((outcome) => {
       if (outcome.kind === "rolled-back" && authorityError) {
-        throw authorityError;
+        throw toErrorObject(authorityError, "Session deletion authority rejected the operation");
       }
       return readSessionActorStorageResult(outcome);
     });

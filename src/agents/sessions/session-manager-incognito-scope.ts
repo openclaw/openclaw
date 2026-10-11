@@ -14,7 +14,10 @@ import {
   withIncognitoSessionBinding,
   type IncognitoSessionBinding,
 } from "../../config/sessions/session-incognito-binding.js";
-import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import {
+  sameSessionTranscriptTargetBinding,
+  type SessionTranscriptTargetBinding,
+} from "../../config/sessions/transcript-target-binding.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   getOwnedSessionTranscriptActor,
@@ -69,7 +72,7 @@ export function withSessionManagerMemoryBinding<T>(
 }
 
 export function captureSessionManagerIncognitoBinding(
-  target: SessionTranscriptRuntimeTarget | undefined,
+  target: SessionTranscriptTargetBinding | undefined,
   manager?: object,
   retarget = false,
 ): SessionManagerIncognitoBinding | undefined {

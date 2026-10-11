@@ -43,8 +43,8 @@ export async function readMemoryParentForkSource(
   const actor =
     selected?.actor ??
     (await captured?.owner?.acquireExisting(sessionKey, {
-      assertCurrent: authority.assertCurrent,
-      assertReadable: authority.assertCurrent,
+      assertCurrent: () => authority.assertCurrent(),
+      assertReadable: () => authority.assertCurrent(),
     }));
   if (!actor) {
     authority.assertCurrent();

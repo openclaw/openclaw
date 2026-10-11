@@ -27,7 +27,6 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   createSessionEntryWithTranscript,
   type SessionEntryCreateWithTranscriptOptions,
-  deleteSessionEntryLifecycle,
   loadExactSessionEntryFromStoreReadOnly,
   resolveSessionEntryAccessTarget,
 } from "../config/sessions/session-accessor.js";
@@ -74,6 +73,7 @@ import {
   prepareSessionPatchRuntimeSelection,
   refreshSessionPatchQueuedSelection,
 } from "./server-methods/sessions-patch-model-selection.js";
+import { completeGatewaySessionCreation } from "./session-create-completion.js";
 import {
   existingSessionSelectionWouldChange,
   sessionCreatePolicyAdoptionError,
@@ -86,6 +86,7 @@ import {
   resolveSessionCreateSpawnPolicy,
 } from "./session-create-inheritance.js";
 import { buildDashboardSessionKey, resolveSessionCreateTargetKey } from "./session-create-key.js";
+import { buildSessionCreateLifecycleTargets } from "./session-create-lifecycle-targets.js";
 import {
   resolveSessionCreationCommitGuard,
   prepareSessionCreateDefaultAccount,
@@ -101,7 +102,7 @@ import type {
   GatewaySessionCommitResult,
   PreparedGatewaySessionLifecycle,
 } from "./session-create-service.types.js";
-import { finalizeSessionCreateTarget, readSessionCreateTarget } from "./session-create-target.js";
+import { readSessionCreateTarget } from "./session-create-target.js";
 import { resolveSessionCreateVisibility } from "./session-create-visibility.js";
 import {
   prepareGatewaySessionLifecycleTargets,
@@ -1198,23 +1199,14 @@ export async function createGatewaySession(
     ...(requestedKey ? [requestedKey] : []),
     ...(initialTargetEntry?.sessionId ? [initialTargetEntry.sessionId] : []),
   ];
-  const lifecycleTargets = [
-    {
-      scope: target.storePath,
-      identities: targetLifecycleIdentities,
-    },
-  ];
-  if (
-    canonicalParentSessionKey &&
-    parentSessionEntry?.sessionId &&
-    parentSessionTarget &&
-    holdParentLifecycle
-  ) {
-    lifecycleTargets.push({
-      scope: parentSessionTarget.storePath,
-      identities: [canonicalParentSessionKey, parentSessionEntry.sessionId],
-    });
-  }
+  const lifecycleTargets = buildSessionCreateLifecycleTargets({
+    target,
+    targetLifecycleIdentities,
+    canonicalParentSessionKey,
+    parentSessionEntry,
+    parentSessionTarget,
+    holdParentLifecycle,
+  });
   // Generated, keyed, same-store, and cross-agent creations all share the
   // lifecycle owner's canonical identity order and one active mutation fence.
   onPhase?.("lifecycleAdmission");
@@ -1234,77 +1226,6 @@ export async function createGatewaySession(
     return result;
   }
   onPhase?.("initialTurn");
-  if (result.resetExisting || !createdContext || !params.afterCreate) {
-    return params.atomicInitialization === true
-      ? unavailableSessionRequest("atomic session initialization did not create a session")
-      : { ...result, postCommit: { status: "completed" } };
-  }
-  if (params.atomicInitialization === true) {
-    const initializingSession = createdContext;
-    const stored = loadGatewaySessionEntryReadOnly(initializingSession.key, {
-      agentId: initializingSession.agentId,
-    }).entry;
-    if (
-      !stored ||
-      stored.sessionId !== initializingSession.entry.sessionId ||
-      stored.initializationPending !== true
-    ) {
-      return unavailableSessionRequest("atomic session initialization lost its owner");
-    }
-    const expectedEntry = structuredClone(stored);
-    try {
-      await params.afterCreate(initializingSession);
-      const finalized = await finalizeSessionCreateTarget(
-        initializingSession,
-        expectedEntry,
-        params.commitGuard,
-      );
-      return {
-        ...result,
-        entry: projectPublicSessionEntry(finalized),
-        postCommit: { status: "completed" },
-      };
-    } catch (error) {
-      try {
-        const rollback = await deleteSessionEntryLifecycle({
-          agentId: initializingSession.agentId,
-          archiveTranscript: false,
-          deleteTranscriptWithoutArchive: true,
-          expectedEntry,
-          expectedSessionId: expectedEntry.sessionId,
-          expectedUpdatedAt: expectedEntry.updatedAt,
-          requireWriteSuccess: true,
-          storePath: initializingSession.storePath,
-          target: {
-            canonicalKey: initializingSession.key,
-            storeKeys: [initializingSession.key],
-          },
-        });
-        if (!rollback.deleted) {
-          throw new Error(`created session ${initializingSession.key} changed before rollback`, {
-            cause: error,
-          });
-        }
-      } catch (rollbackError) {
-        return unavailableSessionRequest(
-          `session initialization failed and rollback did not complete: ${formatErrorMessage(
-            new AggregateError([error, rollbackError]),
-          )}`,
-        );
-      }
-      return unavailableSessionRequest(
-        `session initialization failed: ${formatErrorMessage(error)}`,
-      );
-    }
-  }
-  // The row, transcript, and prepared lifecycle are already durable here. A
-  // fallible initializer must report that committed identity instead of making
-  // callers infer that creation never happened and retry the key.
-  try {
-    await params.afterCreate(createdContext);
-    return { ...result, postCommit: { status: "completed" } };
-  } catch (error) {
-    return { ...result, postCommit: { status: "failed", error } };
-  }
+  return await completeGatewaySessionCreation(params, result, createdContext);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

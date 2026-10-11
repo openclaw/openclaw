@@ -32,7 +32,6 @@ import {
   runWithSessionPendingInputPersistence,
   withSessionPendingInputRelocation,
   type SessionPendingInput,
-  type SessionPendingInputOwner,
   type SessionPendingInputPage,
 } from "./session-accessor.sqlite-pending-inputs.js";
 import {
@@ -53,6 +52,7 @@ import {
 } from "./session-pending-input-authority.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import type { PendingInputCustodyGrant } from "./session-pending-input-operations.types.js";
+import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
 import type { SessionPendingInputReceipt } from "./session-pending-input-receipt.types.js";
 import { readPendingInputSource } from "./session-pending-input-source.js";
 import { preparePendingInputStore, type PendingInputScope } from "./session-pending-input-store.js";

@@ -55,7 +55,9 @@ const authority: SessionActorStorageAuthority = { assertCurrent() {}, authorize(
 const actors: SessionActor[] = [];
 
 function committed<T>(outcome: SessionActorStorageOutcome<T>): T {
-  if (outcome.kind !== "committed") throw new Error(outcome.error.message);
+  if (outcome.kind !== "committed") {
+    throw new Error(outcome.error.message);
+  }
   return outcome.value;
 }
 

@@ -41,7 +41,7 @@ export function createPresenceRecipientProjection(params: {
             captureSessionActorStorageOwner({ agentId, sessionActor: memory }),
           );
         }
-        const entry = memoryOwners.get(agentId)?.owner.readSession(key, memory.authority)?.entry;
+        const entry = memoryOwners.get(agentId)?.owner?.readSession(key, memory.authority)?.entry;
         return entry ? { canonicalKey: key, entry } : undefined;
       }
       if (topology) {

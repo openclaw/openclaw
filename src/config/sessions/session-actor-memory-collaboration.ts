@@ -33,6 +33,7 @@ export function readSessionActorMemoryCollaboration(
     case "session.reactions.read":
       return readSessionActorMemoryReactions(context.state, query.input.sessionId);
   }
+  throw new Error("Unknown memory collaboration query");
 }
 
 export function mutateSessionActorMemoryCollaboration(
@@ -234,4 +235,5 @@ export function mutateSessionActorMemoryCollaboration(
     case "session.reaction.set":
       return setSessionActorMemoryReaction(state, command.input.params);
   }
+  throw new Error("Unknown memory collaboration command");
 }

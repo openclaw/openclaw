@@ -61,7 +61,7 @@ function captureMemoryRead(params: {
       snapshot = binding.actor.snapshot(binding.authority);
     } else {
       binding.actor.assertReadable();
-      snapshot = captured?.owner.readSession(canonicalKey, binding.authority);
+      snapshot = captured?.owner?.readSession(canonicalKey, binding.authority);
     }
     return snapshot?.entry && attachSessionEntrySnapshots(snapshot.entry, {}, params.projection);
   };

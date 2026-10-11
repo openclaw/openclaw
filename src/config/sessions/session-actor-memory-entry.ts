@@ -5,6 +5,7 @@ import { syncSessionActorMemoryConversations } from "./session-actor-memory-conv
 import type {
   SessionActorMemoryEntryCommand,
   SessionActorMemoryEntryQuery,
+  SessionActorMemoryEntryWrites,
 } from "./session-actor-memory-entry-contract.js";
 import { validateSessionActorMemoryEntryGuards } from "./session-actor-memory-entry-guards.js";
 import { installSessionActorMemoryEntry } from "./session-actor-memory-entry-install.js";
@@ -132,7 +133,7 @@ export function executeSessionActorMemoryEntryCommand(
     return installed;
   };
   const replace = (
-    replacement: import("./session-actor-memory-entry-contract.js").SessionActorMemoryEntryReplacement,
+    replacement: SessionActorMemoryEntryWrites["session.entry.replacements"]["input"]["replacements"][number],
   ) => {
     requireExpectedEntry(
       context.get(replacement.sessionKey)?.hot.entry,
@@ -269,11 +270,10 @@ export function executeSessionActorMemoryEntryCommand(
           }),
         );
       }
-      const progressCardReset = Boolean(
+      const progressCardReset =
         writeBoundary &&
         input.resetBoundary?.context === "clear" &&
-        clearSessionActorProgressCardForReset(state),
-      );
+        clearSessionActorProgressCardForReset(state);
       const nextEntry = install(sessionKey, input.nextEntry, {
         consumePendingReset: true,
         routeContext: input.routeContext,

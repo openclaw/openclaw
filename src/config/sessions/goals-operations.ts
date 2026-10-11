@@ -50,6 +50,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import {
   captureIncognitoSessionOperation,
   publishIncognitoSessionEntry,
@@ -231,19 +232,10 @@ export async function mutateSessionGoal(
         },
       },
     );
-    if (outcome.kind === "rolled-back") {
-      if (authorityFailure instanceof Error) {
-        throw authorityFailure;
-      }
-      if (outcome.error.code) {
-        throw new SessionGoalOperationError(outcome.error.code, outcome.error.message);
-      }
-      throw Object.assign(new Error(outcome.error.message), { name: outcome.error.name });
+    if (outcome.kind === "rolled-back" && authorityFailure instanceof Error) {
+      throw authorityFailure;
     }
-    if (outcome.failure) {
-      throw Object.assign(new Error(outcome.failure.message), { name: outcome.failure.name });
-    }
-    const { previous: _previous, ...result } = outcome.value;
+    const { previous: _previous, ...result } = readSessionActorStorageResult(outcome);
     return result;
   }
   const incognito = captureIncognitoSessionOperation(options);

@@ -7,7 +7,7 @@ import {
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
-  normalizeConversationRef,
+  normalizeStoredConversationRef,
   selectUniqueConversationRows,
   type MappedConversationRow,
 } from "./conversation-record-policy.js";
@@ -64,14 +64,14 @@ export function selectConversationRowsFromDatabase(
     query = query.where(
       "c.conversation_id",
       "=",
-      normalizeConversationRef(options.conversationRef),
+      normalizeStoredConversationRef(options.conversationRef),
     );
   }
   if (options.conversationRefs !== undefined) {
     query = query.where(
       "c.conversation_id",
       "in",
-      sqliteStringSet(options.conversationRefs.map(normalizeConversationRef)),
+      sqliteStringSet(options.conversationRefs.map(normalizeStoredConversationRef)),
     );
   }
   if (options.currentSession) {

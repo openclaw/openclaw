@@ -49,8 +49,9 @@ export function validateSessionActorMemorySources(
             ? [alternativeIndex]
             : [],
       );
-      if (!alternatives.length)
+      if (!alternatives.length) {
         return { ...result, refusedSource: { index, facts: { entry, members } } };
+      }
       result.conversationMatches.push({ index, alternatives });
     }
   }

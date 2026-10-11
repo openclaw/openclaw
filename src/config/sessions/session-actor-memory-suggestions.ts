@@ -125,4 +125,5 @@ export function mutateSessionActorMemorySuggestion(
       return suggestion;
     }
   }
+  throw new Error("Unknown memory suggestion command");
 }

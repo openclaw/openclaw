@@ -4,7 +4,7 @@ import {
   type SessionActorStorageBinding,
 } from "../../config/sessions/session-actor-storage-binding.js";
 import type { SessionActorStorageOutcome } from "../../config/sessions/session-actor-storage-contract.js";
-import type { ContextEngineTurnOutboxWorkerStore } from "./context-engine-turn-outbox-store.js";
+import type { ContextEngineTurnOutboxWorkerStore } from "./context-engine-turn-outbox.js";
 
 function committed<T>(outcome: SessionActorStorageOutcome<T>): T {
   if (outcome.kind === "rolled-back") {

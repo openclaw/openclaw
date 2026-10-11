@@ -244,7 +244,7 @@ export function withIncognitoGatewaySessionStoreTarget<T>(params: {
       snapshot = actor.snapshot(authority);
     } else {
       actor.assertReadable();
-      snapshot = captured?.owner.readSession(sessionKey, authority);
+      snapshot = captured?.owner?.readSession(sessionKey, authority);
     }
     let consuming = true;
     const assertCurrent = () => {

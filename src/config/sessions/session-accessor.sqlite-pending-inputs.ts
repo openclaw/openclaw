@@ -21,13 +21,13 @@ import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
+import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
 import {
   isFinalInputCompletion,
   parseSessionPendingInputMessage,
 } from "./session-pending-input-value.js";
 import type {
   SessionPendingInputRow,
-  SessionPendingInputOwner,
   SessionPendingInputWorkerFacts,
   SessionPendingInputWorkerReceipt,
   SessionPendingInputAppend,
@@ -40,7 +40,6 @@ export type {
   SessionPendingInput,
   SessionPendingInputPage,
   SessionPendingInputRow,
-  SessionPendingInputOwner,
   SessionPendingInputWorkerFacts,
   SessionPendingInputWorkerReceipt,
   SessionPendingInputAppend,

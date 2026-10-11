@@ -1,5 +1,5 @@
 import type { SessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
-import type { ProgressCardStore } from "../gateway/progress-card-store.js";
+import type { ProgressCardStore } from "./progress-card-store.types.js";
 
 /** Uses the selected memory backend and leaves the default durable/native router unchanged. */
 export function createSessionActorProgressCardStore(

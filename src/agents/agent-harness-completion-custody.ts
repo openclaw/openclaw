@@ -98,14 +98,14 @@ export function captureAgentHarnessCompletionCustody(
         }
       };
       try {
-        let memory =
+        let memory: SessionActorStorageBinding | undefined =
           selected.actor.target.sessionKey === scope.requesterSessionKey ? selected : undefined;
         if (!memory) {
           const captured = captureSessionActorStorageOwner({
             sessionKey: scope.requesterSessionKey,
             agentId: scope.requesterAgentId,
           });
-          if (!captured) {
+          if (!captured?.owner) {
             return undefined;
           }
           const actor = await captured.owner.acquireExisting(scope.requesterSessionKey, {

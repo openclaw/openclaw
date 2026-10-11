@@ -24,6 +24,7 @@ import {
   readSessionProgressCard,
   writeSessionProgressCard,
 } from "../session-cards/progress-card-store.js";
+import type { ProgressCardStore } from "../session-cards/progress-card-store.types.js";
 import type { ProgressCardWorkerOperations } from "../session-cards/progress-card-store.worker.js";
 import { createSessionActorProgressCardStore } from "../session-cards/session-actor-progress-card-store.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
@@ -43,8 +44,6 @@ import {
   retainOpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
 import { captureGatewaySessionStoreScope } from "./board-store.js";
-
-export type ProgressCardStore = typeof progressCardStore;
 
 /**
  * The activation owner captures routing and supplies live, SQL-free authority.
@@ -121,7 +120,7 @@ export function createIncognitoProgressCardStore(
   };
 }
 
-export const progressCardStore = {
+export const progressCardStore: ProgressCardStore = {
   async get(
     sessionKey: string,
     agentId?: string,

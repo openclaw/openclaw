@@ -74,16 +74,16 @@ export async function runSessionActorUsage(
         : operation.kind === "summary"
           ? undefined
           : operation.sessionFiles;
-    const sessionId = (file: string) => {
+    const requestedSessionId = (file: string) => {
       const marker = parseSqliteSessionFileMarker(file);
       if (!marker || marker.agentId !== binding.agentId || marker.storePath !== binding.path) {
         throw new Error("Usage request belongs to another session owner");
       }
       return marker.sessionId;
     };
-    const ids = requested?.map(sessionId);
+    const ids = requested?.map(requestedSessionId);
     if (operation.kind === "refresh") {
-      operation.rebuildRows?.forEach((row) => sessionId(row.key));
+      operation.rebuildRows?.forEach((row) => requestedSessionId(row.key));
     }
     const instances = await binding.actor.storage!.read(
       {
@@ -199,7 +199,9 @@ export async function runSessionActorUsage(
           !isUsageCostRollupFresh({ file, checkpoint: envelope?.checkpoint })
         );
       })
-      .sort((a, b) => a.file.size - b.file.size || a.file.filePath.localeCompare(b.file.filePath));
+      .toSorted(
+        (a, b) => a.file.size - b.file.size || a.file.filePath.localeCompare(b.file.filePath),
+      );
     const limit =
       operation.maxFiles && Number.isFinite(operation.maxFiles) && operation.maxFiles > 0
         ? Math.floor(operation.maxFiles)

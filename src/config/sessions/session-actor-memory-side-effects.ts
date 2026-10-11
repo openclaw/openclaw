@@ -39,6 +39,12 @@ export function mutateSessionActorMemorySideEffects(
       if (context.state.hot.entry) {
         const row: HeartbeatOutcomeRow = {
           ...command.input,
+          next_check: command.input.next_check ?? null,
+          priority: command.input.priority ?? null,
+          response_reason: command.input.response_reason ?? null,
+          task_names_json: command.input.task_names_json ?? null,
+          wake_reason: command.input.wake_reason ?? null,
+          wake_source: command.input.wake_source ?? null,
           context_run_id: null,
           context_claimed_at: null,
         };

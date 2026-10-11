@@ -259,7 +259,7 @@ export async function createInitialSubagentSession(input: {
                 sessionKey: params.childSessionKey,
                 sessionActor: parentMemory,
               });
-              if (!selected) {
+              if (!selected?.owner) {
                 throw new Error("Incognito child actor is unavailable");
               }
               const actor = await selected.owner.acquire(

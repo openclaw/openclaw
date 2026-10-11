@@ -110,7 +110,9 @@ export async function withGatewayWorkerSessionAdmission<T>(
       identities: [scope.sessionKey, scope.sessionId, ...(params.target?.storeKeys ?? [])],
       onInterrupt: (reason) => controller.abort(reason),
       signal,
-      assertAllowed: assertCurrent,
+      assertAllowed: () => {
+        assertCurrent();
+      },
     });
     try {
       return await admission.run(() =>

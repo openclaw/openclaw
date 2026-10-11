@@ -101,6 +101,25 @@ function toIncognitoCollaborationCommand(
   throw new Error("Incognito collaboration command requires its dedicated owner");
 }
 
+function toMemoryCollaborationCommand(
+  command: SqliteWorkerCommand<SessionSharingWorkerOperations>,
+  scope: SessionCollaborationScope,
+): SessionActorMemoryCollaborationCommand {
+  if (command.type === "category.prepare" || command.type === "category.apply") {
+    throw new Error("Memory categories require the category owner composition");
+  }
+  const { scope: _scope, ...input } = command.input;
+  const profileAliases =
+    command.type === "participant" && command.input.params.identity.type === "profile"
+      ? [...readResidentUserProfileAliases(command.input.params.identity.id, { env: scope.env })]
+      : undefined;
+  // SAFETY: The discriminant retains the existing collaboration input/result pair.
+  return {
+    type: `session.collaboration.${command.type}`,
+    input: { ...input, ...(profileAliases ? { profileAliases } : {}) },
+  } as SessionActorMemoryCollaborationCommand;
+}
+
 export async function runSessionCollaborationWrite<
   Key extends keyof SessionSharingWorkerOperations,
   T,
@@ -125,19 +144,7 @@ export async function runSessionCollaborationWrite<
 ): Promise<T> {
   const memory = getSessionActorStorageBinding(scope);
   if (memory) {
-    if (command.type === "category.prepare" || command.type === "category.apply") {
-      throw new Error("Memory categories require the category owner composition");
-    }
-    const { scope: _scope, ...input } = command.input;
-    const profileAliases =
-      command.type === "participant" && command.input.params.identity.type === "profile"
-        ? [...readResidentUserProfileAliases(command.input.params.identity.id, { env: scope.env })]
-        : undefined;
-    // The discriminant retains the existing collaboration input/result pair.
-    const actorCommand = {
-      type: `session.collaboration.${command.type}`,
-      input: { ...input, ...(profileAliases ? { profileAliases } : {}) },
-    } as SessionActorMemoryCollaborationCommand;
+    const actorCommand = toMemoryCollaborationCommand(command, scope);
     let value: T | undefined;
     const outcome = await memory.actor.storage!.mutate(
       actorCommand,

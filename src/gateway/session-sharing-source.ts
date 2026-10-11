@@ -12,14 +12,6 @@ import {
   type SessionSourceAssertion,
   type SessionSourcePredicateFacts,
 } from "../config/sessions/session-source-authority.js";
-import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import {
-  assertSessionStoreReadCandidate,
-  captureSessionStoreReadCandidate,
-  captureSessionStoreCandidateIdentities,
-  isSessionStoreReadCandidateCurrent,
-} from "../config/sessions/session-store-read-candidates.js";
-import { captureSessionStoreReadCandidates } from "../config/sessions/session-store-target-inventory.js";
 import { retainSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -31,7 +23,6 @@ import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
-import { matchesAgentDatabaseReadCandidatePath } from "../state/openclaw-agent-db-resources.js";
 import {
   assertIncognitoAgentDatabasePathAvailable,
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -59,80 +50,13 @@ import {
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
+import { captureSessionSharingStore } from "./session-sharing-source-store.js";
 import type {
   SessionMutationTarget,
   resolveTalkSessionTargetInput,
 } from "./session-sharing-target-input.js";
 import { prepareTalkSessionTarget, assertTalkSessionStorageTarget } from "./talk/session-target.js";
 import type { PreparedTalkSessionTarget } from "./talk/session-target.types.js";
-
-/** Capture the complete selector family before resolving its physical owner. */
-function captureSessionSharingStore(
-  target: Pick<SessionSharingTarget, "agentId" | "storePath" | "readSource">,
-  env: NodeJS.ProcessEnv,
-  assertCallerCurrent: () => void,
-) {
-  const candidates = captureSessionStoreReadCandidates(target.storePath);
-  const { agentId, storePath, readSource } = target;
-  if (readSource) {
-    const known = captureSessionStoreReadCandidate(readSource.path);
-    if (
-      !candidates.some((candidate) =>
-        matchesAgentDatabaseReadCandidatePath(
-          { ...candidate, path: candidate.physicalPath },
-          known.physicalPath,
-        ),
-      )
-    ) {
-      throw new Error("Session sharing source changed");
-    }
-    // Listing may fail even while the admitted exact file remains accessible.
-    candidates.push(known);
-  }
-  const identities = captureSessionStoreCandidateIdentities(candidates);
-  return async () => {
-    assertCallerCurrent();
-    const resolved =
-      readSource ?? (await prepareSqliteTargetFromSessionStorePath(storePath, { agentId, env }));
-    const assertSourcePathCurrent = () => {
-      if (!candidates.every(isSessionStoreReadCandidateCurrent)) {
-        throw new Error("Session sharing source changed");
-      }
-      try {
-        return assertSessionStoreReadCandidate(resolved.path, candidates);
-      } catch (cause) {
-        throw new Error("Session sharing source changed", { cause });
-      }
-    };
-    const pathname = assertSourcePathCurrent();
-    const identity = identities.get(pathname);
-    if (!resolved.agentId || !identity?.key.startsWith("file:")) {
-      throw new Error("Session sharing source is unavailable");
-    }
-    const source: CapturedSessionEntryReadSource = readSource ?? {
-      agentId: resolved.agentId,
-      path: pathname,
-      databaseIdentity: identity.key.slice("file:".length),
-      databaseBirthtime: identity.birthtime,
-    };
-    const databaseIdentity = source.databaseIdentity;
-    if (typeof databaseIdentity !== "string") {
-      throw new Error("Session sharing reader requires a file-backed source");
-    }
-    const assertCurrent = () => {
-      assertSourcePathCurrent();
-      assertExistingDatabaseIdentity(pathname, identity.key, identity.birthtime);
-      assertExistingDatabaseIdentity(
-        source.path,
-        `file:${databaseIdentity}`,
-        source.databaseBirthtime,
-      );
-    };
-    assertCallerCurrent();
-    assertCurrent();
-    return { source, assertCurrent };
-  };
-}
 
 /** Hold the existing reader only until the prepared writer operation settles. */
 export async function prepareSessionSharingSource(
@@ -201,7 +125,7 @@ export async function prepareSessionSharingSource(
   });
   if (binding) {
     const { actor } = binding;
-    const read = captureIncognitoSessionMutationFacts(binding, target.storeKey, true);
+    const nativeRead = captureIncognitoSessionMutationFacts(binding, target.storeKey, true);
     const source = {
       agentId: actor.agentId,
       path: actor.path,
@@ -219,7 +143,7 @@ export async function prepareSessionSharingSource(
         throw new Error("Session sharing source is no longer retained");
       }
       assertCallerCurrent();
-      read.assertCurrent();
+      nativeRead.assertCurrent();
     };
     assertCurrent();
     const done = createDeferredCore();
@@ -243,10 +167,10 @@ export async function prepareSessionSharingSource(
       actorSource: true as const,
       source,
       get target() {
-        return read.readCurrent().target;
+        return nativeRead.readCurrent().target;
       },
       get members() {
-        return [...read.readCurrent().membership];
+        return [...nativeRead.readCurrent().membership];
       },
       assertCurrent,
       release() {

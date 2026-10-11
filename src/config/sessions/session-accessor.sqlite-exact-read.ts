@@ -103,7 +103,9 @@ export function resolveSessionEntry(
   if (memory) {
     const normalizedKey = scope.sessionKey.trim();
     const existing = memory.read(normalizedKey, options.readOnly ? options.projection : "full");
-    if (memory.source) options.onReadSource?.(memory.source);
+    if (memory.source) {
+      options.onReadSource?.(memory.source);
+    }
     return { existing, legacyKeys: [], normalizedKey };
   }
   // A prepared reader retains its physical locator; rediscovery would escape that custody.
@@ -366,8 +368,12 @@ export function loadExactSessionEntryCandidates(
     assertMemoryExactReadSource(scope.expectedSource, memory.source);
     const entries = sessionKeys.flatMap((key) => {
       const entry = memory.read(key, scope.projection === "worktree" ? "list" : scope.projection);
-      if (!entry) return [];
-      if (scope.projection !== "worktree") return [{ sessionKey: key, entry }];
+      if (!entry) {
+        return [];
+      }
+      if (scope.projection !== "worktree") {
+        return [{ sessionKey: key, entry }];
+      }
       const { sessionId, updatedAt, archivedAt, lastInteractionAt, lifecycleRevision, worktree } =
         entry;
       return [
@@ -384,7 +390,9 @@ export function loadExactSessionEntryCandidates(
         },
       ];
     });
-    if (memory.source) scope.onReadSource?.(memory.source);
+    if (memory.source) {
+      scope.onReadSource?.(memory.source);
+    }
     return entries;
   }
   const options =
@@ -437,7 +445,7 @@ export function loadSessionEntryByIdReadOnly(
   if (memory) {
     const entries = memory
       .entries("list")
-      .sort(
+      .toSorted(
         (left, right) =>
           (scope.orderBy === "updatedAt" ? right.entry.updatedAt - left.entry.updatedAt : 0) ||
           (left.sessionKey < right.sessionKey ? -1 : left.sessionKey > right.sessionKey ? 1 : 0),
@@ -447,7 +455,9 @@ export function loadSessionEntryByIdReadOnly(
         ? undefined
         : entries.find(({ entry }) => entry.sessionId === scope.sessionId)) ??
       entries.find(({ entry }) => entry.sessionId.trim() === scope.sessionId);
-    if (!selected) return undefined;
+    if (!selected) {
+      return undefined;
+    }
     const entry = memory.read(selected.sessionKey, scope.projection);
     return entry ? { sessionKey: selected.sessionKey, entry } : undefined;
   }
@@ -528,13 +538,19 @@ export function loadExactSessionEntryCandidatesReadOnlyBatch(
               key,
               scope.projection === "delivery" ? "list" : scope.projection,
             );
-            if (!entry) return [];
-            if (scope.projection !== "delivery") return [{ sessionKey: key, entry }];
+            if (!entry) {
+              return [];
+            }
+            if (scope.projection !== "delivery") {
+              return [{ sessionKey: key, entry }];
+            }
             const { sessionId, updatedAt, delivery, groupId } = entry;
             return [{ sessionKey: key, entry: { sessionId, updatedAt, delivery, groupId } }];
           }),
         );
-        if (memory.source) scope.onReadSource?.(memory.source);
+        if (memory.source) {
+          scope.onReadSource?.(memory.source);
+        }
         continue;
       }
       const options = toDatabaseOptions(resolveSqliteScope({ ...scope, sessionKey }, targetCache));

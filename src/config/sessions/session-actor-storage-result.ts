@@ -15,7 +15,7 @@ import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 
 /** The write settled; callers must not retry it as a rolled-back operation. */
-export class SessionActorStorageCommittedError<Value> extends Error {
+class SessionActorStorageCommittedError<Value> extends Error {
   constructor(readonly outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>) {
     super(outcome.failure?.message ?? "Session actor publication failed after commit");
     this.name = "SessionActorStorageCommittedError";

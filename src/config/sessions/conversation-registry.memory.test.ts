@@ -35,7 +35,9 @@ const scope = { agentId: "main", storePath: "/synthetic/memory-conversation-regi
 const sessionKey = "agent:main:dashboard:incognito-conversation-registry";
 const owners: ReturnType<typeof createMemorySessionActorOwner>[] = [];
 afterEach(() => {
-  for (const owner of owners.splice(0)) owner.close();
+  for (const owner of owners.splice(0)) {
+    owner.close();
+  }
 });
 
 function entry(target: string, updatedAt = 1): SessionEntry {

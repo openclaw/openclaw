@@ -3,7 +3,7 @@ import type {
   StoredSessionSuggestionResolution,
 } from "./session-sharing-store.types.js";
 
-export type SessionActorMemorySuggestion = {
+type SessionActorMemorySuggestion = {
   suggestion: StoredSessionSuggestion;
   dispatch?: { token: string; startedAt: number; resolution: StoredSessionSuggestionResolution };
 };

@@ -1,6 +1,5 @@
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { err, ok } from "@openclaw/normalization-core/result";
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import type { TranscriptAppendRefusal } from "./session-accessor.sqlite-contract.js";
 import type {
@@ -69,7 +68,7 @@ export function executeSessionActorMemoryReportCommand(
       };
   if (refusal || !entry) {
     if (command.type.startsWith("session.report.")) {
-      return err(refusal!);
+      return { ok: false, error: refusal! };
     }
     throw new SessionTranscriptWriterClaimReboundError(refusal);
   }
@@ -92,8 +91,13 @@ export function executeSessionActorMemoryReportCommand(
       current.updatedAt === expected.updatedAt
     );
   };
-  const commit = (committed: boolean, extra: Partial<TranscriptReportCommit> = {}) =>
-    ok({ committed, projectionNeedsReconcile: false, ...extra });
+  const commit = (
+    committed: boolean,
+    extra: Partial<TranscriptReportCommit> = {},
+  ): { ok: true; value: TranscriptReportCommit } => ({
+    ok: true,
+    value: { committed, projectionNeedsReconcile: false, ...extra },
+  });
   switch (command.type) {
     case "session.transcript.messageFacts": {
       const facts: Awaited<
@@ -126,10 +130,13 @@ export function executeSessionActorMemoryReportCommand(
       return { version: events.version(), facts };
     }
     case "session.report.prepare":
-      return ok({
-        facts: selectTranscriptReport(branch(), readEvent, command.input.selection),
-        version: events.version(),
-      });
+      return {
+        ok: true,
+        value: {
+          facts: selectTranscriptReport(branch(), readEvent, command.input.selection),
+          version: events.version(),
+        },
+      };
     case "session.report.append": {
       if (!versionMatches(command.input.version)) {
         return commit(false);

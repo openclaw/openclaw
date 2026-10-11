@@ -11,7 +11,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
-import { readAdmittedHarnessCompletionInput as readNativeAdmittedHarnessCompletionInput } from "../config/sessions/session-harness-completion-source.kernel.js";
+import { readAdmittedHarnessCompletionInputFromSqlite } from "../config/sessions/session-harness-completion-source.kernel.js";
 import type { HarnessCompletionSourceSnapshot } from "../config/sessions/session-harness-completion-source.types.js";
 import { decodeSessionTranscriptWorkerReadError } from "../config/sessions/session-history-worker-errors.js";
 import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
@@ -38,7 +38,7 @@ import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths
 import { assertHarnessCompletionSourceAdmission } from "./agent-harness-completion-scope.js";
 
 export function readAdmittedHarnessCompletionInput(
-  params: Parameters<typeof readNativeAdmittedHarnessCompletionInput>[0],
+  params: Parameters<typeof readAdmittedHarnessCompletionInputFromSqlite>[0],
 ): boolean {
   const memory = getSessionActorStorageBinding({
     sessionKey: params.claim.requesterSessionKey,
@@ -46,7 +46,7 @@ export function readAdmittedHarnessCompletionInput(
     storePath: params.storePath,
   });
   if (!memory) {
-    return readNativeAdmittedHarnessCompletionInput(params);
+    return readAdmittedHarnessCompletionInputFromSqlite(params);
   }
   const snapshot = memory.actor.storage!.readCurrent(
     {
