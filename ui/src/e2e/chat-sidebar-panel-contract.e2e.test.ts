@@ -384,7 +384,7 @@ async function readSlotColdOpenOutcome(
         ? await holdModuleResponse(
             page,
             controlUiE2eBuiltModuleRequest(
-              "ui/src/pages/chat/components/session-discussion-panel.ts",
+              "ui/src/pages/chat/components/session-discussion-panel.tsx",
             ),
           )
         : null;

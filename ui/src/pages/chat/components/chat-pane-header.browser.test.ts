@@ -5,14 +5,15 @@ import { installTitleTooltips } from "../../../components/tooltip-title.ts";
 import { i18n } from "../../../i18n/index.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../../lib/keyboard-shortcut-contract.ts";
 import { selectChatLayoutAction } from "../../../test-helpers/chat-layout-menu.ts";
-import { openSlot } from "../sidebar-layout.ts";
+import { openSlot, setSidebarOpen } from "../sidebar-layout.ts";
 import "../../../styles.css";
 import "../../../styles/chat/startup-layout.css";
 import "../../../styles/chat/layout.css";
 import "../../../styles/chat/split-view.css";
-import type { ChatDetails } from "./chat-details.ts";
+import type { ChatDetails } from "./chat-details.tsx";
 import { mountChatPaneHeader } from "./chat-pane-header.test-support.ts";
-import "./chat-details.ts";
+import { renderChatPaneHeader } from "./chat-pane-header.ts";
+import "./chat-details.tsx";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
 
 describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
@@ -90,6 +91,51 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       expect(onLayoutChange.mock.calls[1]?.[0].mainPanelId).toBe("subagents");
       expect(onLayoutChange.mock.calls[2]?.[0].dock).toBe("bottom");
       expect(onBrowser).toHaveBeenCalledOnce();
+    });
+
+    it("closes Layout before changing its contents and restores focus on selection and Escape", async () => {
+      const { userEvent } = await import("vitest/browser");
+      const observations: Array<{ open: boolean; focused: boolean }> = [];
+      let fixture: ReturnType<typeof mountChatPaneHeader>;
+      fixture = mountChatPaneHeader(containers, {
+        sidebarLayout: openSlot({ columns: [] }, "subagents"),
+        onToggleSidePanel: () => {
+          const menu = fixture.container.querySelector(".chat-pane__layout-menu")!;
+          const trigger = menu.querySelector("button")!;
+          observations.push({
+            open: menu.hasAttribute("open"),
+            focused: document.activeElement === trigger,
+          });
+          fixture.props.sidebarLayout = setSidebarOpen(
+            fixture.props.sidebarLayout!,
+            !fixture.props.sidebarLayout!.open,
+          );
+          render(renderChatPaneHeader(fixture.props), fixture.container);
+        },
+      });
+      render(renderChatPaneHeader(fixture.props), fixture.container);
+      const trigger = fixture.container.querySelector<HTMLButtonElement>(
+        ".chat-pane__layout-trigger",
+      )!;
+      const menu = fixture.container.querySelector(".chat-pane__layout-menu")!;
+      await page.elementLocator(trigger).click();
+      await userEvent.keyboard("{Escape}");
+      await expect.poll(() => menu.hasAttribute("open")).toBe(false);
+      expect(document.activeElement).toBe(trigger);
+      for (const label of ["Minimize side panel", "Side panel"]) {
+        await selectChatLayoutAction(
+          {
+            container: fixture.container,
+            click: (element) => page.elementLocator(element).click(),
+          },
+          label,
+        );
+        expect(document.activeElement).toBe(trigger);
+      }
+      expect(observations).toEqual([
+        { open: false, focused: true },
+        { open: false, focused: true },
+      ]);
     });
 
     it.each([320, 693])(

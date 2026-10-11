@@ -25,6 +25,7 @@ import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type { SessionOwnerFilterController } from "./session-owner-filter-controller.ts";
 import type { ContextualSidebar } from "./sidebar-context-state.ts";
+import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 /** Stable custom-element inputs. Behavior is layered in focused sidebar modules. */
 export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
@@ -53,7 +54,16 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onUpdateNavigationScope?: (scope: "mine" | "all") => void;
   @state() navigationView: "pages" | "sessions" | "online" = "sessions";
   personalNavigationEpoch = 0;
-  @property({ attribute: false }) sidebarAgentsMode: "chip" | "roster" = "chip";
+  sidebarSnapshot: SidebarSnapshotModel | null = null;
+  sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null = null;
+  private liveSidebarAgentsMode: "chip" | "roster" = "chip";
+  @property({ attribute: false })
+  get sidebarAgentsMode(): "chip" | "roster" {
+    return this.sidebarSnapshot?.mode ?? this.liveSidebarAgentsMode;
+  }
+  set sidebarAgentsMode(mode: "chip" | "roster") {
+    this.liveSidebarAgentsMode = mode;
+  }
   @property({ attribute: false }) sidebarLiveActivity = true;
   /** Agents surfaced first in the chip quick switcher when many exist. */
   @property({ attribute: false }) pinnedAgentIds: readonly string[] = [];
@@ -141,15 +151,21 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   }
 
   readNewSessionAccess(): SessionMethodAccess {
-    return readSessionMethodAccess(this.connected ? this.context?.gateway.snapshot : null, {
-      method: "sessions.create",
-      params: {},
-      sessionScope: true,
-    });
+    return readSessionMethodAccess(
+      this.connected && !this.sidebarSnapshot ? this.context?.gateway.snapshot : null,
+      {
+        method: "sessions.create",
+        params: {},
+        sessionScope: true,
+      },
+    );
   }
 
   readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess {
-    return readSessionMethodAccess(this.connected ? this.context?.gateway.snapshot : null, request);
+    return readSessionMethodAccess(
+      this.connected && !this.sidebarSnapshot ? this.context?.gateway.snapshot : null,
+      request,
+    );
   }
 
   requestOpenNewSession(agentId: string, target?: NewSessionTarget): void {

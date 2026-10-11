@@ -337,9 +337,7 @@ describe("dashboard default activation and personal layout persistence", () => {
     await h.header();
     const focus = h.mount.querySelector<HTMLButtonElement>(".chat-panel-focus");
     expect(focus).not.toBeNull();
-    h.mount
-      .querySelector(".chat-pane__layout-menu")!
-      .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "focus" } } }));
+    select(h.mount.querySelector(".chat-pane__layout-menu")!, "focus");
     expectPresentation(h.state.sidebarLayout, false);
     expect(h.saved()?.dashboardPresentationOverride).toBe("split");
 

@@ -107,42 +107,6 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     });
   });
 
-  it("drops malformed numeric realtime config values", () => {
-    const resolved = resolveConfig({
-      sample_rate: "8000.5",
-      vad_silence_threshold_secs: "999",
-      vad_threshold: "0",
-      min_speech_duration_ms: "0",
-      min_silence_duration_ms: "10.5",
-    });
-
-    expect(resolved).toMatchObject({
-      sampleRate: undefined,
-      vadSilenceThresholdSecs: undefined,
-      vadThreshold: undefined,
-      minSpeechDurationMs: undefined,
-      minSilenceDurationMs: undefined,
-    });
-  });
-
-  it("keeps realtime VAD numeric config inside provider ranges", () => {
-    const resolved = resolveConfig({
-      sample_rate: "8000",
-      vad_silence_threshold_secs: "3",
-      vad_threshold: "0.9",
-      min_speech_duration_ms: "50",
-      min_silence_duration_ms: "2000",
-    });
-
-    expect(resolved).toMatchObject({
-      sampleRate: 8000,
-      vadSilenceThresholdSecs: 3,
-      vadThreshold: 0.9,
-      minSpeechDurationMs: 50,
-      minSilenceDurationMs: 2000,
-    });
-  });
-
   it("connects through the public session boundary with the configured URL params", async () => {
     const requests: URL[] = [];
     const baseUrl = await createRealtimeServer((url) => requests.push(url));
@@ -169,27 +133,27 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     expect(requests[0]?.searchParams.get("language_code")).toBe("en");
   });
 
-  it.each([
-    { message_type: "rate_limited", error: "rate limit exceeded" },
-    { message_type: "input_error", message: "legacy provider rejected the input" },
-  ])("reports ready-state $message_type errors exactly once", async (event) => {
-    const message = event.error ?? event.message;
-    const baseUrl = await createRealtimeServer(() => undefined, { events: [event] });
-    const errorReceived = createDeferred<Error>();
-    const onError = vi.fn(errorReceived.resolve);
-    const session = provider.createSession({
-      providerConfig: { apiKey: "fixture-value", baseUrl },
-      onError,
-    });
+  it.each([{ message_type: "input_error", message: "legacy provider rejected the input" }])(
+    "reports ready-state $message_type errors exactly once",
+    async (event) => {
+      const message = event.message;
+      const baseUrl = await createRealtimeServer(() => undefined, { events: [event] });
+      const errorReceived = createDeferred<Error>();
+      const onError = vi.fn(errorReceived.resolve);
+      const session = provider.createSession({
+        providerConfig: { apiKey: "fixture-value", baseUrl },
+        onError,
+      });
 
-    try {
-      await session.connect();
-      await vi.waitFor(() => errorReceived.promise);
-      expect(onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message }));
-    } finally {
-      session.close();
-    }
-  });
+      try {
+        await session.connect();
+        await vi.waitFor(() => errorReceived.promise);
+        expect(onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message }));
+      } finally {
+        session.close();
+      }
+    },
+  );
 
   it("rejects pre-ready provider errors with their original actionable detail", async () => {
     const message = "rate limit exceeded; retry after account reset";

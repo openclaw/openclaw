@@ -51,6 +51,8 @@ import type { SidebarPanelDefinition } from "./chat-sidebar-region-types.ts";
 
 export type ChatPaneHeaderAction = "reveal" | "copy-path" | "copy-branch";
 
+const pendingLayoutActions = new WeakMap<EventTarget, () => void>();
+
 type ChatPaneParentSession = {
   key: string;
   title: string;
@@ -638,14 +640,17 @@ function renderChatPaneLayoutMenu(props: ChatPaneHeaderProps) {
     placement="bottom-end"
     @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
       const action = allActions.find((candidate) => candidate.id === event.detail.item.value);
-      if (action && action.kind !== "status" && !action.disabled) {
-        if (["open-split-view", "split-down", "split-right", "close-pane"].includes(action.id)) {
-          // Web Awesome restores trigger focus after dispatching selection.
-          queueMicrotask(() => action.onActivate());
-        } else {
-          action.onActivate();
-        }
+      if (event.currentTarget && action && action.kind !== "status" && !action.disabled) {
+        pendingLayoutActions.set(event.currentTarget, action.onActivate);
       }
+    }}
+    @wa-after-hide=${(event: Event) => {
+      if (!event.currentTarget || event.target !== event.currentTarget) {
+        return;
+      }
+      const action = pendingLayoutActions.get(event.currentTarget);
+      pendingLayoutActions.delete(event.currentTarget);
+      action?.();
     }}
   >
     <button

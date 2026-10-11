@@ -53,11 +53,11 @@ it("keeps content actions and focus in Layout across plugin panel swaps", () => 
   const action = (label: string) => container.querySelector<HTMLElement>(`[aria-label="${label}"]`);
   const activate = (label: string) => {
     const item = action(label)!;
-    container
-      .querySelector(".chat-pane__layout-menu")!
-      .dispatchEvent(
-        new CustomEvent("wa-select", { detail: { item: { value: item.getAttribute("value") } } }),
-      );
+    const menu = container.querySelector(".chat-pane__layout-menu")!;
+    menu.dispatchEvent(
+      new CustomEvent("wa-select", { detail: { item: { value: item.getAttribute("value") } } }),
+    );
+    menu.dispatchEvent(new CustomEvent("wa-after-hide"));
   };
 
   paint();

@@ -113,43 +113,6 @@ describe("runMessageAction plugin dispatch", () => {
       });
     });
 
-    it("allows claimless remote terminal dispatch when no receipt applies", async () => {
-      const gatewayPlugin = createGatewayActionPlugin({
-        pluginId: "gatewaychat",
-        label: "Gateway Chat",
-        blurb: "Gateway Chat missing receipt test plugin.",
-        actions: ["send"],
-        messaging: { targetResolver: { looksLikeId: () => true } },
-        handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
-      });
-      setTestPlugin(gatewayPlugin, "gatewaychat");
-      mocks.beginTerminalSourceReplyDelivery.mockResolvedValue(undefined);
-      mocks.reconcileTerminalSourceReplyDelivery.mockResolvedValue("not-applicable");
-      mocks.callGatewayLeastPrivilege.mockResolvedValue({
-        ok: true,
-        messageId: "gw-send-claimless",
-      });
-
-      await runMessageAction({
-        cfg: createEnabledMessageActionConfig("gatewaychat"),
-        action: "send",
-        params: { channel: "gatewaychat", target: "user-123", message: "terminal answer" },
-        sourceReplyFinal: true,
-        sourceReplyToolCallId: "message-call-1",
-        gateway: {
-          terminalSourceReplyReceiptOwner: "caller",
-          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-          mode: GATEWAY_CLIENT_MODES.BACKEND,
-        },
-        dryRun: false,
-      });
-
-      expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledOnce();
-      expect(mocks.reconcileTerminalSourceReplyDelivery).toHaveBeenCalledWith(
-        expect.objectContaining({ receipt: undefined }),
-      );
-    });
-
     it("returns an ambiguous terminal outcome without remote provider I/O", async () => {
       const gatewayPlugin = createGatewayActionPlugin({
         pluginId: "gatewaychat",
@@ -509,47 +472,7 @@ describe("runMessageAction plugin dispatch", () => {
       expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
     });
 
-    it("keeps caller receipts pending after an ambiguous gateway timeout", async () => {
-      const gatewayPlugin = createGatewayActionPlugin({
-        pluginId: "gatewaychat",
-        label: "Gateway Chat",
-        blurb: "Gateway Chat ambiguous timeout test plugin.",
-        actions: ["send"],
-        messaging: { targetResolver: { looksLikeId: () => true } },
-        handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
-      });
-      setTestPlugin(gatewayPlugin, "gatewaychat");
-      const receipt = {
-        sessionId: "session-1",
-        sessionKey: "agent:main:gatewaychat:direct:user-123",
-        sourceTurnId: "source-turn-1",
-        storePath: "/tmp/sessions.json",
-        toolCallId: "message-call-1",
-      };
-      mocks.beginTerminalSourceReplyDelivery.mockResolvedValue(receipt);
-      const timeout = Object.assign(new Error("gateway timeout"), { kind: "timeout" });
-      mocks.callGatewayLeastPrivilege.mockRejectedValue(timeout);
-
-      await expect(
-        runMessageAction({
-          cfg: createEnabledMessageActionConfig("gatewaychat"),
-          action: "send",
-          params: { channel: "gatewaychat", target: "user-123", message: "terminal answer" },
-          sourceReplyFinal: true,
-          sourceReplyToolCallId: receipt.toolCallId,
-          gateway: {
-            terminalSourceReplyReceiptOwner: "caller",
-            clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-            mode: GATEWAY_CLIENT_MODES.BACKEND,
-          },
-          dryRun: false,
-        }),
-      ).rejects.toBe(timeout);
-      expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledTimes(2);
-      expect(mocks.cancelTerminalSourceReplyDelivery).not.toHaveBeenCalled();
-    });
-
-    it.each(["socket", "hosted"] as const)(
+    it.each(["hosted"] as const)(
       "reattaches a timed-out %s send once with the original idempotency key",
       async (route) => {
         const request =

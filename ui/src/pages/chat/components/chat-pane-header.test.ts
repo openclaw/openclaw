@@ -1,6 +1,6 @@
 import { html, render } from "lit";
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { GatewaySessionRow, PresenceEntry, SessionsListResult } from "../../../api/types.ts";
@@ -143,7 +143,13 @@ describe("chat pane header", () => {
       ["close-pane", onClosePane, ["pane-1"]],
     ] as const) {
       menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value } } }));
-      await Promise.resolve();
+      expect(callback).not.toHaveBeenCalled();
+      menu
+        .querySelector("wa-dropdown-item")!
+        .dispatchEvent(new Event("wa-after-hide", { bubbles: true }));
+      expect(callback).not.toHaveBeenCalled();
+      menu.dispatchEvent(new Event("wa-after-hide"));
+      menu.dispatchEvent(new Event("wa-after-hide"));
       expect(callback).toHaveBeenCalledExactlyOnceWith(...args);
     }
     render(renderChatPaneHeader({ ...props, onClosePane: undefined }), container);
@@ -167,9 +173,10 @@ describe("chat pane header", () => {
     expect(container.querySelector(".chat-pane__split-down")).toBeNull();
     expect(container.querySelector(".chat-pane__split-right")).toBeNull();
     expect(container.querySelector(".chat-pane__nav-toggle")).not.toBeNull();
-    container
-      .querySelector(".chat-pane__layout-menu")!
-      .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "terminal" } } }));
+    const menu = container.querySelector(".chat-pane__layout-menu")!;
+    menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "terminal" } } }));
+    expect(onTerminal).not.toHaveBeenCalled();
+    menu.dispatchEvent(new Event("wa-after-hide"));
     expect(onTerminal).toHaveBeenCalledOnce();
   });
 
@@ -417,10 +424,18 @@ describe("chat pane header", () => {
     const mounted = mountIntegratedPresenceHeader({ owners: [], presence });
     const facepile = mounted.container.querySelector("openclaw-viewer-facepile")!;
     await facepile.updateComplete;
-    const updates = vi.spyOn(facepile, "render");
+    const updates: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => updates.push(...records));
+    observer.observe(facepile, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      characterData: true,
+    });
+    onTestFinished(() => observer.disconnect());
     mounted.renderHeader();
     await facepile.updateComplete;
-    expect(updates).not.toHaveBeenCalled();
+    expect(updates).toHaveLength(0);
     mounted.pane.presencePayload = {
       presence: [
         ...presence,
@@ -434,7 +449,7 @@ describe("chat pane header", () => {
     };
     mounted.renderHeader();
     await facepile.updateComplete;
-    expect(updates).toHaveBeenCalledOnce();
+    expect(updates.length).toBeGreaterThan(0);
     expect(facepile.querySelectorAll("openclaw-viewer-avatar")).toHaveLength(2);
   });
 

@@ -6,12 +6,16 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   encodeMemoryEmbedding,
   INVALID_PROJECT_ANNOTATION_KEY,
+  loadSqliteVecExtension,
   MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
   type MemorySyncParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { deleteSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  resolveOpenClawAgentSqlitePath,
+  withOpenClawAgentDatabaseWrite,
+} from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -20,7 +24,11 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import { writeMemoryIndexArchiveTranscript } from "./index-archive.test-support.js";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import {
+  countMemoryIndexFtsMatches,
+  createManagerIndexFixture,
+  memoryIndexFixtureWriter,
+} from "./manager-index.test-support.js";
 import type { MemoryTargetedSessionSyncQueue } from "./manager-sync-control.js";
 import type { MemoryIndexManager } from "./manager.js";
 
@@ -112,7 +120,9 @@ describe("memory index", () => {
     });
     await expect(manager.probeVectorAvailability()).resolves.toBe(true);
     expect(manager.status().vector).toMatchObject({ storeAvailable: true, dims: 4 });
-    db.exec("DROP TABLE memory_index_chunks_vec");
+    const writer = memoryIndexFixtureWriter(manager);
+    expect((await loadSqliteVecExtension({ db: writer })).ok).toBe(true);
+    writer.exec("DROP TABLE memory_index_chunks_vec");
     expect(
       db.prepare("SELECT name FROM sqlite_master WHERE name = 'memory_index_chunks_vec'").get(),
     ).toBeUndefined();
@@ -190,14 +200,15 @@ describe("memory index", () => {
     );
     const manager = await getFreshManager(createCfg({ provider: "none" }));
     await manager.sync({ reason: "test", force: true });
-    const db = Reflect.get(manager, "db") as DatabaseSync;
-    db.prepare(
-      `UPDATE ${MEMORY_INDEX_CHUNK_PROVENANCE_TABLE}
+    memoryIndexFixtureWriter(manager)
+      .prepare(
+        `UPDATE ${MEMORY_INDEX_CHUNK_PROVENANCE_TABLE}
        SET origin_class = 'untrusted'
        WHERE chunk_id IN (
          SELECT id FROM memory_index_chunks WHERE path = 'MEMORY.md' AND source = 'memory'
        )`,
-    ).run();
+      )
+      .run();
     await expect(
       manager.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
     ).resolves.toEqual([]);
@@ -550,10 +561,10 @@ describe("memory index", () => {
     await oldManager.close?.();
     await fs.rm(path.join(fixture.paths.memory, "2026-01-12.md"));
 
-    const nextManager = await getFreshManager(cfg);
-    (Reflect.get(nextManager, "db") as DatabaseSync).exec(
-      `DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`,
+    await withOpenClawAgentDatabaseWrite({ agentId: "main" }, ({ db }) =>
+      db.exec(`DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`),
     );
+    const nextManager = await getFreshManager(cfg);
     expect(nextManager.status().custom?.indexIdentity).toEqual({
       status: "missing",
       reason: "index metadata is missing",
@@ -580,7 +591,9 @@ describe("memory index", () => {
     providerFixture.forceNoProvider = true;
     const nextManager = await getFreshManager(oldCfg);
     const db = Reflect.get(nextManager, "db") as DatabaseSync;
-    db.exec(`DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`);
+    memoryIndexFixtureWriter(nextManager).exec(
+      `DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`,
+    );
 
     await nextManager.sync({ reason: "test" });
 
@@ -655,23 +668,8 @@ describe("memory index", () => {
       }
       fault.disable();
 
-      const ftsMatchCount = (marker: string): number => {
-        const observer = new DatabaseSync(dbPath, { readOnly: true });
-        try {
-          return (
-            observer
-              .prepare(
-                "SELECT COUNT(*) AS count FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?",
-              )
-              .get(`"${marker}"`) as { count: number }
-          ).count;
-        } finally {
-          observer.close();
-        }
-      };
-
-      expect(ftsMatchCount(markers.retained)).toBe(0);
-      expect(ftsMatchCount(markers.trigger)).toBe(0);
+      expect(countMemoryIndexFtsMatches(dbPath, markers.retained)).toBe(0);
+      expect(countMemoryIndexFtsMatches(dbPath, markers.trigger)).toBe(0);
       // Hand ordinary dirty state to maintenance so recovery must use the retained queue.
       manager.takeReindexRetryStateForMaintenance();
       const recoveryState = manager as unknown as {
@@ -697,8 +695,8 @@ describe("memory index", () => {
       const recoveryResults = await Promise.allSettled([recovery, competingFullSync]);
       expect(recoveryResults.map((result) => result.status)).toEqual(["fulfilled", "fulfilled"]);
 
-      expect(ftsMatchCount(markers.retained)).toBeGreaterThan(0);
-      expect(ftsMatchCount(markers.trigger)).toBeGreaterThan(0);
+      expect(countMemoryIndexFtsMatches(dbPath, markers.retained)).toBeGreaterThan(0);
+      expect(countMemoryIndexFtsMatches(dbPath, markers.trigger)).toBeGreaterThan(0);
       expect(recoveryState.sessionSyncQueue.sessions.size).toBe(0);
       expect(recoveryProgress).toHaveBeenCalled();
     } finally {
@@ -1074,11 +1072,11 @@ describe("memory index", () => {
       await diagnostic.sync({ reason: "cli", force: true });
 
       const db = Reflect.get(diagnostic, "db") as DatabaseSync;
-      db.prepare(`INSERT INTO memory_embedding_cache
+      memoryIndexFixtureWriter(diagnostic)
+        .prepare(`INSERT INTO memory_embedding_cache
         (provider, model, provider_key, hash, embedding, dims, updated_at)
-        VALUES ('previous-provider', 'previous-model', 'previous-key', 'retained', ?, 2, 1)`).run(
-        encodeMemoryEmbedding([0, 1]),
-      );
+        VALUES ('previous-provider', 'previous-model', 'previous-key', 'retained', ?, 2, 1)`)
+        .run(encodeMemoryEmbedding([0, 1]));
       expect(diagnostic.status().storage).toMatchObject({
         embeddingCacheEntries: 1,
         embeddingCacheBytes: 16,
@@ -1115,7 +1113,8 @@ describe("memory index", () => {
       await legacyManager.close?.();
       return;
     }
-    const legacyDb = Reflect.get(legacyManager, "db") as DatabaseSync;
+    const legacyDb = memoryIndexFixtureWriter(legacyManager);
+    expect((await loadSqliteVecExtension({ db: legacyDb })).ok).toBe(true);
     legacyDb.exec(`
       CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(
         id TEXT PRIMARY KEY,
@@ -1130,13 +1129,16 @@ describe("memory index", () => {
     expect(Reflect.get(manager, "memoryFullRetryDirty")).toBe(true);
   });
 
-  it("prepares the native vector connection after child retrieval and retires the legacy table", async () => {
-    const manager = await getPersistentManager(createCfg({ vectorEnabled: true }));
-    await manager.sync({ reason: "test", force: true });
-    await expect(manager.search("alpha")).resolves.not.toHaveLength(0);
-    expect(manager.status().vector?.storeAvailable).toBe(true);
+  it("retires a legacy vector table when reopening an indexed database", async () => {
+    const cfg = createCfg({ vectorEnabled: true });
+    const previous = await getPersistentManager(cfg);
+    await previous.sync({ reason: "test", force: true });
+    await previous.close();
+    await withOpenClawAgentDatabaseWrite({ agentId: "main" }, ({ db }) =>
+      db.exec("CREATE TABLE chunks_vec (id TEXT PRIMARY KEY, embedding BLOB)"),
+    );
+    const manager = await getPersistentManager(cfg);
     const db = Reflect.get(manager, "db") as DatabaseSync;
-    db.exec("CREATE TABLE chunks_vec (id TEXT PRIMARY KEY, embedding BLOB)");
 
     await expect(manager.probeVectorStoreAvailability?.()).resolves.toBe(true);
 
@@ -1146,6 +1148,7 @@ describe("memory index", () => {
         .get(),
     ).toBeUndefined();
     expect(Reflect.get(manager, "memoryFullRetryDirty")).toBe(true);
+    await expect(manager.search("alpha")).resolves.not.toHaveLength(0);
   });
 
   it("reports persisted vector index state on the unprobed status path", async () => {

@@ -192,6 +192,9 @@ export function select(menu: ParentNode, value: string) {
       detail: { item: { value } },
     }),
   );
+  if (dropdown!.matches(".chat-pane__layout-menu")) {
+    dropdown!.dispatchEvent(new CustomEvent("wa-after-hide"));
+  }
 }
 
 export function expectPresentation(layout: SidebarLayout, expanded: boolean) {

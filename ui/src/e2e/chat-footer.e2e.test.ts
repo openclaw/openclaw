@@ -313,6 +313,7 @@ suite.define(() => {
           const details = page.locator('.chat-details[role="dialog"]');
           const body = progress.locator(".session-progress-card__body");
           await body.scrollIntoViewIfNeeded();
+          await waitForChatScrollIdle(page);
           const beforeDetailsScroll = await thread.evaluate((element) => element.scrollTop);
           const bounds = (await details.boundingBox())!;
           const point = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };

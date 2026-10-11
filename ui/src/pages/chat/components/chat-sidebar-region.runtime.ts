@@ -1,5 +1,5 @@
 import "../../../styles/chat/side-panel.css";
-import "./chat-files-panel.ts";
+import "./chat-files-panel.tsx";
 import { html, nothing, render as renderTemplate, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";

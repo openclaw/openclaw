@@ -13,9 +13,9 @@ import {
 import { openSlot } from "./sidebar-layout.ts";
 
 function selectPanel(container: HTMLElement, value: string) {
-  container
-    .querySelector(".chat-pane__layout-menu")!
-    .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value } } }));
+  const menu = container.querySelector(".chat-pane__layout-menu")!;
+  menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value } } }));
+  menu.dispatchEvent(new CustomEvent("wa-after-hide"));
 }
 
 function desktopHello(methods: string[], scopes: string[]): GatewayHelloOk {

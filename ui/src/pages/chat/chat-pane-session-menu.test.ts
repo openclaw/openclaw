@@ -94,6 +94,8 @@ describe("chat pane session menu boundary", () => {
         detail: { item: { value: "session-files" } },
       }),
     );
+    expect(workspace.onToggleCollapsed).not.toHaveBeenCalled();
+    container.querySelector(".chat-pane__layout-menu")!.dispatchEvent(new Event("wa-after-hide"));
     expect(workspace.onToggleCollapsed).toHaveBeenCalledOnce();
 
     state.settings = { ...state.settings };

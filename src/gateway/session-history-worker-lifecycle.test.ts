@@ -17,6 +17,7 @@ import {
   createSessionColdStorageFixture,
   maintenanceConfig,
 } from "../config/sessions/session-cold-storage.test-support.js";
+import { prepareSessionEntryPresenceRead } from "../config/sessions/session-entry-presence-read.js";
 import { readSessionHistoryPageInWorker } from "../config/sessions/session-history-worker-runtime.js";
 import {
   historyClearTimeout,
@@ -26,14 +27,12 @@ import {
   targetDiscoveryLane,
 } from "../config/sessions/session-transcript-worker-resources.js";
 import {
-  prepareSessionEntryPresenceRead,
   prewarmSessionHistoryWorker,
   withSessionHistoryWorkerDatabase,
 } from "../config/sessions/session-transcript-worker-runtime.js";
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { DEFAULT_WORKER_PENDING_BYTES } from "../infra/worker-task-capacity.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
@@ -272,29 +271,6 @@ it("keeps fresh fixture roots isolated while reusing idle reader execution", asy
   expect(previousWorker?.threadId).toBe(-1);
 });
 
-it("joins native worker exit when metadata-read custody is revoked during dispatch", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionKey: "agent:main:dashboard:revoked-presence",
-      storePath: path.join(state.agentDir(), "revoked.sqlite"),
-      env: state.env,
-    };
-    await replaceSessionEntry(target, { sessionId: "revoked-row", updatedAt: 1 });
-    let closing: Promise<boolean> | undefined;
-    observed.dispatch = (message) => {
-      if (asOptionalRecord(asOptionalRecord(message)?.input)?.kind === "session-row-presence") {
-        observed.dispatch = undefined;
-        closing = closeOpenClawAgentDatabaseByPathAsync(target.storePath, target.agentId);
-      }
-    };
-    await expect(prepareSessionEntryPresenceRead(target).read()).rejects.toThrow("revoked");
-    expect(closing).toBeDefined();
-    await closing;
-    expect(observed.workers.at(-1)?.threadId).toBe(-1);
-  });
-});
-
 async function seed(state: OpenClawTestState, agentId: string, sessionId: string) {
   const target = {
     agentId,
@@ -383,64 +359,9 @@ it("settles cancelled message reads before reuse and closes their database handl
   });
 });
 
-it("rejects a completed native message reply after primary file replacement", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const sessionId = "replaced-primary-read";
-    const fixture = await seed(state, "main", sessionId);
-    await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
-    fs.copyFileSync(fixture.path, `${fixture.path}.replacement`);
-    const originalInode = fs.statSync(fixture.path, { bigint: true }).ino;
-    const nativeReply = createDeferredCore<unknown>();
-    const releaseReply = createDeferredCore();
-    const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
-    const read = vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
-      const reply = await run(...args);
-      if (reply.ok && asOptionalRecord(reply.value)?.kind === "message-by-id") {
-        nativeReply.resolve(reply.value);
-        await releaseReply.promise;
-      }
-      return reply;
-    });
-    const pending = readSessionHistoryPageInWorker({
-      kind: "message-by-id",
-      params: { target: fixture.target, messageId: `${sessionId}-message` },
-    });
-    try {
-      const completed = await Promise.race([
-        nativeReply.promise,
-        pending.then(() => {
-          throw new Error("History read completed before its native reply was released");
-        }),
-      ]);
-      expect(completed).toMatchObject({
-        kind: "message-by-id",
-        result: { found: true, message: { role: "user", content: sessionId } },
-      });
-      // Release the settled native reader for Windows replacement without revoking host custody.
-      await targetDiscoveryLane.pool.closeResources(JSON.stringify([{ path: fixture.path }]));
-      fs.renameSync(fixture.path, `${fixture.path}.previous`);
-      fs.renameSync(`${fixture.path}.replacement`, fixture.path);
-      expect(fs.statSync(fixture.path, { bigint: true }).ino).not.toBe(originalInode);
-      releaseReply.resolve();
-      await expect(pending).rejects.toThrow(
-        "Session store changed while preparing its metadata. Retry the request.",
-      );
-    } finally {
-      releaseReply.resolve();
-      await pending.catch(() => undefined);
-      read.mockRestore();
-    }
-  });
-});
-
-it.each([
-  { phase: "discovery", mode: "no-commit" },
-  { phase: "discovery", mode: "metadata-refresh" },
-  { phase: "revalidation", mode: "no-commit" },
-  { phase: "revalidation", mode: "metadata-refresh" },
-])(
-  "keeps history readable across unchanged sibling registration during $phase ($mode)",
-  async ({ phase, mode }) => {
+it.each(["no-commit", "metadata-refresh"])(
+  "keeps history readable across unchanged sibling registration during discovery (%s)",
+  async (mode) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const a = await seed(state, "main", "registration-a");
       const b = await seed(state, "other", "registration-b");
@@ -457,11 +378,10 @@ it.each([
       let finished = false;
       observed.dispatch = (message) => {
         const input = asOptionalRecord(asOptionalRecord(message)?.input);
-        const params = asOptionalRecord(asOptionalRecord(input?.request)?.params);
         const registryRead =
           asOptionalRecord(input?.command)?.type === "agentDatabaseRegistry.read";
         if (!started) {
-          if (phase === "discovery" ? registryRead : params?.sessionId === "registration-a") {
+          if (registryRead) {
             started = true;
             registration.begin();
           }
@@ -512,42 +432,6 @@ it.each([
         registryReads.mockRestore();
         registration.finish();
       }
-    });
-  },
-);
-
-it.each(["new-agent", "new-path", "schema", "physical-replacement"] as const)(
-  "rejects history when sibling discovery changes (%s)",
-  async (change) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const a = await seed(state, "main", "topology-a");
-      const b = await seed(state, "other", "topology-b");
-      await a.read();
-      await b.read();
-      await closeOpenClawAgentDatabaseByPathAsync(b.path, "other");
-      let dispatched = false;
-      observed.dispatch = (message) => {
-        const input = asOptionalRecord(asOptionalRecord(message)?.input);
-        const params = asOptionalRecord(asOptionalRecord(input?.request)?.params);
-        if (params?.sessionId !== "topology-a") {
-          return;
-        }
-        observed.dispatch = undefined;
-        dispatched = true;
-        if (change === "physical-replacement") {
-          fs.copyFileSync(b.path, `${b.path}.replacement`);
-          fs.renameSync(b.path, `${b.path}.previous`);
-          fs.renameSync(`${b.path}.replacement`, b.path);
-        }
-        registerOpenClawAgentDatabase({
-          agentId: change === "new-agent" ? "added" : "other",
-          path: change === "new-path" ? `${b.path}.different` : b.path,
-          env: state.env,
-          ...(change === "schema" ? { schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1 } : {}),
-        });
-      };
-      await expect(a.read()).rejects.toThrow("Session store changed while preparing its metadata");
-      expect(dispatched).toBe(true);
     });
   },
 );

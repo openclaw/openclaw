@@ -55,7 +55,7 @@ openclaw automations create "0 18 * * 1-5" \
   --webhook "https://example.invalid/openclaw/cron"
 ```
 
-Use `--command` for deterministic shell-style jobs that run inside the OpenClaw scheduler without starting an isolated agent/model run:
+Use `--command` for script-based shell-style jobs that run inside the OpenClaw scheduler without starting an isolated agent/model run:
 
 ```bash
 openclaw automations create "*/15 * * * *" \
@@ -138,7 +138,7 @@ If session cleanup fails, the error is logged. A removal with no active run also
 
 ## Delivery
 
-`openclaw automations add`, `openclaw automations list`, and `openclaw automations show <job-id>` preview the resolved delivery route. For `channel: "last"`, the preview shows a conversation commit, the resolved channel route, or why delivery will fail closed.
+`openclaw automations add`, `openclaw automations list`, and `openclaw automations show <job-id>` preview the resolved delivery route. For `channel: "last"`, the preview shows a conversation commit, the resolved channel route, or why delivery will be blocked.
 
 If an existing session metadata store cannot be read or its schema is not ready, the preview keeps the requested destination and reports why it is unavailable without blocking job creation or listing. An absent database has no session routing history and uses the normal delivery fallback.
 
@@ -450,7 +450,7 @@ with the intended job ID instead of the name.
 With `--json`, the failure envelope includes these summaries in `error.matches`.
 Event schedules appear as `on-exit` or `stream` without their command text.
 
-`automations list --json` and `automations show <job-id> --json` include a top-level `status` field on each job, computed from `enabled`, `state.runningAtMs`, and `state.lastRunStatus`. Values: `disabled`, `running`, `ok`, `error`, `skipped`, or `idle`. JSON status stays canonical and undecorated, so external tooling can read job state without re-deriving it. Human output may decorate repeated `error` statuses with a failure count.
+`automations list --json` and `automations show <job-id> --json` include a top-level `status` field on each job, computed from `enabled`, `state.runningAtMs`, and `state.lastRunStatus`. Values: `disabled`, `running`, `ok`, `error`, `skipped`, or `idle`. JSON status uses the plain values above without decoration, so external tooling can read job state without re-deriving it. Human output may decorate repeated `error` statuses with a failure count.
 
 `automations runs` entries include delivery diagnostics with the intended automation target, the resolved target, message-tool sends, fallback use, and delivered state.
 

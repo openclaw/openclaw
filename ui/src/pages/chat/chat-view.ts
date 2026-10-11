@@ -564,7 +564,7 @@ export function renderChat(props: ChatProps) {
 
   return html`
     <section
-      class="chat"
+      class="chat ${props.chatBubbleMode ? "chat--bubbles" : ""}"
       style=${styleMap(
         props.chatMessageMaxWidth
           ? {

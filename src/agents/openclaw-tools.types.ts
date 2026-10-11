@@ -90,6 +90,7 @@ export type OpenClawSharedToolsOptions = {
   cronCreatorAuthorityUnavailableReason?: CronToolOptions["creatorAuthorityUnavailableReason"];
   /** Mutable model-context generation used to expire screenshot coordinate frames. */
   computerContextEpoch?: { value: number };
+  computerExecutionId?: string;
   /** Registers run-owned cleanup for tools that hold node resources. */
   registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
   inboundEventKind?: InboundEventKind;

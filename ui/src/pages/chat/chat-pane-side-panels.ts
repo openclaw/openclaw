@@ -29,11 +29,12 @@ import {
   promoteSidebarPanel,
   setSidebarOpen,
   SIDEBAR_NARROW_BREAKPOINT_PX,
+  sidebarActivePanel,
   sidebarMainPanel,
 } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneSidePanels extends ChatPaneBase {
-  private subagentBatch: { session: string; active: boolean } | undefined;
+  private subagentBatch: { session: string; sessionId?: string; active: boolean } | undefined;
   protected sessionCompanionHydrationKey = "";
   protected sessionCompanionFocusGeneration = 0;
   private sessionCompanionPresented = false;
@@ -105,9 +106,16 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     if (!state || !session || session.archived) {
       return;
     }
-    const identity = JSON.stringify([resolveChatAgentId(state), session.key, session.sessionId]);
-    if (this.subagentBatch?.session !== identity) {
-      this.subagentBatch = { session: identity, active: false };
+    const identity = JSON.stringify([resolveChatAgentId(state), session.key]);
+    if (
+      this.subagentBatch?.session !== identity ||
+      (this.subagentBatch.sessionId &&
+        session.sessionId &&
+        this.subagentBatch.sessionId !== session.sessionId)
+    ) {
+      this.subagentBatch = { session: identity, sessionId: session.sessionId, active: false };
+    } else if (session.sessionId) {
+      this.subagentBatch.sessionId = session.sessionId;
     }
     const batch = this.subagentBatch;
     const active = projectSubagentStatus(
@@ -118,7 +126,12 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
       // Open once per batch. A later close remains the user's choice until all
       // children settle; the automatic reveal is not a saved session preference.
       batch.active = true;
-      this.commitSidebarLayout(openSlot(state.sidebarLayout, "subagents"), { persist: false });
+      const selected = sidebarActivePanel(state.sidebarLayout);
+      const keepSelection = selected && isSidebarSlotVisible(state.sidebarLayout, selected.slot);
+      this.commitSidebarLayout(
+        openSlot(state.sidebarLayout, "subagents", { activate: !keepSelection }),
+        { persist: false },
+      );
     } else if (
       !active &&
       session.hasActiveSubagentRun !== true &&

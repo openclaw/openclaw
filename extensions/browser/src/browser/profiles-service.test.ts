@@ -585,7 +585,6 @@ describe("BrowserProfilesService", () => {
     const starting = enqueueProfileStart({
       state,
       runtime,
-      configRevision: 0,
       key: "default",
       run: async () => {
         entered.resolve();
@@ -637,7 +636,6 @@ describe("BrowserProfilesService", () => {
       enqueueProfileStart({
         state,
         runtime,
-        configRevision: getProfileLifecycle(runtime).configRevision,
         key: "default",
         run: async () => {},
       }),
@@ -668,7 +666,6 @@ describe("BrowserProfilesService", () => {
     const starting = enqueueProfileStart({
       state,
       runtime,
-      configRevision: 0,
       key: "default",
       run: async (signal) => {
         entered.resolve();
@@ -704,7 +701,6 @@ describe("BrowserProfilesService", () => {
       enqueueProfileStart({
         state,
         runtime,
-        configRevision: getProfileLifecycle(runtime).configRevision,
         key: "after-drift",
         run: async () => {},
       }),

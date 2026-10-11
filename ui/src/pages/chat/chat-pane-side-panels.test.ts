@@ -53,6 +53,12 @@ it("reveals a batch once, honors its dismissal, and keeps settled results open",
   pane.render();
   expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(false);
 
+  delete parent.sessionId;
+  pane.render();
+  parent.sessionId = "parent-session";
+  pane.render();
+  expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(false);
+
   child.hasActiveRun = false;
   child.status = "done";
   parent.hasActiveSubagentRun = false;
@@ -133,4 +139,31 @@ it("preserves a manually opened empty panel for its session", () => {
   pane.render();
   pane.render();
   expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(true);
+});
+
+it("adds a running batch without replacing the user's selected panel during hydration or settlement", () => {
+  const { pane, state, parent, child, roster } = createPane();
+  pane.render();
+  state.updateSidebarLayout(openSlot(state.sidebarLayout, "processes"));
+  const selected = state.sidebarLayout.columns[0]!.activePanelId;
+
+  parent.hasActiveSubagentRun = true;
+  roster.rows = [child];
+  pane.render();
+  expect(isSidebarSlotVisible(state.sidebarLayout, "processes")).toBe(true);
+  expect(state.sidebarLayout.columns[0]!.activePanelId).toBe(selected);
+  expect(state.sidebarLayout.columns[0]!.panels.some((panel) => panel.slot === "subagents")).toBe(
+    true,
+  );
+
+  delete parent.sessionId;
+  pane.render();
+  parent.sessionId = "parent-session";
+  pane.render();
+  child.hasActiveRun = false;
+  child.status = "done";
+  parent.hasActiveSubagentRun = false;
+  pane.render();
+  expect(isSidebarSlotVisible(state.sidebarLayout, "processes")).toBe(true);
+  expect(state.sidebarLayout.columns[0]!.activePanelId).toBe(selected);
 });
