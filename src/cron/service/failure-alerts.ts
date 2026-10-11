@@ -359,7 +359,7 @@ function failureIncident(params: {
  * An owned job's first chat alert, or terminal one-shot failure, becomes a repair request.
  * A later failure alerts, naming the request, and the streak is never repaired twice.
  */
-export function maybeEmitFailureAlert(
+function maybeEmitFailureAlert(
   state: CronJobPolicyContext,
   params: {
     job: CronJob;
