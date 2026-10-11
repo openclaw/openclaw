@@ -422,14 +422,8 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     async ({ userTokens, fits, nativeProvider }) => {
       const manager = SessionManager.inMemory();
       manager.appendMessage({ role: "user", content: "中".repeat(userTokens), timestamp: 1 });
-      // Covered history pushes the request over budget; only retained users must fit after.
       manager.appendMessage(
-        createAssistant(
-          model,
-          [{ type: "text", text: "Old detail. ".repeat(5_000) }],
-          "stop",
-          60_000,
-        ),
+        createAssistant(model, [{ type: "text", text: "old detail" }], "stop", 60_000),
       );
       const f = await fixture(manager, false, { nativeProvider });
       const warn = vi.spyOn(log, "warn");

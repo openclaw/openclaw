@@ -25,6 +25,7 @@ import {
   estimateLlmBoundaryTokenPressure,
   estimateToolSchemaTokenPressure,
   resolveProjectedRequestPressure,
+  shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
 
 /** Only the native ChatGPT request path owns V2; proxies keep their existing policy. */
@@ -90,11 +91,7 @@ export function createChatGPTV2CompactionBoundary(params: {
       params.assertActive();
     };
     assertActive();
-    // Same accounting as the mid-turn precheck this boundary replaces: a matching
-    // measured predecessor prices the unchanged prefix once; otherwise stay conservative.
-    const outgoing = resolveProjectedRequestPressure({
-      context,
-      previousRequest: requestAnchor,
+    const budget = {
       contextTokenBudget: params.contextTokenBudget,
       reserveTokens: params.reserveTokens,
       replay: {
@@ -102,7 +99,22 @@ export function createChatGPTV2CompactionBoundary(params: {
         sessionId: requestOptions.sessionId,
         authProfileId: requestOptions.authProfileId,
       },
-    });
+    };
+    // A matching measured predecessor prices the unchanged prefix once, as the
+    // mid-turn precheck this boundary replaces does. Without one, keep the
+    // conservative preflight estimate, which honors persisted session usage.
+    const preflight = requestAnchor
+      ? undefined
+      : shouldPreemptivelyCompactBeforePrompt({
+          ...budget,
+          messages: context.messages,
+          systemPrompt: context.systemPrompt,
+          prompt: "",
+          toolSchemaTokens: estimateToolSchemaTokenPressure(context.tools),
+        });
+    const outgoing = preflight
+      ? (preflight.compactionReplay ?? preflight)
+      : resolveProjectedRequestPressure({ ...budget, context, previousRequest: requestAnchor });
     if (outgoing.route === "fits") {
       return undefined;
     }
