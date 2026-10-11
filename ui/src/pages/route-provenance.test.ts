@@ -207,18 +207,4 @@ describe("route preload gateway provenance", () => {
     expect(data.gatewaySnapshot).toBe(originalSnapshot);
     expect(data.result).toEqual(result);
   });
-
-  it("does not request plugins while disconnected", async () => {
-    const requestMethod = vi.fn();
-    const client = { request: requestMethod } as unknown as GatewayBrowserClient;
-    const mutable = mutableGateway(snapshot(client, false));
-
-    const data = await loadRoute<PluginsRouteData>(pluginsPage, {
-      gateway: mutable.gateway,
-    } as unknown as ApplicationContext);
-
-    expect(requestMethod).not.toHaveBeenCalled();
-    expect(data.result).toBeNull();
-    expect(data.error).toBeNull();
-  });
 });

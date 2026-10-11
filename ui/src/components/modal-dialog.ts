@@ -3,9 +3,19 @@ import "@awesome.me/webawesome/dist/components/dialog/dialog.js";
 import { css, html, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 import { acquireNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
+import { composedParent } from "../lib/navigation-click.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
 const modalLayers = (document.openClawModalLayers ??= new Set<HTMLElement>());
+
+function isInert(target: Element): boolean {
+  for (let element: Element | null = target; element; element = composedParent(element)) {
+    if (element.hasAttribute("inert")) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function restoreFocus(target: HTMLElement): void {
   target.focus({ preventScroll: true });
@@ -247,17 +257,22 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     this.#returnFocus = null;
     this.#returnFocusOverride = undefined;
     if (returnFocus?.isConnected) {
-      const activeElement = document.activeElement;
-      // The containing render may release background inertness after removing the modal.
-      queueMicrotask(() => {
-        if (
-          !this.isConnected &&
-          returnFocus.isConnected &&
-          document.activeElement === activeElement
-        ) {
-          restoreFocus(returnFocus);
-        }
-      });
+      if (!isInert(returnFocus)) {
+        restoreFocus(returnFocus);
+      } else {
+        const activeElement = document.activeElement;
+        // The containing render may release background inertness after removing the modal.
+        queueMicrotask(() => {
+          if (
+            !this.isConnected &&
+            returnFocus.isConnected &&
+            !isInert(returnFocus) &&
+            document.activeElement === activeElement
+          ) {
+            restoreFocus(returnFocus);
+          }
+        });
+      }
     }
     super.disconnectedCallback();
   }

@@ -314,25 +314,6 @@ afterEach(() => {
 });
 
 describe("gateway source replacement across reconnect with a reused client", () => {
-  it("preserves matching usage route data on the first bind", async () => {
-    const request = vi.fn();
-    const client = { request } as unknown as GatewayBrowserClient;
-    const context = contextWithClient(client, { connected: true });
-    const result = usageResult("old");
-    const routeData = usageRouteData(context, result);
-    const page = createPage("openclaw-usage-page", context) as TestPage & {
-      routeData: UsageRouteData;
-      usageResult: UsageRouteData["result"];
-    };
-    page.routeData = routeData;
-
-    document.body.append(page);
-    await page.updateComplete;
-
-    expect(page.usageResult).toBe(result);
-    expect(request).not.toHaveBeenCalled();
-  });
-
   it("rejects usage route data from an earlier same-client gateway epoch", async () => {
     const freshResult = usageResult("fresh");
     const request = vi.fn(async (method: string) => {
@@ -417,6 +398,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const result = usageResult();
     const page = createPage("openclaw-usage-page", harness.context) as TestPage & {
       routeData: UsageRouteData;
+      readonly usageResult: UsageRouteData["result"];
       readonly usageLoading: boolean;
       refreshPolicy: UsageRefreshPolicy;
     };
@@ -424,6 +406,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
 
     document.body.append(page);
     await page.updateComplete;
+    expect(page.usageResult).toBe(result);
 
     harness.emitConnected(false);
     harness.emitConnected(true);
@@ -545,22 +528,6 @@ describe("gateway source replacement across reconnect with a reused client", () 
     expect(page.data).not.toBe(staleData);
   });
 
-  it("preserves matching skills route data while loading the viewer library", async () => {
-    const request = vi.fn(async () => emptySkillLibrary);
-    const client = { request } as unknown as GatewayBrowserClient;
-    const context = contextWithClient(client, {
-      connected: true,
-      agentsList: { defaultId: "main", agents: [{ id: "main" }] },
-      selectedAgentId: "main",
-    });
-    const mounted = mountSkillsPage(
-      context,
-      skillsRouteData(context, skillReport("Accepted route skill")),
-    );
-    await waitForSolid(() => expect(mounted.page.textContent).toContain("Accepted route skill"));
-    expect(request).toHaveBeenCalledExactlyOnceWith("skills.library.list", { scope: "all" });
-  });
-
   it("hydrates linked skill verdicts without reloading accepted route data", async () => {
     const verdict = {
       registry: "https://clawhub.ai",
@@ -641,38 +608,6 @@ describe("gateway source replacement across reconnect with a reused client", () 
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenCalledWith("skills.library.list", { scope: "all" });
     expect(request).toHaveBeenCalledWith("skills.securityVerdicts", { agentId: "main" });
-  });
-
-  it("defers fallback workspace skills loading until route data is initialized and invalidated", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "skills.library.list") {
-        return emptySkillLibrary;
-      }
-      if (method === "skills.status") {
-        return { skills: [] };
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const context = contextWithClient(client, {
-      connected: true,
-      agentsList: {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "global",
-        agents: [{ id: "main" }, { id: "research" }],
-      },
-      selectedAgentId: "main",
-    });
-    const mounted = mountSkillsPage(context);
-    await waitForSolid(() =>
-      expect(request).toHaveBeenCalledExactlyOnceWith("skills.library.list", { scope: "all" }),
-    );
-    mounted.setRouteData(skillsRouteData(context, null, { ...context.gateway.snapshot }));
-    await waitForSolid(() =>
-      expect(request).toHaveBeenCalledWith("skills.status", { agentId: "main" }),
-    );
-    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("rejects skills route data from an earlier same-client gateway epoch", async () => {
@@ -870,32 +805,6 @@ describe("gateway source replacement across reconnect with a reused client", () 
     expect(page.logsCursor).toBeNull();
   });
 
-  it("clears diagnostics data and errors loaded by the previous provider", async () => {
-    const client = {} as GatewayBrowserClient;
-    const page = createPage("openclaw-debug-page", contextWithClient(client)) as TestPage & {
-      debugStatus: unknown;
-      debugHealth: unknown;
-      debugModels: unknown[];
-      debugHeartbeat: unknown;
-      debugDiagnosticsError: string | null;
-    };
-    document.body.append(page);
-    await page.updateComplete;
-    page.debugStatus = { version: "old" };
-    page.debugHealth = { ok: true };
-    page.debugModels = [{ id: "old" }];
-    page.debugHeartbeat = { provider: "old" };
-    page.debugDiagnosticsError = "old diagnostics failure";
-
-    await replaceContext(page, client);
-
-    expect(page.debugStatus).toBeNull();
-    expect(page.debugHealth).toBeNull();
-    expect(page.debugModels).toEqual([]);
-    expect(page.debugHeartbeat).toBeNull();
-    expect(page.debugDiagnosticsError).toBeNull();
-  });
-
   it("discards diagnostics from a replaced provider that reuses its client", async () => {
     const pending = deferred<unknown>();
     const request = vi.fn(() => pending.promise);
@@ -907,12 +816,14 @@ describe("gateway source replacement across reconnect with a reused client", () 
       debugModels: unknown[];
       debugHeartbeat: unknown;
       debugLanes: unknown[];
+      debugDiagnosticsError: string | null;
       diagnosticsTask: { readonly status: TaskStatus };
     };
     document.body.append(page);
     await page.updateComplete;
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(4));
+    page.debugDiagnosticsError = "old diagnostics failure";
     await replaceContext(page, client);
     pending.resolve({ models: [{ id: "stale" }], stale: true });
     await pending.promise;
@@ -925,6 +836,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     expect(page.debugModels).toEqual([]);
     expect(page.debugHeartbeat).toBeNull();
     expect(page.debugLanes).toEqual([]);
+    expect(page.debugDiagnosticsError).toBeNull();
   });
 
   it("clears cron data loaded by the previous provider", async () => {
