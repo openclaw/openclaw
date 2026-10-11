@@ -47,7 +47,11 @@ type Host = {
   >;
   mutations: Pick<
     ReturnType<typeof createSessionMutations>,
-    "observeArchiveState" | "confirmArchiveState" | "applyRow" | "observePendingFields"
+    | "observeArchiveState"
+    | "observeArchiveRead"
+    | "confirmArchiveState"
+    | "applyRow"
+    | "observePendingFields"
   >;
   thinkingClaims: Pick<ReturnType<typeof createSessionThinkingClaims>, "observeEvent">;
   decorate: (result: SessionsListResult | null) => SessionsListResult | null;
@@ -84,6 +88,7 @@ export function createSessionReconciliation(host: Host) {
         agentId,
       );
       if (observation && !alreadyObserved) {
+        host.mutations.observeArchiveRead(row);
         host.mutations.observePendingFields(
           row,
           row.rowMode ? pendingFields.filter((field) => Object.hasOwn(row, field)) : pendingFields,
