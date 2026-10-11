@@ -314,6 +314,7 @@ src/agents/worktrees/capacity.ts
 src/agents/worktrees/capacity.worker.ts
 src/agents/worktrees/checkout-apfs.ts
 src/agents/worktrees/checkout-git-config.ts
+src/agents/worktrees/checkout-policy-key.ts
 src/agents/worktrees/checkout.ts
 src/agents/worktrees/errors.ts
 src/agents/worktrees/eviction.runtime.ts
