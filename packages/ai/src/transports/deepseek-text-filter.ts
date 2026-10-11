@@ -82,5 +82,11 @@ export function createDeepSeekTextFilter() {
     flush() {
       return consume(true);
     },
+    hasPending() {
+      // An open suppression span (close token set) is pending even when the
+      // buffer is empty, or a released prefix can be misclassified as a
+      // complete replay while the span is still consuming.
+      return buffer.length > 0 || closeToken !== undefined;
+    },
   };
 }

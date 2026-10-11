@@ -2006,7 +2006,6 @@ src/gateway/server-methods/open-path.ts	1
 src/gateway/server-methods/plugin-approval.ts	1
 src/gateway/server-methods/plugin-host-hooks.ts	1
 src/gateway/server-methods/restart-request.ts	1
-src/gateway/server-methods/send.ts	1
 src/gateway/server-methods/session-create-initial-turn.ts	2
 src/gateway/server-methods/session-recovery-continuation.ts	1
 src/gateway/server-methods/sessions-compact.ts	1
@@ -2656,8 +2655,6 @@ ui/src/components/app-sidebar-agent-menu.ts	2
 ui/src/components/app-sidebar-render.ts	3
 ui/src/components/app-sidebar-session-catalog-render.ts	4
 ui/src/components/app-sidebar-session-list-render.ts	1
-ui/src/components/app-sidebar-session-menu-renderers.ts	3
-ui/src/components/app-sidebar-session-narration.ts	4
 ui/src/components/app-sidebar-session-row-render.ts	2
 ui/src/components/app-sidebar-session-section-header.ts	6
 ui/src/components/app-sidebar.ts	1
