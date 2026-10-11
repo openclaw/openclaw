@@ -109,7 +109,7 @@ async function fixture(entry: Partial<SessionEntry> = {}) {
     params: {
       parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey] },
       sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
-      fallbackEntry: { sessionId: "child-seed", updatedAt: 1, incognito: true },
+      fallbackEntry: { sessionId: "child-seed", updatedAt: 1, incognito: true as const },
     },
     cliForkProviders: ["claude"],
   };
