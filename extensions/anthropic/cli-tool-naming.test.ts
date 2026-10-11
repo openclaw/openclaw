@@ -32,9 +32,12 @@ describe("Claude CLI tool naming guidance", () => {
     expect(prompt).toContain("`mcp__openclaw__message(action=send)`");
   });
 
-  it.each([undefined, []])("leaves prompts unchanged without OpenClaw MCP tools (%j)", (tools) => {
-    expect(transformPrompt(TOOLING_PROMPT, tools)).toBe(TOOLING_PROMPT);
-  });
+  it.each([{ tools: undefined }, { tools: [] }])(
+    "leaves prompts unchanged without OpenClaw MCP tools (%j)",
+    ({ tools }) => {
+      expect(transformPrompt(TOOLING_PROMPT, tools)).toBe(TOOLING_PROMPT);
+    },
+  );
 
   it("omits message delivery guidance when only other OpenClaw MCP tools are exposed", () => {
     const prompt = transformPrompt(TOOLING_PROMPT, ["read"]);
