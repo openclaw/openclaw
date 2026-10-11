@@ -3,13 +3,18 @@
 import { createCatalogIoCounters } from "./session-catalog.performance-counters.test-support.js";
 import type { HeapProfiler, Profiler } from "node:inspector";
 import { Session as InspectorSession } from "node:inspector/promises";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type {
   SessionCatalogHost,
   SessionsCatalogListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createComposedCatalogFixture } from "./session-catalog.performance.test-support.js";
+
+vi.mock("../../infra/shell-env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/shell-env.js")>()),
+  prepareShellPathFromLoginShell: async () => null,
+}));
 
 function measureHostCpuReference(): number {
   const bytes = Uint8Array.from({ length: 65_536 }, (_, index) => index & 255);

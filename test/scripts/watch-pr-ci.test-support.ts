@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { chmodSync, writeFileSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { withTempDir } from "../../src/test-utils/temp-dir.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
@@ -77,7 +77,9 @@ if (process.argv[1] === ${JSON.stringify(fileURLToPath(new URL("../../scripts/wa
               ...createIndependentPrFixtureEnv(parentEnv),
               ...envOverrides,
               NODE_OPTIONS: `${parentEnv.NODE_OPTIONS ?? ""} --import=${pathToFileURL(clockPath).href}`,
-              PATH: `${binDir}${delimiter}${parentEnv.PATH ?? ""}`,
+              PATH: [binDir, dirname(nodeExecPath), parentEnv.PATH ?? ""]
+                .filter(Boolean)
+                .join(delimiter),
             },
           },
           (error, stdout, stderr) => {

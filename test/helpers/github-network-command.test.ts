@@ -100,6 +100,7 @@ it.skipIf(process.platform === "win32").each([
   ["unset", "NODE_OPTIONS"],
   ["unset", "PATH"],
   ["command", "BASH_ENV"],
+  ["command", "ENV"],
 ])("refuses shell guard environment replacement in a %s: %s", (entry, variable) => {
   const directory = tempDirs.make("github-shell-path-");
   symlinkSync("/usr/bin/true", join(directory, "curl"));
@@ -120,6 +121,21 @@ it.skipIf(process.platform === "win32").each([
     ),
   ).toThrow(forbidden);
 });
+
+it.skipIf(process.platform === "win32")(
+  "allows lowercase JavaScript env data in shell input",
+  () => {
+    const node = requireNodeTool("node");
+    const quotedNode = `'${node.replaceAll("'", "'\\''")}'`;
+    expect(
+      execFileSync(
+        "/bin/sh",
+        ["-c", `exec ${quotedNode} -e 'const env = "fixture"; process.stdout.write(env)'`],
+        { encoding: "utf8" },
+      ),
+    ).toBe("fixture");
+  },
+);
 
 it.skipIf(process.platform === "win32").each(["dash", "ksh", "pwsh"])(
   "inspects native %s shell input before dispatch",

@@ -260,11 +260,14 @@ export function inspectTestShellSource(script, options, resolveExecutable, check
     }
     const protectedEnv =
       "(?:NODE_OPTIONS|GIT_ALLOW_PROTOCOL|OPENCLAW_TEST_GITHUB_[A-Z_]+|BASH_ENV|ENV|ZDOTDIR|BASH_FUNC_[^\\s=]+)";
+    const variableFlags = process.platform === "win32" || current.cmd ? "iu" : "u";
     if (
-      new RegExp(`(?:^|[\\s;|&"'])(?:\\$env:)?${protectedEnv}\\s*\\+?=`, "iu").test(source) ||
+      new RegExp(`(?:^|[\\s;|&"'])(?:\\$env:)?${protectedEnv}\\s*\\+?=`, variableFlags).test(
+        source,
+      ) ||
       new RegExp(
         `\\benv\\b[^;|&\\r\\n]*(?:--ignore-environment|\\s-i(?:\\s|$)|(?:-u\\s+|--unset(?:=|\\s+))(?:PATH|${protectedEnv}))`,
-        "iu",
+        variableFlags,
       ).test(source) ||
       /\b(?:command\s+-p|exec\s+-c)\b/u.test(source) ||
       /\b(?:env\s+(?:--ignore-environment|-i)\b|env\s+(?:-u\s+PATH|--unset(?:=|\s+)PATH)|printf\s+-v\s+PATH|read\s+PATH)\b/iu.test(
@@ -364,7 +367,7 @@ export function inspectTestShellSource(script, options, resolveExecutable, check
       }
       if (
         token === "unset" &&
-        argv.some((arg) => new RegExp(`^(?:PATH|${protectedEnv})$`, "iu").test(arg))
+        argv.some((arg) => new RegExp(`^(?:PATH|${protectedEnv})$`, variableFlags).test(arg))
       ) {
         block("unresolved-shell-environment");
       }

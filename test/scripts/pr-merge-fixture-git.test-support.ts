@@ -117,6 +117,7 @@ export function createMergeGitFixtureFactory(directory: string, gitEnv: NodeJS.P
     ]);
     const worktree = join(fixtureRepo, ".worktrees/pr-123");
     git(["worktree", "add", "-q", "-b", "pr-123-prep", worktree, head]);
+    mkdirSync(join(fixtureRepo, ".git/info"), { recursive: true });
     writeFileSync(join(fixtureRepo, ".git/info/exclude"), ".local/\n");
     return {
       ...owner,
