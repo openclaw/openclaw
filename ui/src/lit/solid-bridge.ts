@@ -4,7 +4,6 @@ import {
   createRenderEffect,
   createRoot,
   createSignal,
-  flush,
   onCleanup,
   runWithOwner,
   untrack,
@@ -46,26 +45,6 @@ type ComponentProps<Props, Methods> = Partial<Props> &
     children?: JSX.Element;
   };
 
-const pendingUpdates = new Set<() => void>();
-let pendingCommit: Promise<boolean> | undefined;
-
-function scheduleUpdate(update: () => void): Promise<boolean> {
-  pendingUpdates.add(update);
-  return (pendingCommit ??= Promise.resolve().then(() => {
-    try {
-      for (const commit of pendingUpdates) {
-        pendingUpdates.delete(commit);
-        commit();
-      }
-    } finally {
-      pendingCommit = undefined;
-    }
-    // All Lit property commits share one drain, before their updateComplete reactions.
-    flush();
-    return true;
-  }));
-}
-
 /** Interim tag owner: delete with the last Lit caller at the Solid cutover. */
 export function defineSolidBridge<Props extends object, Methods extends object = object>(
   tag: string,
@@ -97,6 +76,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     #mountedApplication?: ApplicationContext;
     #content?: DocumentFragment;
     #start?: Comment;
+    #pending?: Promise<boolean>;
     #solidOwned = false;
     #host: SolidBridgeElement<Props, Methods>;
 
@@ -129,7 +109,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     }
 
     get updateComplete(): Promise<boolean> {
-      return pendingCommit ?? Promise.resolve(true);
+      return this.#pending ?? Promise.resolve(true);
     }
 
     #write(key: string, value: unknown) {
@@ -224,20 +204,20 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     }
 
     #commit() {
-      return scheduleUpdate(this.#update);
+      return (this.#pending ??= Promise.resolve().then(() => {
+        this.#pending = undefined;
+        if (this.isConnected && !this.#solidOwned) {
+          if (this.#dispose && this.#application !== this.#mountedApplication) {
+            this.#disposeRoot();
+            this.connectedCallback();
+          }
+          if (!this.#dispose) {
+            runWithOwner(null, () => this.#mount());
+          }
+        }
+        return true;
+      }));
     }
-
-    #update = () => {
-      if (this.isConnected && !this.#solidOwned) {
-        if (this.#dispose && this.#application !== this.#mountedApplication) {
-          this.#disposeRoot();
-          this.connectedCallback();
-        }
-        if (!this.#dispose) {
-          runWithOwner(null, () => this.#mount());
-        }
-      }
-    };
 
     #mount(children?: () => JSX.Element) {
       let source: JSX.Element;
