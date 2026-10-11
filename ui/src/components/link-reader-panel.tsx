@@ -23,6 +23,8 @@ import { renderPanelTabStrip } from "./panel-tab-strip.ts";
 import { Icon } from "./solid/icon.tsx";
 import { PanelIconButton } from "./solid/panel-icon-button.tsx";
 
+const panelStyles = `@scope (openclaw-link-reader-panel) { ${linkReaderViewStyles.map((style) => style.cssText.replace(/:host\(([^)]+)\)/gu, ":scope$1").replaceAll(":host", ":scope")).join("\n")} }`;
+
 // These shared helpers still serve Lit panels; each owns only its isolated outlet.
 function PanelPart(props: { content: TemplateResult | typeof nothing }) {
   const outlet = document.createElement("div");
@@ -161,7 +163,7 @@ function PanelView(
   );
   return (
     <>
-      <style>{`@scope (openclaw-link-reader-panel) { ${linkReaderViewStyles.map((style) => style.cssText.replace(/:host\(([^)]+)\)/gu, ":scope$1").replaceAll(":host", ":scope")).join("\n")} }`}</style>
+      <style>{panelStyles}</style>
       {tab() && !props.suppressed && (props.embedded || view().dockLayout.open) ? (
         <section
           class={["bp", props.embedded ? "bp--embedded" : "bp--right", "link-reader-panel"]}

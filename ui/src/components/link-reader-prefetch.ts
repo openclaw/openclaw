@@ -9,7 +9,7 @@ import { LinkReaderPrefetchOwner } from "./link-reader-prefetch-owner.ts";
 
 // The unported chat thread still supplies Lit connection and presentation events.
 class LinkReaderPrefetchDirective extends PresentationAsyncDirective {
-  private readonly owner = new LinkReaderPrefetchOwner();
+  private readonly owner = new LinkReaderPrefetchOwner(() => this.isConnected);
 
   protected override presentationChanged(binding?: PresentationBinding): void {
     if (binding?.isPresented() === false) {
@@ -26,11 +26,6 @@ class LinkReaderPrefetchDirective extends PresentationAsyncDirective {
     [sessionKey, presented, connected = true]: [string, PresentationValue, boolean?],
   ) {
     this.updatePresentation(presented);
-    if (this.isConnected) {
-      this.owner.connect();
-    } else {
-      this.owner.disconnect();
-    }
     this.owner.update(
       part.element instanceof HTMLElement ? part.element : undefined,
       sessionKey,

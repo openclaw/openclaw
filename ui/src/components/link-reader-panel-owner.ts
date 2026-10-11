@@ -185,6 +185,7 @@ export class LinkReaderPanelOwner {
       get: <K extends keyof LinkReaderPanelProps>(key: K): LinkReaderPanelProps[K] | undefined =>
         previous?.[key],
     };
+    // SAFETY: PanelView supplies the complete, explicitly keyed props snapshot.
     if (!previous || (Object.keys(previous) as (keyof LinkReaderPanelProps)[]).some(changed.has)) {
       this.requestUpdate();
     }

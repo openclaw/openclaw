@@ -16,7 +16,7 @@ const PREFETCH_DELAY_MS = 150;
 const SCAN_IDLE_TIMEOUT_MS = 500;
 
 export class LinkReaderPrefetchOwner {
-  private connected = false;
+  constructor(private readonly connected: () => boolean) {}
   private root: HTMLElement | undefined;
   private provider: Element | null = null;
   private readonly handleCapabilities = () => {
@@ -73,7 +73,7 @@ export class LinkReaderPrefetchOwner {
         this.handleCapabilities,
       );
       this.provider = provider;
-      if (this.connected) {
+      if (this.connected()) {
         this.provider?.addEventListener(
           "link-reader-capabilities-changed",
           this.handleCapabilities,
@@ -83,28 +83,24 @@ export class LinkReaderPrefetchOwner {
       this.attempted.clear();
     }
     this.active = connected && presented;
+    document.addEventListener("visibilitychange", this.handleVisibilityChange);
     this.handleVisibilityChange();
   }
 
   disconnect(): void {
-    this.connected = false;
     this.provider?.removeEventListener("link-reader-capabilities-changed", this.handleCapabilities);
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.release();
   }
 
   connect(): void {
-    if (this.connected) {
-      return;
-    }
-    this.connected = true;
     this.provider?.addEventListener("link-reader-capabilities-changed", this.handleCapabilities);
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
     this.handleVisibilityChange();
   }
 
   private readonly handleVisibilityChange = () => {
-    if (this.connected && this.active && !document.hidden) {
+    if (this.connected() && this.active && !document.hidden) {
       if (!this.mutations) {
         this.scheduleScan();
       }
@@ -134,7 +130,7 @@ export class LinkReaderPrefetchOwner {
   }
 
   private canPrefetch(): boolean {
-    return this.active && this.connected && Boolean(this.root?.isConnected) && !document.hidden;
+    return this.active && this.connected() && Boolean(this.root?.isConnected) && !document.hidden;
   }
 
   private scheduleScan(): void {

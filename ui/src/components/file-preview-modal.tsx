@@ -160,7 +160,8 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
     }
   };
   const handleDocumentLink = (event: MouseEvent) => {
-    const anchor = (event.target as Element).closest<HTMLAnchorElement>("a[href]");
+    const anchor =
+      event.target instanceof Element ? event.target.closest<HTMLAnchorElement>("a[href]") : null;
     const href = anchor?.getAttribute("href");
     if (!href || /^[a-z][a-z0-9+.-]*:|^\/\//iu.test(href)) {
       return;

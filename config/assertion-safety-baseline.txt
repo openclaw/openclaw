@@ -2698,7 +2698,6 @@ ui/src/components/desktop/desktop-mobile-keyboard.ts	1
 ui/src/components/desktop/desktop-panel.ts	2
 ui/src/components/dock-panel-layout.ts	3
 ui/src/components/exec-approval.ts	1
-ui/src/components/file-preview-modal.ts	1
 ui/src/components/hub-tabs.ts	1
 ui/src/components/input-dialog.ts	1
 ui/src/components/lobster-dex.ts	2

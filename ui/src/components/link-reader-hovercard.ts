@@ -40,6 +40,7 @@ export const LinkReaderHovercard = defineSolidBridge<HovercardProperties, Hoverc
       owner = new HovercardOwner(host, LinkReaderHovercardProvider);
       owners.set(host, owner);
       // Seed identity belongs to the host, and survives view remounts unchanged.
+      // SAFETY: The literal defines exactly the declared bridge property keys.
       for (const key of Object.keys(properties) as (keyof HovercardProperties)[]) {
         owner.propertyChanged(key);
       }
@@ -62,4 +63,4 @@ export const LinkReaderHovercard = defineSolidBridge<HovercardProperties, Hoverc
 
 export const LinkReaderHovercardProvider = customElements.get(
   LINK_READER_HOVERCARD_PROVIDER_TAG,
-) as { new (): LinkReaderHovercardProvider };
+) as { new (): LinkReaderHovercardProvider }; // SAFETY: The bridge registered this tag with these properties and methods.

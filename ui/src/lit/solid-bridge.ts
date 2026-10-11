@@ -110,6 +110,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         return;
       }
       this.#values.set(key, value);
+      // SAFETY: Keys come only from spec.properties, which maps every Props key.
       spec.propertyChanged?.(this.#host, key as keyof Props);
       const property = declarations.get(key);
       if (property?.reflect && property.attribute !== false) {
