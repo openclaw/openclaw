@@ -43,6 +43,7 @@ describe("Control UI relay tunnel", () => {
       expect(input.pathAndQuery).toBe("/control/?x=1");
       expect(input.headers).toEqual([
         ["accept", "text/html"],
+        ["accept-encoding", "br, gzip"],
         ["cookie", "asset=ok"],
       ]);
       expect(Buffer.from(await new Response(input.body).arrayBuffer())).toEqual(
@@ -52,6 +53,7 @@ describe("Control UI relay tunnel", () => {
         response: new Response(download, {
           headers: {
             "content-type": "text/html",
+            "cache-control": "public, max-age=31536000, immutable",
             "content-security-policy": "frame-ancestors https://chatgpt.com",
             "set-cookie": "evil=x",
             "content-length": "99",
@@ -74,6 +76,7 @@ describe("Control UI relay tunnel", () => {
       more: true,
       headers: [
         ["Accept", "text/html"],
+        ["Accept-Encoding", "br, gzip"],
         ["Cookie", "__Host-oc_ui=secret; asset=ok"],
         ["Connection", "x-hop"],
         ["x-hop", "drop"],
@@ -85,7 +88,6 @@ describe("Control UI relay tunnel", () => {
           "Trailer",
           "Transfer-Encoding",
           "Proxy-Authorization",
-          "Accept-Encoding",
           "Content-Length",
           "Forwarded",
           "X-Forwarded-For",
@@ -110,9 +112,10 @@ describe("Control UI relay tunnel", () => {
       sid: HTTP.sid,
       status: 200,
       headers: [
+        ["cache-control", "public, max-age=31536000, immutable"],
+        ["content-encoding", "gzip"],
         ["content-security-policy", "frame-ancestors https://chatgpt.com"],
         ["content-type", "text/html"],
-        ["cache-control", "no-store"],
         ["referrer-policy", "no-referrer"],
         ["origin-agent-cluster", "?1"],
       ],

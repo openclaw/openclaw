@@ -148,14 +148,7 @@ export function tunnelHeaders(
     }
     if (direction === "request") {
       if (
-        [
-          "host",
-          "accept-encoding",
-          "forwarded",
-          "x-real-ip",
-          "true-client-ip",
-          "cdn-loop",
-        ].includes(name) ||
+        ["host", "forwarded", "x-real-ip", "true-client-ip", "cdn-loop"].includes(name) ||
         /^(proxy-|x-forwarded-|cf-|x-relay-)/.test(name)
       ) {
         continue;
@@ -174,10 +167,8 @@ export function tunnelHeaders(
     } else if (
       [
         "set-cookie",
-        "content-encoding",
         "service-worker-allowed",
         "clear-site-data",
-        "cache-control",
         "referrer-policy",
         "origin-agent-cluster",
       ].includes(name)
@@ -187,11 +178,9 @@ export function tunnelHeaders(
     filtered.push([name, value]);
   }
   if (direction === "response") {
-    filtered.push(
-      ["cache-control", "no-store"],
-      ["referrer-policy", "no-referrer"],
-      ["origin-agent-cluster", "?1"],
-    );
+    // Compressed bodies and the Gateway's cache policy pass through; the relay keeps
+    // every tunneled response out of shared caches (private) and owns that policy.
+    filtered.push(["referrer-policy", "no-referrer"], ["origin-agent-cluster", "?1"]);
   }
   return filtered;
 }
