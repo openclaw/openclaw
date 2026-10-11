@@ -30,6 +30,7 @@ import {
 } from "./client-support.js";
 import { quiesceMatrixClientSync } from "./client-sync-quiesce.js";
 import { waitForMatrixInitialSyncReady } from "./client-sync-ready.js";
+import { createMatrixCryptoDurabilityFence } from "./crypto-durability-fence.js";
 import type { MatrixCryptoFacade } from "./crypto-facade.js";
 import type { MatrixDecryptBridge } from "./decrypt-bridge.js";
 import { isEncryptedToDeviceSend } from "./encrypted-to-device.js";
@@ -131,6 +132,20 @@ export abstract class MatrixClientBase {
     this.requestAbortController.signal.throwIfAborted();
   };
 
+  private readonly cryptoDurabilityFence = createMatrixCryptoDurabilityFence({
+    assertActive: this.assertClientActive,
+    snapshot: async () => {
+      const { persistIdbToDisk } = await loadMatrixCryptoRuntime();
+      await persistIdbToDisk({
+        snapshotPath: this.idbSnapshotPath,
+        databasePrefix: this.cryptoDatabasePrefix,
+        strict: true,
+        abortSignal: this.requestAbortController.signal,
+        stateRuntime: this.stateRuntime,
+      });
+    },
+  });
+
   private readonly captureRequestAuthority = (): (() => void) | undefined => {
     const readAuthority = captureChannelReadAuthority();
     const cryptoOwner = this.cryptoRequestOwner.getStore();
@@ -223,7 +238,7 @@ export abstract class MatrixClientBase {
         // Complete admitted key persistence before checking live wire authority.
         await this.recoveryKeyStore.drainPendingPersistence();
         if (this.cryptoInitialized && isEncryptedToDeviceSend(resource, init)) {
-          await this.persistCryptoForActiveGeneration();
+          await this.cryptoDurabilityFence.persist();
         }
         await this.messageWireDispatchGuards.beforeRequest(resource, init);
       },
@@ -573,7 +588,6 @@ export abstract class MatrixClientBase {
       await Promise.allSettled(this.liveRoomReadinessOperations);
       clearInterval(this.idbPersistTimer ?? undefined);
       this.idbPersistTimer = null;
-      this.syncStore?.setCryptoDurabilityFence(null);
       this.idbPersistAbortController?.abort();
       const activePeriodicPersist = this.idbPersistPromise;
       try {
@@ -583,18 +597,30 @@ export abstract class MatrixClientBase {
         this.cryptoRequestOwner.disable();
       }
       await Promise.all([this.recoveryKeyStore.close(), activePeriodicPersist]);
+      // A fence snapshot that was already publishing when this generation was
+      // aborted finishes its write; no snapshot may land after the stop settles.
+      await this.cryptoDurabilityFence.settled();
       if (persist) {
         const runtime = loadedMatrixCryptoRuntime ?? (await loadMatrixCryptoRuntime());
-        await runtime.persistIdbToDisk({
+        const finalCryptoPersist = runtime.persistIdbToDisk({
           snapshotPath: this.idbSnapshotPath,
           databasePrefix: this.cryptoDatabasePrefix,
           strict: true,
           stateRuntime: this.stateRuntime,
         });
+        await finalCryptoPersist;
+        // Sync and crypto are stopped: this snapshot covers every to-device
+        // event behind the frozen cursor, so it is the fence for the last write.
+        this.syncStore?.setCryptoDurabilityFence(() => finalCryptoPersist);
         this.syncStore?.markCleanShutdown();
         await this.syncStore?.flush();
       }
     } finally {
+      // Until here the generation fence stays registered and rejects, because
+      // the generation is aborted. Detached, the store keeps refusing a cursor
+      // that consumed to-device events: a discarding or failed stop must not
+      // advance past crypto state it did not persist.
+      this.syncStore?.setCryptoDurabilityFence(null);
       await this.recoveryKeyStore.close();
     }
   }
@@ -694,27 +720,6 @@ export abstract class MatrixClientBase {
     }
   }
 
-  /**
-   * Strict crypto snapshot on behalf of an in-flight request or sync cursor.
-   * An Olm message must not leave the process, and a cursor must not move past
-   * to-device events, before the crypto state behind them is durable. A stopped
-   * generation must not publish one: the caller is about to be rejected, and a
-   * successor generation may already own the stored state.
-   */
-  private async persistCryptoForActiveGeneration(): Promise<void> {
-    const { persistIdbToDisk } = await loadMatrixCryptoRuntime();
-    this.assertClientActive();
-    await persistIdbToDisk({
-      snapshotPath: this.idbSnapshotPath,
-      databasePrefix: this.cryptoDatabasePrefix,
-      strict: true,
-      abortSignal: this.requestAbortController.signal,
-      stateRuntime: this.stateRuntime,
-    });
-    // An abort during the dump skips publication without failing the persist.
-    this.assertClientActive();
-  }
-
   private async initializeCrypto(abortSignal: AbortSignal): Promise<void> {
     throwIfMatrixStartupAborted(abortSignal);
     const { persistIdbToDisk, restoreIdbFromDisk } = await loadMatrixCryptoRuntime();
@@ -741,7 +746,7 @@ export abstract class MatrixClientBase {
 
       // Received room keys and inbound Olm sessions arrive as to-device events,
       // which the homeserver does not redeliver once the cursor has moved on.
-      this.syncStore?.setCryptoDurabilityFence(() => this.persistCryptoForActiveGeneration());
+      this.syncStore?.setCryptoDurabilityFence(this.cryptoDurabilityFence.persist);
 
       // Periodically persist to capture new Olm sessions and room keys.
       this.idbPersistTimer = setInterval(() => {

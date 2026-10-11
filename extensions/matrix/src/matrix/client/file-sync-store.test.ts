@@ -437,6 +437,51 @@ describe("SqliteBackedMatrixSyncStore", () => {
     await expect(afterRetry.getSavedSyncToken()).resolves.toBe("with-keys");
   });
 
+  it("writes a to-device cursor without a fence when none was ever registered", async () => {
+    const store = await SqliteBackedMatrixSyncStore.create(storageRoot);
+
+    await store.setSyncData(createSyncResponseWithRoomKey("no-crypto"));
+    await store.flush();
+
+    const persisted = await SqliteBackedMatrixSyncStore.create(storageRoot);
+    await expect(persisted.getSavedSyncToken()).resolves.toBe("no-crypto");
+  });
+
+  it("refuses a to-device cursor while the crypto fence is detached", async () => {
+    const store = await SqliteBackedMatrixSyncStore.create(storageRoot);
+    const fence = vi.fn(async () => {});
+    store.setCryptoDurabilityFence(fence);
+    await store.setSyncData(createSyncResponse("before-keys"));
+    await store.flush();
+
+    store.setCryptoDurabilityFence(null);
+    await store.setSyncData(createSyncResponseWithRoomKey("with-keys"));
+    await expect(store.flush()).rejects.toThrow("crypto durability fence is detached");
+
+    expect(fence).not.toHaveBeenCalled();
+    const whileDetached = await SqliteBackedMatrixSyncStore.create(storageRoot);
+    await expect(whileDetached.getSavedSyncToken()).resolves.toBe("before-keys");
+
+    store.setCryptoDurabilityFence(fence);
+    await store.flush();
+
+    expect(fence).toHaveBeenCalledTimes(1);
+    const afterReattach = await SqliteBackedMatrixSyncStore.create(storageRoot);
+    await expect(afterReattach.getSavedSyncToken()).resolves.toBe("with-keys");
+  });
+
+  it("still writes a cursor without to-device events while the crypto fence is detached", async () => {
+    const store = await SqliteBackedMatrixSyncStore.create(storageRoot);
+    store.setCryptoDurabilityFence(async () => {});
+    store.setCryptoDurabilityFence(null);
+
+    await store.setSyncData(createSyncResponse("no-keys"));
+    await store.flush();
+
+    const persisted = await SqliteBackedMatrixSyncStore.create(storageRoot);
+    await expect(persisted.getSavedSyncToken()).resolves.toBe("no-keys");
+  });
+
   it("coalesces background persistence until the debounce window elapses", async () => {
     vi.useFakeTimers();
 

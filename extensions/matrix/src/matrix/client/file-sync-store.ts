@@ -48,6 +48,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
   private dirty = false;
   private frozen = false;
   private cryptoDurabilityFence: (() => Promise<void>) | null = null;
+  private cryptoDurabilityRequired = false;
   private cryptoDurabilityPending = false;
   private persistTimer: NodeJS.Timeout | null = null;
   private persistPromise: Promise<void> | null = null;
@@ -167,10 +168,14 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
 
   /**
    * Registers the crypto-store persist that must succeed before a sync cursor
-   * that consumed to-device events is written. Pass null to detach it.
+   * that consumed to-device events is written. Passing null detaches the fence
+   * without lifting the requirement: such a cursor is then refused until a
+   * fence is registered again. A store that never had a fence belongs to a
+   * client without crypto state and writes its cursor unconditionally.
    */
   setCryptoDurabilityFence(fence: (() => Promise<void>) | null): void {
     this.cryptoDurabilityFence = fence;
+    this.cryptoDurabilityRequired ||= fence !== null;
   }
 
   markCleanShutdown(): void {
@@ -244,8 +249,14 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
     const cryptoDurabilityPending = this.cryptoDurabilityPending;
     this.cryptoDurabilityPending = false;
     try {
-      if (cryptoDurabilityPending) {
-        await this.cryptoDurabilityFence?.();
+      if (cryptoDurabilityPending && this.cryptoDurabilityRequired) {
+        const fence = this.cryptoDurabilityFence;
+        if (!fence) {
+          throw new Error(
+            "Matrix crypto durability fence is detached; refusing to persist a sync cursor that consumed to-device events",
+          );
+        }
+        await fence();
       }
       await writeMatrixSyncCacheStateToStore({
         storageRootDir: this.storageRootDir,

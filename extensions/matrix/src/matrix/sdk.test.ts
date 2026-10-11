@@ -33,10 +33,11 @@ import {
   makeDecryptedMessageEvent,
   makeMatrixEvent,
 } from "./sdk/event.test-support.js";
-import { clearAllIndexedDbState } from "./sdk/idb-persistence.test-helpers.js";
+import { clearAllIndexedDbState, seedDatabase } from "./sdk/idb-persistence.test-helpers.js";
 import { LogService } from "./sdk/logger.js";
 import {
   captureRecoveryCacheWrite,
+  holdIdbSnapshotPublication,
   holdRecoveryKeyPersistence,
   readStoredRecoveryKey,
   seedRecoveryKeyState,
@@ -793,6 +794,14 @@ describe("MatrixClient request hardening", () => {
       };
     }
 
+    async function seedCryptoDatabase(databasePrefix: string): Promise<void> {
+      await seedDatabase({
+        name: `${databasePrefix}::matrix-sdk-crypto`,
+        storeName: "sessions",
+        records: [{ key: "room-1", value: { session: "abc123" } }],
+      });
+    }
+
     it("persists crypto state before dispatching an encrypted to-device request only", async () => {
       const { client, databasePrefix, dispatch, fetchFn } =
         await startEncryptedClient("to-device-fence");
@@ -915,6 +924,182 @@ describe("MatrixClient request hardening", () => {
         databasesSpy.mockRestore();
         await client.stopWithoutPersist();
         await clearAllIndexedDbState({ databasePrefix });
+      }
+    });
+
+    it("does not start a crypto snapshot for a to-device request of a stopped generation", async () => {
+      const { client, databasePrefix, dispatch, fetchFn } = await startEncryptedClient(
+        "to-device-fence-stale-entry",
+      );
+      const databasesSpy = vi.spyOn(indexedDB, "databases");
+
+      try {
+        client.abortPendingRequests();
+
+        await expect(
+          fetchFn(ENCRYPTED_TO_DEVICE_URL, { method: "PUT", body: "{}" }),
+        ).rejects.toThrow();
+        expect(databasesSpy).not.toHaveBeenCalled();
+        expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        databasesSpy.mockRestore();
+        await client.stopWithoutPersist();
+        await clearAllIndexedDbState({ databasePrefix });
+      }
+    });
+
+    it("does not publish a crypto snapshot when the generation stops during the dump", async () => {
+      const { client, databasePrefix, dispatch, fetchFn, tempDir } = await startEncryptedClient(
+        "to-device-fence-stop-during-dump",
+      );
+      await seedCryptoDatabase(databasePrefix);
+      const dump = createDeferred<void>();
+      const listDatabases = indexedDB.databases.bind(indexedDB);
+      const databasesSpy = vi.spyOn(indexedDB, "databases").mockImplementation(async () => {
+        await dump.promise;
+        return await listDatabases();
+      });
+      let settled: Promise<unknown> | undefined;
+
+      try {
+        const pending = fetchFn(ENCRYPTED_TO_DEVICE_URL, { method: "PUT", body: "{}" });
+        settled = Promise.allSettled([pending]);
+        await vi.waitFor(() => {
+          expect(databasesSpy).toHaveBeenCalledTimes(1);
+        });
+
+        client.abortPendingRequests();
+        dump.resolve();
+
+        await expect(pending).rejects.toThrow(STOPPED_GENERATION);
+        expect(await readMatrixIdbSnapshotJson(tempDir)).toBeNull();
+        expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        dump.resolve();
+        await settled;
+        databasesSpy.mockRestore();
+        await client.stopWithoutPersist();
+        await clearAllIndexedDbState({ databasePrefix });
+      }
+    });
+
+    it("settles a generation stop only after a crypto snapshot that was already publishing", async () => {
+      const publication = holdIdbSnapshotPublication();
+      const { client, databasePrefix, dispatch, fetchFn, tempDir } = await startEncryptedClient(
+        "to-device-fence-stop-during-publish",
+        { stateRuntime: publication.stateRuntime },
+      );
+      await seedCryptoDatabase(databasePrefix);
+      let settled: Promise<unknown> | undefined;
+
+      try {
+        const pending = fetchFn(ENCRYPTED_TO_DEVICE_URL, { method: "PUT", body: "{}" });
+        settled = Promise.allSettled([pending]);
+        await publication.admitted.promise;
+
+        let stopped = false;
+        const stop = client.stopWithoutPersist().then(() => {
+          stopped = true;
+        });
+        await vi.waitFor(() => {
+          expect(matrixJsClient.stopClient).toHaveBeenCalledTimes(1);
+        });
+        for (let turn = 0; turn < 10; turn += 1) {
+          await setImmediate();
+        }
+        expect(stopped).toBe(false);
+        expect(await readMatrixIdbSnapshotJson(tempDir)).toBeNull();
+
+        publication.release.resolve();
+        await stop;
+
+        expect(await readMatrixIdbSnapshotJson(tempDir)).not.toBeNull();
+        await expect(pending).rejects.toThrow(STOPPED_GENERATION);
+        expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        publication.release.resolve();
+        await settled;
+        await client.stopWithoutPersist();
+        await clearAllIndexedDbState({ databasePrefix });
+      }
+    });
+
+    it("writes a pending to-device cursor on a clean stop, after the final crypto snapshot", async () => {
+      const storageRoot = tempDirs.make("matrix-cursor-fence-clean-stop-");
+      const syncStore = await SqliteBackedMatrixSyncStore.create(storageRoot);
+      const { client, databasePrefix } = await startEncryptedClient("cursor-fence-clean-stop", {
+        syncStore,
+      });
+      const cursorsSeenByCryptoPersist: Array<string | null> = [];
+      const listDatabases = indexedDB.databases.bind(indexedDB);
+      const databasesSpy = vi.spyOn(indexedDB, "databases").mockImplementation(async () => {
+        const durable = await SqliteBackedMatrixSyncStore.create(storageRoot);
+        cursorsSeenByCryptoPersist.push(await durable.getSavedSyncToken());
+        return await listDatabases();
+      });
+
+      try {
+        await syncStore.setSyncData(toDeviceSyncResponse("pending"));
+        await client.stopAndPersist();
+
+        // One final snapshot, taken while the cursor was still behind.
+        expect(cursorsSeenByCryptoPersist).toEqual([null]);
+        const persisted = await SqliteBackedMatrixSyncStore.create(storageRoot);
+        await expect(persisted.getSavedSyncToken()).resolves.toBe("pending");
+        expect(persisted.hasSavedSyncFromCleanShutdown()).toBe(true);
+      } finally {
+        databasesSpy.mockRestore();
+        await client.stopWithoutPersist();
+        await clearAllIndexedDbState({ databasePrefix });
+      }
+    });
+
+    it("refuses a pending to-device cursor after a stop without persist", async () => {
+      const storageRoot = tempDirs.make("matrix-cursor-fence-discard-stop-");
+      const syncStore = await SqliteBackedMatrixSyncStore.create(storageRoot);
+      const { client, databasePrefix } = await startEncryptedClient("cursor-fence-discard-stop", {
+        syncStore,
+      });
+      const databasesSpy = vi.spyOn(indexedDB, "databases");
+
+      try {
+        await syncStore.setSyncData(toDeviceSyncResponse("pending"));
+        await client.stopWithoutPersist();
+
+        // The discard already dropped the write; force one to reach the fence.
+        syncStore.markCleanShutdown();
+        await expect(syncStore.flush()).rejects.toThrow("crypto durability fence is detached");
+
+        expect(databasesSpy).not.toHaveBeenCalled();
+        const persisted = await SqliteBackedMatrixSyncStore.create(storageRoot);
+        await expect(persisted.getSavedSyncToken()).resolves.toBeNull();
+      } finally {
+        databasesSpy.mockRestore();
+        await clearAllIndexedDbState({ databasePrefix });
+      }
+    });
+
+    it("does not hold back a to-device cursor for a client without encryption", async () => {
+      const storageRoot = tempDirs.make("matrix-cursor-fence-unencrypted-");
+      const syncStore = await SqliteBackedMatrixSyncStore.create(storageRoot);
+      stubRuntimeFetch(vi.fn(async () => Response.json({})) as unknown as typeof fetch);
+      const client = new MatrixClient("http://127.0.0.1:8008", "token", {
+        syncStore,
+        ssrfPolicy: { allowPrivateNetwork: true },
+      });
+      await client.start();
+      const databasesSpy = vi.spyOn(indexedDB, "databases");
+
+      try {
+        await syncStore.setSyncData(toDeviceSyncResponse("unencrypted"));
+        await syncStore.flush();
+
+        expect(databasesSpy).not.toHaveBeenCalled();
+        const persisted = await SqliteBackedMatrixSyncStore.create(storageRoot);
+        await expect(persisted.getSavedSyncToken()).resolves.toBe("unencrypted");
+      } finally {
+        databasesSpy.mockRestore();
+        await client.stopWithoutPersist();
       }
     });
   });
