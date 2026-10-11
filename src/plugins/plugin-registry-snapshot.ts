@@ -15,6 +15,7 @@ import {
   isBundledPluginInsideDevSourceRoot,
   resolveOpenClawDevSourceRoot,
 } from "./dev-source-root.js";
+import { isConfiguredPluginPathDiagnosticCode } from "./discovery-availability.js";
 import { discoverConfiguredPluginLoadPaths, type PluginDiscoveryResult } from "./discovery.js";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
 import { safeFileSignature, safeHashFile } from "./installed-plugin-index-hash.js";
@@ -356,7 +357,7 @@ function requiresDerivedRegistryValidation(
     hasMissingInstalledPluginOwnerMetadata(index, env) ||
     index.diagnostics.some(
       ({ code, pluginId, source }) =>
-        (params.config !== undefined && code === "configured-plugin-path-unavailable") ||
+        (params.config !== undefined && isConfiguredPluginPathDiagnosticCode(code)) ||
         Boolean(pluginId && source && path.isAbsolute(source) && !fs.existsSync(source)),
     ) ||
     hasMismatchedBundledRoot() ||

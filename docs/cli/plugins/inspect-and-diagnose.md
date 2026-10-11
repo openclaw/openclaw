@@ -97,10 +97,11 @@ When that registry is missing or stale, Gateway startup validates current plugin
 
 Use `plugins registry` to inspect whether the persisted registry is present, current, or stale. Use `--refresh` to rebuild it from the persisted plugin index, config policy, and manifest/package metadata. This is a repair path, not a runtime activation path.
 
-Inspection revalidates warnings for unavailable configured plugin load paths against
-the current config. Removing the final path removes its warning from the inspected
-view; a missing path that remains configured still produces a warning. Inspection
-does not rewrite the persisted registry. Use `--refresh` to update that ledger.
+Inspection revalidates warnings for unavailable or unreadable configured plugin load
+paths against the current config, including permission errors and symbolic link
+loops. Removing the final path removes its warning from the inspected view; a path
+that remains configured and unavailable or unreadable still produces a warning.
+Inspection does not rewrite the persisted registry. Use `--refresh` to update that ledger.
 
 When persisted and derived plugin records differ, the command lists each differing plugin with both sources. JSON output returns the same rows in `differences`. Policy staleness reports `policy-changed` in `refreshReasons` and leaves `differences` empty because policy validation runs before record comparison; a policy refresh can still update enabled fields. A refresh rereads and verifies its persisted replacement before it reports success. If plugin package files keep changing during verification, stop those updates and run `openclaw plugins registry --refresh` again.
 
