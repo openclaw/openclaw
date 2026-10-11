@@ -5,6 +5,9 @@ import { acquireNativeOverlayOcclusion } from "../../lib/native-overlay-occlusio
 import { promoteToPopoverTopLayer } from "../menu-surface.ts";
 import {
   createInspectedNode,
+  createBrowserClient,
+  createBrowserPanelTestMetrics,
+  createBrowserPanelTestTab,
   createPointer,
   flushBrowserResponses,
   type BrowserRequestEnvelope,
@@ -20,6 +23,154 @@ import {
 const { controllerFixture, flushFrames, setHit } = setupNativeBrowserPanelTests();
 
 describe("native Browser panel ownership", () => {
+  it("keeps the new-tab button usable without Agent browser access", async () => {
+    const native = fakeNativeBrowser();
+    const panel = await mountSessionPanel("agent:main:native-only");
+    panel.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="New tab"]')!.click();
+    await flushBrowserResponses();
+    await panel.updateComplete;
+    const message = native.messages().find((candidate) => candidate.type === "open");
+    expect(message).toMatchObject({
+      type: "open",
+      url: "about:blank",
+      sessionKey: panel.sessionKey,
+    });
+    const input = panel.shadowRoot!.querySelector<HTMLInputElement>(".bp-url")!;
+    input.value = "https://mac.example.test/";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flushBrowserResponses();
+    expect(native.messages()).toContainEqual(
+      expect.objectContaining({ type: "navigate", url: input.value }),
+    );
+  });
+
+  it.each(["native", "remote", "native-retry", "native-pending"] as const)(
+    "opens the toolbar's new tab in the Agent profile from a selected %s tab",
+    async (selectedKind) => {
+      const sessionKey = "agent:main:new-tab";
+      const native = fakeNativeBrowser([
+        nativeTab("mac-one", "https://mac.example.test/", sessionKey),
+      ]);
+      const destination = "https://account.example.test/";
+      const opened = createDeferred();
+      const rejected = createDeferred();
+      const pendingNative = createDeferred<{ ok: true; tabId: string }>();
+      let rejectOpen = selectedKind === "native-retry";
+      const tabs = [createBrowserPanelTestTab("remote", "https://remote.example.test/", "Agent")];
+      const { client, request } = createBrowserClient(async (envelope) => {
+        if (envelope.path === "/tabs/open") {
+          if (rejectOpen) {
+            rejectOpen = false;
+            rejected.resolve();
+            throw new Error("Browser opening temporarily failed");
+          }
+          const tab = createBrowserPanelTestTab("new-tab", destination, "Account");
+          tabs.push(tab);
+          opened.resolve();
+          return tab;
+        }
+        if (envelope.path === "/tabs") {
+          return { running: true, tabs: [...tabs] };
+        }
+        if (envelope.path === "/screenshot") {
+          const tab = tabs.find((candidate) => candidate.tabId === envelope.body?.targetId)!;
+          return { path: "/fresh.png", targetId: tab.tabId, url: tab.url };
+        }
+        if (envelope.path === "/act") {
+          return createBrowserPanelTestMetrics(destination);
+        }
+        return { ok: true };
+      });
+      const panel = await mountSessionPanel(sessionKey);
+      panel.refreshOnPresentation = false;
+      panel.client = client;
+      panel.remoteAvailable = true;
+      await panel.updateComplete;
+      panel.handleToggleRequest(
+        new CustomEvent("openclaw:browser-panel-toggle", {
+          detail: {
+            open: true,
+            browserTab: { target: "host", profile: "imported", targetId: "remote" },
+          },
+        }),
+      );
+      await flushBrowserResponses();
+      await flushBrowserResponses();
+      await panel.updateComplete;
+      if (selectedKind !== "remote") {
+        const tab = [...panel.shadowRoot!.querySelectorAll<HTMLElement>('[role="tab"]')].find(
+          (candidate) => candidate.textContent?.includes("Example page"),
+        )!;
+        tab.click();
+        await flushBrowserResponses();
+        await panel.updateComplete;
+      }
+      if (selectedKind === "native-pending") {
+        native.postMessage.mockImplementationOnce(() => pendingNative.promise);
+        panel.handleToggleRequest(
+          new CustomEvent("openclaw:browser-panel-toggle", {
+            detail: { open: true, native: true, url: "https://mac.example.test/pending" },
+          }),
+        );
+      }
+      const nativeOpenCount = selectedKind === "native-pending" ? 1 : 0;
+      panel.shadowRoot!.querySelector<HTMLButtonElement>('button[aria-label="New tab"]')!.click();
+      await panel.updateComplete;
+      expect(native.messages().filter((message) => message.type === "open")).toHaveLength(
+        nativeOpenCount,
+      );
+      const input = panel.shadowRoot!.querySelector<HTMLInputElement>(".bp-url")!;
+      expect(input.value).toBe("");
+      input.value = destination;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      if (selectedKind === "native-retry") {
+        await rejected.promise;
+        await flushBrowserResponses();
+        await panel.updateComplete;
+        expect(panel.shadowRoot!.textContent).toContain("Browser opening temporarily failed");
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        await flushBrowserResponses();
+        expect(native.messages().filter((message) => message.type === "navigate")).toEqual([]);
+      }
+      await opened.promise;
+      await flushBrowserResponses();
+      await flushBrowserResponses();
+      await panel.updateComplete;
+      const openRequests = request.mock.calls
+        .map(([, envelope]) => envelope)
+        .filter((envelope) => (envelope as BrowserRequestEnvelope).path === "/tabs/open");
+      expect(openRequests).toHaveLength(selectedKind === "native-retry" ? 2 : 1);
+      for (const openRequest of openRequests) {
+        expect(openRequest).toMatchObject({
+          target: "host",
+          query: { profile: "imported" },
+          body: { url: destination },
+        });
+      }
+      expect(native.messages().filter((message) => message.type === "open")).toHaveLength(
+        nativeOpenCount,
+      );
+      expect(input.value).toBe(destination);
+      expect(panel.shadowRoot!.textContent).toContain("Account");
+      if (selectedKind === "native-pending") {
+        const message = native.messages().find((candidate) => candidate.type === "open");
+        if (message?.type !== "open") {
+          throw new Error("Expected the earlier native open request");
+        }
+        native.publish([
+          nativeTab("mac-one", "https://mac.example.test/", sessionKey),
+          nativeTab(message.tabId, message.url, sessionKey),
+        ]);
+        pendingNative.resolve({ ok: true, tabId: message.tabId });
+        await flushBrowserResponses();
+        await panel.updateComplete;
+        expect(input.value).toBe(destination);
+      }
+    },
+  );
+
   it("keeps tabs local when opening Browser in another chat session", async () => {
     fakeNativeBrowser();
     const first = await mountSessionPanel("agent:main:first");
