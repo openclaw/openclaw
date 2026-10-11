@@ -6,8 +6,8 @@ import {
 } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import type { PublicationSessionIdentity } from "./github-publication-availability.js";
+import { digestGitHubPublicationRequest } from "./github-publication-receipt.js";
 import {
-  digestGitHubPublicationRequest,
   ensureGitHubPublicationStore,
   insertGitHubPublicationRequest,
 } from "./github-publication-store.js";

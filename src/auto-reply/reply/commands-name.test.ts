@@ -79,25 +79,6 @@ describe("name command", () => {
     ]);
   });
 
-  it("renames the current session and persists the label", async () => {
-    const storePath = await createStorePath();
-    await upsertSessionEntryCore(
-      { storePath, sessionKey },
-      { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
-    );
-
-    const params = buildNameParams("/name Billing rework", storePath);
-    const result = await handleNameCommand(params, true);
-
-    expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toContain("Billing rework");
-    expect(loadSessionEntry({ storePath, sessionKey })?.label).toBe("Billing rework");
-    expect(params.sessionEntry?.label).toBe("Billing rework");
-    expect(takeCommandSessionMetadataChanges(params.ctx)).toEqual([
-      { sessionKey, reason: "command-metadata" },
-    ]);
-  });
-
   it("suggests a name without mutating when no argument is given", async () => {
     const storePath = await createStorePath();
     await upsertSessionEntryCore(

@@ -66,7 +66,7 @@ const attachmentPanelElement = {
   },
   loadModule: async () => {
     await import("../../styles/chat/sidebar.css");
-    await import("../chat/components/chat-detail-panel.ts");
+    await import("../chat/components/chat-detail-panel.tsx");
   },
 };
 

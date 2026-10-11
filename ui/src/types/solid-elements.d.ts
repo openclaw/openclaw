@@ -20,8 +20,6 @@ declare module "@solidjs/web" {
         "open-on-click"?: boolean;
         "auto-size"?: boolean;
       };
-      "openclaw-elapsed-time": HTMLAttributes<HTMLElementTagNameMap["openclaw-elapsed-time"]> &
-        Properties<HTMLElementTagNameMap["openclaw-elapsed-time"]>;
       "openclaw-viewer-facepile": HTMLAttributes<
         HTMLElementTagNameMap["openclaw-viewer-facepile"]
       > &
@@ -53,9 +51,12 @@ declare module "@solidjs/web" {
         };
       "wa-popover": LegacyAttributes<WaPopover> &
         Partial<Pick<WaPopover, "for" | "placement">> & {
+          distance?: number | `${number}`;
           "without-arrow"?: boolean;
           "onWa-show"?: (event: Event) => void;
+          "onWa-after-show"?: (event: Event) => void;
           "onWa-hide"?: (event: Event) => void;
+          "onWa-after-hide"?: (event: Event) => void;
         };
     }
     interface SVGAttributes<T> {

@@ -9,14 +9,14 @@ export function useApplication(): ApplicationContext {
   return useContext(ApplicationProvider);
 }
 
-/** Legacy hosts may stand alone or inherit the surrounding application. */
+/** Standalone leaves can render without application-owned capabilities. */
 export function useOptionalApplication(): ApplicationContext | undefined {
   try {
     return useApplication();
   } catch (error) {
-    if (error instanceof ContextNotFoundError) {
-      return undefined;
+    if (!(error instanceof ContextNotFoundError)) {
+      throw error;
     }
-    throw error;
+    return undefined;
   }
 }

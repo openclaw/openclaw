@@ -423,7 +423,7 @@ export function renderSessionProgressCard(
   composerDisclosureContext?: ComposerProgressDisclosureContext,
   refreshAction?: SessionProgressCardRefreshAction,
   onClearSaved?: (card: ProgressCard) => void,
-  headingMenu?: TemplateResult,
+  headingMenu?: TemplateResult | Node,
 ) {
   if (!card) {
     return nothing;

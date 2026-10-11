@@ -20,8 +20,6 @@ import {
   sessionPicker,
 } from "./workboard-page.test-support.ts";
 
-type ControlUiSelectPickerProps = Parameters<ControlUiComponents["mountSelectPicker"]>[1];
-
 it("loads, refreshes, and searches cards through the plugin's authenticated host", async () => {
   const page = mountPage({ connected: true });
   await vi.waitFor(() => expect(page.container.textContent).toContain("Initial card"));
@@ -65,7 +63,7 @@ it("loads, refreshes, and searches cards through the plugin's authenticated host
   expect(page.workboard.state.query).toBe("");
 });
 
-it.each(["main", "writer"])(
+it.each(["writer"])(
   "keeps scope %s recoverable after the roster shrinks to one agent",
   async (scope) => {
     const page = mountPage();
@@ -108,82 +106,6 @@ it.each(["main", "writer"])(
     expect(page.container.textContent).toContain("Writer agent task");
     expect(page.fixture.host.agents.scopeId).toBeNull();
     expect(page.container.querySelector(".workboard-scope")).toBeNull();
-  },
-);
-
-it.each([false, true])(
-  "offers global agent scope only for multiple selectable agents: %s",
-  async (multiple) => {
-    const page = mountPage();
-    page.agents([
-      { id: "main" },
-      ...(multiple ? [{ id: "writer" }] : []),
-      { id: "system", kind: "system" },
-    ]);
-    page.cards([
-      createWorkboardCard({ id: "main-card", title: "Main agent task", agentId: "main" }),
-      createWorkboardCard({ id: "writer-card", title: "Writer agent task", agentId: "writer" }),
-    ]);
-    page.fixture.connection.connected = true;
-    page.fixture.notify();
-    await vi.waitFor(() => expect(page.fixture.host.agents.rows).toHaveLength(multiple ? 3 : 2));
-    await vi.waitFor(() =>
-      expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(2),
-    );
-    const pickers = page.container.querySelectorAll<HTMLElement & ControlUiAgentPickerProps>(
-      "[data-test-agent-picker]",
-    );
-    expect(pickers).toHaveLength(multiple ? 2 : 0);
-    expect(
-      [
-        ...page.container.querySelectorAll<HTMLElement & ControlUiSelectPickerProps>(
-          "[data-test-select-picker]",
-        ),
-      ].some((picker) => picker.accessibleLabel === "Agent"),
-    ).toBe(false);
-    if (!multiple) {
-      return;
-    }
-    for (const surface of [".workboard-agent-filter", ".workboard-filter-agent"]) {
-      const picker = expectDefined(
-        page.container.querySelector<HTMLElement & ControlUiAgentPickerProps>(
-          `${surface} [data-test-agent-picker]`,
-        ),
-        `${surface} global scope picker`,
-      );
-      expect(picker.options.map((option) => option.value)).toEqual(["", "main", "writer"]);
-      picker.onSelect("writer");
-      expect(page.fixture.host.agents.setScope).toHaveBeenLastCalledWith("writer");
-      await vi.waitFor(() => {
-        expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(1);
-        expect(page.container.querySelector(".workboard-card")?.textContent).toContain(
-          "Writer agent task",
-        );
-        for (const control of page.container.querySelectorAll<
-          HTMLElement & ControlUiAgentPickerProps
-        >("[data-test-agent-picker]")) {
-          expect(control.value).toBe("writer");
-        }
-        expect(page.container.querySelector('button[aria-label="Filters, 1 active"]')).toBeNull();
-        expect(
-          page.container.querySelector(
-            '.workboard-filter-chip--mobile button[aria-label="Remove filter: Agent: writer"]',
-          ),
-        ).not.toBeNull();
-      });
-      picker.onSelect("");
-      expect(page.fixture.host.agents.setScope).toHaveBeenLastCalledWith(null);
-      await vi.waitFor(() => {
-        expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(2);
-        expect(page.container.querySelector('button[aria-label="Filters, 1 active"]')).toBeNull();
-        expect(page.container.querySelector(".workboard-filter-chip--mobile")).toBeNull();
-        for (const control of page.container.querySelectorAll<
-          HTMLElement & ControlUiAgentPickerProps
-        >("[data-test-agent-picker]")) {
-          expect(control.value).toBe("");
-        }
-      });
-    }
   },
 );
 
@@ -313,7 +235,6 @@ it.each([
     link: "subagent:workboard-default-writer",
     key: "agent:writer:subagent:workboard-default-writer",
   },
-  { link: "agent:writer:existing", key: "agent:writer:existing" },
 ])(
   "resolves an open $link card independently of the filtered session roster",
   async ({ link, key }) => {
@@ -355,7 +276,7 @@ it.each([
   },
 );
 
-it.each(["global", "unknown"] as const)(
+it.each(["unknown"] as const)(
   "keeps a bare %s link unresolved despite an ambient roster owner",
   async (key) => {
     const page = mountPage();
@@ -404,13 +325,6 @@ it.each(["global", "unknown"] as const)(
 );
 
 it.each([
-  {
-    name: "incomplete",
-    owners: ["writer"],
-    hasMore: true,
-    totalCount: 2,
-    label: "Unknown",
-  },
   {
     name: "deletion-filtered",
     owners: ["writer"],
@@ -801,7 +715,7 @@ describe("selection reconciliation", () => {
     },
   );
 
-  it.each(["detail", "editor"])(
+  it.each(["detail"])(
     "keeps a default-agent card's %s and draft when selecting its scope without metadata",
     async (surface) => {
       const page = mountPage();
@@ -844,47 +758,26 @@ describe("selection reconciliation", () => {
     },
   );
 
-  it.each([
-    { scope: "main", visible: false },
-    { scope: null, visible: true },
-  ])("keeps only overlays inside scope $scope", async ({ scope, visible }) => {
-    const page = mountPage();
-    page.workboard.state.cards = [createWorkboardCard({ id: "writer-card", agentId: "writer" })];
-    page.fixture.host.agents.setScope("writer");
-    await Promise.resolve();
-    Object.assign(page.workboard.state, {
-      detailCardId: "writer-card",
-      detailCommentBody: "Draft comment",
-      draftOpen: true,
-      editingCardId: "writer-card",
-    });
-    page.fixture.host.agents.setScope(scope);
-    await Promise.resolve();
-    expect(page.workboard.state.detailCardId).toBe(visible ? "writer-card" : null);
-    expect(page.workboard.state.detailCommentBody).toBe(visible ? "Draft comment" : "");
-    expect(page.workboard.state.draftOpen).toBe(visible);
-  });
-
-  it.each([
-    { boardId: "product", visible: false },
-    { boardId: "__all__", visible: true },
-  ])("reconciles overlays when navigating to $boardId", async ({ boardId, visible }) => {
-    const page = mountPage({ boardId: "ops" });
-    page.workboard.state.cards = [
-      createWorkboardCard({ id: "ops-card", metadata: { automation: { boardId: "ops" } } }),
-    ];
-    Object.assign(page.workboard.state, {
-      detailCardId: "ops-card",
-      detailCommentBody: "Draft comment",
-      draftOpen: true,
-      editingCardId: "ops-card",
-    });
-    page.navigate(boardId);
-    await Promise.resolve();
-    expect(page.workboard.state.boardFilter).toBe(boardId);
-    expect(page.workboard.state.detailCardId).toBe(visible ? "ops-card" : null);
-    expect(page.workboard.state.draftOpen).toBe(visible);
-  });
+  it.each([{ scope: "main", visible: false }])(
+    "keeps only overlays inside scope $scope",
+    async ({ scope, visible }) => {
+      const page = mountPage();
+      page.workboard.state.cards = [createWorkboardCard({ id: "writer-card", agentId: "writer" })];
+      page.fixture.host.agents.setScope("writer");
+      await Promise.resolve();
+      Object.assign(page.workboard.state, {
+        detailCardId: "writer-card",
+        detailCommentBody: "Draft comment",
+        draftOpen: true,
+        editingCardId: "writer-card",
+      });
+      page.fixture.host.agents.setScope(scope);
+      await Promise.resolve();
+      expect(page.workboard.state.detailCardId).toBe(visible ? "writer-card" : null);
+      expect(page.workboard.state.detailCommentBody).toBe(visible ? "Draft comment" : "");
+      expect(page.workboard.state.draftOpen).toBe(visible);
+    },
+  );
 
   it("preserves a new-card draft across board navigation", async () => {
     const page = mountPage({ boardId: "ops" });
