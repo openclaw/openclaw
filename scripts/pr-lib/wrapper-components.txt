@@ -761,6 +761,7 @@ src/gateway/worker-environments/placement-workspace-result.ts
 src/gateway/worker-environments/session-attachment.ts
 src/gateway/worker-environments/state.ts
 src/gateway/worker-environments/store-commit-authority.ts
+src/gateway/worker-environments/store-errors.ts
 src/gateway/worker-environments/store-native-publication.ts
 src/gateway/worker-environments/store-projection.ts
 src/gateway/worker-environments/store-validation.ts
@@ -928,6 +929,7 @@ src/infra/kysely-sync-cache-state.ts
 src/infra/kysely-sync.ts
 src/infra/lifecycle-write-custody.ts
 src/infra/lru-cache.ts
+src/infra/main-thread-stall.ts
 src/infra/map-size.ts
 src/infra/mutation-authority.ts
 src/infra/native-error-response-schema.ts
@@ -2013,3 +2015,6 @@ src/config/sessions/transcript-write-context.ts
 src/sessions/session-lifecycle-events.ts
 src/sessions/session-row-facts.ts
 src/state/openclaw-agent-worker-store.ts
+src/config/sessions/session-accessor.sqlite-entry-query.ts
+src/config/sessions/session-accessor.sqlite-provenance.ts
+src/config/sessions/session-accessor.sqlite-transcript-presence.ts

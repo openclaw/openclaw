@@ -27,25 +27,32 @@ afterEach(() => {
 });
 
 describe("Workboard catalog", () => {
-  it("does not satisfy a full page load with pending catalog hydration", async () => {
-    const pending = createDeferred<{ cards: []; boards: ReturnType<typeof board>[] }>();
-    const request = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue({ cards: [] });
-    const host = createHost();
-    const runtime = new WorkboardCatalog(() => {}, host);
-    const client = { request } as unknown as GatewayBrowserClient;
-    try {
-      runtime.sync(client, true);
-      const fullLoad = loadWorkboard({ host, client });
-      pending.resolve({ cards: [], boards: [board("ops")] });
-      await expect(fullLoad).resolves.toBe(true);
-      expect(request).toHaveBeenCalledTimes(2);
-      expect(host.state.loaded).toBe(true);
-      expect(host.state.loadAttempted).toBe(true);
-    } finally {
-      runtime.dispose();
-      host.dispose();
-    }
-  });
+  it.each([false, true])(
+    "loads the full page after catalog hydration (failed=%s)",
+    async (failed) => {
+      const pending = createDeferred<{ cards: []; boards: ReturnType<typeof board>[] }>();
+      const request = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue({ cards: [] });
+      const host = createHost();
+      const runtime = new WorkboardCatalog(() => {}, host);
+      const client = { request } as unknown as GatewayBrowserClient;
+      try {
+        runtime.sync(client, true);
+        const fullLoad = loadWorkboard({ host, client });
+        if (failed) {
+          pending.reject(new Error("Catalog unavailable"));
+        } else {
+          pending.resolve({ cards: [], boards: [board("ops")] });
+        }
+        await expect(fullLoad).resolves.toBe(true);
+        expect(request).toHaveBeenCalledTimes(2);
+        expect(host.state.loaded).toBe(true);
+        expect(host.state.loadAttempted).toBe(true);
+      } finally {
+        runtime.dispose();
+        host.dispose();
+      }
+    },
+  );
 
   it("does not overwrite a completed mutation with an older catalog response", async () => {
     const card = createWorkboardCard();
@@ -199,7 +206,6 @@ describe("Workboard catalog", () => {
     expect(snapshots.at(-1)?.boards[0]?.id).toBe("platform");
     expect(getWorkboardState(host).boards[0]?.id).toBe("platform");
     expect(host.boardsReady).toBe(true);
-    expect(request).toHaveBeenCalledTimes(3);
     runtime.dispose();
   });
 

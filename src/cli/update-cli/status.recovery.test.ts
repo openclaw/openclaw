@@ -13,6 +13,27 @@ const mocks = vi.hoisted(() => ({
   writeJson: vi.fn(),
 }));
 vi.mock("../../infra/update-run-reader.js", () => ({ getUpdateRunAsync: mocks.readRun }));
+// Windows resolves a pinned directory natively (8.3 short names, letter case),
+// so its canonical spelling can differ from the locator an older driver recorded.
+const pinSpelling = vi.hoisted(() => ({
+  canonical: undefined as ((p: string) => string) | undefined,
+}));
+vi.mock("../../infra/directory-durability.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/directory-durability.js")>();
+  return {
+    ...actual,
+    pinDirectory: async (...args: Parameters<typeof actual.pinDirectory>) => {
+      const pin = await actual.pinDirectory(...args);
+      const canonical = pinSpelling.canonical;
+      if (canonical) {
+        Object.defineProperty(pin, "receipt", {
+          value: { ...pin.receipt, realPath: canonical(pin.receipt.realPath) },
+        });
+      }
+      return pin;
+    },
+  };
+});
 vi.mock("../../commands/node-runtime-diagnostics.js", () => ({
   collectNodeRuntimeFindings: async () => [],
 }));
@@ -248,6 +269,38 @@ it("refuses baseline reuse after an interrupted linked seal", async () => {
   ).rejects.toThrow("incomplete publication");
   expect(await fs.readFile(partial, "utf8")).toBe(c.raw);
   expect(await fs.readFile(c.manifestPath, "utf8")).toBe(c.raw);
+});
+
+it("reuses an admitted capture whose native spelling differs and still refuses a linked capture", async () => {
+  const c = await capture();
+  const { readUpdateRecoveryBaselineIdentity } =
+    await import("../../infra/update-recovery-backup-reader.js");
+  const read = () =>
+    readUpdateRecoveryBaselineIdentity({
+      runId: c.manifest.runId,
+      env: process.env,
+      ref: {
+        directory: c.directory,
+        manifestPath: c.manifestPath,
+        manifestSha256: c.manifestSha256,
+      },
+      installRoot: c.manifest.installRoot,
+      readContinuation: () => undefined,
+      assertCurrent: () => {},
+    });
+  pinSpelling.canonical = (realPath) => realPath.toUpperCase();
+  try {
+    await expect(read()).resolves.toMatchObject({
+      ref: { directory: c.directory, manifestSha256: c.manifestSha256 },
+    });
+  } finally {
+    pinSpelling.canonical = undefined;
+  }
+  const moved = `${c.directory}-moved`;
+  await fs.rename(c.directory, moved);
+  await fs.symlink(moved, c.directory, "dir");
+  await expect(read()).rejects.toThrow("Original update capture is not a retained directory");
+  expect(await fs.readFile(path.join(moved, "manifest.json"), "utf8")).toBe(c.raw);
 });
 
 it.each([

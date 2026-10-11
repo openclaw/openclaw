@@ -9,6 +9,7 @@ import {
   ensureFlagCompatibility,
   mergePrimaryFallbackConfig,
   modelKey,
+  requireKnownModelProvider,
   resolveModelTarget,
   resolveModelRefsFromEntries,
   upsertCanonicalModelConfigEntry,
@@ -88,10 +89,18 @@ export async function changeFallbacksCommand(
   modelRaw: string,
   runtime: RuntimeEnv,
 ) {
+  let warning: string | undefined;
   const updated = await updateConfig(
     (cfg, context) => {
       const { runtimeConfig } = context;
       const resolved = resolveModelTarget({ raw: modelRaw, cfg: runtimeConfig });
+      if (params.action === "add") {
+        warning = requireKnownModelProvider(
+          runtimeConfig,
+          resolved,
+          context.providerRegistryAvailable,
+        ).warning;
+      }
       const nextModels = params.action === "add" ? { ...cfg.agents?.defaults?.models } : undefined;
       const targetKey = nextModels
         ? upsertCanonicalModelConfigEntry(nextModels, resolved, context)
@@ -126,6 +135,9 @@ export async function changeFallbacksCommand(
     ],
   );
 
+  if (warning) {
+    runtime.error?.(warning);
+  }
   logConfigUpdated(runtime);
   runtime.log(`${params.label}: ${getFallbacks(updated, params.key).join(", ")}`);
 }

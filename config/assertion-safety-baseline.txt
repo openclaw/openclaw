@@ -786,7 +786,7 @@ extensions/signal/src/client.ts	4
 extensions/signal/src/monitor/event-handler.ts	1
 extensions/signal/src/probe.ts	1
 extensions/signal/src/send.ts	1
-extensions/signal/src/signal-ingress.ts	2
+extensions/signal/src/signal-ingress.ts	1
 extensions/slack/src/accounts.ts	2
 extensions/slack/src/action-runtime.ts	1
 extensions/slack/src/actions.ts	3
@@ -2838,7 +2838,6 @@ ui/src/pages/plugin/route.ts	1
 ui/src/pages/portals/portal-reachability.ts	1
 ui/src/pages/profile/identity-section.ts	2
 ui/src/pages/secrets/view.ts	3
-ui/src/pages/sessions/view.ts	6
 ui/src/pages/skills/view.ts	2
 ui/src/pages/usage/view-details.ts	4
 ui/src/pages/usage/view-overview.ts	2
