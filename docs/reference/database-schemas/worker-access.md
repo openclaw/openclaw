@@ -66,6 +66,9 @@ in use; retaining the original descriptor prevents that inode from being reused
 for a replacement file. This descriptor holds identity custody; it is separate
 from SQLite's native connection descriptor.
 
+Synchronous admission exchanges carry the requested physical database's facts and
+custody, including a retained file whose original pathname now points elsewhere.
+
 Quarantine guards retain their indexed durable row lookup by target pathname.
 A separate inspection process can admit a file before the Gateway's verifier
 confirms corruption and records quarantine. The inspecting process must observe
@@ -485,7 +488,9 @@ unknown outcome nor a failed worker request selects a native fallback.
 Conversation binding V2 adapters require awaited operations and coherent inspection
 snapshots with current-source assertions. Expiring lookup/list operations remain
 writer operations. The account manager uses the same current-binding worker and
-receipt owner; external adapters certify their own source.
+receipt owner; external adapters certify their own source. Bundled Matrix activity
+writes update the affected key, publish only after commit, and retain their existing
+activity coalescing policy using acknowledged facts.
 
 Native harness ownership prepares through the awaited harness hook. Descriptive
 session rows retain exact keyed-state read dependencies through acceptance and

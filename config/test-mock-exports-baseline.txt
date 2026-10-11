@@ -1019,7 +1019,6 @@
 ["extensions/matrix/src/matrix/send.test.ts","openclaw/plugin-sdk/reply-chunking","16082a2be8a2a3a5c3ea1711e7d88b17105397403c5cb1b9c740f0f97c85f256",1]
 ["extensions/matrix/src/matrix/send/client.test.ts","../../runtime.js","83f2a426138843376dc981a55ba3b1726f3a494ff066f84eedea01329619d952",1]
 ["extensions/matrix/src/matrix/send/client.test.ts","../client.js","26262c2017e1be9ae9a27cad43e0ab134f7768cbeba43259824e403821df7aa6",1]
-["extensions/matrix/src/matrix/subagent-hooks.test.ts","./thread-bindings-shared.js","fc0602de36addf87a8c3297d2b577358e22c2cbe468437a233a337dfbd424590",1]
 ["extensions/matrix/src/matrix/subagent-hooks.test.ts","openclaw/plugin-sdk/conversation-binding-runtime","feee032d9398479eb85a1899e9af0b5ed96557d80d4a293c9ccfd5964dcd13ab",1]
 ["extensions/matrix/src/matrix/thread-bindings.test.ts","./send.js","c73c19586327e32834897b795b38b4f31bd43215b5594771a4dbdb08a0e6cea4",1]
 ["extensions/matrix/src/onboarding.resolve.test.ts","./resolve-targets.js","e35c844a4be6fb6a53f7c57a60d9c235bb4756e08ed07c8c2ee0416beec6e193",1]
