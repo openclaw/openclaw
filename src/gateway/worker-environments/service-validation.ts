@@ -9,6 +9,7 @@ import { validateProviderSettings } from "../../config/provider-settings.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import {
   WorkerProviderError,
+  type WorkerExecutionMode,
   type WorkerLease,
   type WorkerLeaseStatus,
   type WorkerProvider,
@@ -29,6 +30,20 @@ export function requireWorkerProfile(value: unknown): WorkerProfile {
   }
   // SAFETY: Validation accepts only bounded JSON objects and checks any secret references.
   return value as WorkerProfile;
+}
+
+export function readWorkerProfileSelection(snapshot: WorkerProfile): {
+  machineClass?: string;
+  os?: string;
+  executionMode?: WorkerExecutionMode;
+} {
+  return {
+    ...(typeof snapshot.machineClass === "string" ? { machineClass: snapshot.machineClass } : {}),
+    ...(typeof snapshot.os === "string" ? { os: snapshot.os } : {}),
+    ...(snapshot.executionMode === "worker-turn" || snapshot.executionMode === "remote-exec"
+      ? { executionMode: snapshot.executionMode }
+      : {}),
+  };
 }
 
 export function requireInheritedWorkerProfileAuthorization(

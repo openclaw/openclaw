@@ -35,7 +35,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
+import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.test-support.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
 import * as diskBudgetModule from "./disk-budget.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";

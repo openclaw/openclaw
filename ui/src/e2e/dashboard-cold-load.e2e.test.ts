@@ -101,10 +101,10 @@ suite.define(() => {
                 .evaluate((view) => view.closest("[data-region]")?.getAttribute("data-region")),
             )
             .toBe("main");
-          // Observe the browser cache owner's completed write before exercising reload.
+          // Transcript persistence is debounced separately from the sidebar write.
           await expect
             .poll(() =>
-              page.evaluate(async () => {
+              page.evaluate(async (expectedSessionKey) => {
                 if (
                   !Object.keys(localStorage).some((key) =>
                     key.startsWith("openclaw.control.bootRecord.v1:"),
@@ -124,15 +124,44 @@ suite.define(() => {
                   );
                   open.addEventListener("success", () => {
                     const db = open.result;
-                    const transaction = db.transaction("sidebarSnapshots", "readonly");
+                    const transaction = db.transaction(
+                      ["sidebarSnapshots", "snapshots"],
+                      "readonly",
+                    );
                     const request = transaction.objectStore("sidebarSnapshots").count();
+                    const snapshots = transaction.objectStore("snapshots").getAll();
                     transaction.addEventListener("complete", () => {
                       db.close();
-                      resolve(request.result > 0);
+                      const transcriptPersisted = snapshots.result.some((record: unknown) => {
+                        if (
+                          typeof record !== "object" ||
+                          record === null ||
+                          !("sessionKey" in record) ||
+                          typeof record.sessionKey !== "string" ||
+                          !record.sessionKey.endsWith(`\u0000${expectedSessionKey}`) ||
+                          !("snapshot" in record) ||
+                          typeof record.snapshot !== "object" ||
+                          record.snapshot === null ||
+                          !("messages" in record.snapshot) ||
+                          !Array.isArray(record.snapshot.messages)
+                        ) {
+                          return false;
+                        }
+                        return record.snapshot.messages.some(
+                          (message: unknown) =>
+                            typeof message === "object" &&
+                            message !== null &&
+                            "role" in message &&
+                            message.role === "assistant" &&
+                            "content" in message &&
+                            message.content === "Synthetic mission briefing.",
+                        );
+                      });
+                      resolve(request.result > 0 && transcriptPersisted);
                     });
                   });
                 });
-              }),
+              }, sessionKey),
             )
             .toBe(true);
           await page.addInitScript(() => {

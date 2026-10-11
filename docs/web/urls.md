@@ -251,7 +251,9 @@ was denied. Without JavaScript, the generic unavailable page remains readable.
 Token/password operators with a saved credential for this Gateway automatically
 continue into the Control UI when reopening, reloading, or following a chat link.
 The browser uses its session token or paired-device credential; passwords remain
-in memory only. This also works on loopback HTTP, which permits public readers.
+in memory only. This also works on loopback HTTP, which permits public readers. Chat links remain
+reloadable during Gateway updates; the temporary recovery marker is removed when
+the app starts.
 In trusted-proxy deployments, browsers controlled by the installed Control UI service worker request the
 protected session-entry app document directly when reopening a chat deep link,
 without first loading the public reader or probing access. Registration is only

@@ -69,7 +69,7 @@ const PROGRESS_MARKDOWN_CACHE_LIMIT = 16;
 const PROGRESS_MARKDOWN_CACHE_MAX_CHARS = 140_000;
 const progressMarkdownCache = new Map<string, string>();
 
-function sanitizedProgressMarkdown(markdown: string): string {
+export function sanitizedProgressMarkdown(markdown: string): string {
   if (markdown.length > PROGRESS_MARKDOWN_CACHE_MAX_CHARS) {
     return toSanitizedMarkdownHtml(markdown, { progressBars: true });
   }
@@ -221,7 +221,7 @@ function progressStepMarker(status: PresentedProgressStepStatus, sessionStatus?:
   return status satisfies never;
 }
 
-function promoteFirstProgressBar(sanitizedHtml: string): string {
+export function promoteFirstProgressBar(sanitizedHtml: string): string {
   const template = document.createElement("template");
   template.innerHTML = sanitizedHtml;
   const progress = template.content.querySelector("progress");
@@ -256,7 +256,7 @@ function promoteFirstProgressBar(sanitizedHtml: string): string {
   return template.innerHTML;
 }
 
-export function renderProgressCardMarkdown(
+function renderProgressCardMarkdown(
   markdown: string | undefined,
   options: { promoteProgress?: boolean } = {},
 ) {
@@ -332,23 +332,13 @@ function renderProgressCardAction(
   </button>`;
 }
 
-export function renderSessionProgressCard(
-  card: ProgressCard | null | undefined,
-  placement: SessionProgressCardPlacement,
-  onDismiss?: (card: ProgressCard) => void,
+function progressCardPresentation(
+  card: ProgressCard,
   sessionStatus?: SessionRunStatus,
   startedAt?: number,
   endedAt?: number,
   hasActiveRun = true,
-  collapseComposerByDefault = false,
-  composerDisclosureContext?: ComposerProgressDisclosureContext,
-  refreshAction?: SessionProgressCardRefreshAction,
-  onClearSaved?: (card: ProgressCard) => void,
-  headingMenu?: TemplateResult | Node,
 ) {
-  if (!card) {
-    return nothing;
-  }
   const counts = progressCounts(card);
   const countLabel = counts
     ? t("sessionProgressCard.countLabel", {
@@ -388,21 +378,72 @@ export function renderSessionProgressCard(
   const activityKey = terminalTimestamp
     ? (`sessionProgressCard.activity.${TERMINAL_RUN_OUTCOMES[sessionStatus!]!}` as const)
     : "sessionProgressCard.activity.updated";
+  const steps = card.steps ?? [];
+  const currentStep = currentProgressStep(steps);
+  const currentPosition = Math.max(1, currentStep ? steps.indexOf(currentStep) + 1 : 0);
+  const complete = steps.length > 0 && steps.every((step) => step.status === "completed");
+  const stepLabel = currentStep?.step ?? t("sessionProgressCard.noteLabel");
+  const terminalOutcome = effectiveSessionStatus
+    ? TERMINAL_RUN_OUTCOMES[effectiveSessionStatus]
+    : undefined;
+  const outcomeLabel = terminalOutcome ? t(`sessionProgressCard.outcome.${terminalOutcome}`) : null;
+  const presentedCurrentStatus: PresentedProgressStepStatus | undefined =
+    currentStep?.status === "in_progress" && !hasCurrentRunActivity && !terminalOutcome
+      ? "paused"
+      : currentStep?.status;
+  return {
+    counts,
+    countLabel,
+    hasCurrentRunActivity,
+    effectiveSessionStatus,
+    activityTimestamp,
+    activityKey,
+    currentStep,
+    currentPosition,
+    complete,
+    stepLabel,
+    terminalOutcome,
+    outcomeLabel,
+    presentedCurrentStatus,
+  };
+}
+
+export function renderSessionProgressCard(
+  card: ProgressCard | null | undefined,
+  placement: SessionProgressCardPlacement,
+  onDismiss?: (card: ProgressCard) => void,
+  sessionStatus?: SessionRunStatus,
+  startedAt?: number,
+  endedAt?: number,
+  hasActiveRun = true,
+  collapseComposerByDefault = false,
+  composerDisclosureContext?: ComposerProgressDisclosureContext,
+  refreshAction?: SessionProgressCardRefreshAction,
+  onClearSaved?: (card: ProgressCard) => void,
+  headingMenu?: TemplateResult | Node,
+) {
+  if (!card) {
+    return nothing;
+  }
+  const {
+    counts,
+    countLabel,
+    hasCurrentRunActivity,
+    effectiveSessionStatus,
+    activityTimestamp,
+    activityKey,
+    currentStep,
+    currentPosition,
+    complete,
+    stepLabel,
+    terminalOutcome,
+    outcomeLabel,
+    presentedCurrentStatus,
+  } = progressCardPresentation(card, sessionStatus, startedAt, endedAt, hasActiveRun);
   const lastActivity = progressActivityTime(activityTimestamp, activityKey);
   const dismiss = renderProgressCardAction(card, "dismiss", onDismiss);
   const clearSaved = renderProgressCardAction(card, "clear-saved", onClearSaved);
   if (placement === "composer" || placement === "details") {
-    const steps = card.steps ?? [];
-    const currentStep = currentProgressStep(steps);
-    const currentPosition = Math.max(1, currentStep ? steps.indexOf(currentStep) + 1 : 0);
-    const complete = steps.length > 0 && steps.every((step) => step.status === "completed");
-    const stepLabel = currentStep?.step ?? t("sessionProgressCard.noteLabel");
-    const terminalOutcome = effectiveSessionStatus
-      ? TERMINAL_RUN_OUTCOMES[effectiveSessionStatus]
-      : undefined;
-    const outcomeLabel = terminalOutcome
-      ? t(`sessionProgressCard.outcome.${terminalOutcome}`)
-      : null;
     const summaryLabel = `${stepLabel}. ${outcomeLabel ?? countLabel}`;
     const shortCount = counts
       ? t("sessionProgressCard.shortCount", {
@@ -410,10 +451,6 @@ export function renderSessionProgressCard(
           total: String(counts.total),
         })
       : nothing;
-    const presentedCurrentStatus =
-      currentStep?.status === "in_progress" && !hasCurrentRunActivity && !terminalOutcome
-        ? "paused"
-        : currentStep?.status;
     const summaryIndicator = terminalOutcome
       ? terminalOutcome === "completed"
         ? icons.check
