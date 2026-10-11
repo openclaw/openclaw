@@ -90,7 +90,8 @@ onboarding installs the Gateway with Bun and records its exact runtime path.
 `--no-onboard` does not create a service on a fresh installation.
 
 With an existing fork executable, add `--bun-path /absolute/path/to/bun` or set
-`OPENCLAW_BUN_PATH`. Published versions require the exact pinned executable;
+`OPENCLAW_BUN_PATH`. Its filename must be `bun` or `bun.exe` (case-insensitive) so
+Gateway services can pin it. Published versions require the exact pinned executable;
 custom package specs also require `--bun-path` and are checked against the
 installed package's pin before running the CLI. Stock Bun, git-checkout builds,
 Windows, and musl/Alpine are unsupported by this installer path.

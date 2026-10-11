@@ -73,7 +73,7 @@ export const PLUGIN_COMPAT_RECORDS = [
       "getPluginRuntimeGatewayRequestScope().context",
     ],
     diagnostics: [
-      "TypeScript @deprecated annotations and migration documentation; placement retirement and restart clearing warn once per plugin and capability family on legacy use",
+      "TypeScript @deprecated annotations and migration documentation; placement reads, retirement, and restart clearing warn once per plugin and capability family on legacy use, while GitHub orphan deferral shares the github-publication family warning",
     ],
     tests: [
       "src/plugin-sdk/gateway-placement-compat.test.ts",

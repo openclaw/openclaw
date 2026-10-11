@@ -40,7 +40,7 @@ export function ToolOutcomeSummary(props: ToolOutcomeSummaryProps) {
 }
 
 type ReviewOutcome = ReturnType<typeof resolveToolApprovalReviewOutcome>;
-export function ToolReviewOutcome(props: { outcome: ReviewOutcome; reviewer?: string }) {
+function ToolReviewOutcome(props: { outcome: ReviewOutcome; reviewer?: string }) {
   return (
     <Show when={props.outcome}>
       <span
@@ -65,7 +65,7 @@ export function ToolReviewOutcome(props: { outcome: ReviewOutcome; reviewer?: st
   );
 }
 
-export const ToolOutcomeSummaryHost = defineSolidBridge<ToolOutcomeSummaryProps>(
+defineSolidBridge<ToolOutcomeSummaryProps>(
   "openclaw-chat-tool-outcome-summary",
   (props) => (
     <ToolOutcomeSummary
@@ -82,7 +82,7 @@ export const ToolOutcomeSummaryHost = defineSolidBridge<ToolOutcomeSummaryProps>
     },
   },
 );
-export const ToolReviewOutcomeHost = defineSolidBridge<{
+defineSolidBridge<{
   outcome: ReviewOutcome;
   reviewer: string;
 }>(

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { isIncognitoSessionKey } from "../../../src/shared/incognito-session-key.js";
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
-import { bootRosterSchema } from "../lib/sessions/session-boot-roster.ts";
+import { bootRosterSchema } from "../lib/sessions/session-boot-roster-schema.ts";
 
 const text = z.string();
 const optionalText = text.optional();

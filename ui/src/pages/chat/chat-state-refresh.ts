@@ -131,6 +131,7 @@ export function applyChatAgentOwnerTransition(
   retireChatModelSelectionOwnership(host);
   host.assistantIdentityRequestVersion += 1;
   host.assistantAgentId = selectedAgentId;
+  host.chatSessionApprovalQueue = [];
   host.assistantName = "";
   host.assistantAvatar = null;
   host.assistantAvatarStatus = null;
@@ -366,10 +367,6 @@ function refreshChatSessionFacts(host: ChatPageHost, binding: ChatMetadataBindin
       const outcome = reconcile(result.session ?? undefined);
       if (!binding.isCurrent() || binding.version !== version) {
         return;
-      }
-      if (outcome.status === "invalidated") {
-        binding.sessionFactsInvalidated = true;
-        binding.sessionFactsRequest = undefined;
       }
       if (outcome.status === "current" && host.sessionsResult) {
         host.sessionsResult = {

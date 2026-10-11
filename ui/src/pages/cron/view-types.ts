@@ -87,6 +87,7 @@ export type CronProps = {
   onJobsFiltersReset: () => void | Promise<void>;
   onLoadMoreRuns: () => void;
   onRunsFiltersChange: (patch: {
+    cronRunsRunId?: string | null;
     cronRunsStatuses?: CronRunsStatusValue[];
     cronRunsDeliveryStatuses?: CronDeliveryStatus[];
     cronRunsQuery?: string;
