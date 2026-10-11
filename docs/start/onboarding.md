@@ -167,7 +167,7 @@ so another provider can opt in without adding provider-specific macOS code.
 
 The manual key/token picker uses the same provider registry. In every route,
 the provider supplies its starter model and configuration. If the starter is an
-alias, OpenClaw tests and saves the provider's canonical model name while
+alias, OpenClaw tests and saves the provider's full model name while
 preserving existing model settings that the starter does not replace.
 A replacement credential stays inactive until you accept **Activate this saved
 sign-in?** after verification. Declining keeps your current connection and the

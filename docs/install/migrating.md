@@ -122,7 +122,7 @@ awk -F= '/^(TELEGRAM_BOT_TOKEN|DISCORD_BOT_TOKEN)=/ { print $1 "=present" }' ~/.
   </Accordion>
 
   <Accordion title="Permissions and ownership">
-    If you copied as root or switched users, the gateway may fail to read credentials. Ensure the state directory and workspace are owned by the user running the gateway.
+    If you copied as root or switched users, the gateway may fail to read credentials. Check that the state directory and workspace are owned by the user running the gateway.
   </Accordion>
 
   <Accordion title="Remote mode">

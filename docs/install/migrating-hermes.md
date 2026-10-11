@@ -137,7 +137,7 @@ Rerun with `--overwrite` only when replacing the existing target is intentional.
 
 Conflicts are unusual on a fresh install. They typically show up when you re-run the import against a setup that already has user edits.
 
-If a conflict surfaces mid-apply (for example, an unexpected race on a config file), that item is reported as a conflict while independent files, skills, credentials, archives, and config entries continue. Resolve the conflicted item and rerun the import; identical memory imports are idempotent.
+If a conflict surfaces mid-apply (for example, an unexpected race on a config file), that item is reported as a conflict while independent files, skills, credentials, archives, and config entries continue. Resolve the conflicted item and rerun the import; repeating an identical memory import does not create duplicates.
 
 ## Secrets
 

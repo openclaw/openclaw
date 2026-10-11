@@ -127,7 +127,7 @@ TimeoutStartSec=90
 If you deliberately installed a system unit instead, edit it via
 `sudo systemctl edit openclaw-gateway.service`.
 
-For the canonical managed unit body and its restart policy, see the [Gateway runbook](/gateway).
+For the standard managed unit definition and its restart policy, see the [Gateway runbook](/gateway).
 
 For Linux OOM behavior, child process victim selection, and `exit 137`
 diagnostics, see [Linux memory pressure and OOM kills](/platforms/linux#memory-pressure-and-oom-kills).
