@@ -86,6 +86,10 @@ export function observeScrollState(
         resizeObserver?.unobserve(element);
         element.removeEventListener("scroll", onScroll);
         cancelLayout(element);
+        if (observations.size === 0) {
+          resizeObserver?.disconnect();
+          resizeObserver = undefined;
+        }
       }
     },
   };
