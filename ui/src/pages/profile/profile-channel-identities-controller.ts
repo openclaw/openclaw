@@ -1,6 +1,3 @@
-import { consume } from "@lit/context";
-import { html, nothing, type PropertyValues } from "lit";
-import { property, state } from "lit/decorators.js";
 import type {
   UsersLinkChannelIdentityResult,
   UsersListChannelIdentitiesResult,
@@ -8,23 +5,9 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
-import {
-  renderSettingsEmpty,
-  renderSettingsLoadingSkeleton,
-  renderSettingsRow,
-  renderSettingsSection,
-} from "../../components/settings-ui.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
-import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
-
-registerProfileEnglish();
 
 type UserChannelIdentityLink = UsersListChannelIdentitiesResult["links"][number];
 type UserChannelIdentity = UserChannelIdentityLink["identity"];
@@ -34,7 +17,6 @@ type ChannelIdentityMutation = {
   identity: UserChannelIdentity;
 };
 
-/** Shared synchronously by ProfilePage and this section to retire stale async results. */
 export type ProfileChannelIdentityGenerations = {
   request: number;
   target: number;
@@ -44,6 +26,16 @@ export type ProfileChannelIdentityBusyState = Readonly<{
   loading: boolean;
   mutation: boolean;
 }>;
+
+export type ProfileChannelIdentityInputs = {
+  profileId: string | null;
+  visible: boolean;
+  profileReady: boolean;
+  identityBusy: boolean;
+  identityGeneration: number;
+  targetGeneration: number;
+  generations: ProfileChannelIdentityGenerations | null;
+};
 
 function sameChannelIdentity(left: UserChannelIdentity, right: UserChannelIdentity): boolean {
   return (
@@ -67,27 +59,23 @@ function sameConnectionScopes(
   );
 }
 
-/** Channel account links are an operator-admin control on the existing Profile screen. */
-export class ProfileChannelIdentities extends OpenClawLightDomContentsElement {
-  @consume({ context: applicationContext, subscribe: false })
-  private context!: ApplicationContext;
+export class ProfileChannelIdentitiesController {
+  profileId: string | null = null;
+  visible = false;
+  profileReady = false;
+  identityBusy = false;
+  identityGeneration = 0;
+  targetGeneration = 0;
+  generations: ProfileChannelIdentityGenerations | null = null;
 
-  @property({ attribute: false }) profileId: string | null = null;
-  @property({ attribute: false }) visible = false;
-  @property({ attribute: false }) profileReady = false;
-  @property({ attribute: false }) identityBusy = false;
-  @property({ attribute: false }) identityGeneration = 0;
-  @property({ attribute: false }) targetGeneration = 0;
-  @property({ attribute: false }) generations: ProfileChannelIdentityGenerations | null = null;
-
-  @state() private links: UserChannelIdentityLink[] | null = null;
-  @state() private loading = false;
-  @state() private error: string | null = null;
-  @state() private status: string | null = null;
-  @state() private mutation: ChannelIdentityMutation | null = null;
-  @state() private channelId = "";
-  @state() private accountId = "";
-  @state() private senderId = "";
+  links: UserChannelIdentityLink[] | null = null;
+  loading = false;
+  error: string | null = null;
+  status: string | null = null;
+  mutation: ChannelIdentityMutation | null = null;
+  channelId = "";
+  accountId = "";
+  senderId = "";
 
   private client: GatewayBrowserClient | null = null;
   private connected = false;
@@ -101,82 +89,14 @@ export class ProfileChannelIdentities extends OpenClawLightDomContentsElement {
   private boundProfileReady = false;
   private listRequestId = 0;
   private mutationId = 0;
-  private unsubscribe: (() => void) | null = null;
-  private lastReportedBusy: string | null = null;
 
-  override connectedCallback() {
-    super.connectedCallback();
-    this.unsubscribe = this.context.gateway.subscribe((snapshot) => this.applySnapshot(snapshot));
-    this.applySnapshot(this.context.gateway.snapshot);
-  }
+  constructor(private readonly notify: () => void) {}
 
-  override disconnectedCallback() {
-    this.unsubscribe?.();
-    this.unsubscribe = null;
-    this.listRequestId += 1;
-    this.mutationId += 1;
-    this.client = null;
-    this.connected = false;
-    this.canManage = false;
-    this.scopes = null;
-    this.links = null;
-    this.loading = false;
-    this.error = null;
-    this.status = null;
-    this.mutation = null;
-    this.channelId = "";
-    this.accountId = "";
-    this.senderId = "";
-    this.lastReportedBusy = null;
-    super.disconnectedCallback();
-  }
-
-  protected override willUpdate(changed: PropertyValues) {
-    if (
-      changed.has("profileId") ||
-      changed.has("visible") ||
-      changed.has("profileReady") ||
-      changed.has("identityBusy") ||
-      changed.has("identityGeneration") ||
-      changed.has("targetGeneration") ||
-      changed.has("generations")
-    ) {
-      this.applySnapshot(this.context.gateway.snapshot);
-    }
-  }
-
-  protected override updated() {
-    const busyState = this.busyState;
-    const key = `${busyState.loading}:${busyState.mutation}`;
-    if (key === this.lastReportedBusy) {
-      return;
-    }
-    this.lastReportedBusy = key;
-    this.dispatchEvent(
-      new CustomEvent<ProfileChannelIdentityBusyState>("profile-channel-identities-busy-changed", {
-        detail: busyState,
-        bubbles: true,
-        composed: true,
-      }),
-    );
-  }
-
-  private get busyState(): ProfileChannelIdentityBusyState {
+  get busyState(): ProfileChannelIdentityBusyState {
     return { loading: this.loading, mutation: this.mutation !== null };
   }
 
-  private get hasAdminGrant() {
-    return this.connected && this.scopes?.includes("operator.admin") === true;
-  }
-
-  private get parentGenerationCurrent() {
-    return (
-      this.generations?.request === this.identityGeneration &&
-      this.generations?.target === this.targetGeneration
-    );
-  }
-
-  private get canManageChannelIdentities() {
+  get canManageChannelIdentities() {
     return (
       this.visible &&
       this.client !== null &&
@@ -186,7 +106,36 @@ export class ProfileChannelIdentities extends OpenClawLightDomContentsElement {
     );
   }
 
-  private applySnapshot(snapshot: ApplicationGatewaySnapshot) {
+  get busy() {
+    return this.loading || this.mutation !== null || this.identityBusy;
+  }
+
+  get formDisabled() {
+    return this.busy || this.links === null;
+  }
+
+  isRemoving(link: UserChannelIdentityLink) {
+    return (
+      this.mutation?.kind === "unlink" && sameChannelIdentity(this.mutation.identity, link.identity)
+    );
+  }
+
+  setDraft(field: "channelId" | "accountId" | "senderId", value: string) {
+    this[field] = value;
+    this.notify();
+  }
+
+  update(inputs: ProfileChannelIdentityInputs, snapshot: ApplicationGatewaySnapshot) {
+    const visibleChanged = this.visible !== inputs.visible;
+    const identityBusyChanged = this.identityBusy !== inputs.identityBusy;
+    this.profileId = inputs.profileId;
+    this.visible = inputs.visible;
+    this.profileReady = inputs.profileReady;
+    this.identityBusy = inputs.identityBusy;
+    this.identityGeneration = inputs.identityGeneration;
+    this.targetGeneration = inputs.targetGeneration;
+    this.generations = inputs.generations;
+
     const nextConnected = snapshot.phase === "connected" && snapshot.client !== null;
     const nextClient = nextConnected ? snapshot.client : null;
     const nextScopes = nextConnected ? (snapshot.hello?.auth?.scopes ?? null) : null;
@@ -212,6 +161,9 @@ export class ProfileChannelIdentities extends OpenClawLightDomContentsElement {
     this.scopes = nextScopes ? [...nextScopes] : nextScopes;
 
     if (!targetChanged && !requestChanged && !grantChanged && !profileReadyChanged) {
+      if (visibleChanged || identityBusyChanged) {
+        this.notify();
+      }
       return;
     }
     this.boundProfileId = this.profileId;
@@ -234,9 +186,38 @@ export class ProfileChannelIdentities extends OpenClawLightDomContentsElement {
       this.senderId = "";
     }
 
+    this.notify();
     if (this.canReadCurrentProfile() && !this.mutation) {
       void this.loadLinks();
     }
+  }
+
+  dispose() {
+    this.listRequestId += 1;
+    this.mutationId += 1;
+    this.client = null;
+    this.connected = false;
+    this.canManage = false;
+    this.scopes = null;
+    this.links = null;
+    this.loading = false;
+    this.error = null;
+    this.status = null;
+    this.mutation = null;
+    this.channelId = "";
+    this.accountId = "";
+    this.senderId = "";
+  }
+
+  private get hasAdminGrant() {
+    return this.connected && this.scopes?.includes("operator.admin") === true;
+  }
+
+  private get parentGenerationCurrent() {
+    return (
+      this.generations?.request === this.identityGeneration &&
+      this.generations?.target === this.targetGeneration
+    );
   }
 
   private canReadCurrentProfile() {
@@ -258,7 +239,7 @@ export class ProfileChannelIdentities extends OpenClawLightDomContentsElement {
     );
   }
 
-  private async loadLinks() {
+  async loadLinks() {
     const client = this.client;
     const profileId = this.profileId;
     if (!client || !profileId || !this.canReadCurrentProfile() || this.mutation) {
@@ -270,6 +251,7 @@ export class ProfileChannelIdentities extends OpenClawLightDomContentsElement {
     this.loading = true;
     this.error = null;
     this.status = null;
+    this.notify();
     try {
       const result = await client.request<UsersListChannelIdentitiesResult>(
         "users.listChannelIdentities",
@@ -282,12 +264,14 @@ export class ProfileChannelIdentities extends OpenClawLightDomContentsElement {
         return;
       }
       this.links = result.links.filter((link) => link.profileId === profileId);
+      this.notify();
     } catch (error) {
       if (
         requestId === this.listRequestId &&
         this.isCurrentTarget(client, profileId, identityGeneration, targetGeneration)
       ) {
         this.error = formatUiError(error, t("profilePage.channelIdentities.loadFailed"));
+        this.notify();
       }
     } finally {
       if (
@@ -295,11 +279,12 @@ export class ProfileChannelIdentities extends OpenClawLightDomContentsElement {
         this.isCurrentTarget(client, profileId, identityGeneration, targetGeneration)
       ) {
         this.loading = false;
+        this.notify();
       }
     }
   }
 
-  private async linkIdentity() {
+  async linkIdentity() {
     const client = this.client;
     const profileId = this.profileId;
     const identity: UserChannelIdentity = {
@@ -328,6 +313,7 @@ export class ProfileChannelIdentities extends OpenClawLightDomContentsElement {
     this.mutation = { kind: "link", profileId, identity };
     this.error = null;
     this.status = null;
+    this.notify();
     try {
       const result = await client.request<UsersLinkChannelIdentityResult>(
         "users.linkChannelIdentity",
@@ -350,12 +336,14 @@ export class ProfileChannelIdentities extends OpenClawLightDomContentsElement {
       this.accountId = "";
       this.senderId = "";
       this.status = t("profilePage.channelIdentities.linked");
+      this.notify();
     } catch (error) {
       if (
         mutationId === this.mutationId &&
         this.isCurrentTarget(client, profileId, identityGeneration, targetGeneration)
       ) {
         this.error = formatUiError(error, t("profilePage.channelIdentities.linkFailed"));
+        this.notify();
       }
     } finally {
       if (mutationId === this.mutationId && client === this.client) {
@@ -366,11 +354,12 @@ export class ProfileChannelIdentities extends OpenClawLightDomContentsElement {
         ) {
           void this.loadLinks();
         }
+        this.notify();
       }
     }
   }
 
-  private async unlinkIdentity(link: UserChannelIdentityLink) {
+  async unlinkIdentity(link: UserChannelIdentityLink) {
     const client = this.client;
     const profileId = this.profileId;
     if (
@@ -391,6 +380,7 @@ export class ProfileChannelIdentities extends OpenClawLightDomContentsElement {
     this.mutation = { kind: "unlink", profileId, identity: link.identity };
     this.error = null;
     this.status = null;
+    this.notify();
     try {
       await client.request<UsersUnlinkChannelIdentityResult>("users.unlinkChannelIdentity", {
         profileId,
@@ -406,12 +396,14 @@ export class ProfileChannelIdentities extends OpenClawLightDomContentsElement {
         (candidate) => !sameChannelIdentity(candidate.identity, link.identity),
       );
       this.status = t("profilePage.channelIdentities.unlinked");
+      this.notify();
     } catch (error) {
       if (
         mutationId === this.mutationId &&
         this.isCurrentTarget(client, profileId, identityGeneration, targetGeneration)
       ) {
         this.error = formatUiError(error, t("profilePage.channelIdentities.unlinkFailed"));
+        this.notify();
       }
     } finally {
       if (mutationId === this.mutationId && client === this.client) {
@@ -422,140 +414,8 @@ export class ProfileChannelIdentities extends OpenClawLightDomContentsElement {
         ) {
           void this.loadLinks();
         }
+        this.notify();
       }
     }
   }
-
-  private renderLinks(busy: boolean) {
-    if (this.links === null) {
-      return nothing;
-    }
-    if (this.links.length === 0) {
-      return renderSettingsEmpty(t("profilePage.channelIdentities.empty"));
-    }
-    return this.links.map((link) =>
-      renderSettingsRow({
-        title: html`<code>${link.identity.channelId}</code>`,
-        description: html`
-          ${t("profilePage.channelIdentities.accountId")}:
-          <code>${link.identity.accountId}</code> · ${t("profilePage.channelIdentities.senderId")}:
-          <code>${link.identity.senderId}</code>
-        `,
-        stackedOnNarrow: true,
-        control: html`<button
-          type="button"
-          class="btn"
-          aria-label=${`${t("profilePage.channelIdentities.remove")} ${link.identity.channelId}, ${link.identity.accountId}, ${link.identity.senderId}`}
-          ?disabled=${busy}
-          @click=${() => void this.unlinkIdentity(link)}
-        >
-          ${
-            this.mutation?.kind === "unlink" &&
-            sameChannelIdentity(this.mutation.identity, link.identity)
-              ? t("profilePage.channelIdentities.removing")
-              : t("profilePage.channelIdentities.remove")
-          }
-        </button>`,
-      }),
-    );
-  }
-
-  override render() {
-    if (!this.canManageChannelIdentities) {
-      return nothing;
-    }
-    const busy = this.loading || this.mutation !== null || this.identityBusy;
-    const formDisabled = busy || this.links === null;
-    return html`<form
-      id="settings-profile-channel-identities"
-      aria-busy=${busy}
-      @submit=${(event: SubmitEvent) => {
-        event.preventDefault();
-        void this.linkIdentity();
-      }}
-    >
-      ${renderSettingsSection(
-        {
-          title: t("profilePage.channelIdentities.title"),
-          description: t("profilePage.channelIdentities.description"),
-        },
-        html`
-          ${
-            this.loading && this.links === null
-              ? renderSettingsLoadingSkeleton({
-                  label: t("profilePage.channelIdentities.loading"),
-                  rows: 1,
-                })
-              : nothing
-          }
-          ${
-            this.error
-              ? renderSettingsRow({
-                  title: t("profilePage.channelIdentities.errorTitle"),
-                  description: this.error,
-                  role: "alert",
-                  stackedOnNarrow: true,
-                  control:
-                    this.links === null
-                      ? html`<button
-                          type="button"
-                          class="btn"
-                          aria-label=${t("profilePage.channelIdentities.retry")}
-                          ?disabled=${this.loading || this.mutation !== null}
-                          @click=${() => void this.loadLinks()}
-                        >
-                          ${t("profilePage.channelIdentities.retry")}
-                        </button>`
-                      : nothing,
-                })
-              : nothing
-          }
-          ${this.status ? renderSettingsRow({ title: this.status, role: "status" }) : nothing}
-          ${this.renderLinks(busy)}
-          ${(
-            [
-              ["channelId", "channelId"],
-              ["accountId", "accountId"],
-              ["senderId", "senderId"],
-            ] as const
-          ).map(([field, label]) =>
-            renderSettingsRow({
-              title: t(`profilePage.channelIdentities.${label}`),
-              stacked: true,
-              control: html`<input
-                class="settings-input"
-                type="text"
-                aria-label=${t(`profilePage.channelIdentities.${label}`)}
-                autocomplete="off"
-                maxlength="512"
-                pattern="\\S(?:.*\\S)?"
-                required
-                .value=${this[field]}
-                ?disabled=${formDisabled}
-                @input=${(event: Event) => {
-                  // SAFETY: This listener is attached directly to the rendered input; currentTarget is that input during dispatch.
-                  this[field] = (event.currentTarget as HTMLInputElement).value;
-                }}
-              />`,
-            }),
-          )}
-          ${renderSettingsRow({
-            title: t("profilePage.channelIdentities.addTitle"),
-            stackedOnNarrow: true,
-            control: html`<button type="submit" class="btn" ?disabled=${formDisabled}>
-              ${
-                this.mutation?.kind === "link"
-                  ? t("profilePage.channelIdentities.linking")
-                  : t("profilePage.channelIdentities.add")
-              }
-            </button>`,
-          })}
-        `,
-      )}
-    </form>`;
-  }
-}
-
-if (!customElements.get("openclaw-profile-channel-identities")) {
-  customElements.define("openclaw-profile-channel-identities", ProfileChannelIdentities);
 }

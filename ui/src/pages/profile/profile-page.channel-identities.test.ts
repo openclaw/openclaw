@@ -101,6 +101,9 @@ it.each(["removed", "already absent", "ownership rejected"])(
       profileId: modelAccountProfile.id,
     });
     const section = page.querySelector<HTMLElement>("#settings-profile-channel-identities")!;
+    expect(
+      page.querySelector<HTMLElement>("openclaw-profile-channel-identities")?.style.display,
+    ).toBe("contents");
     expect(section.textContent).toContain("telegram");
     expect(section.textContent).toContain("Configured account ID:");
     expect(section.textContent).toContain("main");

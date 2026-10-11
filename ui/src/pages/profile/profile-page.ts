@@ -49,10 +49,10 @@ import "../../features/github-connections/github-connections.ts";
 import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
 import "./model-accounts.ts";
 import "./personal-instructions.ts";
-import "./profile-channel-identities.ts";
+import "./profile-channel-identities.tsx";
 import { renderIdentitySection } from "./identity-section.ts";
 import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
-import type { ProfileChannelIdentityBusyState } from "./profile-channel-identities.ts";
+import type { ProfileChannelIdentityBusyState } from "./profile-channel-identities-controller.ts";
 import { renderProfileHero } from "./profile-hero.ts";
 
 registerModelAccountsEnglish();
