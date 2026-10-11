@@ -334,7 +334,7 @@ export function runtimeAuthProfileSnapshotSharesOwner(
 }
 
 /** Resolve a captured owner's path without opening a cold scope or consulting ambient state. */
-function resolveRuntimeAuthSharedOwnerPath(
+export function resolveRuntimeAuthSharedOwnerPath(
   snapshot: RuntimeAuthSharedOwner,
   location: AuthProfileStoreOwner["location"],
 ): string {
