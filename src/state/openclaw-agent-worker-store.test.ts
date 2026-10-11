@@ -43,14 +43,12 @@ import {
   openOpenClawAgentSqliteWorkerStoreV2,
   type OpenClawAgentSqliteWorkerStore,
 } from "./openclaw-agent-worker-store.js";
-import {
-  agentWorkerStoreFixtureEntrypoint,
-  waitForFixtureEntry,
-} from "./openclaw-agent-worker-store.runtime.test-support.js";
+import { agentWorkerStoreFixtureEntrypoint } from "./openclaw-agent-worker-store.runtime.test-support.js";
 import type {
   AgentWorkerFixtureOperations,
   bindSqliteWorkerBackend,
 } from "./openclaw-agent-worker-store.test-support.js";
+import { waitForFixtureEntry } from "./openclaw-agent-worker-store.wait.test-support.js";
 import { readOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { retainOpenClawStateDatabaseForIdle } from "./openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
