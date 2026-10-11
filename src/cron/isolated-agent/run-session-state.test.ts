@@ -33,7 +33,6 @@ import {
   createCronRunContinuationSession,
   createPersistCronSessionEntry,
   setCronSessionRuntimeModel,
-  resolveCronLifecycleRevisionIdentity,
   syncCronSessionLiveSelection,
   type CronSessionRowWriter,
   type MutableCronSession,
@@ -773,7 +772,7 @@ describe("createPersistCronSessionEntry", () => {
     });
     const activeLease = await beginSessionWorkAdmission({
       scope: storePath,
-      identities: [resolveCronLifecycleRevisionIdentity(activeRevision)],
+      identities: [`cron-lifecycle-revision:${activeRevision}`],
       assertAllowed: () => {},
     });
 

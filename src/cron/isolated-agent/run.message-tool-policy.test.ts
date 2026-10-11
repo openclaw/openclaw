@@ -1,5 +1,5 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mockCall } from "../../test-utils/mock-call-assertions.js";
 import { applyJobPatch } from "../service/jobs.js";
 import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
@@ -14,7 +14,6 @@ import {
   makeCronSession,
   makeCronSessionEntry,
   mockRunCronFallbackPassthrough,
-  queueCronMessageToolDeliveryAwarenessMock,
   resolveCronPayloadOutcomeMock,
   resolveCronSessionMock,
   resetRunCronIsolatedAgentTurnHarness,
@@ -359,9 +358,8 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
       });
     });
 
-    it("passes deferred same-source awareness to current-session dispatch", async () => {
+    it("passes verified same-source message delivery to current-session finalization", async () => {
       const sourceSessionKey = "agent:default:messagechat:direct:123";
-      const queueSourceAwareness = vi.fn().mockResolvedValue(undefined);
       mockAnnounce();
       resolveCronSessionMock.mockReturnValue(
         makeCronSession({
@@ -376,7 +374,6 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
           },
         ]),
       );
-      queueCronMessageToolDeliveryAwarenessMock.mockResolvedValueOnce(queueSourceAwareness);
       await runCronIsolatedAgentTurn(
         makeParams(
           makeJob(
@@ -389,35 +386,28 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
           ),
         ),
       );
-      expect(queueCronMessageToolDeliveryAwarenessMock).toHaveBeenCalledWith(
-        expect.objectContaining({ deferredTargetSessionKey: sourceSessionKey }),
-      );
-      dispatch({ sourceSessionKey, queueSourceSessionMessageToolAwareness: queueSourceAwareness });
+      dispatch({
+        sourceSessionKey,
+        sourceDeliveryOutcome: sourceOutcome(
+          [{ ...sentTarget, text: "Current-session completion." }],
+          true,
+        ),
+      });
     });
 
-    it.each([{ accountId: "bot-a", channel: "messagechat", verified: true }])(
-      "rewrites generic providers only for matching account evidence ($accountId)",
-      async ({ accountId, channel, verified }) => {
-        mockAnnounce({ accountId: "bot-a" });
-        resolveDeliveryTargetMock.mockResolvedValue(resolvedTarget({ accountId: "bot-a" }));
-        const observed = { tool: "message", provider: "message", to: "123", accountId };
-        runEmbeddedAgentMock.mockResolvedValue(messageResult([observed]));
-        const result = await runCronIsolatedAgentTurn(
-          makeParams(
-            makeJob({
-              ...announce,
-              accountId: "bot-a",
-            }),
-          ),
-        );
-        expectFields(result.delivery, { messageToolSentTo: [{ channel, to: "123", accountId }] });
-        expect(queueCronMessageToolDeliveryAwarenessMock).toHaveBeenCalledTimes(1);
-        expect(queueCronMessageToolDeliveryAwarenessMock.mock.calls[0]?.[0]).toMatchObject({
-          job: { id: "message-tool-policy" },
-          sourceDeliveryOutcome: sourceOutcome([observed], verified),
-        });
-      },
-    );
+    it("rewrites generic providers only for matching account evidence", async () => {
+      mockAnnounce({ accountId: "bot-a" });
+      resolveDeliveryTargetMock.mockResolvedValue(resolvedTarget({ accountId: "bot-a" }));
+      const observed = { tool: "message", provider: "message", to: "123", accountId: "bot-a" };
+      runEmbeddedAgentMock.mockResolvedValue(messageResult([observed]));
+      const result = await runCronIsolatedAgentTurn(
+        makeParams(makeJob({ ...announce, accountId: "bot-a" })),
+      );
+      expectFields(result.delivery, {
+        messageToolSentTo: [{ channel: "messagechat", to: "123", accountId: "bot-a" }],
+      });
+      dispatch({ sourceDeliveryOutcome: sourceOutcome([observed], true) });
+    });
 
     it("keeps pending message presentation warnings fatal when cron delivery does not succeed", async () => {
       mockPendingWarning();

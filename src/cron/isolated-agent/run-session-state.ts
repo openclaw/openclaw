@@ -162,7 +162,7 @@ export class CronSessionLifecycleClaimError extends Error {
   }
 }
 
-export function resolveCronLifecycleRevisionIdentity(lifecycleRevision: string): string {
+function resolveCronLifecycleRevisionIdentity(lifecycleRevision: string): string {
   return `cron-lifecycle-revision:${lifecycleRevision}`;
 }
 
