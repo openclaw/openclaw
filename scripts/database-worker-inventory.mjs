@@ -174,17 +174,6 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
-    "src/state/user-model-accounts.ts",
-    [
-      {
-        tier: "W",
-        operations: ["updateUserModelAuthProfile"],
-        evidence:
-          "Only agents/auth-profiles/store.worker.ts invokes this mutation; synchronous model-account SDK readers and writers remain separately classified.",
-      },
-    ],
-  ],
-  [
     "src/plugin-state/plugin-state-store.reads.ts",
     [
       {

@@ -8,7 +8,7 @@ export const clawAdoptionOperations = {
     input: { name: string; nowMs: number },
     context: WorkerWriteOperationContext,
   ) =>
-    context.writeAdmitted(({ db }) => {
+    context.write(({ db }) => {
       const result = executeSqliteQuerySync(
         db,
         getNodeSqliteKysely<Pick<DB, "claw_mcp_server_refs">>(db)
@@ -23,7 +23,7 @@ export const clawAdoptionOperations = {
     input: { artifact: ClawPackageAdoption; nowMs: number },
     context: WorkerWriteOperationContext,
   ) =>
-    context.writeAdmitted(({ db }) => {
+    context.write(({ db }) => {
       const { artifact, nowMs } = input;
       const kysely = getNodeSqliteKysely<Pick<DB, "claw_package_refs" | "claw_installs">>(db);
       let query = kysely

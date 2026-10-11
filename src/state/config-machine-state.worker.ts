@@ -6,7 +6,7 @@ export const machineStateOperations = {
     input: { key: string; value: unknown },
     context: WorkerWriteOperationContext,
   ) =>
-    context.writeAdmitted(
+    context.write(
       ({ db }) => {
         return writeConfigMachineStateInDatabase(db, input.key, input.value);
       },

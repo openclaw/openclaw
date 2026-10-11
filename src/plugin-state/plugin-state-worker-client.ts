@@ -170,20 +170,23 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
         assertStateDatabaseReadAllowed(databasePath);
         assertAdmission?.();
         if (typedCommand.type === "pluginState.observe") {
-          // SAFETY: This branch handles only the observe command's observation output.
-          return observationFromCachedPluginState(
+          const observation = observationFromCachedPluginState(
             identity,
             databasePath,
             typedCommand.input,
             cached[0]!,
-          ) as PluginStateWorkerRequests[Key]["output"];
+          );
+          // SAFETY: This branch handles only the observe command's observation output.
+          return observation as PluginStateWorkerRequests[Key]["output"];
         }
-        const values = cached.map(({ row }) => {
+        const values = cached.map(({ row }): Result<unknown, PluginStateWorkerFailure> => {
           try {
-            return ok(row ? parseStoredJson(row.value_json, "lookup", databasePath) : undefined);
+            return ok<unknown, PluginStateWorkerFailure>(
+              row ? parseStoredJson(row.value_json, "lookup", databasePath) : undefined,
+            );
           } catch (error) {
             if (error instanceof PluginStateStoreError && error.code === "PLUGIN_STATE_CORRUPT") {
-              return err(capturePluginStateWorkerFailure(error));
+              return err<unknown, PluginStateWorkerFailure>(capturePluginStateWorkerFailure(error));
             }
             throw error;
           }

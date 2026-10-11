@@ -13,8 +13,8 @@ type VoiceWakeConfig = {
 const DEFAULT_TRIGGERS = ["openclaw", "claude", "computer"];
 const VOICEWAKE_TRIGGERS_STATE_KEY = "voicewake.triggers";
 
-function sanitizeTriggers(triggers: string[] | undefined | null): string[] {
-  const cleaned = (triggers ?? [])
+function sanitizeTriggers(triggers: unknown): string[] {
+  const cleaned = (Array.isArray(triggers) ? triggers : [])
     .map((w) => normalizeOptionalString(w) ?? "")
     .filter((w) => w.length > 0);
   return cleaned.length > 0 ? cleaned : DEFAULT_TRIGGERS;
@@ -38,7 +38,7 @@ export async function loadVoiceWakeConfig(baseDir?: string): Promise<VoiceWakeCo
     return { triggers: defaultVoiceWakeTriggers(), updatedAtMs: 0 };
   }
   return {
-    triggers: sanitizeTriggers(state.value as string[]),
+    triggers: sanitizeTriggers(state.value),
     updatedAtMs: Math.max(0, state.updatedAtMs),
   };
 }
