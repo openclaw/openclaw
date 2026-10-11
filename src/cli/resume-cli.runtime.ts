@@ -171,7 +171,6 @@ function resolveExplicitGlobalSessionKey(
     : undefined;
 }
 
-/** Resolve or select one session and run the existing Gateway-backed TUI. */
 export async function runResumeCommand(query: string | undefined, opts: ResumeCliOptions) {
   const { handoff: encodedHandoff, ...connectionOptions } = opts;
   if (encodedHandoff !== undefined && (query !== undefined || opts.url !== undefined)) {
@@ -230,6 +229,5 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
       ...(connection.tlsFingerprint ? { tlsFingerprint: connection.tlsFingerprint } : {}),
     },
     session: sessionKey,
-    forceProcessExitOnReturn: true,
   });
 }

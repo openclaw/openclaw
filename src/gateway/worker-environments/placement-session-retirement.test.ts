@@ -108,9 +108,9 @@ function createHarness(records: WorkerSessionPlacementRecord[]) {
   });
   const retirement = createPlacementSessionRetirement({
     placements: {
-      get: (sessionId) => placements.get(sessionId),
-      list: () => [...placements.values()],
-      retireSessionPlacement: (input) => {
+      getAsync: async (sessionId) => placements.get(sessionId),
+      listAsync: async () => [...placements.values()],
+      retireSessionPlacementAsync: async (input) => {
         const current = placements.get(input.sessionId);
         if (
           current?.state !== input.expectedState ||
@@ -128,6 +128,7 @@ function createHarness(records: WorkerSessionPlacementRecord[]) {
     },
     forceDestroyEnvironment,
     createSessionEvidenceResolver,
+    reportChanges: (operation) => operation(),
     warn: vi.fn(),
   });
   return {
@@ -180,19 +181,20 @@ describe("placement session retirement", () => {
     });
     const ownedRequested = await placements.startDispatch(ownedIdentity);
     const retireSessionPlacement = vi.fn((input: WorkerSessionPlacementRetirement) =>
-      placements.retireSessionPlacement(input),
+      placements.retireSessionPlacementAsync(input),
     );
     const forceDestroyEnvironment = vi.fn();
     const warn = vi.fn();
     const retirement = createPlacementSessionRetirement({
       placements: {
-        get: (sessionId) => placements.get(sessionId),
-        list: () => placements.list(),
-        retireSessionPlacement,
+        getAsync: (sessionId) => placements.getAsync(sessionId),
+        listAsync: () => placements.listAsync(),
+        retireSessionPlacementAsync: retireSessionPlacement,
       },
       environments: { get: () => undefined },
       forceDestroyEnvironment,
       createSessionEvidenceResolver: async () => async () => "absent",
+      reportChanges: (operation) => operation(),
       warn,
     });
 
@@ -249,9 +251,9 @@ describe("placement session retirement", () => {
     const harness = createHarness([current, unknown]);
     const retirement = createPlacementSessionRetirement({
       placements: {
-        get: (sessionId) => harness.placements.get(sessionId),
-        list: () => [...harness.placements.values()],
-        retireSessionPlacement: () => {
+        getAsync: async (sessionId) => harness.placements.get(sessionId),
+        listAsync: async () => [...harness.placements.values()],
+        retireSessionPlacementAsync: async () => {
           throw new Error("must not retire");
         },
       },
@@ -261,6 +263,7 @@ describe("placement session retirement", () => {
       },
       createSessionEvidenceResolver: async () => async (placement) =>
         placement.sessionId === current.sessionId ? "current" : "unknown",
+      reportChanges: (operation) => operation(),
       warn: vi.fn(),
     });
 

@@ -90,7 +90,9 @@ const SAME_CHANNEL_SDK_GUARDS: GuardedSource[] = [
     const relativePaths =
       pluginId === "signal"
         ? ["src/shared.ts", "runtime-api.ts"]
-        : [pluginId === "telegram" ? "src/channel.ts" : "src/shared.ts"];
+        : pluginId === "telegram"
+          ? ["src/channel.ts", "src/setup-plugin.ts"]
+          : ["src/shared.ts"];
     return relativePaths.map((relativePath) =>
       createGuardedSource(pluginId, relativePath, [
         new RegExp(`["']openclaw/plugin-sdk/${pluginId}["']`),

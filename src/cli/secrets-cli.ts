@@ -126,7 +126,6 @@ export function registerSecretsCli(program: Command): void {
             formatGatewayCommandFailure({
               action: "reload secrets",
               error: err,
-              inspectCommand: "openclaw gateway status --deep",
             }),
           ),
         );

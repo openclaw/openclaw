@@ -13,17 +13,16 @@ import type { TSchema } from "typebox";
 import { cleanSchemaForGemini } from "./clean-for-gemini.js";
 import { cleanSchemaForLlamacppGbnf } from "./clean-for-llamacpp-gbnf.js";
 import { stripUnsupportedSchemaKeywords } from "./schema-keyword-strip.js";
-import { assertToolSchemaDepth, isWithinToolSchemaDepth } from "./tool-schema-depth.js";
+import { truncateToolSchemaDepth } from "./tool-schema-depth.js";
 import { createToolSchemaNormalizationCache } from "./tool-schema-normalization-cache.js";
+import { normalizeToolSchema } from "./tool-schema-normalization.js";
 import {
   setOwnSchemaProperty,
-  copySchemaMeta,
   inlineLocalToolSchemaRefs,
   canPreserveRootSchemaRefs,
   SCHEMA_MAP_KEYS,
   SCHEMA_OBJECT_KEYS,
   SCHEMA_ARRAY_KEYS,
-  SCHEMA_LITERAL_KEYS,
 } from "./tool-schema-refs.js";
 
 /**
@@ -71,6 +70,7 @@ export function shouldOmitEmptyArrayItems(
 }
 
 export type ToolParameterSchemaOptions = {
+  toolName?: string;
   modelProvider?: string;
   modelId?: string;
   modelCompat?: ToolSchemaModelCompat;
@@ -81,39 +81,11 @@ const toolParameterSchemaCache = createToolSchemaNormalizationCache<TSchema>(
   MAX_TOOL_PARAMETER_SCHEMA_CACHE_ENTRIES_PER_SCHEMA,
 );
 
-function resolveToolParameterSchemaCacheKey(
-  options: ToolParameterSchemaOptions | undefined,
-): string {
-  const normalizedProvider = normalizeLowercaseStringOrEmpty(options?.modelProvider);
-  const normalizedModelId = normalizeLowercaseStringOrEmpty(options?.modelId);
-  const toolSchemaProfile = normalizeLowercaseStringOrEmpty(
-    options?.modelCompat?.toolSchemaProfile,
-  );
-  const unsupportedKeywords = Array.from(
-    resolveUnsupportedToolSchemaKeywords(options?.modelCompat),
-  ).toSorted();
-  const omitEmptyArrayItems = shouldOmitEmptyArrayItems(options?.modelCompat);
-  return JSON.stringify([
-    normalizedProvider,
-    normalizedModelId,
-    toolSchemaProfile,
-    unsupportedKeywords,
-    omitEmptyArrayItems,
-  ]);
-}
-
 function isGeminiModelId(modelId: string): boolean {
   return /(?:^|[/:])gemini(?:$|[-/:.])/.test(modelId);
 }
 
-function extractEnumValues(
-  schema: unknown,
-  requireAllVariants = false,
-  depth = 0,
-): unknown[] | undefined {
-  if (!isWithinToolSchemaDepth(depth)) {
-    return undefined;
-  }
+function extractEnumValues(schema: unknown, requireAllVariants = false): unknown[] | undefined {
   if (!schema || typeof schema !== "object") {
     return undefined;
   }
@@ -132,7 +104,7 @@ function extractEnumValues(
   if (variants) {
     let complete = true;
     const values = variants.flatMap((variant) => {
-      const extracted = extractEnumValues(variant, requireAllVariants, depth + 1);
+      const extracted = extractEnumValues(variant, requireAllVariants);
       complete &&= extracted !== undefined;
       return extracted ?? [];
     });
@@ -208,15 +180,14 @@ function mergePropertySchemas(
 
 type ArrayItemsMode = "add" | "omit" | "normalize";
 
-function normalizeArraySchemaItems(schema: unknown, mode: ArrayItemsMode, depth = 0): unknown {
-  assertToolSchemaDepth(depth);
+function normalizeArraySchemaItems(schema: unknown, mode: ArrayItemsMode): unknown {
   if (Array.isArray(schema)) {
     // Only omission descends through a malformed array used as a schema node.
     // Addition visits direct tuple/composition entries through normalizeValue below.
     if (mode === "add") {
       return schema;
     }
-    const entries = schema.map((entry) => normalizeArraySchemaItems(entry, "omit", depth + 1));
+    const entries = schema.map((entry) => normalizeArraySchemaItems(entry, "omit"));
     return entries.some((entry, index) => entry !== schema[index]) ? entries : schema;
   }
   if (!isSchemaRecord(schema)) {
@@ -238,9 +209,9 @@ function normalizeArraySchemaItems(schema: unknown, mode: ArrayItemsMode, depth 
     schema.type === "array" || (Array.isArray(schema.type) && schema.type.includes("array"));
   const normalizeValue = (value: unknown, valueMode: ArrayItemsMode): unknown => {
     if (!Array.isArray(value)) {
-      return normalizeArraySchemaItems(value, valueMode, depth + 1);
+      return normalizeArraySchemaItems(value, valueMode);
     }
-    const entries = value.map((entry) => normalizeArraySchemaItems(entry, valueMode, depth + 1));
+    const entries = value.map((entry) => normalizeArraySchemaItems(entry, valueMode));
     return entries.some((entry, index) => entry !== value[index]) ? entries : value;
   };
   for (const [key, value] of Object.entries(normalized)) {
@@ -259,7 +230,7 @@ function normalizeArraySchemaItems(schema: unknown, mode: ArrayItemsMode, depth 
     if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
       const entries = Object.entries(value);
       for (const entry of entries) {
-        entry[1] = normalizeArraySchemaItems(entry[1], mode, depth + 1);
+        entry[1] = normalizeArraySchemaItems(entry[1], mode);
       }
       if (entries.some(([entryKey, entry]) => entry !== value[entryKey])) {
         next = Object.fromEntries(entries);
@@ -280,129 +251,44 @@ function normalizeArraySchemaItems(schema: unknown, mode: ArrayItemsMode, depth 
   return changed ? normalized : schema;
 }
 
-const OPENAPI_SCHEMA_ANNOTATION_KEYS = new Set([
-  "discriminator",
-  "externalDocs",
-  "readOnly",
-  "writeOnly",
-  "xml",
-  "example",
-]);
-
-function isNullSchemaLike(schema: unknown): boolean {
-  if (!isSchemaRecord(schema)) {
-    return false;
-  }
-  if (schema.type === "null") {
-    return true;
-  }
-  if (Array.isArray(schema.type) && schema.type.includes("null")) {
-    return true;
-  }
-  if ("const" in schema && schema.const === null) {
-    return true;
-  }
-  return Array.isArray(schema.enum) && schema.enum.includes(null);
-}
-
-function normalizeOpenApiSchemaKeywords(schema: unknown, depth = 0): unknown {
-  assertToolSchemaDepth(depth);
-  if (Array.isArray(schema)) {
-    let changed = false;
-    const normalized = schema.map((entry) => {
-      const next = normalizeOpenApiSchemaKeywords(entry, depth + 1);
-      changed ||= next !== entry;
-      return next;
-    });
-    return changed ? normalized : schema;
-  }
-  if (!isSchemaRecord(schema)) {
-    return schema;
-  }
-
-  let changed = false;
-  const nullable = schema.nullable === true;
-  const entries = Object.entries(schema);
-  let normalized: Record<string, unknown> | undefined;
-  for (const [key, value] of entries) {
-    if (key === "nullable" || OPENAPI_SCHEMA_ANNOTATION_KEYS.has(key)) {
-      normalized ??= Object.fromEntries(entries);
-      delete normalized[key];
-      changed = true;
-      continue;
-    }
-    if (SCHEMA_LITERAL_KEYS.has(key) || key === "components") {
-      continue;
-    }
-    let next = value;
-    if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
-      let mapChanged = false;
-      const mapEntries = Object.entries(value);
-      for (const entry of mapEntries) {
-        const nextEntry = normalizeOpenApiSchemaKeywords(entry[1], depth + 1);
-        mapChanged ||= nextEntry !== entry[1];
-        entry[1] = nextEntry;
-      }
-      next = mapChanged ? Object.fromEntries(mapEntries) : value;
-    } else if (SCHEMA_OBJECT_KEYS.has(key) && isSchemaRecord(value)) {
-      next = normalizeOpenApiSchemaKeywords(value, depth + 1);
-    } else if (SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
-      const nextEntries = value.map((entry) => normalizeOpenApiSchemaKeywords(entry, depth + 1));
-      // A changed sibling also exposes these composition-array copies.
-      (normalized ??= Object.fromEntries(entries))[key] = nextEntries;
-      changed ||= nextEntries.some((entry, index) => entry !== value[index]);
-      continue;
-    }
-    if (next !== value) {
-      (normalized ??= Object.fromEntries(entries))[key] = next;
-      changed = true;
-    }
-  }
-
-  if (nullable) {
-    normalized ??= Object.fromEntries(entries);
-    if ([normalized.allOf, normalized.anyOf, normalized.oneOf].some(Array.isArray)) {
-      if (
-        (Array.isArray(normalized.anyOf) && normalized.anyOf.some(isNullSchemaLike)) ||
-        (Array.isArray(normalized.oneOf) && normalized.oneOf.some(isNullSchemaLike))
-      ) {
-        return normalized;
-      }
-      const wrapped = { anyOf: [normalized, { type: "null" }] };
-      copySchemaMeta(normalized, wrapped);
-      return wrapped;
-    }
-    const type = normalized.type;
-    if (typeof type === "string" && type !== "null") {
-      normalized.type = [type, "null"];
-    } else if (Array.isArray(type) && !type.includes("null")) {
-      normalized.type = [...type, "null"];
-    }
-    if (Array.isArray(normalized.enum) && !normalized.enum.includes(null)) {
-      normalized.enum = [...normalized.enum, null];
-    }
-  }
-
-  return changed || nullable ? (normalized ?? schema) : schema;
-}
-
-function normalizeToolParameterSchemaUncached(
+/** Return a provider-compatible JSON schema for a model-facing tool. */
+export function normalizeToolParameterSchema(
   schema: unknown,
   options?: ToolParameterSchemaOptions,
 ): TSchema {
+  const sourceSchema = schema;
+  schema = truncateToolSchemaDepth(schema, options?.toolName);
   const normalizedProvider = normalizeLowercaseStringOrEmpty(options?.modelProvider);
   const normalizedModelId = normalizeLowercaseStringOrEmpty(options?.modelId);
   const normalizedToolSchemaProfile = normalizeLowercaseStringOrEmpty(
     options?.modelCompat?.toolSchemaProfile,
   );
+  const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
+  const omitEmptyArrayItems = shouldOmitEmptyArrayItems(options?.modelCompat);
+  const source = sourceSchema && typeof sourceSchema === "object" ? sourceSchema : undefined;
+  const cacheKey = source
+    ? JSON.stringify([
+        normalizedProvider,
+        normalizedModelId,
+        normalizedToolSchemaProfile,
+        [...unsupportedToolSchemaKeywords].toSorted(),
+        omitEmptyArrayItems,
+      ])
+    : "";
+  if (source) {
+    const cached = toolParameterSchemaCache.get(source, cacheKey);
+    if (cached) {
+      return cached;
+    }
+  }
+  const rememberResult = (normalized: TSchema): TSchema =>
+    source ? toolParameterSchemaCache.remember(source, cacheKey, normalized) : normalized;
   const isGeminiProvider =
     normalizedProvider.includes("google") ||
     normalizedProvider.includes("gemini") ||
     isGeminiModelId(normalizedModelId) ||
     normalizedToolSchemaProfile === "gemini";
   const isAnthropicProvider = normalizedProvider.includes("anthropic");
-  const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
-  const omitEmptyArrayItems = shouldOmitEmptyArrayItems(options?.modelCompat);
   const isLlamacppGbnfProfile = normalizedToolSchemaProfile === "llamacpp";
   const preserveRefs =
     normalizedProvider === "openai" &&
@@ -410,15 +296,16 @@ function normalizeToolParameterSchemaUncached(
     !isLlamacppGbnfProfile &&
     !["$ref", "$defs", "definitions"].some((key) => unsupportedToolSchemaKeywords.has(key)) &&
     canPreserveRootSchemaRefs(schema);
-  const inlinedSchema = normalizeOpenApiSchemaKeywords(
-    preserveRefs ? schema : inlineLocalToolSchemaRefs(schema),
+  const inlinedSchema = normalizeToolSchema(
+    preserveRefs ? schema : inlineLocalToolSchemaRefs(schema, options?.toolName),
+    "openapi",
   );
   const schemaRecord =
     inlinedSchema && typeof inlinedSchema === "object"
       ? (inlinedSchema as Record<string, unknown>)
       : undefined;
   if (!schemaRecord) {
-    return inlinedSchema as TSchema;
+    return rememberResult(inlinedSchema as TSchema);
   }
 
   function applyProviderCleaning(s: unknown): TSchema {
@@ -438,7 +325,7 @@ function normalizeToolParameterSchemaUncached(
         unsupportedToolSchemaKeywords,
       );
     }
-    return arrayItemsCompatibleSchema as TSchema;
+    return rememberResult(arrayItemsCompatibleSchema as TSchema);
   }
 
   const flattenableVariantKey = Array.isArray(schemaRecord.anyOf)
@@ -548,24 +435,4 @@ function normalizeToolParameterSchemaUncached(
 
   // Gemini and OpenAI require an object root; retain discriminator enums while flattening.
   return applyProviderCleaning(flattenedSchema);
-}
-
-/** Return a provider-compatible JSON schema for a model-facing tool. */
-export function normalizeToolParameterSchema(
-  schema: unknown,
-  options?: ToolParameterSchemaOptions,
-): TSchema {
-  if (!schema || typeof schema !== "object") {
-    return normalizeToolParameterSchemaUncached(schema, options);
-  }
-  const cacheKey = resolveToolParameterSchemaCacheKey(options);
-  const cached = toolParameterSchemaCache.get(schema, cacheKey);
-  if (cached) {
-    return cached;
-  }
-  return toolParameterSchemaCache.remember(
-    schema,
-    cacheKey,
-    normalizeToolParameterSchemaUncached(schema, options),
-  );
 }

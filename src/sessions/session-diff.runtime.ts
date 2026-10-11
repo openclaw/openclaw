@@ -401,6 +401,7 @@ export async function collectCheckoutDiff(
     ? await applySessionDiffBaseline({
         baseline: params.baseline,
         diff,
+        scope,
         sessionId: params.sessionId,
       })
     : diff;
@@ -492,9 +493,9 @@ async function gitOutForBaseline(cwd: string, args: string[]): Promise<string | 
   return result.stdout.toString("utf8");
 }
 
-export async function collectCheckoutDiffBaseline(params: {
+async function collectBaselineCandidates(params: {
   cwd: string;
-}): Promise<GitReadOperations["checkout.baseline"]["output"]> {
+}): Promise<{ candidates: BaselineCandidate[]; root: string; truncated: boolean } | undefined> {
   const checkout = await loadCheckoutRevision(params.cwd);
   if (!checkout) {
     return undefined;
@@ -519,7 +520,7 @@ export async function collectCheckoutDiffBaseline(params: {
   const trackedText = trackedResult.value;
   const untrackedText = untrackedResult.value;
   if (trackedText === null || untrackedText === null) {
-    return { version: 1, root, files: [], truncated: true };
+    return { root, candidates: [], truncated: true };
   }
   const tracked = parseNameStatusZ(trackedText);
   const untrackedPaths = untrackedText.split("\0").filter(Boolean);
@@ -531,16 +532,26 @@ export async function collectCheckoutDiffBaseline(params: {
       untracked: true,
     })),
   ].toSorted((left, right) => left.path.localeCompare(right.path));
-  const fingerprinted = await fingerprintBaselineCandidates({ candidates, root });
+  return {
+    root,
+    candidates,
+    truncated: tracked.length > MAX_FILES || untrackedPaths.length > MAX_UNTRACKED_FILES,
+  };
+}
+
+export async function collectCheckoutDiffBaseline(params: {
+  cwd: string;
+}): Promise<GitReadOperations["checkout.baseline"]["output"]> {
+  const collected = await collectBaselineCandidates(params);
+  if (!collected) {
+    return undefined;
+  }
+  const fingerprinted = await fingerprintBaselineCandidates(collected);
   return {
     version: 1,
-    root,
+    root: collected.root,
     files: fingerprinted.files,
-    ...(tracked.length > MAX_FILES ||
-    untrackedPaths.length > MAX_UNTRACKED_FILES ||
-    fingerprinted.truncated
-      ? { truncated: true }
-      : {}),
+    ...(collected.truncated || fingerprinted.truncated ? { truncated: true } : {}),
   };
 }
 
@@ -571,6 +582,7 @@ async function fingerprintBaselineCandidates(params: {
 async function applySessionDiffBaseline(params: {
   baseline: SessionDiffBaseline | undefined;
   diff: CheckoutDiffResult;
+  scope: NonNullable<GitCheckoutDiffInput["scope"]>;
   sessionId: string;
 }): Promise<CheckoutDiffResult> {
   const { baseline, diff } = params;
@@ -583,10 +595,17 @@ async function applySessionDiffBaseline(params: {
     return diff;
   }
   const fingerprints = new Map(baseline.files.map((file) => [file.path, file.fingerprint]));
+  const candidates =
+    params.scope === "uncommitted"
+      ? ((await collectBaselineCandidates({ cwd: diff.root }))?.candidates ?? [])
+      : diff.files;
+  const visiblePaths = new Set(diff.files.map((file) => file.path));
   // New paths cannot match the baseline; hashing them can exhaust the budget
   // before an unchanged pre-session file is compared.
   const current = await fingerprintBaselineCandidates({
-    candidates: diff.files.filter((file) => fingerprints.has(file.path)),
+    candidates: candidates.filter(
+      (file) => fingerprints.has(file.path) && visiblePaths.has(file.path),
+    ),
     root: diff.root,
   });
   const currentFingerprints = new Map(current.files.map((file) => [file.path, file.fingerprint]));

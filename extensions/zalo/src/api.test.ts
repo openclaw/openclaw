@@ -1,7 +1,29 @@
 // Zalo tests cover api plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const effectGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority: () => {
+      const authority = actual.captureEffectAuthority();
+      const prepare = effectGate.prepare;
+      return prepare
+        ? {
+            ...authority,
+            initiate: async <T>(effect: () => T | Promise<T>) => {
+              await prepare();
+              return authority.initiate(effect);
+            },
+          }
+        : authority;
+    },
+  };
+});
 
 const { resolvePinnedHostnameWithPolicyMock } = vi.hoisted(() => ({
   resolvePinnedHostnameWithPolicyMock: vi.fn(),
@@ -86,6 +108,65 @@ async function expectPostJsonRequest(run: (token: string, fetcher: ZaloFetch) =>
 }
 
 describe("Zalo API request methods", () => {
+  it.each([false, true])(
+    "rechecks the send caller after effect preparation (retired=%s)",
+    async (retired) => {
+      const preparing = createDeferred();
+      const prepared = createDeferred();
+      const dispatched = createDeferred();
+      const response = createDeferred<Response>();
+      const caller = new AbortController();
+      const failure = new Error("Zalo caller retired");
+      effectGate.prepare = async () => {
+        preparing.resolve();
+        await prepared.promise;
+      };
+      const fetch = vi.fn<ZaloFetch>(() => {
+        dispatched.resolve();
+        return response.promise;
+      });
+      const sending = callZaloApi(
+        "sendMessage",
+        "test-token",
+        { chat_id: "chat-123", text: "hello" },
+        {
+          fetch,
+          assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+        },
+      ).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await Promise.race([
+          preparing.promise,
+          dispatched.promise.then(() => {
+            throw new Error("dispatched before preparation");
+          }),
+        ]);
+        expect(fetch).not.toHaveBeenCalled();
+        if (retired) {
+          caller.abort(failure);
+        }
+        prepared.resolve();
+        if (!retired) {
+          await dispatched.promise;
+          caller.abort(failure);
+        }
+        response.resolve(Response.json({ ok: true, result: { message_id: "sent-1" } }));
+        expect(await sending).toEqual(
+          retired ? { error: failure } : { value: { ok: true, result: { message_id: "sent-1" } } },
+        );
+        expect(fetch).toHaveBeenCalledTimes(retired ? 0 : 1);
+      } finally {
+        prepared.resolve();
+        response.resolve(Response.json({ ok: true, result: {} }));
+        await sending;
+        effectGate.prepare = undefined;
+      }
+    },
+  );
+
   beforeEach(() => {
     vi.unstubAllEnvs();
     resolvePinnedHostnameWithPolicyMock.mockReset();

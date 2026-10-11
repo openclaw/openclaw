@@ -1,8 +1,39 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { createJiti } from "jiti";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildPluginLoaderJitiOptions, createPluginLoaderModuleCacheKey } from "./sdk-alias.js";
 
+const temp = useAutoCleanupTempDirTracker(afterEach);
+
 describe("buildPluginLoaderJitiOptions alias normalization", () => {
+  it("redirects Windows source paths into the captured generation", () => {
+    const capturedRoot = temp.make("plugin-windows-source-alias-");
+    const captured = path.join(capturedRoot, "lazy.ts");
+    fs.writeFileSync(captured, "export const value: string = 'captured';");
+    const nestedRoot = path.join(capturedRoot, "nested-override");
+    fs.mkdirSync(nestedRoot);
+    const nested = path.join(nestedRoot, "lazy.ts");
+    fs.writeFileSync(nested, "export const value: string = 'nested';");
+    const loader = createJiti(import.meta.url, {
+      ...buildPluginLoaderJitiOptions({
+        [String.raw`C:\plugin\source`]: capturedRoot,
+        [String.raw`C:\plugin\source\nested`]: nestedRoot,
+      }),
+      fsCache: false,
+      moduleCache: false,
+      tryNative: false,
+    });
+
+    expect(fileURLToPath(loader.esmResolve(String.raw`C:\plugin\source\lazy.ts`))).toBe(captured);
+    expect(fileURLToPath(loader.esmResolve(String.raw`C:\plugin\source\nested\lazy.ts`))).toBe(
+      nested,
+    );
+  });
+
   it("keeps plugin loader module cache keys stable across alias insertion order", () => {
     const aliasMap = { zeta: "/repo/zeta.js", alpha: "/repo/alpha.js" };
     expect(createPluginLoaderModuleCacheKey({ tryNative: true, aliasMap })).toBe(

@@ -11,8 +11,6 @@ import type {
   NodeWorkerPreparedWorkspaceResult,
 } from "../worker/node-workspace-prepared-protocol.js";
 import {
-  NODE_WORKER_WORKSPACE_STDERR_MAX_BYTES,
-  NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
   NODE_WORKSPACE_DRAIN_COMMAND,
   projectNodeWorkerWorkspaceExecResult,
   type NodeWorkerWorkspaceExecInput,
@@ -102,7 +100,7 @@ export class NodeWorkerWorkspaceRuntime {
   // Per-generation capture hash memo; lets upload captures skip re-hashing unchanged trees.
   private readonly workspaceHashMemos = new Map<string, Map<string, string>>();
   private readonly deletingWorkspaceGenerations = new Set<string>();
-  private readonly activeRetainProtections = new Map<string, Set<Set<string>>>();
+  private readonly activeRetainProtections = new Map<string, Set<string>>();
   readonly processes = new NodeWorkerWorkspaceProcesses();
   readonly quiescence = new NodeWorkerWorkspaceQuiescence();
 
@@ -198,9 +196,7 @@ export class NodeWorkerWorkspaceRuntime {
       generationKey,
       (this.activeWorkspaceOperations.get(generationKey) ?? 0) + 1,
     );
-    for (const protection of this.activeRetainProtections.get(gatewayNamespace) ?? []) {
-      protection.add(generationKey);
-    }
+    this.activeRetainProtections.get(gatewayNamespace)?.add(generationKey);
     let released = false;
     return () => {
       if (released) {
@@ -280,9 +276,7 @@ export class NodeWorkerWorkspaceRuntime {
       }
       this.acceptedSnapshots.set(input.gatewayNamespace, next);
       const retainedDuringPass = this.currentLocalProtection(input.gatewayNamespace);
-      const protections = this.activeRetainProtections.get(input.gatewayNamespace) ?? new Set();
-      protections.add(retainedDuringPass);
-      this.activeRetainProtections.set(input.gatewayNamespace, protections);
+      this.activeRetainProtections.set(input.gatewayNamespace, retainedDuringPass);
       try {
         const result = await this.collectRetainedWorkspaceSnapshot({
           gatewayNamespace: input.gatewayNamespace,
@@ -294,10 +288,7 @@ export class NodeWorkerWorkspaceRuntime {
         signal?.throwIfAborted();
         return { applied: true, ...result };
       } finally {
-        protections.delete(retainedDuringPass);
-        if (protections.size === 0) {
-          this.activeRetainProtections.delete(input.gatewayNamespace);
-        }
+        this.activeRetainProtections.delete(input.gatewayNamespace);
       }
     });
   }
@@ -339,49 +330,32 @@ export class NodeWorkerWorkspaceRuntime {
       params.signal?.throwIfAborted();
       await serializeNodeWorkerWorkspace(session.sessionRoot, async () => {
         params.signal?.throwIfAborted();
-        const currentSnapshot = this.acceptedSnapshots.get(params.gatewayNamespace);
-        if (
-          currentSnapshot?.controllerId !== params.snapshot.controllerId ||
-          currentSnapshot.sequence !== params.snapshot.sequence ||
-          currentSnapshot.signature !== params.snapshot.signature
-        ) {
-          return;
-        }
         await refreshLaunches();
         const localProtection = currentProtection();
         const entries = await listOwnedEntries(session.sessionRoot);
         const existingGenerations = new Set<number>();
         for (const entry of entries) {
           const generation = parseGenerationName(entry.name);
-          if (generation !== undefined && entry.isDirectory() && !entry.isSymbolicLink()) {
+          if (generation !== undefined && entry.isDirectory()) {
             existingGenerations.add(generation);
           }
         }
         const candidates: Array<{ path: string; generationKey: string }> = [];
         for (const entry of entries) {
-          if (!entry.isDirectory() || entry.isSymbolicLink()) {
+          if (!entry.isDirectory()) {
             continue;
           }
           const generation = parseGenerationName(entry.name);
-          const artifactGeneration = parseTransferArtifactGeneration(entry.name);
-          if (generation !== undefined) {
-            const key = workspaceGenerationKey({ ...session, generation });
-            if (!currentSnapshot.retainedGenerations.has(key) && !localProtection.has(key)) {
-              candidates.push({
-                path: path.join(session.sessionRoot, entry.name),
-                generationKey: key,
-              });
-            }
+          const targetGeneration = generation ?? parseTransferArtifactGeneration(entry.name);
+          if (targetGeneration === undefined) {
             continue;
           }
-          if (artifactGeneration === undefined) {
-            continue;
-          }
-          const key = workspaceGenerationKey({ ...session, generation: artifactGeneration });
-          const retainedTargetMissing =
-            currentSnapshot.retainedGenerations.has(key) &&
-            !existingGenerations.has(artifactGeneration);
-          if (!localProtection.has(key) && !retainedTargetMissing) {
+          const key = workspaceGenerationKey({ ...session, generation: targetGeneration });
+          // Transfer artifacts stay recoverable only while their retained target is missing.
+          const retained =
+            params.snapshot.retainedGenerations.has(key) &&
+            (generation !== undefined || !existingGenerations.has(targetGeneration));
+          if (!localProtection.has(key) && !retained) {
             candidates.push({
               path: path.join(session.sessionRoot, entry.name),
               generationKey: key,
@@ -427,7 +401,7 @@ export class NodeWorkerWorkspaceRuntime {
           [...currentProtection()].some((key) => key.startsWith(sessionPrefix));
         await refreshLaunches();
         const hasLocalProtection = hasCurrentLocalProtection();
-        const retainedManifestRefs = currentSnapshot.manifestsBySession.get(
+        const retainedManifestRefs = params.snapshot.manifestsBySession.get(
           workspaceSessionKey(session.environmentHash, session.sessionHash),
         );
         if (!hasLocalProtection && retainedManifestRefs !== null) {
@@ -444,7 +418,6 @@ export class NodeWorkerWorkspaceRuntime {
           for (const entry of await listOwnedEntries(manifestRoot)) {
             if (
               !entry.isFile() ||
-              entry.isSymbolicLink() ||
               !MANIFEST_FILE_PATTERN.test(entry.name) ||
               reachable.has(`sha256:${entry.name.slice(0, -5)}`)
             ) {
@@ -476,11 +449,10 @@ export class NodeWorkerWorkspaceRuntime {
         const hasGenerationOrArtifact = remaining.some(
           (entry) =>
             entry.isDirectory() &&
-            !entry.isSymbolicLink() &&
             (parseGenerationName(entry.name) !== undefined ||
               parseTransferArtifactGeneration(entry.name) !== undefined),
         );
-        const hasAuthoritativeRetain = [...currentSnapshot.retainedGenerations].some((key) =>
+        const hasAuthoritativeRetain = [...params.snapshot.retainedGenerations].some((key) =>
           key.startsWith(sessionPrefix),
         );
         await refreshLaunches();
@@ -583,11 +555,7 @@ export class NodeWorkerWorkspaceRuntime {
           try {
             const stats = fs.lstatSync(workspacePath);
             const resolved = fs.realpathSync.native(workspacePath);
-            if (
-              stats.isSymbolicLink() ||
-              !stats.isDirectory() ||
-              !isPathInside(sessionRoot, resolved)
-            ) {
+            if (!stats.isDirectory() || !isPathInside(sessionRoot, resolved)) {
               throw new Error("INVALID_REQUEST: node worker workspace path escaped its owner root");
             }
           } catch (error) {
@@ -645,7 +613,7 @@ export class NodeWorkerWorkspaceRuntime {
         }
         if (isWorkspaceInspectionCommand(input.argv)) {
           const stat = fs.lstatSync(workspacePath, { throwIfNoEntry: false });
-          if (!stat?.isDirectory() || stat.isSymbolicLink()) {
+          if (!stat?.isDirectory()) {
             throw new Error("INVALID_REQUEST: workspace inspection root is unavailable");
           }
           const workspaceDir = fs.realpathSync.native(workspacePath);
@@ -701,25 +669,17 @@ export class NodeWorkerWorkspaceRuntime {
           });
           return projectWorkspaceOperationResult(workspaceDir, stdout, input.argv);
         }
-        const processContext = {
+        const result = await this.processes.execute({
           input,
           assertCurrent: assertProcessCurrent,
           workspaceDir,
           env: commandEnv,
           signal,
+          timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
           retainWorkspace: () =>
             this.beginWorkspaceOperation(input.gatewayNamespace, generationKey),
-        };
-        if (input.process) {
-          return await this.processes.execute(processContext);
-        }
-        const result = await this.processes.executeForeground({
-          ...processContext,
-          timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-          stdoutLimit: NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
-          stderrLimit: NODE_WORKER_WORKSPACE_STDERR_MAX_BYTES,
         });
-        return projectNodeWorkerWorkspaceExecResult(workspaceDir, result);
+        return input.process ? result : projectNodeWorkerWorkspaceExecResult(workspaceDir, result);
       });
     } finally {
       finishOperation();

@@ -265,11 +265,14 @@ describe("workboard gateway methods", () => {
 
     expect([...methods.keys()]).toEqual([
       "workboard.cards.list",
+      "workboard.cards.list.owner",
       "workboard.cards.create",
+      "workboard.cards.create.owner",
       "workboard.cards.captureSession",
       "workboard.cards.update",
       "workboard.cards.start",
       "workboard.cards.move",
+      "workboard.cards.move.owner",
       "workboard.cards.delete",
       "workboard.cards.comment",
       "workboard.cards.link",
@@ -289,7 +292,9 @@ describe("workboard gateway methods", () => {
       "workboard.cards.diagnostics",
       "workboard.cards.diagnostics.refresh",
       "workboard.cards.dispatch",
+      "workboard.cards.dispatch.owner",
       "workboard.cards.dispatchWithOptions",
+      "workboard.cards.dispatchWithOptions.owner",
       "workboard.boards.list",
       "workboard.boards.upsert",
       "workboard.sessionsBoard.read",
@@ -428,6 +433,37 @@ describe("workboard gateway methods", () => {
         columns: expect.any(Array),
         sessions: [],
       });
+      const snapshot = read.mock.calls[0]?.[1];
+      const unchanged = await invoke("workboard.sessionsBoard.read", {
+        boardId: "sessions",
+        sinceRevision: snapshot.revision,
+      });
+      expect(unchanged.mock.calls[0]?.[1]).toEqual({
+        unchanged: true,
+        revision: snapshot.revision,
+      });
+      for (const mismatch of [
+        { epoch: "retired" },
+        { revision: snapshot.revision.revision - 1 },
+        { boardId: "other-board" },
+        { scope: "other-view" },
+      ]) {
+        const response = await invoke("workboard.sessionsBoard.read", {
+          boardId: "sessions",
+          sinceRevision: { ...snapshot.revision, ...mismatch },
+        });
+        expect(response.mock.calls[0]?.[1]).toEqual(snapshot);
+      }
+      const otherView = await invoke("workboard.sessionsBoard.read", {
+        boardId: "sessions",
+        view: { involvingMe: true },
+        sinceRevision: snapshot.revision,
+      });
+      expect(otherView.mock.calls[0]?.[1]).toMatchObject({
+        sessions: [],
+        columns: snapshot.columns,
+      });
+      expect(otherView.mock.calls[0]?.[1].revision.scope).not.toBe(snapshot.revision.scope);
       using readSpy = vi.spyOn(sessionsBoard, "read");
       for (const view of [
         {},
@@ -446,14 +482,37 @@ describe("workboard gateway methods", () => {
       }
       const updated = await invoke("workboard.sessionsBoard.update", {
         boardId: "sessions",
-        patch: { scope: { includeArchived: true } },
+        patch: { scope: { includeArchived: true, includeAutomation: true, includeHome: true } },
       });
       expect(updated.mock.calls[0]?.[1]).toMatchObject({
-        board: { sessions: { scope: { includeArchived: true } } },
+        board: {
+          sessions: {
+            scope: { includeArchived: true, includeAutomation: true, includeHome: true },
+          },
+        },
       });
+      const changed = await invoke("workboard.sessionsBoard.read", {
+        boardId: "sessions",
+        sinceRevision: snapshot.revision,
+      });
+      expect(changed.mock.calls[0]?.[1]).toMatchObject({
+        board: { sessions: { scope: { includeArchived: true } } },
+        sessions: [],
+      });
+      expect(changed.mock.calls[0]?.[1].revision.revision).toBeGreaterThan(
+        snapshot.revision.revision,
+      );
       const beforeInvalid = await store.getSessionsBoard("sessions");
       const invalidRequests = [
         ["workboard.sessionsBoard.read", {}, /boardId required/],
+        ...["includeAutomation", "includeHome"].map(
+          (field) =>
+            [
+              "workboard.sessionsBoard.update",
+              { boardId: "sessions", patch: { scope: { [field]: "true" } } },
+              new RegExp(`scope.${field} must be a boolean`),
+            ] as const,
+        ),
         [
           "workboard.sessionsBoard.read",
           { boardId: "sessions", junk: true },

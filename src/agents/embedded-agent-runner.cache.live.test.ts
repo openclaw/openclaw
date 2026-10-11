@@ -1,4 +1,5 @@
 // Live cache-behavior checks for embedded-agent direct provider runs.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,12 +8,15 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { AssistantMessage, Message, Tool } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db-disposal.js";
 import { captureEnv, setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import {
   buildEmbeddedRunnerConfig,
   normalizeLiveUsage,
+  runEmbeddedReleasePrefixScenario,
 } from "./embedded-agent-runner.cache.test-support.js";
 import { runEmbeddedAgent } from "./embedded-agent-runner.js";
 import { compactEmbeddedAgentSessionOnDemand } from "./embedded-agent-runner/compact.runtime.js";
@@ -65,6 +69,8 @@ type CacheTraceEvent = {
     snapshot?: ReturnType<typeof beginPromptCacheObservation>["snapshot"];
     previousCacheRead?: number;
     cacheRead?: number;
+    requestGapMs?: number;
+    providerPrefix?: string;
     changes?: Array<{ code?: string; detail?: string }>;
   };
 };
@@ -194,29 +200,45 @@ async function runEmbeddedCacheProbe(params: {
   suffix: string;
   transport?: "sse" | "websocket";
   promptSections?: number;
+  config?: OpenClawConfig;
 }): Promise<CacheRun> {
   const sessionPaths = buildRunnerSessionPaths(params.sessionId);
   const runId = `${params.sessionId}-${params.suffix}-${params.transport ?? "default"}`;
+  const prompt = buildEmbeddedCachePrompt(params.suffix, params.promptSections);
   await fs.mkdir(sessionPaths.workspaceDir, { recursive: true });
-  const config = buildEmbeddedRunnerConfig({
-    agentDir: sessionPaths.agentDir,
-    apiKey: params.apiKey,
-    cacheRetention: params.cacheRetention,
-    model: params.model,
-    transport: params.transport,
-  });
+  const config =
+    params.config ??
+    buildEmbeddedRunnerConfig({
+      agentDir: sessionPaths.agentDir,
+      apiKey: params.apiKey,
+      cacheRetention: params.cacheRetention,
+      model: params.model,
+      transport: params.transport,
+    });
   // Full-runner probes own a real admission through settlement, just like production callers.
   const preparedRunAdmission = prepareSystemAgentRunAdmission(config, runId, "main", "live-cache");
+  const recorder = createUserTurnTranscriptRecorder({
+    target: {
+      ...sessionPaths.sessionTarget,
+      sessionEntry: undefined,
+      cwd: sessionPaths.workspaceDir,
+      config,
+    },
+    input: { text: prompt, timestamp: Date.now(), idempotencyKey: `${runId}:user` },
+  });
   try {
     const result = await withLiveCacheHeartbeat(
       runEmbeddedAgent({
         preparedRunAdmission,
+        userTurnTranscriptRecorder: recorder,
         sessionId: params.sessionId,
+        sessionKey: sessionPaths.sessionTarget.sessionKey,
         sessionTarget: sessionPaths.sessionTarget,
         workspaceDir: sessionPaths.workspaceDir,
         agentDir: sessionPaths.agentDir,
         config,
-        prompt: buildEmbeddedCachePrompt(params.suffix, params.promptSections),
+        prompt,
+        transcriptPrompt: prompt,
         provider: params.model.provider,
         model: params.model.id,
         timeoutMs: params.providerTag === "openai" ? OPENAI_TIMEOUT_MS : ANTHROPIC_TIMEOUT_MS,
@@ -224,11 +246,33 @@ async function runEmbeddedCacheProbe(params: {
         extraSystemPrompt: params.prefix,
         disableTools: true,
         cleanupBundleMcpOnRunEnd: true,
+        ...(params.config ? { thinkLevel: "off", streamParams: { maxTokens: 128 } } : {}),
       }),
       `${params.providerTag} embedded cache probe ${params.suffix}${params.transport ? ` (${params.transport})` : ""}`,
     );
+    if (result.meta.error) {
+      const { kind, message } = result.meta.error;
+      const historySegment = message.match(
+        /message (\d+) \((user|assistant|toolResult|system)\) differs/,
+      );
+      throw new Error(
+        `Embedded cache probe ${params.suffix} failed: ${JSON.stringify({
+          kind,
+          stopReason: result.meta.stopReason,
+          providerStarted: result.meta.providerStarted,
+          aborted: result.meta.aborted,
+          replayInvalid: result.meta.replayInvalid,
+          segment: historySegment
+            ? `history[${historySegment[1]}] (${historySegment[2]})`
+            : undefined,
+          detailDigest: createHash("sha256").update(message).digest("hex"),
+        })}`,
+      );
+    }
     const text = extractRunPayloadText(result.payloads);
-    expect(text.toLowerCase()).toContain(params.suffix.toLowerCase());
+    expect(text.toLowerCase().includes(params.suffix.toLowerCase()), "expected reply marker").toBe(
+      true,
+    );
     const usage = normalizeLiveUsage(result.meta.agentMeta?.usage);
     return {
       suffix: params.suffix,
@@ -239,6 +283,34 @@ async function runEmbeddedCacheProbe(params: {
   } finally {
     preparedRunAdmission.close();
   }
+}
+
+async function runReleasePrefixScenario(
+  fixture: LiveResolvedModel,
+  provider: "openai" | "anthropic",
+): Promise<void> {
+  const sessionId = `live-cache-release-prefix-${provider}`;
+  await runEmbeddedReleasePrefixScenario({
+    ...fixture,
+    provider,
+    sessionId,
+    ...buildRunnerSessionPaths(sessionId),
+    readTraceEvents: () => readCacheTraceEvents(sessionId),
+    probe: async (config, suffix) => {
+      const run = await runEmbeddedCacheProbe({
+        ...fixture,
+        config,
+        cacheRetention: "short",
+        prefix: "Preserve prior instructions and answer only the latest requested marker.",
+        providerTag: provider,
+        sessionId,
+        suffix,
+        transport: "sse",
+        promptSections: 0,
+      });
+      return run.usage;
+    },
+  });
 }
 
 async function compactLiveCacheSession(params: {
@@ -695,7 +767,7 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
     previousCacheTraceEnv = undefined;
     liveCacheTraceFile = undefined;
     if (liveRunnerPaths) {
-      disposeOpenClawAgentDatabaseByPath(liveRunnerPaths.storePath);
+      await disposeOpenClawAgentDatabaseByPath(liveRunnerPaths.storePath);
       await fs.rm(liveRunnerPaths.rootDir, { recursive: true, force: true });
     }
     liveRunnerPaths = undefined;
@@ -821,46 +893,8 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
     );
 
     it(
-      "keeps high OpenAI cache-read rates across repeated embedded-runner turns",
-      async () => {
-        const sessionId = `${OPENAI_SESSION_ID}-embedded`;
-        const warmup = await runEmbeddedCacheProbe({
-          ...fixture,
-          cacheRetention: "short",
-          prefix: OPENAI_PREFIX,
-          providerTag: "openai",
-          sessionId,
-          suffix: "embedded-warmup",
-        });
-        logLiveCache(
-          `openai embedded warmup cacheRead=${warmup.usage.cacheRead} input=${warmup.usage.input} rate=${warmup.hitRate.toFixed(3)}`,
-        );
-
-        const hitA = await runEmbeddedCacheProbe({
-          ...fixture,
-          cacheRetention: "short",
-          prefix: OPENAI_PREFIX,
-          providerTag: "openai",
-          sessionId,
-          suffix: "embedded-hit-a",
-        });
-        const hitB = await runEmbeddedCacheProbe({
-          ...fixture,
-          cacheRetention: "short",
-          prefix: OPENAI_PREFIX,
-          providerTag: "openai",
-          sessionId,
-          suffix: "embedded-hit-b",
-        });
-        const bestHit = (hitA.usage.cacheRead ?? 0) >= (hitB.usage.cacheRead ?? 0) ? hitA : hitB;
-        logLiveCache(
-          `openai embedded best-hit suffix=${bestHit.suffix} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
-        );
-
-        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
-        expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.4);
-        await expectCacheTraceStages(sessionId, ["cache:state", "cache:result"]);
-      },
+      "passes the release prompt-prefix gate across instruction refresh, hooks and reopen",
+      () => runReleasePrefixScenario(fixture, "openai"),
       8 * 60_000,
     );
 
@@ -1139,47 +1173,8 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
     );
 
     it(
-      "keeps high Anthropic cache-read rates across repeated embedded-runner turns",
-      async () => {
-        const sessionId = `${ANTHROPIC_SESSION_ID}-embedded`;
-        const warmup = await runEmbeddedCacheProbe({
-          ...fixture,
-          cacheRetention: "short",
-          prefix: ANTHROPIC_PREFIX,
-          providerTag: "anthropic",
-          sessionId,
-          suffix: "embedded-warmup",
-        });
-        logLiveCache(
-          `anthropic embedded warmup cacheWrite=${warmup.usage.cacheWrite} cacheRead=${warmup.usage.cacheRead} input=${warmup.usage.input} rate=${warmup.hitRate.toFixed(3)}`,
-        );
-        expect(warmup.usage.cacheWrite ?? 0).toBeGreaterThan(0);
-
-        const hitA = await runEmbeddedCacheProbe({
-          ...fixture,
-          cacheRetention: "short",
-          prefix: ANTHROPIC_PREFIX,
-          providerTag: "anthropic",
-          sessionId,
-          suffix: "embedded-hit-a",
-        });
-        const hitB = await runEmbeddedCacheProbe({
-          ...fixture,
-          cacheRetention: "short",
-          prefix: ANTHROPIC_PREFIX,
-          providerTag: "anthropic",
-          sessionId,
-          suffix: "embedded-hit-b",
-        });
-        const bestHit = (hitA.usage.cacheRead ?? 0) >= (hitB.usage.cacheRead ?? 0) ? hitA : hitB;
-        logLiveCache(
-          `anthropic embedded best-hit suffix=${bestHit.suffix} cacheWrite=${bestHit.usage.cacheWrite} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
-        );
-
-        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
-        expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.4);
-        await expectCacheTraceStages(sessionId, ["cache:state", "cache:result"]);
-      },
+      "passes the release prompt-prefix gate across instruction refresh, hooks and reopen",
+      () => runReleasePrefixScenario(fixture, "anthropic"),
       8 * 60_000,
     );
 

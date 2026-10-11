@@ -72,7 +72,7 @@ export async function buildStatusCommandReportData(
         theme.muted(
           `Skipped in fast status. Full report: ${formatCliCommand("openclaw security audit")}`,
         ),
-        theme.muted(`Deep probe: ${formatCliCommand("openclaw status --deep")}`),
+        theme.muted(`Deep check: ${formatCliCommand("openclaw status --deep")}`),
       ];
   return {
     width: params.tableWidth,

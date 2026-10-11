@@ -395,8 +395,13 @@ describe("diagnostic stability bundles", () => {
   it("preserves worker memory attribution and unavailable samples in exported bundles", () => {
     startDiagnosticStabilityRecorder();
     emitDiagnosticEvent({
-      type: "diagnostic.memory.sample",
-      uptimeMs: 1000,
+      type: "diagnostic.memory.pressure",
+      level: "critical",
+      reason: "worker_heap_threshold",
+      usedBytes: 1024,
+      limitBytes: 1100,
+      thresholdBytes: 990,
+      workerThreadId: 2,
       memory: {
         rssBytes: 4096,
         heapTotalBytes: 1024,
@@ -417,6 +422,7 @@ describe("diagnostic stability bundles", () => {
             script: "prepared-model-catalog.worker.js",
             threadId: 2,
             heapUsed: 1024,
+            heapSizeLimitBytes: 1100,
             heapTotal: 2048,
             external: 1024,
             arrayBuffers: 512,
@@ -440,6 +446,15 @@ describe("diagnostic stability bundles", () => {
     if (readback.status !== "found") {
       throw new Error("Expected readable diagnostics");
     }
+    expect(readback.bundle.snapshot.events[0]).toMatchObject({
+      type: "diagnostic.memory.pressure",
+      level: "critical",
+      reason: "worker_heap_threshold",
+      usedBytes: 1024,
+      limitBytes: 1100,
+      thresholdBytes: 990,
+      workerThreadId: 2,
+    });
     expect(readback.bundle.snapshot.events[0]?.memory).toMatchObject({
       workerCount: 2,
       workerHeapSampledCount: 1,
@@ -454,6 +469,7 @@ describe("diagnostic stability bundles", () => {
           script: "prepared-model-catalog.worker.js",
           threadId: 2,
           heapUsed: 1024,
+          heapSizeLimitBytes: 1100,
           heapTotal: 2048,
           external: 1024,
           arrayBuffers: 512,

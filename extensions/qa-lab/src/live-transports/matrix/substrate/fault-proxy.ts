@@ -301,8 +301,7 @@ function writeForwardedResponse(
       options.preserveConnectionClose && normalizedKey === "connection" && value === "close";
     if (
       (!HOP_BY_HOP_HEADERS.has(normalizedKey) || isIntentionalConnectionClose) &&
-      normalizedKey !== "content-encoding" &&
-      normalizedKey !== "content-length"
+      normalizedKey !== "content-encoding"
     ) {
       headers[key] = value;
     }

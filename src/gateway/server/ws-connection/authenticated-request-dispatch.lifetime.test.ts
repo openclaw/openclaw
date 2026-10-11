@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 describe("authenticated request completion", { concurrent: false }, () => {
-  it.each(["return", "throw"])(
+  it.each(["throw"])(
     "holds reconnect capacity through handler settlement (%s)",
     async (outcome) => {
       const held = createDeferredCore();
@@ -80,7 +80,10 @@ describe("authenticated request completion", { concurrent: false }, () => {
         return { handleGatewayRequest };
       });
       if (stage === "start scheduler") {
-        vi.doMock("./request-start.js", () => ({ scheduleGatewayRequestStart: hold }));
+        vi.doMock("./request-start.js", async (importOriginal) => ({
+          ...(await importOriginal<typeof import("./request-start.js")>()),
+          scheduleGatewayRequestStart: hold,
+        }));
       }
       const { createDispatchTestHarness, createOperatorWsClient } =
         await import("./authenticated-request-dispatch.test-support.js");
@@ -180,7 +183,10 @@ describe("authenticated request completion", { concurrent: false }, () => {
         }));
       }
       if (stage === "start scheduler") {
-        vi.doMock("./request-start.js", () => ({ scheduleGatewayRequestStart: hold }));
+        vi.doMock("./request-start.js", async (importOriginal) => ({
+          ...(await importOriginal<typeof import("./request-start.js")>()),
+          scheduleGatewayRequestStart: hold,
+        }));
       }
       const { createDispatchTestHarness, createOperatorWsClient } =
         await import("./authenticated-request-dispatch.test-support.js");

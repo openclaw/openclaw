@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -115,12 +114,12 @@ export const wizardHandlers: GatewayRequestHandlers = {
     const sessionId = randomUUID();
     const flow = params.flow ?? "setup";
     const createSession = () =>
-      flow === "channels"
-        ? new WizardSession((prompter, _signal, wizardSession) =>
-            runHostedWizard((runtime) =>
-              context.channelWizardRunner(
+      new WizardSession((prompter, _signal, wizardSession) =>
+        runHostedWizard((runtime) =>
+          flow === "channels"
+            ? context.channelWizardRunner(
                 {
-                  channel: readStringValue(params.channel),
+                  channel: params.channel,
                   onConfigured: (accounts) => wizardSession.setConfiguredAccounts(accounts),
                   // Durable effects (plugin installs, config commit) must finish
                   // even if the client cancels mid-write.
@@ -130,22 +129,18 @@ export const wizardHandlers: GatewayRequestHandlers = {
                 },
                 runtime,
                 prompter,
-              ),
-            ),
-          )
-        : new WizardSession((prompter) =>
-            runHostedWizard((runtime) =>
-              context.wizardRunner(
+              )
+            : context.wizardRunner(
                 {
                   mode: params.mode,
-                  workspace: readStringValue(params.workspace),
+                  workspace: params.workspace,
                   installDaemon: params.installDaemon,
                 },
                 runtime,
                 prompter,
               ),
-            ),
-          );
+        ),
+      );
     const session = await createAdmittedWizardSession(createSession, flow === "setup");
     if (!session) {
       respondSetupAdmissionBusy(respond);
@@ -173,7 +168,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
           return;
         }
         try {
-          const validationError = await session.answer(answer.stepId ?? "", answer.value);
+          const validationError = await session.answer(answer.stepId, answer.value);
           if (validationError) {
             respond(
               true,

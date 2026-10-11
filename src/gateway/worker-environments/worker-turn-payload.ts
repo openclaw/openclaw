@@ -44,6 +44,7 @@ import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { capturePresenceToolAuthority } from "../../agents/tools/presence-tool-authority.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { redactSensitiveText } from "../../logging/redact.js";
@@ -73,7 +74,10 @@ import {
 import type { WorkerReplyMediaPreparer } from "./worker-reply-media.types.js";
 import { WorkerTurnExecutionError } from "./worker-turn-failure.js";
 import type { prepareWorkerTurnPrompt } from "./worker-turn-prompt.js";
-import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
+import {
+  captureWorkerTurnTranscriptSource,
+  resolveWorkerTurnTranscriptTarget,
+} from "./worker-turn-transcript-target.js";
 import {
   reconcileWorkspaceAfterTurn,
   workerWorkspaceFailure,
@@ -98,6 +102,43 @@ type PrepareWorkerAgentRuntimeIdentityParams = {
   assertSourceCurrent: () => void;
 };
 
+/** Keep input admission ordered before placement and transcript source checks. */
+export function captureWorkerTurnInputAuthority(params: {
+  transcriptTarget: BoundAgentRunSessionTarget;
+  recorder: SessionPlacementTurnParams["userTurnTranscriptRecorder"];
+  signal?: AbortSignal;
+  assertRunCurrent?: () => void;
+  isBlocked: () => boolean;
+  placements: WorkerSessionPlacementStore;
+  turnClaim: WorkerSessionTurnClaim;
+}) {
+  const assertInputCurrent = composeSessionSourceAssertion(
+    [params.assertRunCurrent],
+    (assertRun) => {
+      assertRun();
+      params.signal?.throwIfAborted();
+      if (params.recorder?.isBlocked() && !params.isBlocked()) {
+        throw new Error("Cloud worker turn input is blocked");
+      }
+    },
+  );
+  const transcriptSource = captureWorkerTurnTranscriptSource(params.transcriptTarget);
+  return {
+    assertTurnInputCurrent: assertInputCurrent,
+    assertSourceCurrent: composeSessionSourceAssertion([assertInputCurrent, transcriptSource]),
+    assertContextCurrent: () => {
+      assertInputCurrent();
+      if (!params.placements.validateTurnClaim(params.turnClaim)) {
+        throw new Error("Worker turn claim changed during context preparation");
+      }
+      resolveWorkerTurnTranscriptTarget({
+        ...params.transcriptTarget,
+        sessionTarget: params.transcriptTarget,
+      });
+    },
+  };
+}
+
 export async function prepareWorkerAgentRuntimeIdentity(
   params: PrepareWorkerAgentRuntimeIdentityParams,
 ) {
@@ -115,10 +156,10 @@ export async function prepareWorkerAgentRuntimeIdentity(
   if (!assertAdmittedActive) {
     throw new Error("Worker turn has no active admitted execution authority");
   }
-  const assertActive = () => {
-    params.assertSourceCurrent();
-    assertAdmittedActive();
-  };
+  const assertActive = composeSessionSourceAssertion([
+    params.assertSourceCurrent,
+    assertAdmittedActive,
+  ]);
   assertAdmittedActive();
   const operatorAuthority = readAdmittedRunOperatorAuthority(admittedRunContext);
   const assertPresenceSourceCurrent = capturePresenceToolAuthority({

@@ -23,7 +23,7 @@ import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/sessi
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import * as clientCleanup from "./attempt-client-cleanup.js";
-import { codexTestTurnIds } from "./codex-app-server.test-fixtures.js";
+import { codexTestTurnIds, nativeCommandItem } from "./codex-app-server.test-fixtures.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import { CodexEphemeralTurn } from "./ephemeral-turn.js";
@@ -128,26 +128,6 @@ function codexHookCommand(config: unknown, key: string) {
     ?.hooks?.at(0);
 }
 
-function nativeCommandItem(
-  id: string,
-  status: "inProgress" | "completed",
-  durationMs: number | null,
-) {
-  return {
-    type: "commandExecution",
-    id,
-    command: "git status --short",
-    cwd: "/tmp/workspace",
-    processId: null,
-    source: "agent",
-    status,
-    commandActions: [],
-    aggregatedOutput: status === "completed" ? "" : null,
-    exitCode: status === "completed" ? 0 : null,
-    durationMs,
-  };
-}
-
 useProviderToolSchemaRuntimeForTest(["openai", "codex", "lmstudio"]);
 
 describe("runCodexAppServerSideQuestion", () => {
@@ -198,7 +178,7 @@ describe("runCodexAppServerSideQuestion", () => {
       }),
       { bindingStore: persistedBindings },
     );
-    await expect(operation).rejects.toThrow("Codex session generation is no longer current");
+    await expect(operation).rejects.toThrow("Codex session execution policy changed");
     expect(client.request.mock.calls.some(([method]) => method === "thread/fork")).toBe(false);
     expect(persistedBindings.read(current)).toEqual(parent);
   });
@@ -1100,30 +1080,39 @@ describe("runCodexAppServerSideQuestion", () => {
     },
   );
 
-  it("disables hosted search when side-question sender policy removes managed web_search", async () => {
-    createOpenClawCodingToolsMock.mockImplementation((options: { senderId?: string }) =>
-      options.senderId === "restricted-sender"
-        ? []
-        : [
-            {
-              name: "web_search",
-              description: "Search the web",
-              parameters: { type: "object", properties: {}, additionalProperties: true },
-              execute: toolExecuteMock,
-            },
-          ],
-    );
+  it.each([
+    { senderId: "restricted-sender", webSearchMode: "disabled" },
+    { senderId: "allowed-sender", webSearchMode: "cached" },
+  ])(
+    "applies side-question search policy for $senderId without managed search",
+    async (testCase) => {
+      // Missing managed credentials are not a denial; hosted search uses the policy owner.
+      createOpenClawCodingToolsMock.mockReturnValue([]);
 
-    const { forkConfig } = await runSideQuestionWithManagedWebSearchCall(
-      sideParams({ senderId: "restricted-sender" }),
-      { preserveToolFactory: true },
-    );
+      const { forkConfig, toolResponse } = await runSideQuestionWithManagedWebSearchCall(
+        sideParams({
+          senderId: testCase.senderId,
+          cfg: {
+            tools: { toolsBySender: { "id:restricted-sender": { deny: ["web_search"] } } },
+          },
+        }),
+        { preserveToolFactory: true },
+      );
 
-    expect(forkConfig).toMatchObject({
-      "features.standalone_web_search": false,
-      web_search: "disabled",
-    });
-  });
+      expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ senderId: testCase.senderId }),
+      );
+      expect(forkConfig).toMatchObject({
+        "features.standalone_web_search": false,
+        web_search: testCase.webSearchMode,
+      });
+      expect(toolResponse).toEqual({
+        success: false,
+        contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: web_search" }],
+      });
+      expect(toolExecuteMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects side questions before forking when the tool allowlist excludes native tools", async () => {
     await expect(
@@ -2312,7 +2301,13 @@ describe("runCodexAppServerSideQuestion", () => {
         hostCapabilities: host.hostCapabilities,
         opts: { runId },
       }),
-      { bindingStore: { ...createCodexTestBindingStore(), read: () => parent } },
+      {
+        bindingStore: {
+          ...createCodexTestBindingStore(),
+          read: () => parent,
+          readAsync: async () => parent,
+        },
+      },
     );
     try {
       await Promise.race([

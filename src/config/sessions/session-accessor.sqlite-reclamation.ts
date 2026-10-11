@@ -27,10 +27,8 @@ import {
 } from "./session-accessor.sqlite-deletion-plan.js";
 import { runSqliteSessionDeletionTransaction } from "./session-accessor.sqlite-deletion.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
-import {
-  deleteLifecycleTargetRows,
-  readSessionEntryCount,
-} from "./session-accessor.sqlite-entry-store.js";
+import { deleteLifecycleTargetRows } from "./session-accessor.sqlite-entry-store.js";
+import { isRecentHistoricalSessionId } from "./session-accessor.sqlite-history-recency.js";
 import {
   assertPlannedLifecycleArtifactEntriesUnchanged,
   deleteMaterializedSessionStatePlans,
@@ -48,8 +46,7 @@ import type {
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import { reclaimSessionMaintenanceInTransaction } from "./session-accessor.sqlite-maintenance-transaction.js";
 import { deleteSessionDeliveryArtifacts } from "./session-accessor.sqlite-node-artifacts.js";
-import { commitProjectedSessionEntryRemovalsInDatabase } from "./session-accessor.sqlite-projection-state.js";
-import { isRecentHistoricalSessionId } from "./session-accessor.sqlite-references.js";
+import { commitPreparedSessionEntryLifecycleMutationInDatabase } from "./session-accessor.sqlite-projection-state.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 
 type SessionBoardCleanupDatabase = Pick<
@@ -185,17 +182,14 @@ function reclaimSqliteRowsInTransaction(
       { operationLabel: "session.deletion.plan" },
     );
   }
-  if (plan.kind === "lifecycle-projection-plan" || plan.kind === "lifecycle-projection-count") {
+  if (plan.kind === "lifecycle-projection-plan") {
     return runOpenClawAgentWriteTransaction(
       (database) => {
         callbacks.beforeMutation?.();
-        const result: SqliteSessionReclamationResult =
-          plan.kind === "lifecycle-projection-plan"
-            ? {
-                kind: plan.kind,
-                value: projectSessionEntryLifecycleRemovalsInDatabase(database, plan.input),
-              }
-            : { kind: plan.kind, value: readSessionEntryCount(database) };
+        const result: SqliteSessionReclamationResult = {
+          kind: plan.kind,
+          value: projectSessionEntryLifecycleRemovalsInDatabase(database, plan.input),
+        };
         callbacks.onCommit?.(database);
         return result;
       },
@@ -207,11 +201,35 @@ function reclaimSqliteRowsInTransaction(
     const value = runSqliteSessionDeletionTransaction(
       (database) => {
         callbacks.beforeMutation?.();
-        const result = commitProjectedSessionEntryRemovalsInDatabase(
+        const progressCardResetKeys: string[] = [];
+        const projectionReconcileSessionIds: string[] = [];
+        const result = commitPreparedSessionEntryLifecycleMutationInDatabase(
           database,
           plan.input,
           plan.materializedPlans,
+          {
+            resetScope: {
+              agentId: plan.agentId,
+              path: database.path,
+              env: plan.databaseOptions.env,
+            },
+            onResetBoundary: ({
+              sessionKey,
+              sessionId,
+              progressCardReset,
+              projectionNeedsReconcile,
+            }) => {
+              if (progressCardReset) {
+                progressCardResetKeys.push(sessionKey);
+              }
+              if (projectionNeedsReconcile) {
+                projectionReconcileSessionIds.push(sessionId);
+              }
+            },
+          },
         );
+        result.progressCardResetKeys = progressCardResetKeys;
+        result.projectionReconcileSessionIds = projectionReconcileSessionIds;
         callbacks.onCommit?.(database, { kind: plan.kind, value: result });
         return result;
       },
@@ -334,7 +352,6 @@ function reclaimSqliteRowsInTransaction(
         plan.materializedPlans,
         protectedSessionIds,
         excludedSessionKeys,
-        undefined,
         diskBudget,
       );
       const db = getSessionKysely(transactionDb.db);
@@ -409,6 +426,10 @@ export function createSessionMaintenanceFinalizationOperation(params: {
 }): Extract<SqliteSessionReclamationPlan, { kind: "maintenance-finalize" }> {
   return {
     ...params,
+    entries: params.entries.map((removal) => ({
+      ...removal,
+      expectedEntry: removal.expectedEntry && { ...removal.expectedEntry },
+    })),
     databaseOptions: resolveSessionReclamationDatabaseOptions(params.databaseOptions),
     kind: "maintenance-finalize",
   };

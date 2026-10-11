@@ -121,10 +121,6 @@ export function resolveCompileConcurrency(
     : capacity;
 }
 
-function readJsonFile(filePath: string): unknown {
-  return JSON.parse(readFileSync(filePath, "utf8"));
-}
-
 function summarizeOutputSection(name: string, output: string) {
   const trimmed = output.trim();
   if (!trimmed) {
@@ -153,10 +149,6 @@ function formatFailureFooter(params: StepFailureParams = {}) {
     footerLines.push(params.note);
   }
   return footerLines.join("\n");
-}
-
-function createStepOutputCapture(): StepOutputCapture {
-  return { text: "", truncatedChars: 0 };
 }
 
 function isPositiveFinite(value: number | undefined): value is number {
@@ -245,39 +237,24 @@ function attachStepFailureMetadata(error: Error, label: string, params: StepFail
   });
 }
 
-function collectBundledExtensionIds() {
+function collectOptInExtensionIds() {
   return readdirSync(join(repoRoot, "extensions"), { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
-    .toSorted();
-}
-
-function resolveExtensionTsconfigPath(extensionId: string) {
-  return join(repoRoot, "extensions", extensionId, "tsconfig.json");
-}
-
-function readExtensionTsconfig(extensionId: string) {
-  const config = readJsonFile(resolveExtensionTsconfigPath(extensionId));
-  return config && typeof config === "object" && "extends" in config
-    ? { extends: config.extends }
-    : {};
-}
-
-function collectOptInExtensionIds() {
-  return collectBundledExtensionIds().filter((extensionId) => {
-    const tsconfigPath = resolveExtensionTsconfigPath(extensionId);
-    if (!existsSync(tsconfigPath)) {
-      return false;
-    }
-    return readExtensionTsconfig(extensionId).extends === extensionPackageBoundaryBaseConfig;
-  });
-}
-
-/** One lifecycle adapter for preparation, compilers, and the negative canary. */
-function abortSiblingSteps(abortController?: AbortController) {
-  if (abortController && !abortController.signal.aborted) {
-    abortController.abort();
-  }
+    .toSorted()
+    .filter((extensionId) => {
+      const tsconfigPath = join(repoRoot, "extensions", extensionId, "tsconfig.json");
+      if (!existsSync(tsconfigPath)) {
+        return false;
+      }
+      const config: unknown = JSON.parse(readFileSync(tsconfigPath, "utf8"));
+      return (
+        config !== null &&
+        typeof config === "object" &&
+        "extends" in config &&
+        config.extends === extensionPackageBoundaryBaseConfig
+      );
+    });
 }
 
 export async function runNodeStepAsync(
@@ -288,8 +265,8 @@ export async function runNodeStepAsync(
 ) {
   const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, MAX_TIMER_TIMEOUT_MS);
   const startedAt = Date.now();
-  let stdout = createStepOutputCapture();
-  let stderr = createStepOutputCapture();
+  let stdout: StepOutputCapture = { text: "", truncatedChars: 0 };
+  let stderr: StepOutputCapture = { text: "", truncatedChars: 0 };
   let receivedSignal: NodeJS.Signals | undefined;
   let activeChild: ChildProcess | undefined;
   try {
@@ -368,7 +345,7 @@ export async function runNodeStepAsync(
     original.message = formatStepFailure(label, detail);
     const failure = attachStepFailureMetadata(original, label, detail);
     params.onFailure?.(failure);
-    abortSiblingSteps(params.abortController);
+    params.abortController?.abort();
     throw failure;
   }
 }
@@ -397,7 +374,7 @@ export async function runNodeStepsWithConcurrency(steps: BoundaryStep[], concurr
         // Keep the mapper fulfilled so pMap waits for active process-group cleanup.
         firstFailure ??= error;
         failures.push(error);
-        abortSiblingSteps(abortController);
+        abortController.abort();
       }
     },
     { concurrency, stopOnError: false },

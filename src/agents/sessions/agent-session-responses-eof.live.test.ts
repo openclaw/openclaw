@@ -110,7 +110,7 @@ describeLive("AgentSession Responses EOF live", () => {
       cwd: root,
       model,
       thinkingLevel: "low",
-      tools: ["record_receipt"],
+      tools: ["record_receipt", "inspect_receipt"],
       customTools: [
         {
           name: "record_receipt",

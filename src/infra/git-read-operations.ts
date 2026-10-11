@@ -61,6 +61,8 @@ export type GitReadOperations = {
       branch: string;
       defaultBranch?: string;
       mergedHeads: readonly GitMergedPullHead[];
+      /** The session's persisted managed-worktree binding owns index stat refreshes. */
+      refreshIndex?: boolean;
     };
     output: GitPullRequestBranchFacts | undefined;
   };
@@ -73,4 +75,3 @@ export type GitReadOperations = {
 export type GitReadOperation = {
   [K in keyof GitReadOperations]: { type: K; input: GitReadOperations[K]["input"] };
 }[keyof GitReadOperations];
-export type GitReadOperationResult = GitReadOperations[keyof GitReadOperations]["output"];

@@ -1,4 +1,6 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRetainedOperation, type RetainedOperation } from "./retained-operation.js";
 import type {
   Slot,
@@ -6,6 +8,22 @@ import type {
   RetainedWorkerTask,
   WorkerTaskResponse,
 } from "./worker-task-pool.types.js";
+
+export function createWorkerHostExchange<Input, Output>(
+  task: Task<Input, Output>,
+  request: unknown,
+): NonNullable<Task<Input, Output>["exchange"]> {
+  const name = isRecord(request) ? (request.kind ?? request.type) : request;
+  return (task.exchange = {
+    id: ++task.exchangeSequence,
+    // Retain only a bounded operation label, never callback payloads or paths.
+    name:
+      typeof name === "string" && /^[a-zA-Z][a-zA-Z0-9._:-]{0,95}$/.test(name) ? name : "unknown",
+    pressure: new AbortController(),
+    sent: false,
+    onConsumed: undefined,
+  });
+}
 
 export function dispatchOwnedWorkerRequest<Input, Output>(
   task: Task<Input, Output>,
@@ -18,7 +36,10 @@ export function dispatchOwnedWorkerRequest<Input, Output>(
     closedError: () => Error;
   },
 ): void {
-  const context = { signal: task.controller.signal, yieldSignal: exchange.pressure.signal };
+  const context = {
+    signal: (task.controller ??= new AbortController()).signal,
+    yieldSignal: exchange.pressure.signal,
+  };
   const assertCurrent = () => {
     if (task.done || slot.task !== task) {
       throw owner.closedError();
@@ -265,6 +286,22 @@ export function prepareWorkerTaskInput<Input, Output>(
   } else {
     ready(prepared);
   }
+}
+
+export function armWorkerTaskTimeout<Input, Output>(
+  task: Task<Input, Output>,
+  timeoutMs: number,
+  onTimeout: () => void,
+): void {
+  clearTimeout(task.timer);
+  const now = performance.now();
+  task.deadline = Math.min(
+    task.options.hostTimeout !== "owner" && task.options.timeoutMs !== undefined
+      ? (task.deadline ?? task.enqueuedAt + resolveTimerTimeoutMs(task.options.timeoutMs, 60_000))
+      : Infinity,
+    now + resolveTimerTimeoutMs(timeoutMs, 60_000),
+  );
+  task.timer = setTimeout(onTimeout, Math.max(0, task.deadline - now));
 }
 
 export function expireWorkerTasks<Input, Output>(

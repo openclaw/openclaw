@@ -7,12 +7,7 @@ export async function prepareReplySessionDiffBaseline(params: {
   workspaceDir: string;
   sessionState: Pick<
     SessionInitResult,
-    | "sessionEntry"
-    | "sessionEntryHandle"
-    | "sessionStore"
-    | "isNewSession"
-    | "sessionKey"
-    | "storePath"
+    "sessionEntry" | "sessionEntryHandle" | "isNewSession" | "sessionKey" | "storePath"
   >;
 }): Promise<void> {
   const { sessionState } = params;
@@ -29,5 +24,4 @@ export async function prepareReplySessionDiffBaseline(params: {
   });
   sessionState.sessionEntry = entry;
   sessionState.sessionEntryHandle.replaceCurrent(entry);
-  sessionState.sessionStore[sessionState.sessionKey] = entry;
 }

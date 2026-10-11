@@ -198,19 +198,18 @@ export async function forkCanonicalCodexSession(params: {
           let response;
           try {
             response = assertCodexThreadForkResponse(raw);
+            if (
+              !response.thread.id.trim() ||
+              response.thread.id === sourceBinding.threadId ||
+              response.thread.id === fork.upstream.threadId ||
+              response.thread.forkedFromId !== sourceBinding.threadId ||
+              (await bindingStore.hasOtherThreadOwner(response.thread.id))
+            ) {
+              throw new Error("Codex fork returned an unsafe native thread identity");
+            }
           } catch (error) {
             control.retireConnection?.();
             throw error;
-          }
-          if (
-            !response.thread.id.trim() ||
-            response.thread.id === sourceBinding.threadId ||
-            response.thread.id === fork.upstream.threadId ||
-            response.thread.forkedFromId !== sourceBinding.threadId ||
-            (await bindingStore.hasOtherThreadOwner(response.thread.id))
-          ) {
-            control.retireConnection?.();
-            throw new Error("Codex fork returned an unsafe native thread identity");
           }
           freshThreadId = response.thread.id;
           ownership = await claimCodexAppServerLiveThread(context.client, freshThreadId);
@@ -303,7 +302,7 @@ export async function forkCanonicalCodexSession(params: {
           ) {
             throw new Error("The canonical Codex display prefix could not be copied completely");
           }
-          initialization.link({
+          await initialization.linkAsync({
             sessionKey: created.key,
             agentId: created.agentId,
             catalogId: fork.upstream.catalogId,

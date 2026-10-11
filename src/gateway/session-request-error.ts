@@ -26,3 +26,7 @@ export function invalidSessionRequest(
 ): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message, options) };
 }
+
+export function unavailableSessionRequest(message: string): { ok: false; error: ErrorShape } {
+  return { ok: false, error: errorShape(ErrorCodes.UNAVAILABLE, message) };
+}

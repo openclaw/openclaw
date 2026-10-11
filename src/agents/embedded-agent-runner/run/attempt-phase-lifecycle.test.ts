@@ -11,6 +11,7 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
 import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
+import { awaitAgentHarnessAgentEndHook } from "../../harness/lifecycle-hook-helpers.js";
 import { installSessionToolResultGuard } from "../../session-tool-result-guard.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
@@ -25,11 +26,9 @@ const hoisted = vi.hoisted(() => ({
   waitForCompletionRequiredAsyncTasks: vi.fn(),
 }));
 
+// mock-isolation: Keep skill scheduling and plugin hooks outside phase-ordering tests.
 vi.mock("../../harness/agent-end-side-effects.js", () => ({
-  runAgentEndSideEffects: hoisted.runAgentEndSideEffects,
-}));
-vi.mock("./agent-end-context.js", () => ({
-  buildEmbeddedAgentEndContext: () => ({}),
+  runAgentEndSideEffectsAsync: hoisted.runAgentEndSideEffects,
 }));
 vi.mock("./attempt-async-tasks.js", () => ({
   shouldWaitForCompletionRequiredAsyncTasks: hoisted.shouldWaitForCompletionRequiredAsyncTasks,
@@ -98,7 +97,6 @@ describe("embedded attempt phase lifecycle state", () => {
         promptError: null,
         promptErrorSource: null,
         yieldAborted: false,
-        sessionIdUsed: "session-1",
       },
       readLifecycleState: () => ({
         aborted: timedOut,
@@ -173,7 +171,6 @@ describe("embedded attempt phase lifecycle state", () => {
         promptError: null,
         promptErrorSource: null,
         yieldAborted: false,
-        sessionIdUsed: "session-1",
       },
       readLifecycleState: () => ({
         aborted: true,
@@ -261,7 +258,6 @@ describe("embedded attempt phase lifecycle state", () => {
         promptError: null,
         promptErrorSource: null,
         yieldAborted: false,
-        sessionIdUsed: "session-1",
       },
       readLifecycleState: () => ({
         aborted: false,
@@ -451,61 +447,102 @@ describe("embedded attempt phase lifecycle state", () => {
     },
   );
 
-  it("emits an abort-classified agent_end event when a teardown error races the abort", async () => {
-    const abortError = Object.assign(new Error("This operation was aborted"), {
-      name: "AbortError",
-    });
-    await completeEmbeddedAttemptAfterTurn(
-      {
-        attempt: {
-          runId: "run-1",
-          sessionId: "session-1",
-          sessionFile: "/tmp/session.jsonl",
-        } as never,
-        activeContextEngine: undefined,
-        agentDir: "/tmp/agent",
-        resolveActiveContextEnginePluginId: () => undefined,
-        setup: { effectiveWorkspace: "/tmp/workspace", sessionAgentId: "main" },
-        sessionLock: {
-          withOwnedTranscriptWrite: async (operation: () => unknown) => await operation(),
-        },
-        state: { terminal: { kind: "aborted", source: "external" } },
-        prepared: {
-          bootstrap: { shouldRecordCompletedBootstrapTurn: false },
-          bundleTools: { uncompactedEffectiveTools: [{ name: "skill_workshop" }] },
-          toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
-          sessionRuntime: {
-            sessionManager: SessionManager.inMemory(),
-            agentSession: { hookRunner: null },
-            state: { prePromptMessageCount: 0 },
-            contextGuards: { getAfterTurnCheckpoint: () => null },
-            cacheTrace: null,
-            anthropicPayloadLogger: null,
+  it.each(["success", "failure", "abort"] as const)(
+    "preserves cron job identity in agent_end after %s",
+    async (outcome) => {
+      const abortError = Object.assign(new Error("This operation was aborted"), {
+        name: "AbortError",
+      });
+      const promptError =
+        outcome === "abort"
+          ? abortError
+          : outcome === "failure"
+            ? new Error("provider failed")
+            : null;
+      const runAgentEnd = vi.fn<
+        NonNullable<
+          Parameters<typeof awaitAgentHarnessAgentEndHook>[0]["hookRunner"]
+        >["runAgentEnd"]
+      >(async () => {});
+      hoisted.runAgentEndSideEffects.mockImplementation(awaitAgentHarnessAgentEndHook);
+      for (const jobId of [undefined, "job-1"]) {
+        const sessionKey = jobId ? "agent:main:cron:job-1:run:run-1" : "agent:main:main";
+        runAgentEnd.mockClear();
+        hoisted.runAgentEndSideEffects.mockClear();
+        await completeEmbeddedAttemptAfterTurn(
+          {
+            attempt: {
+              runId: "run-1",
+              sessionId: "session-1",
+              sessionKey,
+              jobId,
+              trigger: jobId ? "cron" : "user",
+              contextTokenBudget: 180_000,
+              sessionFile: "/tmp/session.jsonl",
+            } as never,
+            activeContextEngine: undefined,
+            agentDir: "/tmp/agent",
+            resolveActiveContextEnginePluginId: () => undefined,
+            setup: { effectiveWorkspace: "/tmp/workspace", sessionAgentId: "main" },
+            sessionLock: {
+              withOwnedTranscriptWrite: async (operation: () => unknown) => await operation(),
+            },
+            state: {
+              terminal:
+                outcome === "abort" ? { kind: "aborted", source: "external" } : { kind: "ok" },
+            },
+            prepared: {
+              bootstrap: { shouldRecordCompletedBootstrapTurn: false },
+              bundleTools: { uncompactedEffectiveTools: [{ name: "skill_workshop" }] },
+              toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
+              sessionRuntime: {
+                sessionManager: SessionManager.inMemory(),
+                agentSession: { hookRunner: { hasHooks: () => true, runAgentEnd } },
+                state: { prePromptMessageCount: 0 },
+                contextGuards: { getAfterTurnCheckpoint: () => null },
+                cacheTrace: null,
+                anthropicPayloadLogger: null,
+              },
+            },
+            diagnostics: { diagnosticTrace: { traceId: "trace-1", spanId: "span-1" } as never },
+          } as never,
+          {
+            promptError,
+            sessionIdUsed: "session-1",
+            messagesSnapshot: [],
+            lastCallUsage: undefined,
+            promptCache: undefined,
+            compactionOccurredThisAttempt: false,
+          } as never,
+          {
+            yieldAborted: false,
+            transcriptLeafId: null,
+            promptStartedAt: Date.now(),
+            beforeAgentFinalizeRevisionReason: undefined,
           },
-        },
-        diagnostics: { diagnosticTrace: { traceId: "trace-1", spanId: "span-1" } as never },
-      } as never,
-      {
-        promptError: abortError,
-        sessionIdUsed: "session-1",
-        messagesSnapshot: [],
-        lastCallUsage: undefined,
-        promptCache: undefined,
-        compactionOccurredThisAttempt: false,
-      } as never,
-      {
-        yieldAborted: false,
-        transcriptLeafId: null,
-        promptStartedAt: Date.now(),
-        beforeAgentFinalizeRevisionReason: undefined,
-      },
-    );
+        );
 
-    expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledTimes(1);
-    const event = hoisted.runAgentEndSideEffects.mock.calls[0]?.[0]?.event;
-    expect(event).toMatchObject({ success: false });
-    expect(event?.error).toBeUndefined();
-  });
+        expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledTimes(1);
+        const event = hoisted.runAgentEndSideEffects.mock.calls[0]?.[0]?.event;
+        expect(event).toMatchObject({ success: outcome === "success" });
+        expect(event?.error).toBe(outcome === "failure" ? "provider failed" : undefined);
+        expect(runAgentEnd).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ success: outcome === "success" }),
+          expect.objectContaining({ runId: "run-1", sessionId: "session-1", sessionKey }),
+          { unrefTimeout: false },
+        );
+        if (jobId) {
+          expect(runAgentEnd).toHaveBeenCalledWith(
+            expect.anything(),
+            expect.objectContaining({ jobId }),
+            expect.anything(),
+          );
+        } else {
+          expect(runAgentEnd.mock.calls[0]?.[1]).not.toHaveProperty("jobId");
+        }
+      }
+    },
+  );
 
   it.each(["blocked writes", "interrupted tool result"] as const)(
     "selects review evidence after the pre-turn boundary with %s",
@@ -550,7 +587,11 @@ describe("embedded attempt phase lifecycle state", () => {
 
       await completeEmbeddedAttemptAfterTurn(
         {
-          attempt: { runId: "reused-run-id", sessionId: target.sessionId } as never,
+          attempt: {
+            runId: "reused-run-id",
+            sessionId: target.sessionId,
+            contextTokenBudget: 180_000,
+          } as never,
           activeContextEngine: undefined,
           agentDir: dir,
           resolveActiveContextEnginePluginId: () => undefined,
@@ -647,6 +688,7 @@ describe("embedded attempt phase lifecycle state", () => {
         {
           attempt: {
             runId: "after-turn",
+            contextTokenBudget: 180_000,
             sessionId: target.sessionId,
             sessionKey: target.sessionKey,
             sessionTarget: target,

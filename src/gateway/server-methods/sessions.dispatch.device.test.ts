@@ -44,6 +44,7 @@ import {
   makeFailedPlacement,
   makeSessionTarget,
 } from "./sessions-dispatch.test-support.js";
+import { registerNativeDeviceDispatchTests } from "./sessions.dispatch.native-device.suite.js";
 
 // Install session-store fixtures before environment handlers load their session accessors.
 const environmentMethods = await import("./environments.js");
@@ -105,12 +106,15 @@ function connectedNode(deviceId: string, available: number): NodeWorkerSuperviso
       enabled: true,
       capacity: { total: Math.max(2, available), available },
       capturedExecPolicy: true,
+      promptContext: 1,
     },
     commands: ["system.run"],
   } satisfies NodeWorkerSupervisorNodeProof;
 }
 
-function activeDevicePlacement(deviceId: string): WorkerSessionPlacementRecord {
+function activeDevicePlacement(
+  deviceId: string,
+): Extract<WorkerSessionPlacementRecord, { state: "active" }> {
   return {
     sessionId: dispatchTestSessionId,
     agentId: "main",
@@ -153,44 +157,53 @@ describe("sessions.dispatch device targets", () => {
     dispatchTestMocks.resolveTarget.mockReturnValue(makeSessionTarget());
   });
 
-  it("synthesizes the core device-provider target for a connected session-capable node", async () => {
-    useDeviceSession();
-    const dispatch = vi.fn().mockResolvedValue(activeDevicePlacement("device-1"));
-    const respond = await invokeSessionDispatch(
-      makeDispatchTestContext({
-        workerPlacementDispatchService: { dispatch },
-        workerSessionPlacementService: { getMany: () => new Map() },
-      }),
-      { deviceId: "device-1" },
-    );
-
-    expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        profileId: "device:device-1",
-        deviceId: "device-1",
-        inheritedProfile: {
-          providerId: "device",
-          profileSnapshot: { install: "bundle", settings: { device: "device-1" } },
-        },
-      }),
-      expect.any(Function),
-      undefined,
-      undefined,
-    );
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        ok: true,
-        placement: expect.objectContaining({ state: "active" }),
-      }),
-      undefined,
-    );
+  registerNativeDeviceDispatchTests({
+    connectedNode,
+    pairedNode,
+    useDeviceSession,
+    activeDevicePlacement,
   });
 
   describe("automatic paired-device selection", () => {
     afterEach(() => {
       vi.restoreAllMocks();
     });
+
+    it.each(["unpaired", "reconnected"] as const)(
+      "reports live %s refusal instead of stale full capacity",
+      async (reason) => {
+        useDeviceSession();
+        const node = connectedNode("unavailable", 0);
+        vi.spyOn(environmentMethods, "listGatewayEnvironments").mockResolvedValue(
+          deviceEnvironments([node]),
+        );
+        const dispatch = vi.fn();
+        const context = makeDispatchTestContext({
+          nodeRegistry: { get: () => node } as never,
+          workerPlacementDispatchService: { dispatch },
+          workerSessionPlacementService: { getMany: () => new Map() },
+        });
+        bindDeviceWorkerAvailability(context.workerEnvironmentService!, async () =>
+          reason === "unpaired"
+            ? { available: false, unavailableReason: "unpaired" }
+            : { available: true, node: { ...node, connId: "replacement-connection" } },
+        );
+
+        const respond = await invokeSessionDispatch(context, { autoDevice: true });
+
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: ErrorCodes.INVALID_REQUEST,
+            message: expect.stringContaining(
+              reason === "unpaired" ? "not a paired" : "not connected",
+            ),
+          }),
+        );
+      },
+    );
 
     it("dispatches to a capacity-one host whose occupied slot is reclaimable idle", async () => {
       useDeviceSession();

@@ -132,6 +132,8 @@ type AnthropicInlineContentNormalizer = (
 
 /** Narrow host ports consumed by the built-in provider adapters. */
 export interface AiTransportHost {
+  /** Creates background resources outside the embedding application's request contexts. */
+  runInDetachedAsyncContext<T>(run: () => T): T;
   /** Retains accepted lifecycle work after its caller observes cancellation. */
   observePendingProviderWork?: (pending: Promise<unknown>) => void;
   /**
@@ -141,7 +143,7 @@ export interface AiTransportHost {
   buildModelFetch(
     model: Model,
     timeoutMs?: number,
-    options?: { sanitizeSse?: boolean },
+    options?: { sanitizeSse?: boolean; onSseComment?: () => void },
   ): typeof fetch | undefined;
   /** Resolves host-owned process-local secret sentinel substrings immediately before egress. */
   resolveSecretSentinel(value: string): string;
@@ -233,6 +235,7 @@ type ActiveAiTransportHost = Omit<AiTransportHost, "normalizeAnthropicInlineCont
 };
 
 const inertAiTransportHost: ActiveAiTransportHost = {
+  runInDetachedAsyncContext: (run) => run(),
   buildModelFetch: () => undefined,
   resolveSecretSentinel: (value) => value,
   redactModelVisibleSecrets: (value) => value,

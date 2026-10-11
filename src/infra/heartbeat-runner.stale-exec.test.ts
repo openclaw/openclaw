@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getReplySystemEventContext } from "../auto-reply/reply/system-event-session-key.js";
 import { resetConfigRuntimeState, type OpenClawConfig } from "../config/config.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -163,51 +164,58 @@ describe("stale exec heartbeat wakes", () => {
   );
 
   it(
-    "keeps tagged cron work alive when an exec wake is coalesced",
+    "processes a coalesced notification after its exec occurrence was polled",
     heartbeatCase(async ({ sessionKey, replySpy, run }) => {
-      enqueueSystemEvent("Reminder: Check the overnight report", {
-        sessionKey,
-        contextKey: "cron:overnight-report",
+      const marker = "COALESCED_NOTIFICATION";
+      enqueueSystemEvent(marker, { sessionKey, contextKey: "notification:coalesced" });
+      replySpy.mockImplementation(async (_ctx, options) => {
+        expect(getReplySystemEventContext(options)?.events?.map((event) => event.text)).toContain(
+          marker,
+        );
+        return { text: "HEARTBEAT_OK" };
       });
       expect((await run()).status).toBe("ran");
       expect(replySpy).toHaveBeenCalledOnce();
-      expect(peekSystemEvents(sessionKey)).toEqual([]);
     }),
   );
 
   it(
-    "retires a stale exec wake before retryable busy gates",
-    heartbeatCase(async ({ run }) => {
-      expect(await run({ deps: { getQueueSize: () => 1 } })).toEqual(stale);
+    "retires a stale exec wake before busy gates without consuming excluded base content",
+    heartbeatCase(async ({ sessionKey, replySpy, run }) => {
+      const notice = "PRIVATE_EXCLUDED_STALE_NOTICE";
+      enqueueSystemEvent(notice, { sessionKey, contextKey: "notice:excluded" });
+      expect(
+        await run({
+          heartbeat: { isolatedSession: true },
+          deps: { getReplyFromConfig: replySpy, getQueueSize: () => 1 },
+        }),
+      ).toEqual(stale);
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(peekSystemEvents(sessionKey)).toEqual([notice]);
     }),
   );
 
-  it.each([{ guard: "min-spacing", runs: 1, delay: 30_000 }])(
-    "does not move cadence when a stale exec wake defers for $guard",
-    async ({ runs, delay }) => {
-      const { runSpy, runner } = startRunner();
-      for (let index = 0; index < runs; index += 1) {
-        requestHeartbeat({
-          source: "manual",
-          intent: "manual",
-          reason: "manual",
-          agentId: "main",
-          coalesceMs: 0,
-        });
-        await vi.advanceTimersByTimeAsync(1);
-      }
-      runSpy.mockResolvedValueOnce(stale);
-      await vi.advanceTimersByTimeAsync(100 - runs);
-      runner.updateConfig(heartbeatConfig("5m"));
-      await vi.advanceTimersByTimeAsync(1);
-      requestExec();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(runSpy).toHaveBeenCalledTimes(runs);
-      await vi.advanceTimersByTimeAsync(delay);
-      expect(runSpy).toHaveBeenCalledTimes(runs + 1);
-      runner.stop();
-    },
-  );
+  it("does not move cadence when a stale exec wake defers for min-spacing", async () => {
+    const { runSpy, runner } = startRunner();
+    requestHeartbeat({
+      source: "manual",
+      intent: "manual",
+      reason: "manual",
+      agentId: "main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    runSpy.mockResolvedValueOnce(stale);
+    await vi.advanceTimersByTimeAsync(99);
+    runner.updateConfig(heartbeatConfig("5m"));
+    await vi.advanceTimersByTimeAsync(1);
+    requestExec();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    runner.stop();
+  });
 
   it("does not record cooldown bookkeeping for an acknowledged exec wake", async () => {
     const { runSpy, runner } = startRunner();

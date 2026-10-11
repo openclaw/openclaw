@@ -53,7 +53,6 @@ const MANAGED_DREAMING_PROMPT = "__openclaw_memory_core_short_term_promotion_dre
 const QA_HISTORY_RETRY_DEFAULT_MS = 250;
 const QA_HISTORY_RETRY_MIN_MS = 100;
 const QA_HISTORY_RETRY_MAX_MS = 5_000;
-const QA_TRANSCRIPT_EVIDENCE_TIMEOUT_MS = 5_000;
 const QA_TRANSCRIPT_EVIDENCE_POLL_MS = 50;
 
 async function startAgentRun(
@@ -322,12 +321,17 @@ async function forceMemoryIndex(params: {
   query: string;
   expectedNeedle: string;
 }) {
+  if (!params.env.gateway.restartAfterStateMutation) {
+    throw new Error("qa gateway cannot stop for offline memory indexing");
+  }
+  await params.env.gateway.restartAfterStateMutation(async () => {
+    await runQaCli(params.env, ["memory", "index", "--agent", "qa", "--force"], {
+      timeoutMs: resolveQaLiveTurnTimeoutMs(params.env, 60_000),
+    });
+  });
   await waitForGatewayHealthy(params.env, 60_000);
   await waitForTransportReady(params.env, 60_000);
-  await runQaCli(params.env, ["memory", "index", "--agent", "qa", "--force"], {
-    timeoutMs: resolveQaLiveTurnTimeoutMs(params.env, 60_000),
-  });
-  const result = await waitForMemorySearchMatch({
+  return await waitForMemorySearchMatch({
     expectedNeedle: params.expectedNeedle,
     timeoutMs: resolveQaLiveTurnTimeoutMs(params.env, 20_000),
     search: async () =>
@@ -340,8 +344,6 @@ async function forceMemoryIndex(params: {
         },
       )) as QaMemorySearchResult,
   });
-  await params.env.gateway.restartAfterStateMutation?.(async () => {});
-  return result;
 }
 
 async function waitForPersistedTranscriptToolEvidence(
@@ -350,11 +352,12 @@ async function waitForPersistedTranscriptToolEvidence(
     sessionKey: string;
     toolName: string;
     requireSuccessfulResult: boolean;
+    timeoutMs: number;
   },
 ) {
   const startedAt = Date.now();
   let lastError: unknown;
-  while (Date.now() - startedAt < QA_TRANSCRIPT_EVIDENCE_TIMEOUT_MS) {
+  while (Date.now() - startedAt < params.timeoutMs) {
     try {
       const summary = await readSessionTranscriptSummary(env, params.sessionKey, {
         allowEmpty: true,
@@ -368,14 +371,14 @@ async function waitForPersistedTranscriptToolEvidence(
     } catch (error) {
       lastError = error;
     }
-    const remainingMs = QA_TRANSCRIPT_EVIDENCE_TIMEOUT_MS - (Date.now() - startedAt);
+    const remainingMs = params.timeoutMs - (Date.now() - startedAt);
     if (remainingMs <= 0) {
       break;
     }
     await sleep(Math.min(QA_TRANSCRIPT_EVIDENCE_POLL_MS, remainingMs));
   }
   throw new Error(
-    `timed out after ${QA_TRANSCRIPT_EVIDENCE_TIMEOUT_MS}ms waiting for persisted ${params.toolName} transcript evidence`,
+    `timed out after ${params.timeoutMs}ms waiting for persisted ${params.toolName} transcript evidence`,
     lastError === undefined ? undefined : { cause: lastError },
   );
 }
@@ -399,6 +402,7 @@ async function runAgentPrompt(
       sessionKey: params.sessionKey,
       toolName: params.transcriptToolName,
       requireSuccessfulResult: params.requireSuccessfulTranscriptToolResult === true,
+      timeoutMs: resolveTimerTimeoutMs(params.timeoutMs, 30_000),
     });
   }
   return {

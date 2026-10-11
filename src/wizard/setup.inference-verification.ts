@@ -22,7 +22,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import {
   resolveSystemAgentConfiguredRouteFromConfig,
   projectInferenceRoute,
-  sameDefaultInferenceRoute,
 } from "../system-agent/inference-route.js";
 import { activateSavedSetupCredential } from "../system-agent/setup-inference-credential-access.js";
 import { isSetupCredentialReplacement } from "../system-agent/setup-inference-credentials.js";
@@ -70,7 +69,6 @@ export async function completeSetupModelAuth(params: {
       ) !== undefined &&
       ((params.usedImportFlow && params.keepExistingModelConfig) || opts.authChoice !== "skip"))
   ) {
-    const verificationTarget = resolveOnboardingSetupTarget(params.config);
     const verification = await offerLiveModelVerification({
       config: params.config,
       baseConfig,
@@ -80,7 +78,6 @@ export async function completeSetupModelAuth(params: {
       opts,
       prompter: params.prompter,
       runtime: params.runtime,
-      workspaceDir: verificationTarget.workspaceDir,
       configTarget: params.configTarget,
       required: params.usedImportFlow && params.keepExistingModelConfig,
     });
@@ -107,7 +104,6 @@ export async function offerLiveModelVerification(params: {
   opts: OnboardOptions;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
-  workspaceDir: string;
   agentDir?: string;
   stateDir?: string;
   configTarget: SetupInferenceConfigTarget;
@@ -339,7 +335,7 @@ export async function offerLiveModelVerification(params: {
         activate: async () => {
           if (savedProfile?.credential.setup?.replacement && verifiedRoute) {
             const latest = (await params.configTarget.read()).config;
-            if (!sameDefaultInferenceRoute(await projectRoute(latest), verifiedRoute)) {
+            if (!isDeepStrictEqual(await projectRoute(latest), verifiedRoute)) {
               throw new Error(
                 "The connection changed before activation. Test the saved sign-in again.",
               );

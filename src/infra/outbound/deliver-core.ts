@@ -14,22 +14,23 @@ import { throwIfAborted } from "./abort.js";
 import { createChannelHandler } from "./deliver-channel.js";
 import type { ChannelHandler, DeliverOutboundPayloadsCoreParams } from "./deliver-contracts.js";
 import { assertOutboundHandoffCurrent } from "./deliver-handoff.js";
-import { suppressedPayloadOutcome, toOutboundDeliveryError } from "./deliver-hooks.js";
 import {
   buildPayloadSummary,
   deliveryKindForPayload,
   maybeNotifyAfterDeliveredPayload,
   maybePinDeliveredMessage,
   normalizeEmptyPayloadForDelivery,
-  resolveOutboundMediaAccessForSend,
+  resolveChannelHandlerParams,
   stripInternalRuntimeScaffoldingFromPayload,
 } from "./deliver-payload.js";
 import { createDeliveryResultRecorder } from "./deliver-results.js";
 import { mirrorDeliveredPayloads } from "./deliver-transcript.js";
-import type {
-  OutboundDeliveryResult,
-  OutboundPayloadDeliveryKind,
-  OutboundPayloadDeliveryOutcome,
+import {
+  OutboundDeliveryError,
+  type OutboundDeliveryResult,
+  type OutboundPayloadDeliveryKind,
+  type OutboundPayloadDeliveryOutcome,
+  type OutboundPayloadDeliverySuppressionReason,
 } from "./deliver-types.js";
 import {
   assertStableMediaFanout,
@@ -73,27 +74,14 @@ export async function deliverOutboundPayloadsCore(
   let payloadSendStarted: boolean;
   const createHandler = (mediaSources: readonly string[]) =>
     createChannelHandler({
+      ...resolveChannelHandlerParams(params, reply, mediaSources),
       cfg,
-      agentId: params.session?.agentId,
       channel,
       to,
       deps,
       accountId,
-      replyToId: reply?.replyToId,
-      replyToMode: reply?.source === "implicit" ? reply.mode : undefined,
-      formatting: params.formatting,
-      threadId: params.threadId,
-      identity: params.identity,
-      gifPlayback: params.gifPlayback,
-      forceDocument: params.forceDocument,
-      silent: params.silent,
       abortSignal,
-      mediaAccess: resolveOutboundMediaAccessForSend(params, channel, mediaSources),
-      gatewayClientScopes: params.gatewayClientScopes,
-      conversationReadOrigin: params.conversationReadOrigin,
       deliveryQueueId: params.deliveryQueueId,
-      preparedMessageId: params.preparedMessageId,
-      requiredUnknownSendReconciliation: params.requiredUnknownSendReconciliation,
       onPlatformSendStart: async (route) => {
         // Channel handlers can fan one logical payload into multiple sends.
         // Carry its source index without polluting the persisted platform route.
@@ -101,6 +89,7 @@ export async function deliverOutboundPayloadsCore(
         await params.onPlatformSendStart?.(route, activeSourceIndex);
       },
       onDirectAdapterHandoff: params.onDirectAdapterHandoff,
+      withDirectAdapterHandoff: params.withDirectAdapterHandoff,
       assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
       onPlatformSendDispatch: params.onPlatformSendDispatch,
       onDeliveryResult: reportIdentifiedDeliveryResult,
@@ -157,7 +146,7 @@ export async function deliverOutboundPayloadsCore(
   const sendTextChunks = async (
     sendHandler: ChannelHandler,
     text: string,
-    overrides: OutboundMessageSendOverrides = {},
+    overrides: OutboundMessageSendOverrides,
   ) => {
     const units = planOutboundTextMessageUnits({
       text,
@@ -168,10 +157,7 @@ export async function deliverOutboundPayloadsCore(
       textLimit,
       chunkMode,
       formatting: params.formatting,
-      consumeReplyTo: (value) =>
-        applyReplyToConsumption(value, {
-          consumeImplicitReply: value.replyToIdSource === "implicit",
-        }),
+      consumeReplyTo: applyReplyToConsumption,
     });
     for (const unit of units) {
       throwIfAborted(abortSignal);
@@ -230,6 +216,8 @@ export async function deliverOutboundPayloadsCore(
       payloadOutcomes.push(recordedOutcome);
       params.onPayloadDeliveryOutcome?.(recordedOutcome);
     };
+    const recordSuppressedPayload = (reason: OutboundPayloadDeliverySuppressionReason): void =>
+      recordPayloadOutcome({ index: payloadIndex, status: "suppressed", reason });
     let deliveryKind: DiagnosticMessageDeliveryKind = "other";
     let deliveryStartedAt = 0;
     let deliveryPending = false;
@@ -254,38 +242,31 @@ export async function deliverOutboundPayloadsCore(
         ...(diagnosticSessionKey ? { sessionKey: diagnosticSessionKey } : {}),
       });
     };
-    const completeDeliveryDiagnostics = (resultCount: number) => {
+    const finishDeliveryDiagnostics = (result: number | { error: unknown }) => {
       if (!deliveryPending) {
         return;
       }
       deliveryPending = false;
-      emitDiagnosticEvent({
-        type: "message.delivery.completed",
+      const delivery = {
         channel,
         deliveryKind,
         durationMs: Date.now() - deliveryStartedAt,
-        resultCount,
         ...(diagnosticSessionKey ? { sessionKey: diagnosticSessionKey } : {}),
-      });
-    };
-    const errorDeliveryDiagnostics = (err: unknown) => {
-      if (!deliveryPending) {
-        return;
-      }
-      deliveryPending = false;
-      emitDiagnosticEvent({
-        type: "message.delivery.error",
-        channel,
-        deliveryKind,
-        durationMs: Date.now() - deliveryStartedAt,
-        errorCategory: diagnosticErrorCategory(err),
-        ...(diagnosticSessionKey ? { sessionKey: diagnosticSessionKey } : {}),
-      });
+      };
+      emitDiagnosticEvent(
+        typeof result === "number"
+          ? { type: "message.delivery.completed", ...delivery, resultCount: result }
+          : {
+              type: "message.delivery.error",
+              ...delivery,
+              errorCategory: diagnosticErrorCategory(result.error),
+            },
+      );
     };
     try {
       throwIfAborted(abortSignal);
 
-      const presentationHandler = await getDeliveryHandler(buildPayloadSummary(payload).mediaUrls);
+      const presentationHandler = await getDeliveryHandler(payloadSummary.mediaUrls);
       const renderedPayload = stripInternalRuntimeScaffoldingFromPayload(
         await renderPresentationForDelivery(presentationHandler, payload),
       );
@@ -305,15 +286,12 @@ export async function deliverOutboundPayloadsCore(
           )
         : null;
       if (!effectivePayload) {
-        recordPayloadOutcome(
-          suppressedPayloadOutcome({
-            index: payloadIndex,
-            reason: preparedEntry.messageHookChanged
-              ? "empty_after_message_sending_hook"
-              : preparedEntry.replyHookChanged
-                ? "empty_after_reply_payload_sending_hook"
-                : "no_visible_payload",
-          }),
+        recordSuppressedPayload(
+          preparedEntry.messageHookChanged
+            ? "empty_after_message_sending_hook"
+            : preparedEntry.replyHookChanged
+              ? "empty_after_reply_payload_sending_hook"
+              : "no_visible_payload",
         );
         continue;
       }
@@ -336,14 +314,7 @@ export async function deliverOutboundPayloadsCore(
         replyToIdSource: replyToResolution.source,
         ...(preparedTarget.threadId != null ? { threadId: preparedTarget.threadId } : {}),
         ...(effectivePayload.audioAsVoice === true ? { audioAsVoice: true } : {}),
-        ...(params.forceDocument !== undefined ? { forceDocument: params.forceDocument } : {}),
       };
-      const applySendReplyToConsumption = <T extends OutboundMessageSendOverrides>(
-        overrides: T,
-      ): T =>
-        applyReplyToConsumption(overrides, {
-          consumeImplicitReply: replyToResolution.source === "implicit",
-        });
       const deliveryTarget = () =>
         deliveryHandler.buildTargetRef({ threadId: preparedTarget.threadId });
       const beforeCount = results.length;
@@ -358,19 +329,13 @@ export async function deliverOutboundPayloadsCore(
       ) {
         const delivery = await deliveryHandler.sendPayload(
           effectivePayload,
-          withPreparedTarget(applySendReplyToConsumption(sendOverrides)),
+          withPreparedTarget(applyReplyToConsumption(sendOverrides)),
         );
         await recordIdentifiedDeliveryResult(delivery);
         adoptSuccessfulResultsSince(beforeCount);
-        const deliveredResults = results.slice(beforeCount);
-        if (deliveredResults.length === 0) {
-          completeDeliveryDiagnostics(0);
-          recordPayloadOutcome(
-            suppressedPayloadOutcome({
-              index: payloadIndex,
-              reason: getSuppressionReason() ?? "adapter_returned_no_identity",
-            }),
-          );
+        if (results.length <= beforeCount) {
+          finishDeliveryDiagnostics(0);
+          recordSuppressedPayload(getSuppressionReason() ?? "adapter_returned_no_identity");
           continue;
         }
       } else if (payloadSummary.mediaUrls.length === 0) {
@@ -378,7 +343,7 @@ export async function deliverOutboundPayloadsCore(
           await recordIdentifiedDeliveryResults(
             await deliveryHandler.sendFormattedText(
               payloadSummary.text,
-              withPreparedTarget(applySendReplyToConsumption(sendOverrides)),
+              withPreparedTarget(applyReplyToConsumption(sendOverrides)),
             ),
           );
           adoptSuccessfulResultsSince(beforeCount);
@@ -410,7 +375,7 @@ export async function deliverOutboundPayloadsCore(
           mediaUrls: payloadSummary.mediaUrls,
           caption: payloadSummary.text,
           overrides: sendOverrides,
-          consumeReplyTo: applySendReplyToConsumption,
+          consumeReplyTo: applyReplyToConsumption,
         });
         const sendMedia = deliveryHandler.sendFormattedMedia ?? deliveryHandler.sendMedia;
         for (const unit of mediaUnits) {
@@ -439,14 +404,9 @@ export async function deliverOutboundPayloadsCore(
         });
         recordDeliveredPayload(mirroredPayload);
       } else {
-        recordPayloadOutcome(
-          suppressedPayloadOutcome({
-            index: payloadIndex,
-            reason: getSuppressionReason() ?? "adapter_returned_no_identity",
-          }),
-        );
+        recordSuppressedPayload(getSuppressionReason() ?? "adapter_returned_no_identity");
         if (getSuppressionReason() === "adapter_returned_no_send") {
-          completeDeliveryDiagnostics(0);
+          finishDeliveryDiagnostics(0);
           continue;
         }
       }
@@ -475,7 +435,7 @@ export async function deliverOutboundPayloadsCore(
         target: deliveryTarget(),
         results: deliveredResults,
       });
-      completeDeliveryDiagnostics(deliveredResults.length);
+      finishDeliveryDiagnostics(deliveredResults.length);
     } catch (caughtError) {
       let err = caughtError;
       if (!payloadSendStarted) {
@@ -508,7 +468,7 @@ export async function deliverOutboundPayloadsCore(
         stage: "platform_send",
         results: failedPayloadResults,
       });
-      errorDeliveryDiagnostics(err);
+      finishDeliveryDiagnostics({ error: err });
       // A completed provider send records success before optional pin/notify
       // bookkeeping. Reaching this fallback first means the logical payload's
       // provider fan-out itself was incomplete, even if an earlier part sent.
@@ -521,12 +481,14 @@ export async function deliverOutboundPayloadsCore(
           : {}),
       });
       if (!params.bestEffort) {
-        throw toOutboundDeliveryError({
-          error: err,
-          results,
-          payloadOutcomes,
-          stage: "platform_send",
-        });
+        throw err instanceof OutboundDeliveryError
+          ? err
+          : new OutboundDeliveryError(formatErrorMessage(err), {
+              cause: err,
+              results,
+              payloadOutcomes,
+              stage: "platform_send",
+            });
       }
       params.onError?.(err, payloadSummary);
     }
@@ -534,8 +496,6 @@ export async function deliverOutboundPayloadsCore(
   await mirrorDeliveredPayloads({
     delivery: params,
     payloads: deliveredMirrorPayloads,
-    channel,
-    to,
   });
 
   return results;

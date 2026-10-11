@@ -9,18 +9,9 @@ const REPLAY_WINDOW_MS = 10 * 60 * 1000;
 const REPLAY_CACHE_MAX_ENTRIES = 10_000;
 const REPLAY_CACHE_PRUNE_INTERVAL = 64;
 
-type WebhookReplayCache = {
-  seenUntil: Map<string, { expiresAt: number }>;
-  calls: number;
-};
+type WebhookReplayCache = ReturnType<typeof createWebhookReplayCache>;
 
-type WebhookReplayReservation = {
-  isReplay: boolean;
-  verifiedRequestKey: string;
-  releaseReplay?: () => void;
-};
-
-export function createWebhookReplayCache(): WebhookReplayCache {
+export function createWebhookReplayCache() {
   return { seenUntil: new Map<string, { expiresAt: number }>(), calls: 0 };
 }
 
@@ -33,10 +24,7 @@ function pruneWebhookReplayCache(cache: WebhookReplayCache, now: number): void {
   pruneMapToMaxSize(cache.seenUntil, REPLAY_CACHE_MAX_ENTRIES);
 }
 
-export function reserveWebhookReplay(
-  cache: WebhookReplayCache,
-  replayKey: string,
-): WebhookReplayReservation {
+export function reserveWebhookReplay(cache: WebhookReplayCache, replayKey: string) {
   const now = Date.now();
   cache.calls += 1;
   if (cache.calls % REPLAY_CACHE_PRUNE_INTERVAL === 0) {

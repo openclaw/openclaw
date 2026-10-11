@@ -234,11 +234,6 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
     actions: ["refreshHooksPolicy"],
   },
   {
-    prefixes: ["skills.workshop.autonomous.mode"],
-    kind: "hot",
-    actions: ["reconcileSystemJobs"],
-  },
-  {
     prefixes: ["agents.defaults.decisionModel"],
     kind: "hot",
     actions: ["reloadPlugins"],
@@ -289,6 +284,7 @@ const DEFAULT_RELOAD_POLICIES: ReloadPolicy[] = [
       "broadcast",
       "memory.citations",
       "worktreeRoot",
+      "worktreeMaxCount",
       "worktreeAcceleration",
       "security.audit.suppressions",
       "security.installPolicy",

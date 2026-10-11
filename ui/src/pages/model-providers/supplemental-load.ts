@@ -95,7 +95,7 @@ export class ModelProviderSupplementalLoader {
       data.providerUsage === null &&
       data.costByProvider === null
     ) {
-      void this.load(client);
+      void this.loadRequests(client, true);
     }
   }
 
@@ -116,10 +116,6 @@ export class ModelProviderSupplementalLoader {
     const epoch = this.options.getGateway().epoch;
     void this.usageTask.run([null, epoch]);
     void this.costTask.run([null, epoch]);
-  }
-
-  load(explicitClient?: GatewayBrowserClient): Promise<void> {
-    return this.loadRequests(explicitClient, true);
   }
 
   loadUsage(): Promise<void> {

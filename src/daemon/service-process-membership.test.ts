@@ -1,3 +1,4 @@
+import vm from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { inspectServiceProcessMembershipSync } from "./service-process-membership.js";
 
@@ -174,6 +175,133 @@ describe("launchd process membership", () => {
       expect(inspectServiceProcessMembershipSync(gatewayPid, "darwin")).toBe(expected);
     },
   );
+});
+
+describe("launchd process membership when launchctl denies PID domains", () => {
+  // macOS 12 answers `launchctl print pid/<pid>` with exit 1 (EPERM) for most processes.
+  const denied = {
+    status: 1,
+    stdout: "",
+    stderr: "Could not print domain: 1: Operation not permitted",
+  };
+  const nativeRow = (id: number, name?: string) => ({
+    status: 0,
+    stdout: JSON.stringify({ id: String(id), name }),
+  });
+  const observe = (caller: object, gateway: object, launchctl: object = denied) =>
+    native.spawn.mockImplementation((command: string, args: string[]) =>
+      command === "ps"
+        ? { status: 0, stdout: groupRows(901) }
+        : command === process.execPath
+          ? Number(args[4]) === process.pid
+            ? caller
+            : gateway
+          : launchctl,
+    );
+
+  it.each([
+    {
+      label: "an external terminal",
+      caller: nativeRow(1204, "com.apple.Terminal"),
+      gateway: nativeRow(1203, "ai.openclaw.gateway"),
+      expected: "outside",
+    },
+    {
+      label: "a process in the Gateway coalition",
+      caller: nativeRow(1203),
+      gateway: nativeRow(1203),
+      expected: "inside",
+    },
+    {
+      label: "a child of an earlier Gateway instance",
+      caller: nativeRow(1204, "ai.openclaw.gateway"),
+      gateway: nativeRow(1203, "ai.openclaw.gateway"),
+      expected: "inside",
+    },
+    {
+      label: "distinct coalitions without job names",
+      caller: nativeRow(1204),
+      gateway: nativeRow(1203, "ai.openclaw.gateway"),
+      expected: "unknown",
+    },
+    {
+      label: "a crashed native probe",
+      caller: { status: null, signal: "SIGSEGV", stdout: "" },
+      gateway: nativeRow(1203, "ai.openclaw.gateway"),
+      expected: "unknown",
+    },
+    {
+      label: "an invalid coalition ID",
+      caller: { status: 0, stdout: JSON.stringify({ id: "0", name: "com.apple.Terminal" }) },
+      gateway: nativeRow(1203, "ai.openclaw.gateway"),
+      expected: "unknown",
+    },
+    {
+      label: "unparseable native output",
+      caller: { status: 0, stdout: "{" },
+      gateway: nativeRow(1203, "ai.openclaw.gateway"),
+      expected: "unknown",
+    },
+  ])("classifies $label from native coalitions", ({ caller, gateway, expected }) => {
+    observe(caller, gateway);
+    expect(inspectServiceProcessMembershipSync(gatewayPid, "darwin")).toBe(expected);
+  });
+
+  it.each(["missing-record", "empty-coalition", "available"] as const)(
+    "renders a naturally completing native probe for %s",
+    (mode) => {
+      observe(nativeRow(1204, "com.apple.Terminal"), nativeRow(1203, "ai.openclaw.gateway"));
+      inspectServiceProcessMembershipSync(gatewayPid, "darwin");
+      const invocation = native.spawn.mock.calls.find(([command]) => command === process.execPath);
+      const script = invocation?.[1]?.[2];
+      expect(typeof script).toBe("string");
+      if (typeof script !== "string") {
+        throw new Error("Native coalition probe was not invoked");
+      }
+      const write = vi.fn();
+      const childProcess = {
+        argv: ["node", "koffi-fixture", "42"],
+        exitCode: undefined as number | undefined,
+        stdout: { write },
+        exit: () => {
+          throw new Error("Forced exit bypassed native probe completion");
+        },
+      };
+      vm.runInNewContext(script, {
+        Buffer,
+        process: childProcess,
+        require: () => ({
+          load: (name: string) => {
+            if (name !== "/usr/lib/libproc.dylib") {
+              throw new Error("Optional coalition name unavailable");
+            }
+            return {
+              func: () => (_pid: number, _kind: number, _arg: number, info: Buffer) => {
+                info.writeBigUInt64LE(mode === "empty-coalition" ? 0n : 42n);
+                return mode === "missing-record" ? 0 : info.length;
+              },
+            };
+          },
+        }),
+      });
+      expect(childProcess.exitCode).toBe(mode === "available" ? undefined : 1);
+      if (mode === "available") {
+        expect(write).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ id: "42" }));
+      } else {
+        expect(write).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("does not query natively when launchctl itself fails to run", () => {
+    observe(nativeRow(1204, "com.apple.Terminal"), nativeRow(1203, "ai.openclaw.gateway"), {
+      status: null,
+      stdout: "",
+      error: new Error("timeout"),
+    });
+    expect(inspectServiceProcessMembershipSync(gatewayPid, "darwin")).toBe("unknown");
+    expect(native.spawn.mock.calls.some(([command]) => command === process.execPath)).toBe(false);
+  });
 });
 
 describe("systemd process membership", () => {

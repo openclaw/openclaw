@@ -12,6 +12,8 @@ export type GatewayCloseOptions = {
   reason?: string;
   restartExpectedMs?: number | null;
   drainTimeoutMs?: number | null;
+  /** Process-owning host only: the process exits after close, releasing native watchers. */
+  exitAfterClose?: boolean;
 };
 
 type GatewayShutdownBudget = {
@@ -110,7 +112,7 @@ export type GatewayServerOptions = {
   updateCanary?: boolean;
   channelAutostartSuppression?: ChannelAutostartSuppression;
   /** Internal lifecycle callback that re-proves and records crash-loop recovery. */
-  tryRecoverChannelAutostartSuppression?: () => boolean;
+  tryRecoverChannelAutostartSuppression?: (signal: AbortSignal) => Promise<number | undefined>;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
   /** Internal Node process-origin timestamp used only for initial startup tracing. */
   processStartedAt?: number;

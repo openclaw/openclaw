@@ -1,5 +1,6 @@
 import { AsyncResource } from "node:async_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
@@ -538,7 +539,9 @@ describe("worker detached model-context branch parity", () => {
     },
   );
 
-  it("retains the initial-setup writer fence across the asynchronous context read", async () => {
+  it("retains the initial-setup writer fence across the asynchronous context read", async ({
+    signal,
+  }) => {
     seedPrevious();
     const paused = createDeferredCore();
     const finishSetup = createDeferredCore();
@@ -568,7 +571,13 @@ describe("worker detached model-context branch parity", () => {
     });
     void setup.catch(() => undefined);
     const callerCurrent = vi.fn();
-    const waitForInitialPlacement = vi.fn(dispatch.waitForInitialPlacement);
+    const setupWaitStarted = createDeferredCore();
+    const waitForInitialPlacement = vi.fn(
+      (...args: Parameters<typeof dispatch.waitForInitialPlacement>) => {
+        setupWaitStarted.resolve();
+        return dispatch.waitForInitialPlacement(...args);
+      },
+    );
     try {
       await paused.promise;
       const observed = await withAsyncReadHook(
@@ -588,14 +597,23 @@ describe("worker detached model-context branch parity", () => {
             expect(placements.validateTurnClaim(claim)).toBe(true);
           },
         },
-        () => {
+        async () => {
           const pending = launchProbe(
             {
               ...request("writer-after-initial-setup"),
+              abortSignal: signal,
               suppressNextUserMessagePersistence: true,
             },
             callerCurrent,
             waitForInitialPlacement,
+          );
+          await withinTest(
+            awaitGateBeforeSettlement(
+              setupWaitStarted.promise,
+              pending,
+              "turn skipped the initial-setup admission wait",
+            ),
+            signal,
           );
           finishSetup.resolve();
           return pending;

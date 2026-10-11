@@ -18,7 +18,7 @@ const makeMappedDirectClient = (params: {
       [params.userId]: [params.roomId],
     }),
     getUserId: vi.fn().mockResolvedValue(params.botId ?? BOT_USER_ID),
-    getJoinedRooms: vi.fn(),
+    getJoinedRooms: vi.fn<MatrixClient["getJoinedRooms"]>().mockResolvedValue([]),
     getJoinedRoomMembers: vi.fn().mockResolvedValue([params.botId ?? BOT_USER_ID, params.userId]),
     setAccountData: vi.fn(),
     ...params.extra,
@@ -188,7 +188,7 @@ describe("resolveMatrixRoomId", () => {
         [userId]: ["!room-a:example.org"],
       }),
       getUserId: vi.fn().mockResolvedValue("@bot-a:example.org"),
-      getJoinedRooms: vi.fn(),
+      getJoinedRooms: vi.fn<MatrixClient["getJoinedRooms"]>().mockResolvedValue([]),
       getJoinedRoomMembers: vi.fn().mockResolvedValue(["@bot-a:example.org", userId]),
       setAccountData: vi.fn(),
       resolveRoom: vi.fn(),
@@ -198,7 +198,7 @@ describe("resolveMatrixRoomId", () => {
         [userId]: ["!room-b:example.org"],
       }),
       getUserId: vi.fn().mockResolvedValue("@bot-b:example.org"),
-      getJoinedRooms: vi.fn(),
+      getJoinedRooms: vi.fn<MatrixClient["getJoinedRooms"]>().mockResolvedValue([]),
       getJoinedRoomMembers: vi.fn().mockResolvedValue(["@bot-b:example.org", userId]),
       setAccountData: vi.fn(),
       resolveRoom: vi.fn(),
@@ -308,7 +308,7 @@ describe("resolveMatrixRoomId", () => {
         [userId]: ["!shared-room:example.org", "!dm-room:example.org"],
       }),
       getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
-      getJoinedRooms: vi.fn(),
+      getJoinedRooms: vi.fn<MatrixClient["getJoinedRooms"]>().mockResolvedValue([]),
       getJoinedRoomMembers: vi
         .fn()
         .mockResolvedValueOnce(["@bot:example.org", userId, "@extra:example.org"])

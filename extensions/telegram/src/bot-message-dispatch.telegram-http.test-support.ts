@@ -397,7 +397,6 @@ export function createTelegramDispatchHttpFixture() {
       sendRecordVoice: async () => undefined,
       sendChatActionHandler: { sendChatAction: async () => undefined },
       ackReactionPromise: null,
-      reactionApi: null,
       statusReactionController: null,
       accountId: "default",
       turn: {

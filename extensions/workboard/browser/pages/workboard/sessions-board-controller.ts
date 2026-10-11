@@ -2,11 +2,13 @@ import type { UsersSelfResult } from "@openclaw/gateway-protocol";
 import type {
   WorkboardBoardSummary,
   WorkboardSessionsBoardRead,
+  WorkboardSessionsBoardRevision,
   WorkboardSessionsBoardView,
 } from "@openclaw/workboard-contract";
-import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
+import type { ControlUiHost, ControlUiSession } from "openclaw/plugin-sdk/control-ui";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { normalizeWorkboardChange } from "../../lib/workboard/change-payload.ts";
 
 /** Optional host contract supplied by the shared page dock owner. */
 type BoardDockHost = ControlUiHost & {
@@ -29,6 +31,7 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
   let attempted = false;
   let pending: Promise<boolean> | undefined;
   let snapshot: WorkboardSessionsBoardRead | undefined;
+  let revision: WorkboardSessionsBoardRevision | undefined;
   let error: string | undefined;
   let busy = false;
   let draggedKey: string | undefined;
@@ -38,6 +41,11 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
   let gatewayId: string | undefined;
   let identityLoad: Promise<void> | undefined;
   let restoredBoardId: string | undefined;
+  const invalidate = () => {
+    generation += 1;
+    pending = undefined;
+    revision = undefined;
+  };
   const storageKey = (id: string) =>
     gatewayId && viewerProfileId
       ? `openclaw.workboard.sessions.people:${JSON.stringify([gatewayId, viewerProfileId, id])}`
@@ -124,14 +132,21 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
             ? { involvingProfileId: peopleFilter.slice(8) }
             : {}),
         };
-        const result = await host.request<WorkboardSessionsBoardRead>(
-          "workboard.sessionsBoard.read",
-          { boardId: id, view },
-        );
+        const result = await host.request<
+          | (WorkboardSessionsBoardRead & { revision: WorkboardSessionsBoardRevision })
+          | { unchanged: true; revision: WorkboardSessionsBoardRevision }
+        >("workboard.sessionsBoard.read", {
+          boardId: id,
+          view,
+          ...(revision ? { sinceRevision: revision } : {}),
+        });
         if (!current(id, receipt)) {
           return false;
         }
-        snapshot = result;
+        revision = result.revision;
+        if (!("unchanged" in result)) {
+          snapshot = result;
+        }
         error = undefined;
         return true;
       } catch (cause) {
@@ -158,6 +173,7 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
       return;
     }
     const id = boardId;
+    invalidate();
     const receipt = generation;
     busy = true;
     error = undefined;
@@ -183,6 +199,17 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
   };
 
   return {
+    hasCurrent(payload: unknown) {
+      const change = normalizeWorkboardChange(payload);
+      return Boolean(
+        active &&
+        boardId &&
+        change &&
+        revision &&
+        change.epoch === revision.epoch &&
+        change.sessionsRevision === revision.revision,
+      );
+    },
     get snapshot() {
       return snapshot;
     },
@@ -205,8 +232,7 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
       } catch {
         // Keep the selection for this mounted view if storage is unavailable.
       }
-      generation += 1;
-      pending = undefined;
+      invalidate();
       snapshot = snapshot ? { ...snapshot, sessions: [] } : undefined;
       error = undefined;
       void read();
@@ -232,8 +258,7 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
     sync(board: WorkboardBoardSummary | undefined | null, enabled: boolean) {
       const nextId = board?.kind === "sessions" ? board.id : undefined;
       if (boardId !== nextId || active !== enabled) {
-        generation += 1;
-        pending = undefined;
+        invalidate();
         attempted = false;
         busy = false;
         draggedKey = undefined;
@@ -284,6 +309,19 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
             host.agents.defaultId ??
             host.connection.assistantAgentId ??
             undefined);
+        if (sessionKey) {
+          const { session } = await host.request<{ session: ControlUiSession | null }>(
+            "sessions.describe",
+            { key: sessionKey },
+          );
+          if (!current(id, receipt) || !writable()) {
+            return;
+          }
+          agentId = session?.agentId ?? agentId;
+          if (!session?.isDock) {
+            sessionKey = undefined;
+          }
+        }
         if (!sessionKey) {
           if (createdConversation?.boardId === id) {
             ({ sessionKey, agentId } = createdConversation);
@@ -291,7 +329,12 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
             if (!agentId) {
               throw new Error(t("workboard.sessionsBoard.agentUnavailable"));
             }
-            sessionKey = (await host.sessions.create({ agentId, label })) ?? undefined;
+            sessionKey =
+              (await host.sessions.create({
+                agentId,
+                displayName: label,
+                surface: "plugin-dock",
+              })) ?? undefined;
             if (!sessionKey) {
               throw new Error(t("workboard.sessionsBoard.agentCreateFailed"));
             }
@@ -327,8 +370,7 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
       }),
     dispose() {
       active = false;
-      generation += 1;
-      pending = undefined;
+      invalidate();
     },
   };
 }

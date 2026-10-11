@@ -27,7 +27,7 @@ export async function prepareWorkerGitHubBinding(params: {
       return undefined;
     }
     const currentWorkspace = await prepareGitHubPublicationWorkspaceOwner(params);
-    const workspace = currentWorkspace();
+    const workspace = currentWorkspace.initial;
     if (params.assertCurrent?.() === false) {
       return undefined;
     }
@@ -55,8 +55,12 @@ export async function prepareWorkerGitHubBinding(params: {
     if (params.assertCurrent?.() === false) {
       return undefined;
     }
+    const current = await currentWorkspace.read();
+    if (params.assertCurrent?.() === false) {
+      return undefined;
+    }
     if (
-      !sameGitHubPublicationWorkspace(workspace, currentWorkspace()) ||
+      !sameGitHubPublicationWorkspace(workspace, current) ||
       !matchesCurrentGitHubPublicationIdentity({ agentId: params.agentId, identity })
     ) {
       return undefined;

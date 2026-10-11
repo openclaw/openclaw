@@ -9,14 +9,6 @@ struct ExecApprovalTerminalTombstone: Equatable {
 }
 
 extension ExecApprovalTerminalTombstone: Codable {
-    private enum CodingKeys: String, CodingKey {
-        case approvalId
-        case gatewayStableID
-        case outcome
-        case outcomeIsAuthoritative
-        case recordedAt
-    }
-
     private enum LegacyCodingKeys: String, CodingKey {
         case outcomeText
     }

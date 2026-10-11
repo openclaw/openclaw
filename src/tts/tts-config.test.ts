@@ -45,6 +45,7 @@ describe("shouldAttemptTtsPayload", () => {
   it("does not infer automatic TTS from a dashboard text turn without opt-in state", () => {
     expect(
       shouldAttemptTtsPayload({
+        preparedTtsPreferences: {},
         cfg: {} as OpenClawConfig,
         agentId: "main",
         channelId: "webchat",
@@ -57,20 +58,27 @@ describe("shouldAttemptTtsPayload", () => {
     writeFileSync(prefsPath, JSON.stringify({ tts: { auto: "off" } }));
     const cfg = { tts: { auto: "off" } } as OpenClawConfig;
 
-    expect(shouldAttemptTtsPayload({ cfg, ttsAuto: "always" })).toBe(true);
-    expect(shouldAttemptTtsPayload({ cfg, ttsAuto: "off" })).toBe(false);
+    expect(shouldAttemptTtsPayload({ preparedTtsPreferences: {}, cfg, ttsAuto: "always" })).toBe(
+      true,
+    );
+    expect(shouldAttemptTtsPayload({ preparedTtsPreferences: {}, cfg, ttsAuto: "off" })).toBe(
+      false,
+    );
   });
 
   it("uses local prefs before config auto mode", () => {
     const cfg = { tts: { auto: "off" } } as OpenClawConfig;
 
     writeFileSync(prefsPath, JSON.stringify({ tts: { enabled: true } }));
-    expect(shouldAttemptTtsPayload({ cfg })).toBe(true);
+    expect(shouldAttemptTtsPayload({ preparedTtsPreferences: {}, cfg })).toBe(true);
 
     writeFileSync(prefsPath, JSON.stringify({ tts: { auto: "off" } }));
-    expect(shouldAttemptTtsPayload({ cfg: { tts: { enabled: true } } as OpenClawConfig })).toBe(
-      false,
-    );
+    expect(
+      shouldAttemptTtsPayload({
+        preparedTtsPreferences: {},
+        cfg: { tts: { enabled: true } } as OpenClawConfig,
+      }),
+    ).toBe(false);
   });
 
   it("records the selected provider preference source", () => {
@@ -119,9 +127,13 @@ describe("shouldAttemptTtsPayload", () => {
       },
     } as OpenClawConfig;
 
-    expect(shouldAttemptTtsPayload({ cfg, agentId: "voice" })).toBe(true);
+    expect(shouldAttemptTtsPayload({ preparedTtsPreferences: {}, cfg, agentId: "voice" })).toBe(
+      true,
+    );
     expect(resolveConfiguredTtsMode(cfg, "voice")).toBe("all");
-    expect(shouldAttemptTtsPayload({ cfg, agentId: "main" })).toBe(false);
+    expect(shouldAttemptTtsPayload({ preparedTtsPreferences: {}, cfg, agentId: "main" })).toBe(
+      false,
+    );
     expect(resolveConfiguredTtsMode(cfg, "main")).toBe("final");
   });
 
@@ -135,8 +147,12 @@ describe("shouldAttemptTtsPayload", () => {
       },
     } as OpenClawConfig;
 
-    expect(shouldAttemptTtsPayload({ cfg, agentId: "voice" })).toBe(true);
-    expect(shouldAttemptTtsPayload({ cfg, agentId: "main" })).toBe(false);
+    expect(shouldAttemptTtsPayload({ preparedTtsPreferences: {}, cfg, agentId: "voice" })).toBe(
+      true,
+    );
+    expect(shouldAttemptTtsPayload({ preparedTtsPreferences: {}, cfg, agentId: "main" })).toBe(
+      false,
+    );
   });
 
   it("merges channel and account TTS overrides after agent overrides", () => {

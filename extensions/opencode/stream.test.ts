@@ -205,6 +205,13 @@ describe("OpenCode stream adapter", () => {
           command: "node app.js",
           env: [{ key: "NODE_ENV", value: "test" }],
         });
+        const streamingCall = {
+          ...execMessage.content[0]!,
+          partialJson: JSON.stringify({
+            command: "node app.js",
+            env: [{ key: "NODE_ENV", value: "test" }],
+          }),
+        };
         producerDelta = {
           type: "toolcall_delta",
           contentIndex: 0,
@@ -212,7 +219,7 @@ describe("OpenCode stream adapter", () => {
             command: "node app.js",
             env: [{ key: "NODE_ENV", value: "test" }],
           }),
-          partial: execMessage,
+          partial: { ...execMessage, content: [streamingCall] },
         };
         stream.push(producerDelta);
         stream.push({
@@ -323,6 +330,9 @@ describe("OpenCode stream adapter", () => {
         content: [{ arguments: { command: "node app.js", env: { NODE_ENV: "test" } } }],
       },
     });
+    if (events[0]?.type === "toolcall_delta") {
+      expect(events[0].partial.content[0]).not.toHaveProperty("partialJson");
+    }
     expect(producerDelta).toMatchObject({
       delta: '{"command":"node app.js","env":[{"key":"NODE_ENV","value":"test"}]}',
       partial: {

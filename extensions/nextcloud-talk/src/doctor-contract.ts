@@ -33,21 +33,33 @@ export const legacyConfigRules = [
   ...streamingAliasMigration.legacyConfigRules,
 ];
 
-export function normalizeCompatibilityConfig({
+export function normalizeHistoricalWebhookConfig({
   cfg,
 }: {
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
   const webhook = webhookContract.normalizeCompatibilityConfig({ cfg });
   return {
-    ...streamingAliasMigration.normalizeChannelConfig({
-      cfg: webhook.config,
-      changes: webhook.changes,
-    }),
+    ...webhook,
     historicalWebhookAccountIds: !hasConfiguredNextcloudTalkChannelState({ cfg })
       ? []
       : listNextcloudTalkAccountIds(cfg).filter(
           (accountId) => mergeNextcloudTalkAccountConfig(cfg, accountId).enabled !== false,
         ),
+  };
+}
+
+export function normalizeCompatibilityConfig({
+  cfg,
+}: {
+  cfg: OpenClawConfig;
+}): ChannelDoctorConfigMutation {
+  const webhook = normalizeHistoricalWebhookConfig({ cfg });
+  return {
+    ...streamingAliasMigration.normalizeChannelConfig({
+      cfg: webhook.config,
+      changes: webhook.changes,
+    }),
+    historicalWebhookAccountIds: webhook.historicalWebhookAccountIds,
   };
 }

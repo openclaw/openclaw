@@ -7,7 +7,6 @@ import {
 } from "./ir-spans.js";
 import type { MarkdownIR, MarkdownLinkSpan, MarkdownStyle, MarkdownStyleSpan } from "./ir.js";
 
-/** Marker pair used to wrap a styled Markdown span in the target renderer. */
 export type RenderStyleMarker = {
   open: string | ((span: MarkdownStyleSpan) => string);
   close: string;
@@ -16,7 +15,6 @@ export type RenderStyleMarker = {
 /** Optional marker map; omitted styles are emitted as plain escaped text. */
 export type RenderStyleMap = Partial<Record<MarkdownStyle, RenderStyleMarker>>;
 
-/** Marker pair used to render a semantic Markdown annotation. */
 type RenderAnnotationMarker = {
   open: string | ((span: MarkdownAnnotationSpan) => string);
   close: string;
@@ -36,7 +34,6 @@ export type RenderLink = {
 
 type MarkdownLinkOrigin = "authored" | "linkify";
 
-/** Renderer hooks for converting Markdown IR into a marker-based target format. */
 export type RenderOptions = {
   styleMarkers: RenderStyleMap;
   annotationMarkers?: RenderAnnotationMap;

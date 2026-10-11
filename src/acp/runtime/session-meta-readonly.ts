@@ -30,14 +30,13 @@ export async function readAcpSessionMetaForEntries(
     env?: NodeJS.ProcessEnv;
     databasePath?: string;
   },
-  options: { current?: true } = {},
+  options: { current?: true; signal?: AbortSignal } = {},
 ): Promise<Array<SessionAcpMeta | null>> {
   if (params.entries.length === 0) {
     return [];
   }
   const entries = params.entries.map((item) => ({
-    sessionKey: normalizeStoreSessionKey(item.sessionKey),
-    agentId: item.agentId,
+    keys: [buildAcpDatabaseSessionKey(normalizeStoreSessionKey(item.sessionKey), item.agentId)],
     entry: item.entry
       ? {
           lifecycleRevision: item.entry.lifecycleRevision,
@@ -50,10 +49,7 @@ export async function readAcpSessionMetaForEntries(
     { env: params.env, path: params.databasePath },
     {
       type: "acpSessions.metadata",
-      entries: entries.map(({ sessionKey, agentId, entry }) => ({
-        keys: [buildAcpDatabaseSessionKey(sessionKey, agentId)],
-        entry,
-      })),
+      entries,
     },
     options,
   );

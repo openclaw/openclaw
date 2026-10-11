@@ -619,13 +619,13 @@ buzz-admin generate-key
 
 ## Verify the connection
 
-Run the authenticated channel probe:
+Run the authenticated channel check:
 
 ```bash
 openclaw channels status --channel buzz --probe
 ```
 
-A successful probe confirms that the bot can authenticate and that Buzz reports
+A successful check confirms that the bot can authenticate and that Buzz reports
 the selected room with the **Bot** role.
 
 Then send a real message:

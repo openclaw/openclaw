@@ -80,6 +80,34 @@ describe("diagnostic support redaction", () => {
   });
 
   it.each([
+    [
+      'journal "operation.sqlite" unsafe: mode=0600 nlink=2 uid=1000; expected owner-only mode nlink=1.',
+      true,
+    ],
+    [
+      'helper "recovery.mjs" unsafe: mode=0644 nlink=1 uid=1000; expected owner-only mode nlink=1.',
+      true,
+    ],
+    [
+      'journal "operation.sqlite" unsafe: mode=0600 nlink=2 uid=1000; expected owner-only mode nlink=1. private-text',
+      false,
+    ],
+    [
+      'journal "/private/operation.sqlite" unsafe: mode=0600 nlink=2 uid=1000; expected owner-only mode nlink=1.',
+      false,
+    ],
+    [
+      'unknown "operation.sqlite" unsafe: mode=0600 nlink=2 uid=1000; expected owner-only mode nlink=1.',
+      false,
+    ],
+  ])("bounds public package recovery diagnostics: %s", (detail, allowed) => {
+    const line = `Package recovery ${detail}`;
+    expect(redactPublicSupportDiagnosticLine(line, { env: {}, stateDir: tempDir })).toBe(
+      allowed ? line : "[redacted-diagnostic]",
+    );
+  });
+
+  it.each([
     "EACCES",
     "EPERM",
     "ENOTEMPTY",

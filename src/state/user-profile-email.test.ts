@@ -12,7 +12,7 @@ import { readUserProfileEmailBindings } from "./user-profile-identity.read.js";
 import {
   prepareUserProfileIdentity,
   readResidentUserProfileId,
-  retainUserProfileCatalog,
+  prepareUserProfileCatalog,
 } from "./user-profile-list.js";
 import { linkCanonicalUserProfileEmail } from "./user-profile-writes.js";
 import { linkEmail } from "./user-profile-writes.worker.js";
@@ -82,7 +82,7 @@ it.each(["lost during close", "after alias reassignment"] as const)(
       const pathname = openOpenClawStateDatabase().path;
       const existing = ensureProfileForEmail("existing@example.test");
       const retained = await prepareUserProfileIdentity(existing.id);
-      const release = retainUserProfileCatalog();
+      const release = (await prepareUserProfileCatalog()).release;
       let closing: ReturnType<typeof closeOpenClawStateDatabaseByPathAsync> | undefined;
       let originalBinding: string | null | undefined;
       try {

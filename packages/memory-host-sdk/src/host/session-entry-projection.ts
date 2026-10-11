@@ -1,9 +1,33 @@
+import { createHash } from "node:crypto";
 import {
   asOptionalObjectRecord,
   asOptionalRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
+import type { SessionResetRecallCutoff } from "./session-reset-recall.js";
+import type { MemoryEntryProvenance } from "./types.js";
+
+export function hashSessionEntrySnapshot(params: {
+  content: string;
+  lineMap: readonly number[];
+  messageTimestampsMs: readonly number[];
+  lineProvenance: readonly MemoryEntryProvenance[];
+  resetRecallCutoff: SessionResetRecallCutoff;
+}): string {
+  // Preserve persisted hash bytes without flattening another full export string.
+  return createHash("sha256")
+    .update(params.content)
+    .update("\n")
+    .update(params.lineMap.join(","))
+    .update("\n")
+    .update(params.messageTimestampsMs.join(","))
+    .update("\n")
+    .update(JSON.stringify(params.lineProvenance))
+    .update("\n")
+    .update(JSON.stringify(params.resetRecallCutoff))
+    .digest("hex");
+}
 
 export function collectRawSessionText(content: unknown): string | null {
   if (typeof content === "string") {
@@ -113,4 +137,28 @@ function splitLongSessionLine(text: string): string[] {
 
 export function renderSessionExportLines(label: string, text: string): string[] {
   return splitLongSessionLine(text).map((segment) => `${label}: ${segment}`);
+}
+
+const MAX_DATE_TIMESTAMP_MS = 8_640_000_000_000_000;
+
+export function parseSessionTimestampMs(
+  record: { timestamp?: unknown },
+  message: { timestamp?: unknown },
+): number {
+  const candidates = [message.timestamp, record.timestamp];
+  for (const value of candidates) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      const ms = value > 0 && value < 1e11 ? value * 1000 : value;
+      if (Number.isFinite(ms) && ms > 0 && ms <= MAX_DATE_TIMESTAMP_MS) {
+        return Math.floor(ms);
+      }
+    }
+    if (typeof value === "string") {
+      const parsed = Date.parse(value);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return parsed;
+      }
+    }
+  }
+  return 0;
 }

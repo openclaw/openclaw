@@ -59,6 +59,9 @@ const NPM_LOCK_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 const NPM_LOCK_COMMAND_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const NPM_LOCK_DEFAULT_JOBS = 4;
 const NPM_LOCK_MAX_JOBS = 16;
+// Observed nested-override locks settle after one reload; a lock still changing after
+// this many reloads is oscillating and must fail instead of shipping an unstable lock.
+const NPM_LOCK_MAX_RELOAD_PASSES = 3;
 const NPM_LOCK_WORKER_KIND = "openclaw-npm-lock-package";
 
 function usage() {
@@ -1126,14 +1129,9 @@ type OverrideViolation = {
   path: string;
 };
 
-type NpmBundledDependencyPolicy = {
-  allowMissingBundleMarker: boolean;
-  exceptions: Map<string, string>;
-};
-
 // Trusted release tooling validates frozen targets as well as current main. Keep each
 // reviewed npm tarball exact here until no supported frozen target can reference it.
-const NPM_BUNDLED_DEPENDENCY_POLICIES = new Map<string, NpmBundledDependencyPolicy>([
+const NPM_BUNDLED_DEPENDENCY_POLICIES = new Map([
   [
     "11.20.0",
     {
@@ -1147,6 +1145,17 @@ const NPM_BUNDLED_DEPENDENCY_POLICIES = new Map<string, NpmBundledDependencyPoli
   ],
   [
     "12.1.0",
+    {
+      allowMissingBundleMarker: false,
+      exceptions: new Map([
+        ["node_modules/npm/node_modules/minimatch", "10.2.5"],
+        ["node_modules/npm/node_modules/brace-expansion", "5.0.9"],
+        ["node_modules/npm/node_modules/ip-address", "10.5.0"],
+      ]),
+    },
+  ],
+  [
+    "12.2.0",
     {
       allowMissingBundleMarker: false,
       exceptions: new Map([
@@ -1381,10 +1390,7 @@ function collectUnallowedOverrideViolations(
   const packages = recordAt(lockfile, "packages");
   const broadViolations = collectOverrideViolations(lockfile, overrideRules);
   if (!packages) {
-    return broadViolations.map((violation) => ({
-      ...violation,
-      shrinkwrapSources: [] as string[],
-    }));
+    return [];
   }
 
   const findings = new Map<
@@ -1559,21 +1565,33 @@ function describeOverrideViolations(violations: ReturnType<typeof collectOverrid
     .join("; ");
 }
 
-function normalizeNpmLockOverrides(
-  tempDir: string,
-  npmInstallArgs: string[],
-  env: NodeJS.ProcessEnv,
-) {
+function installNpmPackageLock(tempDir: string, npmInstallArgs: string[], env: NodeJS.ProcessEnv) {
   const npmLockPath = path.join(tempDir, "package-lock.json");
   const enforcedOverrides = readWorkspaceOverrides();
   const overrideRules = validationOverrideRulesFromOverrides(enforcedOverrides);
   const disabledSources = new Set<string>();
   const disabledPaths = new Set<string>();
+  let previousLockText: string | undefined;
+  let reloadPasses = 0;
   while (true) {
-    const npmLock = parseJsonObject(readFileSync(npmLockPath, "utf8"));
+    runNpm(npmInstallArgs, tempDir, env);
+    const npmLockText = readFileSync(npmLockPath, "utf8");
+    const npmLock = parseJsonObject(npmLockText);
     const remaining = collectUnallowedOverrideViolations(npmLock, overrideRules, enforcedOverrides);
     if (remaining.length === 0) {
-      return;
+      // npm can assign nested override sets differently on a fresh tree than when it
+      // reloads that lock, so `npm ci` rejects a first-pass lock as out of sync.
+      // Rerun from the written lock until npm's own reload leaves it unchanged.
+      if (npmLockText === previousLockText) {
+        return;
+      }
+      if (++reloadPasses > NPM_LOCK_MAX_RELOAD_PASSES) {
+        throw new Error(
+          `generated package-lock.json did not stabilize after ${NPM_LOCK_MAX_RELOAD_PASSES} npm reloads`,
+        );
+      }
+      previousLockText = npmLockText;
+      continue;
     }
     // npm 11 ignores root overrides inside dependency-owned shrinkwraps. Disable every
     // current source, rerun npm, then rescan the whole graph because its placement can change.
@@ -1599,8 +1617,8 @@ function normalizeNpmLockOverrides(
       disabledSources.add(`${source}\0${typeof version === "string" ? version : ""}`);
       disabledPaths.add(source);
     }
-    writeFileSync(npmLockPath, `${JSON.stringify(npmLock, null, 2)}\n`);
-    runNpm(npmInstallArgs, tempDir, env);
+    previousLockText = `${JSON.stringify(npmLock, null, 2)}\n`;
+    writeFileSync(npmLockPath, previousLockText);
   }
 }
 
@@ -1616,10 +1634,9 @@ function normalizeNpmVersionDrift<T>(lockfile: T): T {
     if (metadata.inBundle === undefined && isApprovedNpmBundledDependency(packages, lockPath)) {
       metadata.inBundle = true;
     }
-    // npm versions and mutable registry metadata disagree on these package-lock
-    // fields. None affect resolution, so keep generated npm locks stable.
+    // Normalize descriptive metadata and peer bookkeeping, never platform
+    // constraints: npm uses os/cpu/libc to filter native package installs.
     delete metadata.deprecated;
-    delete metadata.libc;
     if (metadata.peer === true) {
       delete metadata.peer;
     }
@@ -1672,10 +1689,9 @@ export function generateNpmPackageLock(packageDir: string, options: NpmLockOptio
       `${JSON.stringify(normalizedPackageJson, null, 2)}\n`,
     );
     copyLocalFileDependencies(normalizedPackageJson, packageDir, tempDir);
-    runNpm(npmInstallArgs, tempDir, env);
     // Lock-derived overrides steer npm placement. Only explicit workspace overrides
     // are policy that dependency shrinkwraps must not violate.
-    normalizeNpmLockOverrides(tempDir, npmInstallArgs, env);
+    installNpmPackageLock(tempDir, npmInstallArgs, env);
     const generated = normalizeNpmVersionDrift(
       applyPackageExtensionPeerMetadata(
         parseJsonObject(readFileSync(path.join(tempDir, "package-lock.json"), "utf8")),
@@ -1843,6 +1859,103 @@ function collectPnpmLockViolations(
   return violations;
 }
 
+export function collectNpmPlatformOptionalDependencies(npmLock: unknown): Record<string, string> {
+  const dependencies: Array<[string, string]> = [];
+  for (const [lockPath, metadata] of Object.entries(recordAt(npmLock, "packages") ?? {})) {
+    const packagePath = parseLockPackagePath(lockPath);
+    const packageEntry = packagePath[0];
+    if (
+      packagePath.length !== 1 ||
+      packageEntry?.path !== lockPath ||
+      !isRecord(metadata) ||
+      metadata.optional !== true ||
+      metadata.dev === true ||
+      metadata.link === true ||
+      typeof metadata.version !== "string" ||
+      !EXACT_VERSION_PATTERN.test(metadata.version) ||
+      !["os", "cpu", "libc"].some((field) => {
+        const constraint = metadata[field];
+        return (
+          Array.isArray(constraint) &&
+          constraint.length > 0 &&
+          constraint.every((value) => typeof value === "string")
+        );
+      })
+    ) {
+      continue;
+    }
+    const actualName = typeof metadata.name === "string" ? metadata.name : packageEntry.name;
+    dependencies.push([
+      packageEntry.name,
+      actualName === packageEntry.name ? metadata.version : `npm:${actualName}@${metadata.version}`,
+    ]);
+  }
+  return Object.fromEntries(dependencies.toSorted(([left], [right]) => left.localeCompare(right)));
+}
+
+function collectPnpmLockPlatformViolations(npmLock: unknown, pnpmLock = readPnpmLock()) {
+  const pnpmPackages = new Map<string, UnknownRecord>();
+  for (const [packageKey, metadata] of Object.entries(recordAt(pnpmLock, "packages") ?? {})) {
+    const parsed = parsePnpmPackageKey(packageKey);
+    if (!parsed || !isRecord(metadata)) {
+      continue;
+    }
+    pnpmPackages.set(`${parsed.name}@${parsed.version}`, metadata);
+    if (typeof metadata.version === "string") {
+      pnpmPackages.set(`${parsed.name}@${metadata.version}`, metadata);
+    }
+  }
+
+  const violations: Array<{
+    actualConstraint: unknown;
+    expectedConstraint: string[];
+    field: "os" | "cpu" | "libc";
+    packageKey: string;
+    path: string;
+  }> = [];
+  for (const [lockPath, metadata] of Object.entries(recordAt(npmLock, "packages") ?? {})) {
+    if (
+      lockPath === "" ||
+      !isRecord(metadata) ||
+      metadata.link === true ||
+      typeof metadata.version !== "string"
+    ) {
+      continue;
+    }
+    const packageName =
+      typeof metadata.name === "string"
+        ? metadata.name
+        : parseLockPackagePath(lockPath).at(-1)?.name;
+    const packageKey = `${packageName}@${metadata.version}`;
+    const expectedMetadata = pnpmPackages.get(packageKey);
+    for (const field of ["os", "cpu", "libc"] as const) {
+      const expected = expectedMetadata?.[field];
+      if (expected === undefined) {
+        continue;
+      }
+      if (!Array.isArray(expected) || !expected.every((value) => typeof value === "string")) {
+        throw new Error(`invalid pnpm platform constraint: ${packageKey} ${field}`);
+      }
+      const actual = metadata[field];
+      if (
+        Array.isArray(actual) &&
+        actual.every((value) => typeof value === "string") &&
+        JSON.stringify(actual.toSorted()) === JSON.stringify(expected.toSorted())
+      ) {
+        continue;
+      }
+      violations.push({
+        actualConstraint: actual,
+        expectedConstraint: expected,
+        field,
+        packageKey,
+        path: lockPath,
+      });
+    }
+  }
+  return violations;
+}
+
 function assertNpmLockMatchesPnpmLock(
   npmLock: unknown,
   localPackageArtifacts: NpmLocalPackageArtifact[] = [],
@@ -1870,16 +1983,22 @@ function assertNpmLockMatchesPnpmLock(
     localPackageArtifacts,
     npmBundleTarball,
   );
-  if (violations.length === 0) {
+  const platformViolations = collectPnpmLockPlatformViolations(npmLock);
+  if (violations.length === 0 && platformViolations.length === 0) {
     return;
   }
-  const examples = violations
-    .slice(0, 5)
-    .map((violation) =>
+  const examples = [
+    ...violations.map((violation) =>
       violation.expectedIntegrities
         ? `${violation.path} integrity ${violation.actualIntegrity}, expected ${violation.expectedIntegrities.join(" or ")}`
         : `${violation.path} locked ${violation.packageKey}`,
-    )
+    ),
+    ...platformViolations.map(
+      (violation) =>
+        `${violation.path} ${violation.field} ${JSON.stringify(violation.actualConstraint ?? "<missing>")}, expected ${JSON.stringify(violation.expectedConstraint)}`,
+    ),
+  ]
+    .slice(0, 5)
     .join("; ");
   throw new Error(`generated package-lock.json violates pnpm-lock.yaml: ${examples}`);
 }
@@ -2171,6 +2290,7 @@ export {
   // changed-package detection without invoking npm.
   collectOverrideViolations,
   collectPnpmLockViolations,
+  collectPnpmLockPlatformViolations,
   disableDependencyShrinkwrapOverrideConflictSources,
   validationOverrideRulesFromOverrides,
   mergeOverrides,

@@ -449,6 +449,7 @@ describe("ordinary chat input admission", () => {
         });
       }
       const clone = vi.spyOn(globalThis, "structuredClone");
+      const sql = observeHostDataSql();
       const read = acpReads.readAcpSessionMetaForEntries;
       const restarting = restart
         ? vi
@@ -467,6 +468,9 @@ describe("ordinary chat input admission", () => {
       });
       try {
         await fixture.send(respond);
+        expect(sql.queries.filter((query) => /\bworker_session_placements\b/u.test(query))).toEqual(
+          [],
+        );
         if (restart) {
           expect(respond).toHaveBeenCalledOnce();
           expect(respond).not.toHaveBeenCalledWith(
@@ -507,6 +511,7 @@ describe("ordinary chat input admission", () => {
           ).length,
         ).toBeLessThanOrEqual(1);
       } finally {
+        sql.restore();
         restarting?.mockRestore();
         clone.mockRestore();
         await fixture.cleanup();
@@ -535,8 +540,12 @@ describe("ordinary chat input admission", () => {
         patch: { workerBundleHash: "a".repeat(64) },
       });
       fixture.context.workerSessionPlacementService = placements;
+      const sql = observeHostDataSql();
       try {
         const respond = await fixture.send();
+        expect(sql.queries.filter((query) => /\bworker_session_placements\b/u.test(query))).toEqual(
+          [],
+        );
         expect(respond).toHaveBeenCalledWith(
           true,
           expect.objectContaining({ status: "started" }),
@@ -550,6 +559,7 @@ describe("ordinary chat input admission", () => {
           items: [{ state: "queued", runId: fixture.params.idempotencyKey }],
         });
       } finally {
+        sql.restore();
         await fixture.cleanup();
       }
     },

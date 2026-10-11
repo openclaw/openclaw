@@ -160,6 +160,61 @@ describePosix("correction publication authority handoff", () => {
     },
   );
 
+  it.each([
+    ["auto", "prepare_push"],
+    ["graphql", "prepare_push"],
+    ["graphql", "prepare_sync_head"],
+  ] as const)(
+    "publishes and resumes a reviewed %s correction through %s with pending GitHub gates",
+    (transport, command) => {
+      const f = fixture(transport);
+      const incomingReview = readFileSync(join(f.local, "review.json"), "utf8");
+      writeFileSync(
+        join(f.local, "gates.env"),
+        `PR_NUMBER=4242\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.candidate}\n`,
+      );
+      const published = runCorrection(f, { command: `${command} 4242` });
+      expect(published.status, published.stdout + published.stderr).toBe(0);
+      const hosted = f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic");
+      const gates = readFileSync(join(f.local, "gates.env"), "utf8");
+      expect(gates).toContain(`HOSTED_GATES_TARGET_HEAD_SHA=${hosted}\n`);
+      expect(gates).not.toMatch(/GATES_PASSED_AT|LAST_VERIFIED_HEAD_SHA|FULL_GATES_HEAD_SHA/);
+      expect(readFileSync(join(f.local, "prep.env"), "utf8")).toContain(
+        `LOCAL_PREP_HEAD_SHA=${f.candidate}\n`,
+      );
+      expect(readFileSync(join(f.local, "prep.md"), "utf8")).not.toContain("Gates passed");
+      const resumed = runCorrection(f);
+      expect(resumed.status, resumed.stdout + resumed.stderr).toBe(0);
+      expect(readFileSync(join(f.local, "gates.env"), "utf8")).toBe(gates);
+      expect(readFileSync(join(f.local, "events"), "utf8")).toBe(
+        `${transport === "auto" ? "push" : "graphql"}\n`,
+      );
+      expect(readFileSync(join(f.local, "review.json"), "utf8")).toBe(incomingReview);
+    },
+  );
+
+  it.each(["missing", "stale", "foreign-pr", "changed-review"])(
+    "refuses pending correction publication with %s binding",
+    (fault) => {
+      const f = fixture();
+      writeFileSync(
+        join(f.local, "gates.env"),
+        `PR_NUMBER=${fault === "foreign-pr" ? 42 : 4242}\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${fault === "missing" ? "" : fault === "stale" ? f.source : f.candidate}\n`,
+      );
+      if (fault === "changed-review") {
+        const path = join(f.local, "correction-review.json");
+        const review = JSON.parse(readFileSync(path, "utf8"));
+        review.pr.headSha = f.source;
+        writeFileSync(path, JSON.stringify(review));
+      }
+      const result = runCorrection(f);
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
+      expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(f.source);
+      expect(existsSync(join(f.local, "prep.env"))).toBe(false);
+    },
+  );
+
   it("publishes a signed baseline refresh only after fresh exact-candidate review and gates", () => {
     const f = fixture("auto");
     f.git("branch", "-m", "pr-4242-prep");
@@ -267,46 +322,34 @@ describePosix("correction publication authority handoff", () => {
     expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\n");
   });
 
-  it("does not advance authority or start proof when the result writer fails", () => {
-    const f = fixture();
-    const result = runCorrection(f, {
-      setup: [
-        "eval \"$(declare -f pr_git | sed '1s/pr_git/fixture_git/')\"",
-        "pr_git() {",
-        '  if [ "$*" = "hash-object --stdin" ]; then mkdir .local/prepare-push-result.env; fi',
-        '  fixture_git "$@"',
-        "}",
-      ],
-      command: [
-        "if prepare_push 4242; then exit 99; else status=$?; fi",
-        `test "$PREP_PUBLICATION_LEASE_SHA" = '${f.source}' || exit 98`,
-        'exit "$status"',
-      ].join("\n"),
-    });
-    expect(result.status, result.stdout + result.stderr).toBe(1);
-    expect(result.stderr).toContain("Is a directory");
-    expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\n");
-    expectIncomplete(f);
-  });
-
-  it("rejects a replaced result instead of admitting whatever the writer path contains", () => {
-    const f = fixture();
-    const result = runCorrection(f, {
-      setup: [
-        "eval \"$(declare -f pr_git | sed '1s/pr_git/fixture_git/')\"",
-        "pr_git() {",
-        '  if [ "$*" = "hash-object --no-filters -- .local/prepare-push-result.env" ]; then',
-        '    printf "\\n" >> .local/prepare-push-result.env',
-        "  fi",
-        '  fixture_git "$@"',
-        "}",
-      ],
-    });
-    expect(result.status, result.stdout + result.stderr).toBe(1);
-    expect(result.stderr).toContain("Correction review authority changed");
-    expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\n");
-    expectIncomplete(f);
-  });
+  it.each(["writer failure", "replaced result"])(
+    "does not advance authority or start proof after %s",
+    (fault) => {
+      const f = fixture();
+      const result = runCorrection(f, {
+        setup: [
+          "eval \"$(declare -f pr_git | sed '1s/pr_git/fixture_git/')\"",
+          "pr_git() {",
+          fault === "writer failure"
+            ? '  if [ "$*" = "hash-object --stdin" ]; then mkdir .local/prepare-push-result.env; fi'
+            : '  if [ "$*" = "hash-object --no-filters -- .local/prepare-push-result.env" ]; then printf "\\n" >> .local/prepare-push-result.env; fi',
+          '  fixture_git "$@"',
+          "}",
+        ],
+        command: [
+          "if prepare_push 4242; then exit 99; else status=$?; fi",
+          `test "$PREP_PUBLICATION_LEASE_SHA" = '${f.source}' || exit 98`,
+          'exit "$status"',
+        ].join("\n"),
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      expect(result.stderr).toContain(
+        fault === "writer failure" ? "Is a directory" : "Correction review authority changed",
+      );
+      expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\n");
+      expectIncomplete(f);
+    },
+  );
 
   it("preserves an exact no-op receipt and advances stale process-local authority", () => {
     const f = fixture();

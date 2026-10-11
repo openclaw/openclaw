@@ -45,10 +45,7 @@ beforeEach(() => {
   mocks.routeReply.mockReset().mockResolvedValue({ ok: true, delivered: true });
   sessionStoreMocks.currentEntry = undefined;
   sessionStoreMocks.loadSessionStoreEntry.mockImplementation(() => undefined);
-  sessionStoreMocks.loadSessionStore.mockReturnValue({});
-  sessionStoreMocks.readSessionEntry.mockImplementation(() => undefined);
   sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue("/tmp/mock-sessions.json");
-  sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({ existing: undefined });
 });
 
 afterEach(() => {

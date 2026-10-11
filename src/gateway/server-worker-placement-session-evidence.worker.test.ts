@@ -108,7 +108,7 @@ function pauseRegistry() {
     .mockImplementationOnce((...args) => {
       const prepared = prepare(...args);
       return {
-        assertCurrent: prepared.assertCurrent,
+        ...prepared,
         read: async () => {
           entered.resolve();
           await resume.promise;
@@ -404,12 +404,20 @@ it.each(["path", "root"] as const)(
             ? closeOpenClawAgentDatabaseByPathAsync(alias, "main")
             : closeOpenClawAgentDatabasesAsync(aliasDir);
         // An alias-only close must still find the failed physical reader's custody.
-        await expect(close()).rejects.toMatchObject({
+        const resourceFailure = {
           message: "Agent database resource drainage failed",
           errors: expect.arrayContaining([
             expect.objectContaining({ message: "synthetic retirement failure" }),
           ]),
-        });
+        };
+        await expect(close()).rejects.toMatchObject(
+          selection === "path"
+            ? resourceFailure
+            : {
+                message: "Agent database close failed",
+                errors: expect.arrayContaining([expect.objectContaining(resourceFailure)]),
+              },
+        );
         boundary.failRetirement = false;
         await close();
         expect(await (await createWorkerPlacementSessionEvidenceResolver([subject]))(subject)).toBe(

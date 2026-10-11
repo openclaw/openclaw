@@ -70,6 +70,52 @@ describe("failover user copy", () => {
     expect(renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw })).toBe(expected);
   });
 
+  it("gives sanitized prompt-size guidance for a non-retryable HTTP 400", () => {
+    const raw =
+      "400 This prompt is longer than the free tier allows for a single request. Shorten it, or add credits to use this model without the free-tier cap.";
+    const copy = renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw });
+
+    expect(copy).toBe(
+      "⚠️ The provider rejected this request because the prompt exceeds its per-request limit. Shorten the prompt and try again, or choose a model with a larger limit.",
+    );
+    expect(copy).not.toContain("free-tier cap");
+    expect(copy).not.toContain("add credits");
+  });
+
+  it("parses a complete bounded HTTP 400 JSON body in both failover and reply copy", () => {
+    const providerMessage =
+      "This prompt is longer than the free tier allows for a single request. Shorten it, or add credits to use this model without the free-tier cap.";
+    const raw = `400 ${JSON.stringify({
+      error: { type: "invalid_request_error", message: providerMessage },
+      request_id: "req_prompt_size_canary",
+      details: "x".repeat(700),
+    })}`;
+    const expected =
+      "⚠️ The provider rejected this request because the prompt exceeds its per-request limit. Shorten the prompt and try again, or choose a model with a larger limit.";
+
+    expect(raw.length).toBeGreaterThan(512);
+    expect(raw.length).toBeLessThanOrEqual(16_384);
+    const failoverCopy = renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw });
+    const replyCopy = renderRateLimitReplyCopy({ message: raw, reason: "rate_limit" });
+    expect(failoverCopy).toBe(expected);
+    expect(replyCopy).toBe(expected);
+    expect(failoverCopy).not.toContain("req_prompt_size_canary");
+    expect(replyCopy).not.toContain("free-tier cap");
+  });
+
+  it("keeps over-limit structured provider errors on generic rate-limit copy", () => {
+    const providerMessage = "This prompt is longer than the free tier allows for a single request.";
+    const raw = `400 ${JSON.stringify({
+      error: { type: "invalid_request_error", message: providerMessage },
+      details: "x".repeat(16_384),
+    })}`;
+
+    expect(raw.length).toBeGreaterThan(16_384);
+    expect(renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw })).toBe(
+      "⚠️ The AI service needs a short break. Please try again in a few minutes.",
+    );
+  });
+
   it.each([
     "Error: 400 max_tokens (384000) exceeds model's maximum output tokens (65536)",
     "OpenAI API error (400): max_output_tokens (384000) exceeds model's maximum output tokens (65536)",
@@ -82,18 +128,42 @@ describe("failover user copy", () => {
   it.each([
     "A maximum of 4 blocks with cache_control may be provided. Found 5. PRIVATE_CANARY",
     "A maximum of many blocks with cache_control may be provided. Found 5.",
-  ])("does not echo arbitrary cache-limit error text: %s", (raw) => {
-    expect(renderFormatErrorCopy(raw)).toBe(
-      "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
-    );
+  ])("preserves unrecognized rejection detail: %s", (raw) => {
+    expect(renderFormatErrorCopy(raw)).toContain("LLM request rejected:");
+    expect(renderFormatErrorCopy(raw)).toContain("A maximum of");
   });
 
-  it("keeps overlong provider-controlled limit text generic", () => {
-    const raw = `400 max_tokens (384000) exceeds ${"x".repeat(301)} maximum output tokens (65536)`;
-    expect(renderFormatErrorCopy(raw)).toBe(
-      "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
-    );
+  it("bounds provider diagnostics without dropping the cause", () => {
+    const raw = `Invalid parameter: ${"x".repeat(1000)}`;
+    const copy = renderFormatErrorCopy(raw);
+    expect(copy).toContain("LLM request rejected: Invalid parameter");
+    expect(copy).toHaveLength(624);
+    expect(copy.endsWith("…")).toBe(true);
   });
+
+  it("redacts credentials and renders provider markup as literal text", () => {
+    const raw =
+      "Invalid argument api_key=synthetic_secret_value; ![image](https://example.test/pixel)";
+    const copy = renderFormatErrorCopy(
+      JSON.stringify({
+        error: { type: "invalid_request_error", message: raw },
+        request: { input: "PRIVATE_PROMPT" },
+      }),
+    );
+    expect(copy).toContain("Invalid argument");
+    expect(copy).not.toContain("synthetic_secret_value");
+    expect(copy).not.toContain("PRIVATE_PROMPT");
+    expect(copy).not.toContain("![image](");
+  });
+
+  it.each(["{ malformed response", "<html>Private gateway response</html>", ""])(
+    "does not dump an unparsed response body: %s",
+    (raw) => {
+      expect(renderFormatErrorCopy(raw)).toBe(
+        "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
+      );
+    },
+  );
 
   it("renders structured cooldown durations and exhausted model sets", () => {
     const now = 1_000_000;

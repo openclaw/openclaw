@@ -9,10 +9,12 @@ import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/serv
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { modelKey } from "../../agents/model-ref-shared.js";
 import { ExpectedCliError } from "../../cli/failure-output.js";
+import { runWithLocalStateOwner } from "../../cli/local-state-owner.js";
 import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { callGateway, isImplicitLocalGatewayTarget } from "../../gateway/call.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
+import { startProxy, stopProxy } from "../../infra/net/proxy/proxy-lifecycle.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { printModelTable } from "./list.table.js";
 import type { ModelRow } from "./list.types.js";
@@ -98,41 +100,73 @@ export async function modelsListCommand(
       import("../../agents/prepared-model-runtime-auth.js"),
       import("../../gateway/server-methods/models-list-result.js"),
     ]);
-    const { resolvedConfig: localConfig } = await loadModelsConfigWithSource({
-      commandName: "models list",
-      runtime,
-    });
-    const { agentId, agentDir } = resolveModelsTargetAgent(localConfig, opts.agent, {
-      kind: "read",
-    });
-    result = await withPreparedModelCatalogOwner(
-      {
-        agentId,
-        agentDir,
-        config: localConfig,
-        readOnly: opts.refresh !== true,
-        ...(opts.refresh ? { refreshFullCatalog: true } : {}),
-      },
-      async (snapshot) => {
-        const owner = resolvePublishedModelCatalogOwner(snapshot);
-        // Complete row projection and its final readiness reads before releasing a temporary owner.
-        return await buildModelsListResult({
-          source: {
-            kind: "published",
-            owner: {
-              ...owner,
-              authMaterializations: getPreparedModelRuntimeAuthMaterializations(snapshot),
-            },
+    const readLocal = async () => {
+      const { resolvedConfig: localConfig } = await loadModelsConfigWithSource({
+        commandName: "models list",
+        runtime,
+      });
+      const { agentId, agentDir } = resolveModelsTargetAgent(localConfig, opts.agent, {
+        kind: "read",
+      });
+      const proxy = opts.refresh ? await startProxy(localConfig.proxy) : null;
+      try {
+        return await withPreparedModelCatalogOwner(
+          {
+            agentId,
+            agentDir,
+            config: localConfig,
+            readOnly: opts.refresh !== true,
+            ...(opts.refresh ? { refreshFullCatalog: true, persistOfflineRefresh: true } : {}),
           },
-          agentId,
+          async (snapshot) => {
+            const owner = resolvePublishedModelCatalogOwner(snapshot);
+            // Complete row projection and its final readiness reads before releasing a temporary owner.
+            return await buildModelsListResult({
+              source: {
+                kind: "published",
+                owner: {
+                  ...owner,
+                  authMaterializations: getPreparedModelRuntimeAuthMaterializations(snapshot),
+                },
+              },
+              agentId,
+              params,
+            });
+          },
+        );
+      } finally {
+        await stopProxy(proxy);
+      }
+    };
+    result = opts.refresh
+      ? await runWithLocalStateOwner({
+          method: "models.list",
           params,
-        });
-      },
-    );
+          target: "local model catalog",
+          onForeignOwner: "refuse",
+          runLocal: async ({ assertCurrent }) => {
+            assertCurrent();
+            const refreshed = await readLocal();
+            assertCurrent();
+            return refreshed;
+          },
+        })
+      : await readLocal();
   }
   if (result.refreshFailed) {
     runtime.error(
       "Model discovery could not refresh all providers. Showing the available published model list.",
+    );
+  }
+  for (const outcome of result.providerOutcomes ?? []) {
+    if (outcome.status === "ready") {
+      continue;
+    }
+    const label = `${sanitizeTerminalText(outcome.provider)}${outcome.profileId ? ` (profile ${sanitizeTerminalText(outcome.profileId)})` : ""}`;
+    runtime.error(
+      outcome.status === "auth-rejected"
+        ? `Model discovery authentication was rejected for ${label}. Open Models in the Control UI to check sign-in and catalog access, then retry with --refresh.`
+        : `Model discovery is unavailable for ${label}. Retry with --refresh; if it still fails, check the provider in Models in the Control UI.`,
     );
   }
   const rows = result.models
@@ -141,7 +175,7 @@ export async function modelsListCommand(
   if (rows.length === 0 && !opts.json && !opts.plain) {
     runtime.log("No models found.");
   } else {
-    printModelTable(rows, runtime, opts);
+    printModelTable(rows, runtime, { ...opts, providerOutcomes: result.providerOutcomes });
   }
   requestExitAfterOneShotOutput(runtime);
 }

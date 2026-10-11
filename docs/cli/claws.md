@@ -30,6 +30,17 @@ The current CLI reads a local package directory, `CLAW.md`, or grouped JSON mani
 Publishing, searching, and installing whole Claws through ClawHub are a
 separate registry track and are not part of this command surface yet.
 
+Commands that access installed Claw state (`add`, `update`, `remove`, `migrate`,
+`status`, and `export`, including previews) require exclusive offline ownership.
+Stop the Gateway through its service owner, wait for ownership to release, then
+run the command again. These commands refuse before accessing state when a
+Gateway owns it. Package-only `create`, `validate`, `build`, `dev`, and `inspect`
+remain available while the Gateway runs.
+
+Removal of a Claw-created agent still requires Gateway monitor drainage and is
+unavailable through this offline CLI path. Removing ownership adopted with
+`migrate` works offline and retains the existing agent and workspace.
+
 ## Bundled role Claws
 
 The bundled `coordinator`, `researcher`, `writer`, and `reviewer` roles are Claw
@@ -339,7 +350,7 @@ canonical Claw reader before success.
 ## Inspect and preview
 
 Validate the source without planning local changes. For OpenClaw profile
-extensions, inspect also performs the canonical read-only artifact probe and
+extensions, inspect also performs the canonical read-only artifact check and
 reports mapped and unavailable components:
 
 ```bash

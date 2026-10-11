@@ -102,10 +102,8 @@ export function createChannelRunQueue(params: ChannelRunQueueParams): ChannelRun
   };
 }
 
-function runAbortCleanup(onAbort: (() => void | Promise<void>) | undefined): Promise<void> {
-  return new Promise<void>((resolve) => {
-    resolve(onAbort?.());
-  });
+async function runAbortCleanup(onAbort: (() => void | Promise<void>) | undefined): Promise<void> {
+  return onAbort?.();
 }
 
 /**

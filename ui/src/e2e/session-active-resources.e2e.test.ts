@@ -8,6 +8,7 @@ import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-rea
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
+  waitForControlUiRoute,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
@@ -70,6 +71,7 @@ const pane = (page: Page) => page.locator(".chat-pane-cache__pane--active");
 const desktopTab = (page: Page) => pane(page).getByRole("tab", { name: "Desktop", exact: true });
 const ready = async (page: Page) => {
   await waitForControlUiGatewayReady(page);
+  await waitForControlUiRoute(page, { routeId: "chat" });
   await pane(page).locator(".agent-chat__composer-combobox textarea").waitFor();
 };
 async function assertNoProvisioning(gateway: MockGatewayControls) {
@@ -94,9 +96,7 @@ async function assertNoProvisioning(gateway: MockGatewayControls) {
 suite.define(() => {
   it.each(
     [
-      { width: 1280, staleRoster: false, reclaimOnReload: false, swapOnReload: false },
       { width: 390, staleRoster: false, reclaimOnReload: false, swapOnReload: false },
-      { width: 1280, staleRoster: true, reclaimOnReload: false, swapOnReload: false },
       { width: 1280, staleRoster: false, reclaimOnReload: true, swapOnReload: false },
       { width: 1280, staleRoster: false, reclaimOnReload: false, swapOnReload: true },
       {

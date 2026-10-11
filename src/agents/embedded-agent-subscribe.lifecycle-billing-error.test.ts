@@ -180,6 +180,7 @@ describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
             coreBuiltinToolNames: new Set(),
             replaySafeToolNames: new Set(),
             codeModeExecToolNames: new Set(),
+            sourceReplyCapableToolNames: new Set(),
             sideEffectToolOwners: new Map(),
           },
           hookAgentId: "main",

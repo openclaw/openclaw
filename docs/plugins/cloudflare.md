@@ -95,7 +95,7 @@ openclaw storage list --json
 Initialization writes the location marker at
 `openclaw/openclaw-storage.json` for the example above. The displayed target is
 `r2://openclaw-artifacts/openclaw`. A successful test confirms that it wrote, read,
-verified, and deleted its probe object; add `--json` for `state: "ok"`.
+verified, and deleted its check object; add `--json` for `state: "ok"`.
 Keep the marker and encryption passphrase: losing either can make encrypted
 objects unreadable. R2 health checks verify bucket access without reporting free
 or total space.

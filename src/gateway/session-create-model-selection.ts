@@ -9,6 +9,7 @@ import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-contex
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
+import { captureDelegatedToolPolicyAssertion } from "../agents/delegated-tool-policy.js";
 import { resolveModelProviderAuthConfig } from "../agents/model-auth-provider-route.js";
 import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
 import { findModelCatalogEntry } from "../agents/model-catalog.js";
@@ -22,7 +23,7 @@ import { inheritSessionSelection } from "../config/sessions/session-entry-select
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
-import { isUserModelAuthProfileOwner } from "../state/user-model-accounts.js";
+import { prepareUserModelAccountAuthority } from "../state/user-model-account-operations.js";
 import type { ModelAccountConnectAction } from "./model-account-authority.js";
 import { ModelAccountConnectAuthorityError } from "./model-account-connect-errors.js";
 import {
@@ -33,6 +34,29 @@ import type {
   CreateGatewaySessionParams,
   GatewaySessionTitleModelSelection,
 } from "./session-create-service.types.js";
+
+/** Keep automatic selection provenance distinct from an explicit model pin. */
+export function projectSessionCreateSpawnModelSelection(params: {
+  entry: SessionEntry;
+  creation: CreateGatewaySessionParams["creation"];
+  requestedModel?: string;
+  createdNewEntry: boolean;
+}): Partial<SessionEntry> {
+  // Match the requested model before using the patch owner's canonical selection.
+  const selection = params.creation?.spawnModelAutoSelection;
+  if (!params.createdNewEntry || !selection || selection.model !== params.requestedModel) {
+    return {};
+  }
+  return {
+    modelOverrideSource: "auto",
+    ...(selection.hasFallbackOrigin
+      ? {
+          modelOverrideFallbackOriginProvider: params.entry.providerOverride,
+          modelOverrideFallbackOriginModel: params.entry.modelOverride,
+        }
+      : {}),
+  };
+}
 
 export function resolveSessionCreateModelInputError(
   params: Pick<
@@ -130,36 +154,58 @@ export function prepareSessionCreateModelSelection(params: {
   };
 }
 
-/** Title preparation and the row commit retain the same caller, model, and account fences. */
-export function createSessionCreateCommitGuard(params: {
-  assertCallerCurrent?: () => void;
-  operatorAuthority?: AdmittedRunOperatorAuthority;
-  selections: readonly ({ assertCurrent: () => void } | undefined)[];
-  personalAccountDefaults?: ModelAccountConnectAction;
-  readDefaultProfile: () => string | undefined;
-  validateSelection: () => ErrorShape | undefined;
-}): () => void {
+/** Assemble the creation lifetime once, including host-only publication intent. */
+export function resolveSessionCreationCommitGuard(
+  params: CreateGatewaySessionParams,
+  prepared: {
+    readOperatorAuthority: () => AdmittedRunOperatorAuthority | undefined;
+    assertPreparedTargetCurrent: () => void;
+    validateSelection: () => ErrorShape | undefined;
+  },
+): (() => void) | undefined {
+  const assertDelegationCurrent = captureDelegatedToolPolicyAssertion(
+    params.cfg,
+    params.spawnToolPolicy?.delegatedToolPolicy,
+  );
+  const assertCallerCurrent =
+    params.childSessionPublication || assertDelegationCurrent
+      ? () => {
+          params.commitGuard?.();
+          params.childSessionPublication?.assertCurrent();
+          assertDelegationCurrent?.();
+        }
+      : params.commitGuard;
+  if (
+    !(
+      params.personalModelSelection ||
+      params.operatorAuthority ||
+      params.personalAccountDefaults ||
+      params.activeParentFork ||
+      params.preparedModelSelection ||
+      params.preparedPermissionSelection ||
+      typeof params.model === "string" ||
+      params.agentRuntime !== undefined
+    )
+  ) {
+    return assertCallerCurrent;
+  }
+  const selections = [
+    params.activeParentFork,
+    params.preparedModelSelection,
+    params.preparedPermissionSelection,
+    params.personalModelSelection,
+    params.personalAccountDefaults,
+  ];
   return () => {
-    params.assertCallerCurrent?.();
-    params.operatorAuthority?.assertCurrent();
-    const error = params.validateSelection();
+    assertCallerCurrent?.();
+    prepared.assertPreparedTargetCurrent();
+    prepared.readOperatorAuthority()?.assertCurrent();
+    const error = prepared.validateSelection();
     if (error) {
       throw new Error(error.message);
     }
-    for (const selection of params.selections) {
+    for (const selection of selections) {
       selection?.assertCurrent();
-    }
-    const selectedProfile = params.readDefaultProfile();
-    if (
-      params.personalAccountDefaults &&
-      selectedProfile &&
-      isUserModelAuthProfileId(selectedProfile) &&
-      !isUserModelAuthProfileOwner({
-        profileId: params.personalAccountDefaults.owner,
-        authProfileId: selectedProfile,
-      })
-    ) {
-      throw new ModelAccountConnectAuthorityError();
     }
   };
 }
@@ -205,7 +251,23 @@ export async function prepareSessionCreateDefaultAccount(params: {
     provider: model.provider,
     requesterProfileId: params.defaults.owner,
   });
-  return { ok: true, profileId: linked?.profileId, validate: selected.validate };
+  const account =
+    linked && isUserModelAuthProfileId(linked.profileId)
+      ? await prepareUserModelAccountAuthority({
+          profileId: params.defaults.owner,
+          authProfileId: linked.profileId,
+        })
+      : undefined;
+  params.assertCurrent?.();
+  const validate = () => {
+    params.defaults.assertCurrent();
+    if (linked && isUserModelAuthProfileId(linked.profileId) && !account?.isCurrent()) {
+      throw new ModelAccountConnectAuthorityError();
+    }
+    return selected.validate();
+  };
+  const error = validate();
+  return error ? { ok: false, error } : { ok: true, profileId: linked?.profileId, validate };
 }
 
 /** Catalog-owned creations cannot mix independent model or key selections. */

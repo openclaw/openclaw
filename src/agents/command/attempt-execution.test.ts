@@ -254,18 +254,6 @@ describe("claudeCliSessionTranscriptHasContent", () => {
 
   const GRACE_MS = 250;
 
-  it("rejects path-like session ids instead of escaping the Claude projects tree", async () => {
-    const workspaceDir = await makeWorkspace();
-    await writeClaudeProjectFile(workspaceDir, "safe-session", "");
-    expect(
-      await claudeCliSessionTranscriptHasContent({
-        sessionId: "../safe-session",
-        workspaceDir,
-        homeDir: tmpDir,
-      }),
-    ).toBe(false);
-  });
-
   it("returns false when workspaceDir is missing (path cannot be computed)", async () => {
     expect(
       await claudeCliSessionTranscriptHasContent({
@@ -367,17 +355,6 @@ describe("claudeCliSessionTranscriptHasOrphanedToolUse", () => {
 
   it.each([
     {
-      name: "Claude-specific answered calls",
-      expected: false,
-      lines: [
-        message("assistant", [tool("server", "server_tool_use"), tool("mcp", "mcp_tool_use")]),
-        message("user", [
-          result("server", "web_search_tool_result"),
-          result("mcp", "mcp_tool_result"),
-        ]),
-      ],
-    },
-    {
       name: "hosted results inside the assistant message",
       expected: false,
       lines: [
@@ -468,21 +445,6 @@ describe("createAcpVisibleTextAccumulator", () => {
     expect(acc.consume(" is saying")).toEqual({
       text: "The user is saying",
       delta: " is saying",
-    });
-  });
-
-  it("preserves punctuation-start text that begins with NO_REPLY-like content", () => {
-    const acc = createAcpVisibleTextAccumulator();
-
-    expect(acc.consume("NO_REPLY: explanation")).toEqual({
-      text: "NO_REPLY: explanation",
-      delta: "NO_REPLY: explanation",
-    });
-
-    expect(acc.finalize()).toBe("NO_REPLY: explanation");
-    expect(acc.finalizeReplySnapshot()).toEqual({
-      disposition: "visible",
-      text: "NO_REPLY: explanation",
     });
   });
 

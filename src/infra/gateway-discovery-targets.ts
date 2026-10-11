@@ -1,26 +1,13 @@
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  resolveGatewayDiscoveryEndpoint,
-  type GatewayBonjourBeacon,
-  type GatewayDiscoveryResolvedEndpoint,
-} from "./bonjour-discovery.js";
+import { resolveGatewayDiscoveryEndpoint, type GatewayBonjourBeacon } from "./bonjour-discovery.js";
 
 // Gateway discovery targets turn Bonjour beacons into display, websocket, and
 // SSH connection hints without assuming every beacon has all fields.
-type GatewayDiscoveryTarget = {
-  title: string;
-  domain: string;
-  endpoint: GatewayDiscoveryResolvedEndpoint | null;
-  wsUrl: string | null;
-  sshPort: number | null;
-  sshTarget: string | null;
-};
-
 export function buildGatewayDiscoveryTarget(
   beacon: GatewayBonjourBeacon,
   opts?: { sshUser?: string | null },
-): GatewayDiscoveryTarget {
+) {
   const endpoint = resolveGatewayDiscoveryEndpoint(beacon);
   const sshPort = asPositiveFiniteNumber(beacon.sshPort) ?? null;
   const sshUser = normalizeOptionalString(opts?.sshUser) ?? "";

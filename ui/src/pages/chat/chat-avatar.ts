@@ -187,9 +187,7 @@ export function renderForwardedAvatar(agentId: string | undefined, opts: Forward
 type ChatAvatarHost = {
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null; agents?: AgentsListResult["agents"] } | null;
-  resourceBasePath: string;
   chatAvatarReason?: string | null;
-  chatAvatarSource?: string | null;
   chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   chatAvatarUrl: string | null;
   senderAgentAvatars?: ReadonlyMap<string, string | null>;
@@ -197,9 +195,7 @@ type ChatAvatarHost = {
   connected: boolean;
   connectionEpoch?: number;
   hello: GatewayHelloOk | null;
-  password?: string | null;
   sessionKey: string;
-  settings?: { token?: string | null } | null;
   requestUpdate?: () => void;
 };
 
@@ -207,14 +203,6 @@ const chatAvatarRequestVersions = new WeakMap<object, number>();
 const chatAvatarDisplayedAgents = new WeakMap<object, string>();
 const senderAvatarRequests = new WeakMap<object, object>();
 const senderAvatarInputs = new WeakMap<object, unknown[]>();
-
-type ChatAvatarSnapshot = {
-  reason: string | null;
-  source: string | null;
-  status: "none" | "local" | "remote" | "data" | null;
-  url: string | null;
-  release: () => void;
-};
 
 const CHAT_AVATAR_CACHE_LIMIT = 24;
 const currentAvatarReference = Symbol("current-chat-avatar");
@@ -247,7 +235,6 @@ function clearChatAvatarState(host: ChatAvatarHost) {
   references?.get(currentAvatarReference)?.();
   references?.delete(currentAvatarReference);
   host.chatAvatarUrl = null;
-  host.chatAvatarSource = null;
   host.chatAvatarStatus = null;
   host.chatAvatarReason = null;
 }
@@ -279,10 +266,7 @@ export function invalidateChatAvatarCache(host: ChatAvatarHost): void {
   clearChatAvatarState(host);
 }
 
-async function loadChatAvatarSnapshot(
-  host: ChatAvatarHost,
-  agentId: string,
-): Promise<ChatAvatarSnapshot | null> {
+async function loadChatAvatarSnapshot(host: ChatAvatarHost, agentId: string) {
   const client = host.client;
   const epoch = host.connectionEpoch;
   const sessionAgentId = resolveAgentIdForSession(host);
@@ -316,7 +300,6 @@ async function loadChatAvatarSnapshot(
     }
     return {
       release,
-      source: identity.avatarSource ?? null,
       status: identity.avatarStatus ?? null,
       reason: identity.avatarReason ?? null,
       url,
@@ -408,7 +391,7 @@ export async function refreshSenderAgentAvatars(
       return [id, snapshot ? snapshot.url : (previousAvatars?.get(id) ?? null)];
     }),
   );
-  // Leases and identity TTL refresh independently; unchanged URLs keep settled rows memoized.
+  // Identity invalidation and image leases refresh independently; unchanged URLs keep rows memoized.
   if (
     avatars.size !== (previousAvatars?.size ?? 0) ||
     [...avatars].some(([id, url]) => previousAvatars?.get(id) !== url)
@@ -446,7 +429,6 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
   }
   if (snapshot) {
     rememberChatAvatarReference(host, currentAvatarReference, snapshot.release);
-    host.chatAvatarSource = snapshot.source;
     host.chatAvatarStatus = snapshot.status;
     host.chatAvatarReason = snapshot.reason;
     host.chatAvatarUrl = snapshot.url;

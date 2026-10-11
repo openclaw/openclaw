@@ -10,9 +10,11 @@ import {
 } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { isComposingKeyboardEvent } from "../../lib/ime.ts";
 import {
   loadPluginDiscoveryDetail,
   uninstallPlugin,
@@ -33,7 +35,6 @@ import {
 } from "./detail-tabs.ts";
 import { PluginDiscoveryController } from "./plugin-discovery-controller.ts";
 import { PluginHelpController } from "./plugin-help-controller.ts";
-import { confirmPluginUninstall } from "./plugin-lifecycle-confirmation.ts";
 import { PluginMcpLoginController } from "./plugin-mcp-login-controller.ts";
 import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.ts";
 import { PluginSettingsController } from "./plugin-settings-controller.ts";
@@ -146,8 +147,7 @@ class PluginsPage extends OpenClawLightDomElement {
   });
   private readonly catalogTask = new Task(this, {
     autoRun: false,
-    args: () => [this.gateway.connected ? this.gateway.client : null] as const,
-    task: ([client], { signal }) =>
+    task: ([client]: readonly [GatewayPageController["client"]], { signal }) =>
       client ? client.request<PluginListResult>("plugins.list", {}, { signal }) : initialState,
     onComplete: (result) => {
       this.replaceResult(result);
@@ -218,8 +218,17 @@ class PluginsPage extends OpenClawLightDomElement {
     // owner close the menu and restore focus before this page handles Escape.
     if (
       event.key !== "Escape" ||
+      isComposingKeyboardEvent(event) ||
       document.querySelector(".shell-nav[aria-modal='true']") ||
       (event.target instanceof Element && event.target.closest("wa-dropdown[open]"))
+    ) {
+      return;
+    }
+    if (
+      event.target instanceof Node &&
+      event.target !== document &&
+      event.target !== document.body &&
+      !this.contains(event.target)
     ) {
       return;
     }
@@ -341,7 +350,7 @@ class PluginsPage extends OpenClawLightDomElement {
     this.ensureInitialData();
   }
 
-  private invalidateRequests(invalidateCatalog = true) {
+  private invalidateRequests(invalidateCatalog: boolean) {
     this.mcpLogin.reset();
     if (invalidateCatalog) {
       void this.catalogTask.run([null]);
@@ -445,11 +454,7 @@ class PluginsPage extends OpenClawLightDomElement {
       return;
     }
     const catalogId = this.activeRoutePluginId;
-    if (catalogId) {
-      await this.showCatalogDetail(catalogId);
-    } else {
-      await this.discovery.refresh();
-    }
+    return catalogId ? this.showCatalogDetail(catalogId) : this.discovery.refresh();
   }
 
   private selectHubTab(tab: PluginsHubTab) {
@@ -599,7 +604,7 @@ class PluginsPage extends OpenClawLightDomElement {
     await this.consentController.runMutation(
       rowKey,
       (client) => uninstallPlugin(client, pluginId),
-      async (result, refreshError, client, _isCurrent, isLatest) => {
+      async (result, refreshError, client, isLatest) => {
         if (this.detail?.pluginId === pluginId) {
           this.detail = null;
         }
@@ -615,7 +620,16 @@ class PluginsPage extends OpenClawLightDomElement {
         }
         await this.refreshCatalog(client);
       },
-      { action: "uninstall", confirm: () => confirmPluginUninstall(name) },
+      {
+        action: "uninstall",
+        confirm: () =>
+          showConfirmDialog({
+            title: t("pluginsPage.removeConfirmTitle", { name }),
+            message: t("pluginsPage.removeConfirmMessage"),
+            confirmLabel: t("pluginsPage.remove"),
+            danger: true,
+          }),
+      },
     );
   }
 

@@ -41,7 +41,7 @@ page that now holds the content.
 - <a id="transcript-event-structure" />[Transcript event structure](/reference/session-management-compaction/schema#transcript-event-structure)
 - <a id="context-windows-vs-tracked-tokens" />[Context windows vs tracked tokens](/reference/session-management-compaction/compaction#context-windows-vs-tracked-tokens)
 - <a id="compaction%3A-what-it-is" /><a id="compaction-what-it-is" />[Compaction: what it is](/reference/session-management-compaction/compaction#compaction-what-it-is)
-- <a id="chunk-boundaries-and-tool-pairing" />[Chunk boundaries and tool pairing](/reference/session-management-compaction/compaction#chunk-boundaries-and-tool-pairing)
+- <a id="chunk-boundaries-and-tool-pairing" />[Summary input and tool pairing](/reference/session-management-compaction/compaction#summary-input-and-tool-pairing)
 - <a id="when-auto-compaction-happens" />[When auto-compaction happens](/reference/session-management-compaction/compaction#when-auto-compaction-happens)
 - <a id="compaction-settings" />[Compaction settings](/reference/session-management-compaction/compaction#compaction-settings)
 - <a id="pluggable-compaction-providers" />[Pluggable compaction providers](/reference/session-management-compaction/compaction#pluggable-compaction-providers)

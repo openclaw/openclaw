@@ -21,16 +21,11 @@ export function runtimeTarget(triple) {
   ) {
     return null; // Bundled Gateway runtimes belong to the Linux companion only.
   }
-  const platform = triple.endsWith("-unknown-linux-gnu") ? "linux" : null;
   const arch = triple.startsWith("aarch64-") ? "arm64" : triple.startsWith("x86_64-") ? "x64" : null;
-  if (!platform || !arch) {
+  if (!triple.endsWith("-unknown-linux-gnu") || !arch) {
     throw new Error(`Unsupported embedded runtime target: ${triple}`);
   }
-  return { platform, arch };
-}
-
-function run(script, args) {
-  execFileSync(script, args, { cwd: root, stdio: "inherit" });
+  return { platform: "linux", arch };
 }
 
 export function stageRuntime(triple) {
@@ -40,7 +35,10 @@ export function stageRuntime(triple) {
   try {
     if (target) {
       const pin = JSON.parse(fs.readFileSync(path.join(root, "scripts/lib/openclaw-bun.json"), "utf8"));
-      run(path.join(root, "scripts/stage-openclaw-bun.sh"), [work, target.platform, target.arch]);
+      execFileSync(path.join(root, "scripts/stage-openclaw-bun.sh"), [work, target.platform, target.arch], {
+        cwd: root,
+        stdio: "inherit",
+      });
       const executablePath = path.join(work, "bin/bun");
       const executable = fs.readFileSync(executablePath);
       fs.writeFileSync(executablePath, resourceBytes(executable));

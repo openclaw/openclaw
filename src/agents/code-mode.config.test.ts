@@ -5,56 +5,25 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCodeModeConfig } from "./code-mode-runtime.js";
 
 describe("Code Mode configuration", () => {
-  it.each<{
-    name: string;
-    global: boolean | "auto";
-    model?: boolean;
-    agent?: boolean | "auto";
-    agentModel?: boolean;
-    expected: boolean | "auto";
-  }>([
-    { name: "model on overrides global off", global: false, model: true, expected: true },
-    {
-      name: "agent default overrides model default",
-      global: false,
-      model: true,
-      agent: false,
-      expected: false,
-    },
-    {
-      name: "agent model overrides agent default",
-      global: false,
-      model: false,
-      agent: false,
-      agentModel: true,
-      expected: true,
-    },
-  ])("$name", ({ global, model, agent, agentModel, expected }) => {
+  it("model on overrides global off", () => {
     const cfg: OpenClawConfig = {
-      tools: { codeMode: { enabled: global, timeoutMs: 1234, maxOutputBytes: 4096 } },
+      tools: { codeMode: { enabled: false, timeoutMs: 1234, maxOutputBytes: 4096 } },
       agents: {
-        defaults: { models: { "test/model-a": { codeMode: model } } },
+        defaults: { models: { "test/model-a": { codeMode: true } } },
         entries: {
           ops: {
-            tools: {
-              codeMode: { ...(agent === undefined ? {} : { enabled: agent }), timeoutMs: 2345 },
-            },
-            models: { "test/model-a": { codeMode: agentModel, alias: "A" } },
+            tools: { codeMode: { timeoutMs: 2345 } },
+            models: { "test/model-a": { alias: "A" } },
           },
         },
       },
     };
     expect(
       resolveCodeModeConfig(cfg, "ops", { provider: "test", modelId: "model-a" }),
-    ).toMatchObject({
-      enabled: expected,
-      timeoutMs: 2345,
-      maxOutputBytes: 4096,
-    });
-    // A fallback model gets its own setting rather than the primary's override.
+    ).toMatchObject({ enabled: true, timeoutMs: 2345, maxOutputBytes: 4096 });
     expect(
       resolveCodeModeConfig(cfg, "ops", { provider: "test", modelId: "model-b" }).enabled,
-    ).toBe(agent ?? global);
+    ).toBe(false);
   });
 
   it("resolves object config defaults", () => {

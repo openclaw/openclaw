@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { MattermostAccountConfig } from "../types.js";
 import { normalizeCallbackPath, resolveCallbackHost } from "./callback-host.js";
 import type { MattermostClient } from "./client.js";
 
@@ -8,19 +9,9 @@ import type { MattermostClient } from "./client.js";
 export const MATTERMOST_SLASH_POST_METHOD = "P";
 const MATTERMOST_COMMAND_DESCRIPTION_MAX_BYTES = 128;
 
-export type MattermostSlashCommandConfig = {
-  /** Enable native slash commands. "auto" resolves to false for now (opt-in). */
-  native: boolean | "auto";
-  /** Also register skill-based commands. */
-  nativeSkills: boolean | "auto";
-  /** Path for the callback endpoint on the gateway HTTP server. */
-  callbackPath: string;
-  /**
-   * Explicit callback URL override (e.g. behind a reverse proxy).
-   * If not set, auto-derived from baseUrl + gateway port + callbackPath.
-   */
-  callbackUrl?: string;
-};
+export type MattermostSlashCommandConfig = Required<
+  Omit<NonNullable<MattermostAccountConfig["commands"]>, "callbackUrl">
+> & { callbackUrl?: string };
 
 export type MattermostCommandSpec = {
   trigger: string;
@@ -57,15 +48,6 @@ export type MattermostSlashCommandPayload = {
   text: string; // args after the trigger word
   trigger_id?: string;
   response_url?: string;
-};
-
-export type MattermostSlashCommandResponse = {
-  response_type?: "ephemeral" | "in_channel";
-  text: string;
-  username?: string;
-  icon_url?: string;
-  goto_location?: string;
-  attachments?: unknown[];
 };
 
 type MattermostCommandCreate = {

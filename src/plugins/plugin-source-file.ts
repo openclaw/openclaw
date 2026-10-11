@@ -1,9 +1,20 @@
 import { createHash, type Hash } from "node:crypto";
 import fs from "node:fs";
-import { copyFileDescriptorSync } from "@openclaw/fs-safe/advanced";
+import path from "node:path";
+import {
+  assertDirectoryIdentitySync,
+  copyFileDescriptorSync,
+  copyRootFileSync,
+  createFileSync,
+} from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
-import { hasErrnoCode } from "../infra/errno.js";
+import {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  formatErrorMessage,
+  readErrorCauses,
+} from "../infra/errors.js";
 import { isGitRuntimeStagingName } from "../infra/update-runtime-staging.js";
 
 // Git rollback trees retain links relative to their final location. Only explicit
@@ -13,9 +24,13 @@ export const isPluginSourceEntry = (name: string): boolean =>
 
 // Capture and native module hooks are synchronous; no read retains this scratch buffer.
 const scratch = Buffer.allocUnsafe(64 * 1024);
+const SMALL_SOURCE_COPY_BYTES = 64 * 1024;
 
-export const pluginSourceStatIdentity = (stat: fs.BigIntStats): string =>
-  `${stat.dev}:${stat.ino}:${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+export const pluginSourceStatIdentity = (
+  stat: fs.BigIntStats,
+  identity: Pick<fs.BigIntStats, "dev" | "ino"> = stat,
+): string =>
+  `${identity.dev}:${identity.ino}:${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
 
 export const pluginSourceIdentityChangedOnlyByCtime = (
   previous: string,
@@ -47,54 +62,153 @@ export function pluginSourceFileIdentity(source: string, boundary: string): stri
 }
 
 export function isPluginNativeExecutable(source: string, boundary: string): boolean {
-  return withPluginSourceFile(source, boundary, (fd) => {
-    if (fs.readSync(fd, scratch, 0, 4, 0) !== 4) {
-      return false;
+  return withPluginSourceFile(source, boundary, isPluginNativeDescriptor);
+}
+
+function isPluginNativeDescriptor(fd: number): boolean {
+  if (fs.readSync(fd, scratch, 0, 4, 0) !== 4) {
+    return false;
+  }
+  const magic = scratch.readUInt32BE(0);
+  return (
+    scratch.readUInt16BE(0) === 0x4d5a ||
+    [0x7f454c46, 0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca].includes(
+      magic,
+    )
+  );
+}
+
+function copySmallPluginSourceFile(
+  source: string,
+  boundary: string,
+  target: string,
+  fd: number,
+  admitted: fs.BigIntStats,
+  mode: number,
+  hashCopiedContent?: boolean,
+) {
+  const parent = path.dirname(target);
+  const parentIdentity = fs.lstatSync(parent, { bigint: true });
+  const assertAdmission = () => {
+    assertDirectoryIdentitySync(parent, {
+      dev: parentIdentity.dev,
+      ino: parentIdentity.ino,
+      realPath: parent,
+    });
+    withPluginSourceFile(source, boundary, (currentFd) => {
+      const current = fs.fstatSync(currentFd, { bigint: true });
+      const before = pluginSourceStatIdentity(admitted);
+      const after = pluginSourceStatIdentity(current);
+      if (before !== after && !pluginSourceIdentityChangedOnlyByCtime(before, after)) {
+        throw new FsSafeError(
+          current.size > admitted.size ? "too-large" : "path-mismatch",
+          "Plugin source changed while preparing its reload; retry after the edit finishes.",
+        );
+      }
+    });
+  };
+  using copied = createFileSync(target, { mode: 0o600, assertBeforeMutation: assertAdmission });
+  const identity = fs.fstatSync(copied.fd, { bigint: true });
+  const assertCurrent = () => {
+    assertAdmission();
+    const named = fs.lstatSync(target, { bigint: true });
+    const current = fs.fstatSync(copied.fd, { bigint: true });
+    if (
+      !named.isFile() ||
+      named.nlink !== 1n ||
+      named.dev !== identity.dev ||
+      named.ino !== identity.ino ||
+      !current.isFile() ||
+      current.nlink !== 1n ||
+      current.dev !== identity.dev ||
+      current.ino !== identity.ino
+    ) {
+      throw new FsSafeError("path-mismatch", "Plugin capture destination changed during copying");
     }
-    const magic = scratch.readUInt32BE(0);
-    return (
-      scratch.readUInt16BE(0) === 0x4d5a ||
-      [0x7f454c46, 0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca].includes(
-        magic,
-      )
-    );
+  };
+  // Small copies need one bounded descriptor transfer, rather than repeated
+  // pathname clone admission. The source pin and exclusive output stay owned.
+  const bytes = copyFileDescriptorSync(fd, copied.fd, {
+    maxBytes: Number(admitted.size),
+    assertBeforeMutation: assertCurrent,
   });
+  if (bytes !== Number(admitted.size)) {
+    throw new FsSafeError("path-mismatch", "Plugin source changed while copying");
+  }
+  fs.fchmodSync(copied.fd, mode);
+  assertCurrent();
+  return hashCopiedContent
+    ? {
+        ...hashPluginSourceDescriptor(copied.fd),
+        sourceIdentity: pluginSourceStatIdentity(admitted),
+      }
+    : undefined;
 }
 
 export function copyPluginSourceFile(
   source: string,
   boundary: string,
   target: string,
-  options: { hashCopiedContent?: boolean } = {},
+  options: {
+    hashCopiedContent?: boolean;
+    preserveSourceMode?: boolean;
+    copyFile?: typeof copyRootFileSync;
+  } = {},
 ) {
   return withPluginSourceFile(source, boundary, (fd) => {
-    // Reopening the admitted pathname would lose the pinned inode on concurrent replacement.
-    if (process.platform === "linux" || process.platform === "darwin") {
-      const descriptor = `${process.platform === "linux" ? "/proc/self/fd" : "/dev/fd"}/${fd}`;
-      try {
-        fs.copyFileSync(descriptor, target, fs.constants.COPYFILE_FICLONE);
-        return undefined;
-      } catch (error) {
-        // Chroots and restricted mounts can lack descriptor paths despite a valid open file.
-        if (
-          !["ENOENT", "ENOTDIR", "EACCES", "EPERM"].some((code) => hasErrnoCode(error, code)) &&
-          !(
-            process.platform === "darwin" &&
-            Object.hasOwn(process.versions, "bun") &&
-            hasErrnoCode(error, "EBADF")
-          )
-        ) {
-          throw error;
-        }
-      }
-    }
-    const output = fs.openSync(target, options.hashCopiedContent ? "w+" : "w", 0o600);
+    const admitted = fs.fstatSync(fd, { bigint: true });
     try {
-      copyFileDescriptorSync(fd, output, { maxBytes: fs.fstatSync(fd).size });
-      // Hash the actual destination through its owned descriptor. Reopening every
-      // fresh copy repeats Windows file admission before its receipt can be recorded.
-      return options.hashCopiedContent ? hashPluginSourceDescriptor(output) : undefined;
+      const mode = options.preserveSourceMode
+        ? Number(admitted.mode & 0o777n)
+        : 0o600 | Number(admitted.mode & 0o100n);
+      // Windows needs this path most: fs-safe skips native copies and path-admission
+      // caching on win32, so guarded clones of every small file stall Gateway startup.
+      if (
+        admitted.size <= BigInt(SMALL_SOURCE_COPY_BYTES) &&
+        !/\.(?:node|so|dylib|dll)$/iu.test(source) &&
+        !isPluginNativeDescriptor(fd) &&
+        fs.realpathSync.native(path.dirname(target)) === path.dirname(target)
+      ) {
+        return copySmallPluginSourceFile(
+          source,
+          boundary,
+          target,
+          fd,
+          admitted,
+          mode,
+          options.hashCopiedContent,
+        );
+      }
+      // Keep our pin alive; fs-safe binds its own admitted open to this exact inode.
+      using copied = (options.copyFile ?? copyRootFileSync)({
+        source: { rootPath: boundary, absolutePath: source },
+        destination: { rootPath: path.dirname(target), absolutePath: target },
+        expectedSourceIdentity: { dev: admitted.dev, ino: admitted.ino },
+        clone: "auto",
+        maxBytes: Number(admitted.size),
+        mode,
+        sourceHardlinks: "allow",
+      });
+      // The initial hash belongs to the copied descriptor; receipts still recheck its path.
+      return options.hashCopiedContent
+        ? {
+            ...hashPluginSourceDescriptor(copied.fd),
+            sourceIdentity: pluginSourceStatIdentity(admitted, copied.sourceIdentity),
+          }
+        : undefined;
     } catch (error) {
+      // fs-safe wraps native failures; retain the disk-full code and detail that
+      // plugin-load diagnostics use to explain how to recover.
+      if (
+        error instanceof FsSafeError &&
+        collectErrorGraphCandidates(error, readErrorCauses).some(
+          (cause) => extractErrorCode(cause) === "ENOSPC",
+        )
+      ) {
+        throw Object.assign(new Error(formatErrorMessage(error), { cause: error }), {
+          code: "ENOSPC",
+        });
+      }
       if (error instanceof FsSafeError && error.code === "too-large") {
         throw new Error(
           "Plugin source changed while preparing its reload; retry after the edit finishes.",
@@ -102,8 +216,6 @@ export function copyPluginSourceFile(
         );
       }
       throw error;
-    } finally {
-      fs.closeSync(output);
     }
   });
 }
