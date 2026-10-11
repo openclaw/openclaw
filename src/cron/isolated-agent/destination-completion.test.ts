@@ -778,73 +778,76 @@ describe("destination-owned completion", () => {
     });
   });
 
-  it("rejects implicit delivery when the creator resets after route resolution", async () => {
-    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-      const fixture = await createCompletionFixture(
-        state,
-        "isolated",
-        "agent:main:telegram:direct:12345",
-      );
-      const registry = captureActivePluginRegistrySnapshot();
-      const sendText = vi.fn(async () => ({ channel: "telegram", messageId: "stale-report" }));
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "telegram",
-            source: "test",
-            plugin: {
-              ...createChannelTestPluginBase({ id: "telegram" }),
-              outbound: { deliveryMode: "direct", sendText },
-            },
-          },
-        ]),
-      );
-      try {
-        fixture.params.cfgWithAgentDefaults.session = {
-          ...fixture.params.cfgWithAgentDefaults.session,
-          dmScope: "per-channel-peer",
-        };
-        await replaceSessionEntry(fixture.scope, {
-          ...fixture.params.sourceSessionGeneration,
-          sessionId: fixture.scope.sessionId,
-          updatedAt: 1,
-          delivery: normalizeSessionDeliveryState({
-            context: { channel: "telegram", to: "12345", accountId: "default" },
-          }),
-        });
-        fixture.params.resolvedDelivery = await resolveDeliveryTarget(
-          fixture.params.cfgWithAgentDefaults,
-          "main",
-          { ...fixture.job, ...fixture.params.deliveryPlan },
+  it.each(["isolated", "current"] as const)(
+    "rejects implicit %s delivery when the creator resets after route resolution",
+    async (sessionTarget) => {
+      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+        const fixture = await createCompletionFixture(
+          state,
+          sessionTarget,
+          "agent:main:telegram:direct:12345",
         );
-        assert(fixture.params.resolvedDelivery.ok);
-        expect(fixture.params.resolvedDelivery.to).toBe("12345");
-        await resetSessionEntryLifecycle({
-          storePath: fixture.scope.storePath,
-          target: {
-            canonicalKey: fixture.scope.sessionKey,
-            storeKeys: [fixture.scope.sessionKey],
-          },
-          buildNextEntry: () => ({
-            sessionId: "replacement-session",
-            lifecycleRevision: "replacement-generation",
-            updatedAt: 3000,
-          }),
-        });
-        fixture.params.deliveryPayloads = [{ text: "Stale report" }];
-        fixture.params.synthesizedText = "Stale report";
+        const registry = captureActivePluginRegistrySnapshot();
+        const sendText = vi.fn(async () => ({ channel: "telegram", messageId: "stale-report" }));
+        setActivePluginRegistry(
+          createTestRegistry([
+            {
+              pluginId: "telegram",
+              source: "test",
+              plugin: {
+                ...createChannelTestPluginBase({ id: "telegram" }),
+                outbound: { deliveryMode: "direct", sendText },
+              },
+            },
+          ]),
+        );
+        try {
+          fixture.params.cfgWithAgentDefaults.session = {
+            ...fixture.params.cfgWithAgentDefaults.session,
+            dmScope: "per-channel-peer",
+          };
+          await replaceSessionEntry(fixture.scope, {
+            ...fixture.params.sourceSessionGeneration,
+            sessionId: fixture.scope.sessionId,
+            updatedAt: 1,
+            delivery: normalizeSessionDeliveryState({
+              context: { channel: "telegram", to: "12345", accountId: "default" },
+            }),
+          });
+          fixture.params.resolvedDelivery = await resolveDeliveryTarget(
+            fixture.params.cfgWithAgentDefaults,
+            "main",
+            { ...fixture.job, ...fixture.params.deliveryPlan },
+          );
+          assert(fixture.params.resolvedDelivery.ok);
+          expect(fixture.params.resolvedDelivery.to).toBe("12345");
+          await resetSessionEntryLifecycle({
+            storePath: fixture.scope.storePath,
+            target: {
+              canonicalKey: fixture.scope.sessionKey,
+              storeKeys: [fixture.scope.sessionKey],
+            },
+            buildNextEntry: () => ({
+              sessionId: "replacement-session",
+              lifecycleRevision: "replacement-generation",
+              updatedAt: 3000,
+            }),
+          });
+          fixture.params.deliveryPayloads = [{ text: "Stale report" }];
+          fixture.params.synthesizedText = "Stale report";
 
-        const result = await dispatchCronDelivery(fixture.params);
-        expect(result).toMatchObject({ delivered: false });
-        expect(result.deliveryError).toBeDefined();
-        expect(sendText).not.toHaveBeenCalled();
-        expect(await readConversationMessages(fixture.scope)).toEqual([]);
-      } finally {
-        restoreActivePluginRegistrySnapshot(registry);
-        await fixture.dispose();
-      }
-    });
-  });
+          const result = await dispatchCronDelivery(fixture.params);
+          expect(result).toMatchObject({ delivered: false });
+          expect(result.deliveryError).toBeDefined();
+          expect(sendText).not.toHaveBeenCalled();
+          expect(await readConversationMessages(fixture.scope)).toEqual([]);
+        } finally {
+          restoreActivePluginRegistrySnapshot(registry);
+          await fixture.dispose();
+        }
+      });
+    },
+  );
 
   it.each(["deleted", "reset"] as const)(
     "records a delivery failure when the creating conversation is %s",
