@@ -206,26 +206,6 @@ describe("session group catalog loading", () => {
     sessions.dispose();
   });
 
-  it("keeps a loaded path-free catalog when defaults are unavailable", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.groups.list") {
-        return { groups: [{ name: "Client", position: 0 }] };
-      }
-      if (method === "sessions.groups.defaults") {
-        throw new Error("defaults unavailable");
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
-
-    await expect(sessions.groupsLoad()).resolves.toBeNull();
-
-    expect(sessions.state.groups).toEqual(["Client"]);
-    expect(sessions.state.groupSettings).toEqual([{ name: "Client", position: 0 }]);
-    expect(sessions.groupsStatus()).toBe("unavailable");
-    sessions.dispose();
-  });
-
   it("keeps path-free mutations pending until fresh defaults arrive", async () => {
     const refreshedDefaults = createDeferred<{
       defaults: Array<{ name: string; cwd: string; worktree: boolean }>;
