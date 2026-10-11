@@ -1,7 +1,6 @@
 // Owns the published index state and the isolated lifetime of shadow reindex work.
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
-import { setTimeout as delay } from "node:timers/promises";
 import {
   createSubsystemLogger,
   resolveStateDir,
@@ -23,16 +22,14 @@ import {
   type SqliteWorkerStore,
   runQueuedStoreWrite,
   readOpenClawAgentDatabaseIdentity,
+  readSqliteDatabaseWriteTokenForPath,
   supportsOpenClawAgentDatabaseExecution,
   withOpenClawAgentDatabaseWrite,
   type StoreWriterQueue,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
-import { runMemorySourceState } from "./manager-cpu-worker-runtime.js";
-import {
-  memoryDatabaseTableExists,
-  MemoryIndexRevisionConflictError,
-} from "./manager-db-kernel.js";
+import { runMemoryDatabaseFacts, runMemorySourceState } from "./manager-cpu-worker-runtime.js";
+import { memoryDatabaseTableExists } from "./manager-db-kernel.js";
 import {
   closeMemoryDatabase,
   openMemoryDatabaseAtPath,
@@ -47,10 +44,16 @@ import type {
   MemoryPublicationState,
 } from "./manager-publication-task.js";
 import { memoryEmbeddingCacheFitsInline } from "./manager-publication-transfer.js";
-import { publishMemoryEmbeddingCache, publishMemorySource } from "./manager-publication.js";
+import {
+  publishMemoryEmbeddingCache,
+  publishMemorySource,
+  retryMemoryPublication,
+} from "./manager-publication.js";
+import type { MemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import {
   assertMemoryShadowIdentity,
   readMemoryShadowIdentity,
+  readMemoryConnectionPragmas,
   type MemoryShadowConnection,
 } from "./manager-shadow-task.js";
 import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
@@ -66,29 +69,13 @@ type PublicationWorker = {
   busyTimeoutMs: number;
 };
 
-function readConnectionPragmas(db: DatabaseSync, errorMessage: string) {
-  const read = (name: keyof MemoryPublicationConnection["pragmas"]): number => {
-    const row = db.prepare(`PRAGMA ${name}`).get();
-    const value = row?.[name] ?? row?.timeout;
-    if (typeof value !== "number" || !Number.isSafeInteger(value)) {
-      throw new Error(errorMessage);
-    }
-    return value;
-  };
-  return {
-    busy_timeout: read("busy_timeout"),
-    synchronous: read("synchronous"),
-    foreign_keys: read("foreign_keys"),
-    journal_size_limit: read("journal_size_limit"),
-    checkpoint_fullfsync: read("checkpoint_fullfsync"),
-  };
-}
-
 export class MemoryIndexDatabase {
   private readonly privateQueues = new Map<string, StoreWriterQueue>();
   private nativeWriterActive = false;
   private publicationWorker?: Promise<PublicationWorker>;
   private schemaAdmission?: Promise<void>;
+  private connectionPragmas?: MemoryPublicationConnection["pragmas"];
+  private factsToken?: string;
   private shadow?: {
     path: string;
     identity: MemoryShadowConnection["fileIdentity"];
@@ -135,11 +122,17 @@ export class MemoryIndexDatabase {
         (!database.fts.enabled || params.maintenanceSource.fts.available)
       ) {
         Object.assign(database.fts, params.maintenanceSource.fts);
+        database.installFacts(params.maintenanceSource.facts);
       } else if (params.readOnly) {
         database.fts.available =
           database.hasIndex &&
           database.fts.enabled &&
           memoryDatabaseTableExists(database.db, "main", MEMORY_INDEX_FTS_TABLE);
+        if (database.hasIndex) {
+          database.installFacts(
+            await runMemoryDatabaseFacts(params.writeOptions.path, params.agentId),
+          );
+        }
       } else {
         await database.admitSchema(params.schema);
         // Sync must acquire its own retained executor for accepted shutdown work.
@@ -163,8 +156,9 @@ export class MemoryIndexDatabase {
       database.shadow = {
         path: filename,
         identity: readMemoryShadowIdentity(filename),
-        pragmas: readConnectionPragmas(db, "Invalid memory shadow connection policy"),
+        pragmas: readMemoryConnectionPragmas(db, "Invalid memory shadow connection policy"),
       };
+      database.connectionPragmas = database.shadow.pragmas;
       return database;
     } catch (error) {
       closeMemoryDatabase(db);
@@ -196,7 +190,13 @@ export class MemoryIndexDatabase {
     loadError?: string;
   } = { enabled: false, available: false };
   vectorReady: Promise<boolean> | null = null;
-  lastMetaSerialized: string | null = null;
+  facts: MemoryDatabaseFacts = {
+    meta: null,
+    serialized: null,
+    revision: 0,
+    hasIndexedChunks: false,
+    hasSemanticChunks: false,
+  };
   vectorDegradedWriteWarningShown = false;
   closed = false;
 
@@ -207,6 +207,47 @@ export class MemoryIndexDatabase {
     readonly writeOptions?: Parameters<typeof withOpenClawAgentDatabaseWrite>[0],
     readonly hasIndex = true,
   ) {}
+
+  private writeToken(): string | undefined {
+    const filename = this.shadow?.path ?? this.writeOptions?.path;
+    return filename ? readSqliteDatabaseWriteTokenForPath(filename) : undefined;
+  }
+
+  private installFacts(facts: MemoryDatabaseFacts, token?: string): void {
+    this.facts = facts;
+    this.factsToken = token;
+  }
+
+  async refreshFacts(): Promise<void> {
+    if (!this.hasIndex || this.readOnly) {
+      return;
+    }
+    const token = this.writeToken();
+    if (token !== undefined && token === this.factsToken) {
+      return;
+    }
+    this.installFacts(
+      await this.executePublication({ type: "index.facts", input: undefined }, () => {
+        if (this.closed || !this.db.isOpen) {
+          throw new Error("Memory database owner closed before reading index facts");
+        }
+      }),
+      token,
+    );
+  }
+
+  async writeMetadata(meta: NonNullable<MemoryDatabaseFacts["meta"]>): Promise<void> {
+    if (this.facts.serialized === JSON.stringify(meta)) {
+      return;
+    }
+    await this.retryPublication(() =>
+      this.executePublication({ type: "index.writeMetadata", input: meta }, () => {
+        if (this.closed || !this.db.isOpen) {
+          throw new Error("Memory database owner closed before writing index metadata");
+        }
+      }),
+    );
+  }
 
   get isShadow(): boolean {
     return this.shadow !== undefined;
@@ -291,8 +332,10 @@ export class MemoryIndexDatabase {
       if (!filename || this.readOnly || this.closed) {
         throw new Error("Memory publication requires its live file owner");
       }
-      const pragmas =
-        this.shadow?.pragmas ?? readConnectionPragmas(this.db, "Invalid memory connection policy");
+      const pragmas = (this.connectionPragmas ??= readMemoryConnectionPragmas(
+        this.db,
+        "Invalid memory connection policy",
+      ));
       const worker = {
         moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication),
         input: {
@@ -400,28 +443,15 @@ export class MemoryIndexDatabase {
     prepare: () => Promise<boolean> = async () => true,
   ): Promise<T | undefined> {
     const worker = await this.getPublicationWorker();
-    const deadline = performance.now() + worker.busyTimeoutMs;
-    while (await prepare()) {
-      const result = await run();
-      if (result.ok) {
-        return result.value;
-      }
-      const code = result.error.errcode === undefined ? undefined : result.error.errcode & 0xff;
-      if (result.entered || (code !== 5 && code !== 6) || performance.now() >= deadline) {
-        throw Object.assign(
-          result.error.name === "MemoryIndexRevisionConflictError"
-            ? new MemoryIndexRevisionConflictError(result.error.message)
-            : new Error(result.error.message),
-          result.error,
-          {
-            entered: result.entered,
-            committed: result.committed,
-          },
-        );
-      }
-      await delay(Math.min(25, Math.max(0, deadline - performance.now())));
+    const result = await retryMemoryPublication({
+      run,
+      prepare,
+      busyTimeoutMs: worker.busyTimeoutMs,
+    });
+    if (result?.facts) {
+      this.installFacts(result.facts, result.writeToken);
     }
-    return undefined;
+    return result?.value;
   }
 
   read<Key extends "source.hash" | "source.chunks" | "cache.read" | "session.current">(

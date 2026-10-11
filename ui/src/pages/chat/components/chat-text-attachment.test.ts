@@ -1,17 +1,39 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, expect, it, vi } from "vitest";
+import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import "./chat-detail-panel.tsx";
 
 async function mountAttachment(
   overrides: Partial<Extract<SidebarContent, { kind: "attachment" }>> = {},
+  request = async (_method: string, params: { html: string }) => ({
+    html: params.html,
+    sandboxUrl: "/mcp-app-sandbox?frames=none",
+    sandboxPort: 8444,
+  }),
 ) {
   const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
     content: SidebarContent;
     updateComplete: Promise<unknown>;
   };
+  const previewContext = {
+    gateway: {
+      snapshot: { client: { request }, phase: "connected" },
+      connection: { gatewayUrl: "ws://gateway.example:8443" },
+      subscribe: () => () => {},
+    },
+  } as unknown as ApplicationContext;
+  panel.addEventListener("context-request", (event) => {
+    if (
+      event.context === applicationContext &&
+      event.contextTarget.localName === "openclaw-chat-html-preview"
+    ) {
+      event.stopPropagation();
+      event.callback(previewContext);
+    }
+  });
   panel.content = {
     kind: "attachment",
     attachmentKind: "document",
@@ -376,22 +398,14 @@ it.each([
     const text =
       "\ufeff<!doctype html>\r\n<style>h1{color:red}</style><h1>Rendered page</h1><script>window.ready=true</script>\n";
     vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response(text)));
-    const panel = await mountAttachment({ title, mimeType });
-    await customElements.whenDefined("openclaw-chat-html-preview");
-    await expect.poll(() => panel.querySelector("openclaw-chat-html-preview")).not.toBeNull();
-    const preview = panel.querySelector("openclaw-chat-html-preview")!;
     const request = vi.fn().mockResolvedValue({
       html: text,
       sandboxUrl: "/mcp-app-sandbox?frames=none",
       sandboxPort: 8444,
     });
-    Reflect.set(preview, "context", {
-      gateway: {
-        snapshot: { client: { request }, phase: "connected" },
-        connection: { gatewayUrl: "ws://gateway.example:8443" },
-        subscribe: () => () => {},
-      },
-    });
+    const panel = await mountAttachment({ title, mimeType }, request);
+    await customElements.whenDefined("openclaw-chat-html-preview");
+    await expect.poll(() => panel.querySelector("openclaw-chat-html-preview")).not.toBeNull();
     await expect.poll(() => panel.querySelector("iframe")).not.toBeNull();
     const frame = panel.querySelector("iframe");
     expect(panel.querySelector("h1, script, style")).toBeNull();
