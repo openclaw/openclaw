@@ -117,7 +117,7 @@ export function createWorkboardTools(params: {
       name: "workboard_create",
       label: "Workboard Create",
       description:
-        "Create a Workboard card, optionally with parent dependencies, tenant, skills, workspace, and idempotency key. Sessions boards do not hold cards; use workboard_sessions_board_read/update/move for them.",
+        "Create a Workboard card, optionally with parent dependencies, tenant, skills, workspace, and key to prevent duplicate requests. Sessions boards do not hold cards; use workboard_sessions_board_read/update/move for them.",
       parameters: strictObject({
         title: Type.String({ description: "Card title." }),
         notes: Type.Optional(Type.String({ description: "Card notes or acceptance criteria." })),
@@ -132,7 +132,11 @@ export function createWorkboardTools(params: {
         createdByCardId: Type.Optional(
           Type.String({ description: "Parent card that created this card." }),
         ),
-        idempotencyKey: Type.Optional(Type.String({ description: "Idempotent create key." })),
+        idempotencyKey: Type.Optional(
+          Type.String({
+            description: "Reuse this key when retrying to avoid creating a duplicate card.",
+          }),
+        ),
         skills: Type.Optional(Type.Array(Type.String(), { description: "Suggested skills." })),
         workspace: workspaceField(),
         maxRuntimeSeconds: Type.Optional(Type.Number({ description: "Run timeout seconds." })),

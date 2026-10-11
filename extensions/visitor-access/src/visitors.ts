@@ -488,7 +488,7 @@ export class VisitorAccessService {
       }
       if (input.profileId && !profile) {
         throw new VisitorAccessError(
-          "Profile not found. Use the current canonical profileId from visitor_list.",
+          "Profile not found. Use the current profileId from visitor_list.",
         );
       }
       const access =

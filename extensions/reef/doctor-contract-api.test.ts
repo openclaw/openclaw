@@ -653,7 +653,7 @@ describe("Reef doctor contract", () => {
     ).migrateLegacyState(params);
     await expectReefStateOperationError(
       generateAndStoreKeys(createRuntime(env)),
-      /has no canonical keys/,
+      /has no stored keys/,
     );
 
     expect(registration.warnings).toEqual([]);

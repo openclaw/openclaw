@@ -16,7 +16,7 @@ fingerprints with a friend before approving pairing.
 A working guard model is required. Guard errors stop outgoing messages and hold
 incoming messages for later delivery; friendship alone does not bypass guards.
 
-The deterministic secret scan recognizes full 40-character hexadecimal Git
+The rule-based secret scan recognizes full 40-character hexadecimal Git
 object IDs in HTTPS `github.com/<owner>/<repo>/{commit,blob,tree}/<id>` paths.
 Only that ID occurrence is excluded from the entropy heuristic; credentials,
 query/fragment values, other path segments, and the rest of the message remain
