@@ -7467,7 +7467,6 @@
 ["src/gateway/server-methods/restart.test.ts","../../infra/gateway-lock.js","1d2108b4ffcd159c6c7ab4146a747bee1143d71558fc000a59daaa213688423a",1]
 ["src/gateway/server-methods/restart.test.ts","../../infra/restart-coordinator.js","3ebd55a972d34b2354843d69c2f45949401c89e6e7f0c1c0e64a683a374556c8",1]
 ["src/gateway/server-methods/restart.test.ts","../../infra/restart.js","b47d574681558c49b2b62b3551f3d1632f64ecd2699d31676ef14d456f5f54ed",1]
-["src/gateway/server-methods/secrets.test.ts","../../secrets/runtime-state.js","bc752dfff626c792e35d209ca2cdcb9d0f13b66bfc6fc8b63d227a1a5f716c98",1]
 ["src/gateway/server-methods/secrets.test.ts","../../secrets/target-registry.js","6d8132a899e7d7b3093efa0c90f1b4d4d8c8e37ef852e1b36c4cde68ab90ae93",1]
 ["src/gateway/server-methods/send.test.ts","../../channels/plugins/index.js","0944736abac19b6098e057b2bad63c91a5c71297d09ac038890773d1f5fd5faf",1]
 ["src/gateway/server-methods/send.test.ts","../../config/sessions/restart-recovery-receipt.js","bd4e8305e8d881ba79df035b72c73045dcd873638445b3f634fd336ed77cc418",1]

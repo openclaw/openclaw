@@ -1,4 +1,5 @@
-import { html, nothing, type TemplateResult } from "lit";
+import type { JSX as SolidJSX } from "@solidjs/web";
+import { createMemo, Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
@@ -11,10 +12,11 @@ import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { WidgetRenderTimeoutError } from "../../lib/widget-sandbox-host.ts";
 import { installWidgetThemeObserver, postWidgetTheme } from "../../lib/widget-theme.ts";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import { COMMAND_PALETTE_OPEN_EVENT } from "../command-palette-contract.ts";
 import { McpAppConfirm } from "../mcp-app-confirm.ts";
-import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
 import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
+import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 
 // Keep in sync with the identical literal in chat widget-card.ts: a shared
 // module is not worth its startup-bundle cost for one string.
@@ -182,6 +184,7 @@ export class BoardWidgetFrameLifecycle {
   }
 
   disconnect(): void {
+    this.frameProbeGeneration += 1;
     this.resetPresentation();
     this.stopWork();
     window.removeEventListener("message", this.handleWindowMessage);
@@ -243,47 +246,100 @@ export class BoardWidgetFrameLifecycle {
     this.updateSandboxHost();
   }
 
-  render(widget: BoardWidget): TemplateResult {
-    const resolveFrameUrl = this.host.resolveFrameUrl();
-    if (!resolveFrameUrl) {
-      throw new Error(t("board.widget.frameResolverMissing"));
-    }
-    const src = resolveFrameUrl(widget.name, widget.revision);
-    this.lastFrameUrl = src;
-    const sandboxSrc = this.resolveSandboxFrameUrl(widget);
-    if (sandboxSrc) {
-      // Never grant popups: host.open handles user-clicked links so ungranted
-      // widgets cannot escape network containment through navigation.
-      return html`
-        <div class="board-widget__frame-pane">
-          ${this.confirmation.render()}
-          ${
-            this.contentVisible || this.host.loadingCovered?.()
-              ? nothing
-              : this.renderStalled
-                ? html`<div class="board-widget__notice" role="status">
-                    ${t("board.widget.resourceUnavailable")}
-                    <button class="btn btn--small" @click=${() => this.retryContent()}>
-                      ${t("common.retry")}
-                    </button>
-                  </div>`
-                : this.waiting
-                  ? html`<div class="board-widget__notice" role="status">
-                      ${t("board.widget.waitingForConnection")}
-                    </div>`
-                  : renderPanelLoadingSkeleton("discussion", t("common.loading"), false, true)
-          }
+  render(
+    widget: BoardWidget | (() => BoardWidget),
+    revision: () => number = () => 0,
+  ): SolidJSX.Element {
+    const current = () => (typeof widget === "function" ? widget() : widget);
+    const view = createMemo(() => {
+      revision();
+      const value = current();
+      const resolveFrameUrl = this.host.resolveFrameUrl();
+      if (!resolveFrameUrl) {
+        throw new Error(t("board.widget.frameResolverMissing"));
+      }
+      const src = resolveFrameUrl(value.name, value.revision);
+      this.lastFrameUrl = src;
+      const sandboxSrc = this.resolveSandboxFrameUrl(value);
+      if (!sandboxSrc && (value.sandboxUrl || value.sandboxPort || value.viewTicket)) {
+        throw new Error(t("board.widget.sandboxUnavailable"));
+      }
+      return {
+        src,
+        sandboxSrc,
+        visible: this.contentVisible,
+        waiting: this.waiting,
+        stalled: this.renderStalled,
+        covered: this.host.loadingCovered?.(),
+      };
+    });
+    return (
+      <Show
+        when={Boolean(view().sandboxSrc)}
+        fallback={
           <iframe
             class="board-widget__frame"
             allow="fullscreen"
-            style=${this.contentVisible ? "" : "opacity: 0"}
-            ?inert=${!this.contentVisible}
+            sandbox="allow-scripts"
+            referrerpolicy="no-referrer"
+            loading="lazy"
+            title={current().title || current().name}
+            src={view().src}
+            onError={() => this.refreshFailedFrame(current())}
+            onLoad={(event) => {
+              this.notifyBoardHost(event);
+              this.verifyAuthorization(event, current());
+            }}
+          />
+        }
+      >
+        <div class="board-widget__frame-pane">
+          <LitContent
+            render={() => {
+              revision();
+              return this.confirmation.render();
+            }}
+          />
+          <Show when={!view().visible && !view().covered}>
+            <Show
+              when={view().stalled}
+              fallback={
+                <Show
+                  when={view().waiting}
+                  fallback={
+                    <PanelLoadingSkeleton
+                      variant="discussion"
+                      label={t("common.loading")}
+                      compact={false}
+                      overlay
+                    />
+                  }
+                >
+                  <div class="board-widget__notice" role="status">
+                    {t("board.widget.waitingForConnection")}
+                  </div>
+                </Show>
+              }
+            >
+              <div class="board-widget__notice" role="status">
+                {t("board.widget.resourceUnavailable")}
+                <button class="btn btn--small" onClick={() => this.retryContent()}>
+                  {t("common.retry")}
+                </button>
+              </div>
+            </Show>
+          </Show>
+          <iframe
+            class="board-widget__frame"
+            allow="fullscreen"
+            style={{ opacity: view().visible ? undefined : 0 }}
+            inert={!view().visible}
             sandbox="allow-scripts allow-same-origin allow-forms"
             referrerpolicy="origin"
             loading="eager"
-            title=${widget.title || widget.name}
-            src=${sandboxSrc}
-            @openclaw:restore-focus=${(event: Event) => {
+            title={current().title || current().name}
+            src={view().sandboxSrc}
+            onOpenclaw:restore-focus={(event: Event) => {
               const frame = event.currentTarget;
               if (
                 frame instanceof HTMLIFrameElement &&
@@ -297,39 +353,16 @@ export class BoardWidgetFrameLifecycle {
                 );
               }
             }}
-            @error=${() => {
-              if (this.sandboxHost) {
-                this.sandboxHost.handleFrameError();
-              } else {
-                this.refreshFailedFrame(widget);
-              }
-            }}
-            @load=${(event: Event) => this.notifyBoardHost(event)}
-          ></iframe>
+            onError={() =>
+              this.sandboxHost
+                ? this.sandboxHost.handleFrameError()
+                : this.refreshFailedFrame(current())
+            }
+            onLoad={(event) => this.notifyBoardHost(event)}
+          />
         </div>
-      `;
-    }
-    if (widget.sandboxUrl || widget.sandboxPort || widget.viewTicket) {
-      throw new Error(t("board.widget.sandboxUnavailable"));
-    }
-    // Snapshots from hosts predating the shared-sandbox contract remain capless:
-    // no bridge ticket or network CSP authority crosses this compatibility path.
-    return html`
-      <iframe
-        class="board-widget__frame"
-        allow="fullscreen"
-        sandbox="allow-scripts"
-        referrerpolicy="no-referrer"
-        loading="lazy"
-        title=${widget.title || widget.name}
-        src=${src}
-        @error=${() => this.refreshFailedFrame(widget)}
-        @load=${(event: Event) => {
-          this.notifyBoardHost(event);
-          this.verifyAuthorization(event, widget);
-        }}
-      ></iframe>
-    `;
+      </Show>
+    );
   }
 
   private setError(error: string, notify = true): void {
@@ -395,8 +428,17 @@ export class BoardWidgetFrameLifecycle {
       return;
     }
     this.frameRefreshAttempts += 1;
+    const refreshGeneration = this.frameProbeGeneration;
     void refreshFrame(widget.name).catch((error: unknown) => {
-      this.setError(formatUiError(error));
+      const current = this.host.widget();
+      if (
+        this.host.connected() &&
+        this.frameProbeGeneration === refreshGeneration &&
+        current?.name === widget.name &&
+        current.revision === widget.revision
+      ) {
+        this.setError(formatUiError(error));
+      }
     });
     if (this.frameRefreshAttempts >= MAX_FRAME_REFRESH_ATTEMPTS) {
       this.setError(resolveBoardFrameFailureMessage(widget, this.sandboxOrigin));
@@ -621,6 +663,7 @@ export class BoardWidgetFrameLifecycle {
       }
       return;
     }
+    // SAFETY: Fields remain unknown; each use below checks its discriminant, numeric type, or nonce.
     const data = event.data as {
       type?: unknown;
       height?: unknown;

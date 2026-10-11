@@ -84,3 +84,13 @@ declare global {
     "openclaw-desktop-panel": DesktopPanelElement;
   }
 }
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-desktop-panel": HTMLAttributes<DesktopPanelElement> & {
+        [Key in keyof DesktopPanelInputs as `prop:${Key}`]?: DesktopPanelInputs[Key];
+      } & { embedded?: boolean };
+    }
+  }
+}

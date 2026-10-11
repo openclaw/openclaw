@@ -3,11 +3,9 @@ import {
   type BoardGetParams,
   type BoardSnapshot,
 } from "@openclaw/gateway-protocol";
-import { html, nothing, type PropertyValues } from "lit";
-import { property, state } from "lit/decorators.js";
+import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { hasOperatorApprovalsAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
-import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import {
   acquireBoardProviderForSession,
@@ -21,11 +19,13 @@ import {
   isGatewayCapabilityAdvertised,
   isGatewayMethodAdvertised,
 } from "../../lib/gateway-methods.ts";
+import { projectBoardProvider } from "../../lib/reactive/domain-board.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
-import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { Icon } from "../solid/icon.tsx";
+import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import "../../styles/board-document.css";
-import "./board-view.ts";
+import { BoardView } from "./board-view.tsx";
 
 type DashboardDocumentState =
   | "loading"
@@ -37,50 +37,44 @@ type DashboardDocumentState =
 
 type ProviderBinding = {
   client: NonNullable<ApplicationGatewaySnapshot["client"]>;
-  sessions: Pick<SessionCapability, "describe">;
+  sessions?: Pick<SessionCapability, "describe">;
   sessionKey: string;
   capabilityKey: string;
 };
 
-export class OpenClawBoardDocument extends OpenClawLightDomElement {
-  @property({ attribute: false }) gatewaySnapshot?: ApplicationGatewaySnapshot;
-  @property({ attribute: false }) sessions!: Pick<SessionCapability, "describe">;
-  @property({ attribute: false }) sessionKey: string | null = null;
-  @property({ attribute: false }) preparedSession: BoardGetParams | null = null;
-  @property({ attribute: false }) onDocumentClose: (() => void) | null = null;
-  @property({ type: Boolean }) passive = false;
+export type BoardDocumentProps = {
+  gatewaySnapshot?: ApplicationGatewaySnapshot;
+  sessions?: Pick<SessionCapability, "describe">;
+  sessionKey?: string | null;
+  preparedSession?: BoardGetParams | null;
+  onDocumentClose?: (() => void) | null;
+  passive?: boolean;
+};
 
-  @state() private documentState: DashboardDocumentState = "loading";
-  @state() private snapshot?: BoardSnapshot;
-  @state() private activeTabId = "";
-  @state() private errorText = "";
-
+// The provider binding remains synchronous; Solid observes its presentation facts.
+class BoardDocumentController {
+  documentState: DashboardDocumentState = "loading";
+  snapshot?: BoardSnapshot;
+  activeTabId = "";
+  errorText = "";
   private provider: BoardProvider | null = null;
   private providerLease: BoardProviderLease | null = null;
   private binding: (ProviderBinding & { session: BoardGetParams }) | null = null;
   private providerSubscriptions: (() => void)[] = [];
   private bindingGeneration = 0;
 
-  override connectedCallback(): void {
-    super.connectedCallback();
-    // Reattaching unchanged properties must reacquire the released binding.
-    this.requestUpdate("gatewaySnapshot");
+  constructor(
+    private readonly props: BoardDocumentProps,
+    private readonly notify: () => void,
+  ) {}
+
+  update(): void {
+    this.synchronizeProvider();
+    this.notify();
   }
 
-  override disconnectedCallback(): void {
+  dispose(): void {
     this.releaseProvider();
-    super.disconnectedCallback();
-  }
-
-  override updated(changed: PropertyValues<this>): void {
-    if (
-      changed.has("sessionKey") ||
-      changed.has("preparedSession") ||
-      changed.has("sessions") ||
-      changed.has("gatewaySnapshot")
-    ) {
-      this.synchronizeProvider();
-    }
   }
 
   private providerCapabilities(snapshot: ApplicationGatewaySnapshot) {
@@ -100,16 +94,14 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
   }
 
   private synchronizeProvider(): void {
-    if (!this.isConnected) {
-      return;
-    }
-    const sessionKey = (this.preparedSession?.sessionKey ?? this.sessionKey)?.trim() ?? "";
+    const sessionKey =
+      (this.props.preparedSession?.sessionKey ?? this.props.sessionKey)?.trim() ?? "";
     if (!sessionKey) {
       this.releaseProvider();
       this.documentState = "missing-session";
       return;
     }
-    const snapshot = this.gatewaySnapshot;
+    const snapshot = this.props.gatewaySnapshot;
     const client = snapshot?.client;
     if (!snapshot || !client) {
       this.releaseProvider();
@@ -125,9 +117,10 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
     const capabilityKey = JSON.stringify(capabilities);
     if (
       this.binding?.client === client &&
-      this.binding.sessions === this.sessions &&
+      this.binding.sessions === this.props.sessions &&
       this.binding.sessionKey === sessionKey &&
-      (!this.preparedSession || this.binding.session.agentId === this.preparedSession.agentId) &&
+      (!this.props.preparedSession ||
+        this.binding.session.agentId === this.props.preparedSession.agentId) &&
       this.binding.capabilityKey === capabilityKey
     ) {
       this.providerLease?.update(client, snapshot.phase === "connected", capabilities);
@@ -137,31 +130,39 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
     this.documentState = "loading";
     const generation = this.bindingGeneration;
     void this.bindProvider(
-      { client, sessions: this.sessions, sessionKey, capabilityKey },
+      { client, sessions: this.props.sessions, sessionKey, capabilityKey },
       capabilities,
       generation,
-      this.preparedSession,
+      this.props.preparedSession ?? null,
     );
   }
 
   private async bindProvider(
     binding: ProviderBinding,
-    capabilities: ReturnType<OpenClawBoardDocument["providerCapabilities"]>,
+    capabilities: ReturnType<BoardDocumentController["providerCapabilities"]>,
     generation: number,
     preparedSession: BoardGetParams | null,
   ): Promise<void> {
     try {
-      const described = preparedSession
-        ? null
-        : await binding.sessions.describe({ key: binding.sessionKey }, { client: binding.client });
+      const sessions = binding.sessions;
+      if (!preparedSession && !sessions) {
+        this.documentState = "unavailable";
+        this.notify();
+        return;
+      }
+      const described =
+        preparedSession || !sessions
+          ? null
+          : await sessions.describe({ key: binding.sessionKey }, { client: binding.client });
       if (generation !== this.bindingGeneration) {
         return;
       }
       if (!preparedSession && !described?.session) {
         this.documentState = "not-found";
+        this.notify();
         return;
       }
-      const current = this.gatewaySnapshot;
+      const current = this.props.gatewaySnapshot;
       if (!current || current.client !== binding.client) {
         return;
       }
@@ -182,11 +183,10 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
       this.provider = provider;
       this.providerLease = lease;
       this.binding = { ...binding, session };
+      const projection = projectBoardProvider(provider);
       this.providerSubscriptions.push(
-        provider.snapshot$.subscribe(() => this.reconcileProvider(provider)),
-      );
-      this.providerSubscriptions.push(
-        provider.loadError$.subscribe(() => this.reconcileProvider(provider)),
+        projection.subscribe(() => this.reconcileProvider(provider)),
+        () => projection.dispose(),
       );
       this.providerSubscriptions.push(
         provider.events.subscribe(({ command }) => {
@@ -195,6 +195,7 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
             provider.snapshot$.value.tabs.some((tab) => tab.tabId === command.tabId)
           ) {
             this.activeTabId = command.tabId;
+            this.notify();
           }
         }),
       );
@@ -203,6 +204,7 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
       if (generation === this.bindingGeneration) {
         this.errorText = formatUiError(error);
         this.documentState = "error";
+        this.notify();
       }
     }
   }
@@ -226,6 +228,7 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
       this.snapshot = provider.snapshot$.value;
       this.selectAvailableTab();
       this.documentState = "ready";
+      this.notify();
       return;
     }
     const loadError = provider.loadError$.value;
@@ -236,6 +239,7 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
       this.errorText = "";
       this.documentState = "loading";
     }
+    this.notify();
   }
 
   private releaseProvider(): void {
@@ -253,31 +257,12 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
     this.errorText = "";
   }
 
-  private renderState() {
-    if (this.documentState === "loading") {
-      return renderPanelLoadingSkeleton("board", t("common.loading"));
-    }
-    const statusText =
-      this.documentState === "missing-session"
-        ? t("dashboardDocument.missingSession")
-        : this.documentState === "not-found"
-          ? t("dashboardDocument.notFound")
-          : this.documentState === "unavailable"
-            ? t("dashboardDocument.unavailable")
-            : null;
-    if (statusText !== null) {
-      return html`<div class="board-document__state" role="status">${statusText}</div>`;
-    }
-    if (this.documentState === "error") {
-      return html`<div class="board-document__state board-document__state--error" role="alert">
-        ${t("dashboardDocument.loadFailed", { error: this.errorText })}
-      </div>`;
-    }
+  presentation(passive: boolean) {
     const provider = this.provider;
     const snapshot = this.snapshot;
     const session = this.binding?.session;
     if (!provider || !snapshot || !session) {
-      return nothing;
+      return undefined;
     }
     const callbacks = {
       appViewGeneration: provider.appViewGeneration,
@@ -285,67 +270,131 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
       grant: (name, decision) => provider.grant(name, decision),
       selectTab: (tabId) => {
         this.activeTabId = tabId;
+        this.notify();
       },
       frameLoadFailed: (name) => provider.refreshWidgetFrame(name),
-      ...(!this.passive
+      ...(!passive
         ? {
             widgetAppView: (name, revision) => provider.widgetAppView(name, revision),
             refreshWidgetAppView: (name, revision) => provider.refreshWidgetAppView(name, revision),
           }
         : {}),
     } satisfies BoardViewCallbacks;
-    // Only saved HTML and declared pure core widgets may render in a preview;
-    // arbitrary plugins and MCP apps can acquire active runtime resources.
-    const renderSnapshot = this.passive
+    // Previews admit only saved HTML and declared pure core widgets.
+    const renderSnapshot = passive
       ? {
           ...snapshot,
           widgets: snapshot.widgets.filter((widget) =>
-            isPassiveBoardWidget(widget, this.gatewaySnapshot?.hello?.controlUiWidgetKinds ?? []),
+            isPassiveBoardWidget(
+              widget,
+              this.props.gatewaySnapshot?.hello?.controlUiWidgetKinds ?? [],
+            ),
           ),
         }
       : snapshot;
-    return html`<openclaw-board-view
-      .active=${true}
-      .bridgeEnabled=${!this.passive}
-      .fitAutoContent=${true}
-      .session=${session}
-      .snapshot=${renderSnapshot}
-      .activeTabId=${this.activeTabId}
-      .widgetFrameUrl=${(name: string, revision: number) => provider.widgetFrameUrl(name, revision)}
-      .callbacks=${callbacks}
-      .canMutate=${!this.passive && provider.canMutate}
-      .canGrant=${!this.passive && provider.canGrant}
-    ></openclaw-board-view>`;
-  }
-
-  override render() {
-    return html`
-      <main class="board-document" aria-label=${t("board.label")}>
-        ${
-          this.onDocumentClose
-            ? html`<button
-                class="btn btn--ghost btn--icon board-document__close"
-                type="button"
-                aria-label=${t("dashboardDocument.close")}
-                title=${t("dashboardDocument.close")}
-                @click=${this.onDocumentClose}
-              >
-                ${icons.x}
-              </button>`
-            : nothing
-        }
-        <div class="board-document__content">${this.renderState()}</div>
-      </main>
-    `;
+    return {
+      provider,
+      widgetFrameUrl: (name: string, revision: number) => provider.widgetFrameUrl(name, revision),
+      snapshot: renderSnapshot,
+      session,
+      callbacks,
+      activeTabId: this.activeTabId,
+    };
   }
 }
 
-if (!customElements.get("openclaw-board-document")) {
-  customElements.define("openclaw-board-document", OpenClawBoardDocument);
+function BoardDocumentContent(props: BoardDocumentProps) {
+  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+  const controller = new BoardDocumentController(props, () => setRevision((value) => value + 1));
+  createEffect(
+    () => ({
+      gatewaySnapshot: props.gatewaySnapshot,
+      sessions: props.sessions,
+      sessionKey: props.sessionKey,
+      preparedSession: props.preparedSession,
+    }),
+    () => untrack(() => controller.update()),
+  );
+  onCleanup(() => controller.dispose());
+  const state = createMemo(() => {
+    revision();
+    return {
+      kind: controller.documentState,
+      error: controller.errorText,
+      board: controller.presentation(props.passive ?? false),
+    };
+  });
+  const statusText = () =>
+    state().kind === "missing-session"
+      ? t("dashboardDocument.missingSession")
+      : state().kind === "not-found"
+        ? t("dashboardDocument.notFound")
+        : t("dashboardDocument.unavailable");
+  return (
+    <main class="board-document" aria-label={t("board.label")}>
+      {props.onDocumentClose ? (
+        <button
+          class="btn btn--ghost btn--icon board-document__close"
+          type="button"
+          aria-label={t("dashboardDocument.close")}
+          title={t("dashboardDocument.close")}
+          onClick={() => props.onDocumentClose?.()}
+        >
+          <Icon name="x" />
+        </button>
+      ) : null}
+      <div class="board-document__content">
+        <Show when={state().kind === "loading"}>
+          <PanelLoadingSkeleton variant="board" label={t("common.loading")} />
+        </Show>
+        <Show when={state().kind === "error"}>
+          <div class="board-document__state board-document__state--error" role="alert">
+            {t("dashboardDocument.loadFailed", { error: state().error })}
+          </div>
+        </Show>
+        <Show when={["missing-session", "not-found", "unavailable"].includes(state().kind)}>
+          <div class="board-document__state" role="status">
+            {statusText()}
+          </div>
+        </Show>
+        <Show when={state().kind === "ready" && state().board}>
+          {(board) => (
+            <BoardView
+              active={true}
+              bridgeEnabled={!props.passive}
+              fitAutoContent={true}
+              session={board().session}
+              snapshot={board().snapshot}
+              activeTabId={board().activeTabId}
+              widgetFrameUrl={board().widgetFrameUrl}
+              callbacks={board().callbacks}
+              canMutate={!props.passive && board().provider.canMutate}
+              canGrant={!props.passive && board().provider.canGrant}
+            />
+          )}
+        </Show>
+      </div>
+    </main>
+  );
 }
+
+export const OpenClawBoardDocument = defineSolidBridge<BoardDocumentProps>(
+  "openclaw-board-document",
+  BoardDocumentContent,
+  {
+    properties: {
+      gatewaySnapshot: { default: undefined, attribute: false },
+      sessions: { default: undefined, attribute: false },
+      sessionKey: { default: null, attribute: false },
+      preparedSession: { default: null, attribute: false },
+      onDocumentClose: { default: null, attribute: false },
+      passive: { default: false, type: Boolean },
+    },
+  },
+);
 
 declare global {
   interface HTMLElementTagNameMap {
-    "openclaw-board-document": OpenClawBoardDocument;
+    "openclaw-board-document": SolidBridgeElement<BoardDocumentProps>;
   }
 }

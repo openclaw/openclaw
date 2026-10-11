@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 /* @vitest-environment jsdom */
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import {
+  CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
+  createConfigCapabilityHarness,
+  createConfigServerMock,
+} from "../lib/config/config-test-harness.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import { resetServerUiPref } from "./server-prefs-controls.ts";
@@ -34,7 +39,10 @@ afterEach(() => {
 });
 
 function expectPatch(request: RequestMock, prefs: Record<string, unknown>) {
-  const params = { raw: JSON.stringify({ ui: { prefs } }), note: "control-ui prefs sync" };
+  const params = {
+    raw: JSON.stringify({ ui: { prefs } }),
+    note: "control-ui prefs sync",
+  };
   expect(request).toHaveBeenCalledWith("config.patch", params);
 }
 
@@ -42,6 +50,55 @@ const conflictError = () =>
   new Error("config changed since last load; re-run config.get and retry");
 
 describe("server preferences", () => {
+  it("adopts the preference revision before saving an in-flight Settings edit", async () => {
+    vi.useFakeTimers();
+    const started = createDeferred();
+    const release = createDeferred();
+    const committed = createDeferred();
+    const store = createConfigServerMock();
+    const request = vi.fn<Request>(async (method, params) => {
+      if (method === "config.patch") {
+        started.resolve();
+        await release.promise;
+        return store.request("config.set", {
+          raw: JSON.stringify({ count: 1, ui: { prefs: { themeMode: "dark" } } }),
+          baseHash: "hash-1",
+        });
+      }
+      return store.request(method, params);
+    });
+    const { runtimeConfig } = createConfigCapabilityHarness(
+      request as GatewayBrowserClient["request"],
+    );
+    try {
+      await runtimeConfig.ensureLoaded();
+      pushServerUiPrefs(
+        runtimeConfig,
+        { themeMode: "dark" },
+        {
+          afterCommit: () => committed.resolve(),
+        },
+      );
+      await started.promise;
+      runtimeConfig.patchForm(["count"], 2);
+      release.resolve();
+      await committed.promise;
+      expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-2");
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+      expect(store.submissions).toHaveLength(2);
+      expect(store.submissions[1]?.baseHash).toBe("hash-2");
+      expect(JSON.parse(store.submissions[1]!.raw)).toEqual({
+        count: 2,
+        ui: { prefs: { themeMode: "dark" } },
+      });
+      expect(request.mock.calls.filter(([method]) => method === "config.get")).toHaveLength(1);
+    } finally {
+      release.resolve();
+      runtimeConfig.setWritesSuspended(true);
+      runtimeConfig.dispose();
+    }
+  });
+
   it.each([
     { intents: ["write"], expected: { locale: "de" } },
     { intents: ["write", "server"], expected: { locale: null } },

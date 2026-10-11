@@ -15,7 +15,6 @@ declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
       "openclaw-browser-panel": ShellElementAttributes;
-      "openclaw-desktop-panel": ShellElementAttributes;
       "openclaw-link-reader-panel": ShellElementAttributes;
     }
   }

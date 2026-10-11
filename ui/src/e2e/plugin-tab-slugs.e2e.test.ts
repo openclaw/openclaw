@@ -1,6 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import type { PluginPage } from "../pages/plugin/plugin-page.ts";
+import type { PluginPageElement } from "../pages/plugin/plugin-page.tsx";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -62,7 +62,7 @@ async function expectReports(page: Page, pathname = "/reports") {
     .waitFor();
   expect(new URL(page.url()).pathname).toBe(pathname);
   expect(
-    await page.locator("openclaw-plugin-page").evaluate((element: PluginPage) => ({
+    await page.locator("openclaw-plugin-page").evaluate((element: PluginPageElement) => ({
       pluginId: element.pluginId,
       id: element.tabId,
     })),

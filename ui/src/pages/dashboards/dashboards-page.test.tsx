@@ -1,32 +1,25 @@
 /* @vitest-environment jsdom */
 
 import type { BoardGetParams, BoardSnapshot } from "@openclaw/gateway-protocol";
-import type { LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import {
-  DASHBOARD_DOCUMENT_ELEMENT,
-  ensureCustomElementDefined,
-} from "../../app/lazy-custom-element.ts";
 import { i18n } from "../../i18n/index.ts";
 import type { SessionListOptions, SessionListSnapshot } from "../../lib/sessions/index.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { dashboardSessionListQuery } from "../../lib/sessions/session-requests.ts";
-import {
-  createApplicationContextProvider,
-  createApplicationGateway,
-} from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { settleLitElement } from "../../test-helpers/lit-settle.ts";
-import type { DashboardsRouteData } from "./view.ts";
-import "./dashboards-page.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import {
+  createSolidApplicationContextProvider,
+  createApplicationGateway,
+} from "../../test-helpers/solid-application-context.tsx";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { DashboardsPage } from "./dashboards-page.tsx";
+import type { DashboardsRouteData } from "./view.tsx";
 
-type DashboardsPageElement = HTMLElement & {
-  routeData?: DashboardsRouteData;
-  updateComplete: Promise<boolean>;
-};
+type DashboardsPageElement = HTMLElement;
 
 function result(sessionRow: GatewaySessionRow): SessionsListResult {
   return {
@@ -101,32 +94,33 @@ function controlPreviewFrames(): () => void {
 }
 
 async function settleDashboardPreviews(element: DashboardsPageElement, runFrame: () => void) {
-  await settleLitElement(element);
+  flush();
   runFrame();
-  const previews = element.querySelectorAll<LitElement>("openclaw-dashboard-preview");
+  flush();
+  const previews = element.querySelectorAll<HTMLElement>("openclaw-dashboard-preview");
   expect(previews.length).toBeGreaterThan(0);
   for (const preview of previews) {
-    await settleLitElement(preview);
-    const board = preview.querySelector<LitElement>("openclaw-board-document")!;
-    expect(board).not.toBeNull();
-    await settleLitElement(board);
-    const view = board.querySelector<LitElement>("openclaw-board-view")!;
-    expect(view, board.textContent ?? "").not.toBeNull();
-    await settleLitElement(view);
-    expect(view.querySelector('[data-test-id="board-empty"]')).not.toBeNull();
+    // The first visible preview also waits for the lazy board module to load.
+    await waitForSolid(
+      () => {
+        const board = preview.querySelector("openclaw-board-document");
+        expect(board, preview.textContent ?? "").not.toBeNull();
+        const view = board?.querySelector("openclaw-board-view");
+        expect(view, board?.textContent ?? "").not.toBeNull();
+        expect(view?.querySelector('[data-test-id="board-empty"]')).not.toBeNull();
+      },
+      { timeout: 10_000 },
+    );
   }
 }
 
 describe("DashboardsPage", () => {
   beforeEach(async () => {
     await i18n.setLocale("en");
-    await ensureCustomElementDefined(
-      DASHBOARD_DOCUMENT_ELEMENT.tagName,
-      DASHBOARD_DOCUMENT_ELEMENT.loadModule,
-    );
   });
 
   afterEach(() => {
+    cleanupSolid();
     document.body.replaceChildren();
     vi.restoreAllMocks();
   });
@@ -171,12 +165,14 @@ describe("DashboardsPage", () => {
       },
       agents: { state: { agentsList: null } },
     } as unknown as ApplicationContext;
-    const element = document.createElement("openclaw-dashboards-page") as DashboardsPageElement;
-    element.routeData = routeData(row("agent:main:before", "Before"));
-    const provider = createApplicationContextProvider(context);
-    provider.append(element);
-    document.body.append(provider);
-    await element.updateComplete;
+    const mounted = mountSolid(
+      () => <DashboardsPage routeData={routeData(row("agent:main:before", "Before"))} />,
+      {
+        wrapper: createSolidApplicationContextProvider(context).wrapper,
+      },
+    );
+    const element = mounted.container;
+    flush();
 
     expect(subscribeList).toHaveBeenCalledWith(
       {
@@ -194,7 +190,7 @@ describe("DashboardsPage", () => {
 
     selectionState.scopeId = "writer";
     selectionListeners.forEach((listener) => listener());
-    await vi.waitFor(() => expect(refreshList).toHaveBeenCalledTimes(1));
+    await waitForSolid(() => expect(refreshList).toHaveBeenCalledTimes(1));
     expect(refreshList).toHaveBeenCalledWith({
       limit: SIDEBAR_SESSION_ROSTER_LIMIT,
       rowMode: "dashboard",
@@ -206,13 +202,30 @@ describe("DashboardsPage", () => {
     });
     expect(element.textContent).toContain("Before");
 
-    listListeners.get("writer")?.({
+    const publishWriter = (snapshot: SessionListSnapshot) => {
+      snapshots.set("writer", snapshot);
+      listListeners.get("writer")?.(snapshot);
+    };
+    publishWriter({
+      result: null,
+      agentId: "writer",
+      loading: false,
+      error: "Writer initial load failed",
+    });
+    flush();
+    expect(element.querySelector('[role="alert"]')?.textContent).toContain(
+      "Writer initial load failed",
+    );
+    expect(element.querySelector('[aria-busy="true"]')).toBeNull();
+    expect(refreshList).toHaveBeenCalledTimes(1);
+
+    publishWriter({
       result: result(row("agent:writer:current", "Writer dashboard")),
       agentId: "writer",
       loading: false,
       error: null,
     });
-    await vi.waitFor(() => expect(element.textContent).toContain("Writer dashboard"));
+    await waitForSolid(() => expect(element.textContent).toContain("Writer dashboard"));
     await settleDashboardPreviews(element, runFrame);
     retiredListener({
       result: result(row("agent:main:retired", "Retired")),
@@ -220,39 +233,39 @@ describe("DashboardsPage", () => {
       loading: false,
       error: "Retired scope refresh failed",
     });
-    await element.updateComplete;
+    flush();
     expect(element.textContent).not.toContain("Retired");
 
     const writerListener = listListeners.get("writer")!;
-    writerListener({
+    publishWriter({
       result: result(row("agent:writer:current", "Writer dashboard")),
       agentId: "writer",
       loading: false,
       error: "Writer refresh failed",
     });
-    await element.updateComplete;
+    flush();
     expect(element.textContent).toContain("Writer dashboard");
     expect(element.querySelector('[role="alert"]')?.textContent).toContain("Writer refresh failed");
     expect(element.querySelector('[role="alert"] button')).toBeNull();
-    writerListener({
+    publishWriter({
       result: result(row("agent:writer:current", "Recovered dashboard")),
       agentId: "writer",
       loading: false,
       error: null,
     });
-    await element.updateComplete;
+    flush();
     await settleDashboardPreviews(element, runFrame);
     expect(element.textContent).toContain("Recovered dashboard");
     expect(element.querySelector('[role="alert"]')).toBeNull();
 
-    element.remove();
+    mounted.unmount();
     writerListener({
       result: null,
       agentId: "writer",
       loading: false,
       error: "Detached refresh failed",
     });
-    await element.updateComplete;
+    flush();
     expect(element.textContent).not.toContain("Detached refresh failed");
   });
 
@@ -311,21 +324,21 @@ describe("DashboardsPage", () => {
         agentSelection: { state: { selectedId: "main", scopeId: null }, subscribe: () => () => {} },
         agents: { state: { agentsList: null } },
       } as unknown as ApplicationContext;
-      const element = document.createElement("openclaw-dashboards-page") as DashboardsPageElement;
-      const provider = createApplicationContextProvider(context);
-      provider.append(element);
-      document.body.append(provider);
+      const mounted = mountSolid(() => <DashboardsPage />, {
+        wrapper: createSolidApplicationContextProvider(context).wrapper,
+      });
+      const element = mounted.container;
       try {
-        await vi.waitFor(() => expect(requests).toHaveLength(2));
+        await waitForSolid(() => expect(requests).toHaveLength(2));
         if (retired) {
           source.publish({ ...source.gateway.snapshot, phase: "reconnecting", client: null });
           resolvePage(page([secondRow], 1, false));
-          await settleLitElement(element);
+          flush();
           expect(element.textContent).toContain("New dashboard");
           expect(element.textContent).not.toContain("Old dashboard");
           return;
         }
-        await vi.waitFor(() =>
+        await waitForSolid(() =>
           expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(2),
         );
         await settleDashboardPreviews(element, runFrame);
@@ -339,7 +352,7 @@ describe("DashboardsPage", () => {
             session: { ...firstRow, displayName: "Updated dashboard", updatedAt: 2 },
           },
         });
-        await settleLitElement(element);
+        flush();
         expect(element.textContent).toContain("Updated dashboard");
         expect(element.textContent).toContain("Old dashboard");
         expect(requests).toHaveLength(2);
@@ -347,20 +360,19 @@ describe("DashboardsPage", () => {
         const search = element.querySelector<HTMLInputElement>('input[type="search"]')!;
         search.value = "old";
         search.dispatchEvent(new Event("input", { bubbles: true }));
-        await element.updateComplete;
+        flush();
         expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(1);
         expect(element.textContent).toContain("Old dashboard");
       } finally {
         resolvePage(page([secondRow], 1, false));
-        element.remove();
+        mounted.unmount();
         sessions.dispose();
       }
     },
   );
 
   it("filters by search and author and sorts visible cards by title", async () => {
-    const element = document.createElement("openclaw-dashboards-page") as DashboardsPageElement;
-    element.routeData = {
+    const data: DashboardsRouteData = {
       result: results([
         {
           ...row("agent:main:dashboard:zulu", "Zulu monitor"),
@@ -384,8 +396,18 @@ describe("DashboardsPage", () => {
       mainKey: "main",
       globalScope: false,
     };
-    document.body.append(element);
-    await element.updateComplete;
+    const context = {
+      gateway: createApplicationGateway().gateway,
+      agentSelection: { state: { scopeId: null }, subscribe: () => () => {} },
+      sessions: {
+        listSnapshot: () => ({ result: null, error: null, loading: false }),
+        subscribeList: () => () => {},
+      },
+    } as unknown as ApplicationContext;
+    const { container: element } = mountSolid(() => <DashboardsPage routeData={data} />, {
+      wrapper: createSolidApplicationContextProvider(context).wrapper,
+    });
+    flush();
 
     expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(3);
     expect(element.querySelector(".dashboard-preview")?.hasAttribute("inert")).toBe(true);
@@ -397,19 +419,19 @@ describe("DashboardsPage", () => {
     }
     search.value = "signals";
     search.dispatchEvent(new Event("input", { bubbles: true }));
-    await element.updateComplete;
+    flush();
     expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(1);
     expect(element.textContent).toContain("Alpha signals");
 
     search.value = "";
     search.dispatchEvent(new Event("input", { bubbles: true }));
-    await element.updateComplete;
+    flush();
     const selects = element.querySelectorAll<HTMLSelectElement>("select");
     const authorSelect = selects.item(0);
     const sortSelect = selects.item(1);
     authorSelect.value = "mira";
     authorSelect.dispatchEvent(new Event("change", { bubbles: true }));
-    await element.updateComplete;
+    flush();
     expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(1);
     expect(element.textContent).toContain("By Mira");
 
@@ -417,7 +439,7 @@ describe("DashboardsPage", () => {
     authorSelect.dispatchEvent(new Event("change", { bubbles: true }));
     sortSelect.value = "title";
     sortSelect.dispatchEvent(new Event("change", { bubbles: true }));
-    await element.updateComplete;
+    flush();
     expect(
       Array.from(element.querySelectorAll(".dashboard-card__heading h2"), (heading) =>
         heading.textContent?.trim(),
