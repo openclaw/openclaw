@@ -1,4 +1,4 @@
-// Compare-only text views for matching imported CLI prompts to local rows.
+// Text views for matching imported CLI prompts and reading their provenance.
 import { stripCliSessionDriftNote } from "../agents/cli-session.js";
 import {
   normalizeInputProvenance,
@@ -50,8 +50,12 @@ function stripLeadingSystemEventLines(text: string): string {
   return lines.slice(end).join("\n");
 }
 
-// Compare-only view of an imported prompt without the context OpenClaw added
-// around the user's text before handing it to the CLI.
+// Correlation/provenance-only view without the context OpenClaw added around
+// the user's text before handing it to the CLI. Never replace stored content.
 export function stripCliPromptDecorations(text: string): string {
-  return stripLeadingSystemEventLines(stripCliSessionDriftNote(text));
+  const withoutGapNote = text.replace(
+    /^\[OpenClaw: \d+ messages occurred outside this Claude session from [^\n]+\. Their contents are not included here\.[^\n]*\]\r?\n\r?\n/u,
+    "",
+  );
+  return stripLeadingSystemEventLines(stripCliSessionDriftNote(withoutGapNote));
 }
