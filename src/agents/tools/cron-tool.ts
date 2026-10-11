@@ -211,8 +211,8 @@ SCHEDULE:
 - {kind:"cron",expr,tz?:"IANA"}: wall time in tz, never UTC-convert; omitted tz=Gateway host local.${streamScheduleLine}
 
 TARGET+PAYLOAD:
-- "current" (agentTurn default): detached run reads bounded conversation context and commits its final result here. It uses the scheduled agent's workspace/session, not the conversation worktree or cloud placement; verify checkout/tool access before delegating work. To resume the real conversation use "session:<key>".
-- "isolated": fresh detached session; results recorded in run history.
+- "current" (agentTurn default) = this conversation's context: the run stays detached, reads bounded chat context, then delivers its final visible assistant result to the resolved destination (this conversation unless another destination is configured). Delayed work/loop = at|every + agentTurn + current. This is not a resumed parent turn: it uses the scheduled agent workspace with its own session identity, not the conversation worktree or cloud worker placement. In-flight turns sent through the job's stable cron key are canceled if that key is reassigned. Verify required checkout/tool access before delegating repository work; result delivery alone does not resume the original agent.
+- "isolated" = fresh detached session; standalone background work recorded in cron run history.
 - "main" = heartbeat lane; payload {kind:"systemEvent",text} (systemEvent default target).
 - "session:<key>" + agentTurn runs a turn inside that existing conversation (same history, saved workspace/worktree). To come back here later (wait for CI, recheck), add an at + agentTurn job with sessionTarget "session:<your session key from Runtime>" and message = instructions for your next turn.
 - {kind:"agentTurn",message}; timeoutSeconds 0=none.
@@ -224,7 +224,7 @@ AUTHORING: keep repeatable logic in workspace scripts and detailed instructions 
 
 ${triggerSection}
 
-DELIVERY: omitted=announce. current commits to this conversation and sends once for external chats; isolated uses the last route or, without one, commits to the creating conversation. Set channel/to for a specific chat; let the scheduler deliver instead of messaging inside the run.${silentWatcherCue} webhook POSTs the finished-run event to URL in \`to\`; successful empty summaries stay silent. Add completionDestination:{mode:"webhook",to:"https://..."} to announce for both.
+DELIVERY: omitted=announce. Agent, command, and script jobs send their final visible result to the destination, then add confirmed delivery once to that conversation, independently of isolated/current/persistent execution. Set channel/to/accountId/threadId to select another destination; the creating conversation is the fallback when no external route exists. Verified matching message-tool delivery suppresses the notification resend, not the conversation result. Failed or uncertain external sends are not added to conversation history; a failed history write after confirmed delivery records a warning without failing delivery. With no external route, the conversation commit completes delivery and appears live and after reconnect. Use none for no automatic result or notification. ${silentWatcherCue} webhook posts finished-run event (successful empty summary is intentional silence, no POST) to URL in \`to\`. To keep announce delivery and also POST completion, use mode:"announce" with completionDestination:{mode:"webhook",to:"https://..."}.
 
 FAILURE ALERTS: routed jobs default to 2 consecutive execution failures and 1h cooldown; terminal one-shot failures bypass that count. failureAlert:false disables execution/delivery alerts, not auto-disable notices. bestEffort suppresses inherited execution alerts. Required-delivery failures use an alternate route, bypass after, and share the cooldown without incrementing the execution streak.
 

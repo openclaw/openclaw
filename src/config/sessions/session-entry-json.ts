@@ -1,4 +1,6 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SessionEntry } from "./types.js";
 
 export function hasValidSessionEntryIdentity(entry: {
   sessionId?: unknown;
@@ -34,4 +36,27 @@ export function parseSqliteSessionEntryRecord(row: {
   } catch {
     return null;
   }
+}
+
+export function normalizeSessionEntryTimestamp(entry: SessionEntry): SessionEntry {
+  const hasLegacyDeliveryFields = [
+    "route",
+    "deliveryContext",
+    "origin",
+    "channel",
+    "lastChannel",
+    "lastTo",
+    "lastAccountId",
+    "lastThreadId",
+  ].some((key) => key in entry);
+  const delivery =
+    entry.delivery ?? (hasLegacyDeliveryFields ? undefined : { kind: "none" as const });
+  if (asFiniteNumber(entry.updatedAt) !== undefined) {
+    if (entry.delivery === delivery) {
+      return entry;
+    }
+    return delivery ? { ...entry, delivery } : entry;
+  }
+  const updatedAt = asFiniteNumber(entry.sessionStartedAt) ?? Date.now();
+  return delivery ? { ...entry, delivery, updatedAt } : { ...entry, updatedAt };
 }
