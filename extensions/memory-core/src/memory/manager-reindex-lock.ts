@@ -21,8 +21,8 @@ export async function waitForMemoryReindexLock(
   options: { waitForActive?: boolean } = {},
 ): Promise<MemoryReindexLockHandle> {
   const lockPath = `${dbPath}.reindex-lock.sqlite`;
-  const entered = createDeferred<void>();
-  const released = createDeferred<void>();
+  const entered = createDeferred();
+  const released = createDeferred();
   const completed = enqueueKeyedTask({
     tails: builds,
     key: resolveUserPath(dbPath),

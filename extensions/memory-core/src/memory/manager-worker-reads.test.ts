@@ -9,7 +9,6 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
-  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   observeHostDataSql,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";

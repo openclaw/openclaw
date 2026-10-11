@@ -221,7 +221,7 @@ export function retirePlaywrightBrowserConnectionExact(opts: {
     const pending = connectingByCdpUrl.get(normalized);
     const cached = takeCachedPlaywrightBrowserConnection(normalized);
     if (cached) {
-      captureConnection(cached);
+      void captureConnection(cached);
     }
     if (pending) {
       const task = pending.then(captureConnection, () => {});

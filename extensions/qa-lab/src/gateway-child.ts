@@ -67,7 +67,6 @@ async function startOwnedGatewayChild(
   } = setup;
   let active!: ReturnType<QaGatewayChildLifecycle["register"]>;
   let getChildFailure: (() => QaChildFailure | null) | undefined;
-  let launch!: Awaited<ReturnType<typeof setup.prepareAttempt>>;
   const requireRpcClient = () => {
     if (!lifetime.rpcClient) {
       throw new Error("qa gateway rpc client is not ready");
@@ -165,7 +164,7 @@ async function startOwnedGatewayChild(
     lifetime.assertOpen();
     active.ready = true;
   };
-  launch = await setup.prepareAttempt();
+  const launch = await setup.prepareAttempt();
   const attemptLogMark = output.mark();
   try {
     await launchReady(true);
