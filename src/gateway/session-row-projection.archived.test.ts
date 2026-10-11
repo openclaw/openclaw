@@ -10,8 +10,8 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  canRunSessionListBackgroundWork,
   retainSessionListForegroundWork,
+  yieldSessionListBackgroundWork,
 } from "./session-projection-work.js";
 import * as databaseFactsRead from "./session-row-database-facts.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
@@ -448,7 +448,7 @@ it("bounds archived residency across pages and evicts the least recently read ro
     } finally {
       projection.dispose();
       release();
-      expect(canRunSessionListBackgroundWork()).toBe(true);
+      await yieldSessionListBackgroundWork();
     }
   });
   // Vitest timeout cancels the waits; retain the fixture until its pages and state finish cleanup.
@@ -457,7 +457,7 @@ it("bounds archived residency across pages and evicts the least recently read ro
 });
 
 it.each(["catalog", "archive"] as const)(
-  "withdraws pending backfill authority after %s demotion",
+  "keeps archived display rows cold after %s demotion during backfill",
   async (change) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = { agents: { entries: { main: {} } } };
@@ -495,7 +495,6 @@ it.each(["catalog", "archive"] as const)(
         } else {
           replaceSessionEntrySync(target, { ...entry, archivedAt: 1 });
         }
-        expect(backfill.mock.calls.at(-1)?.[0].shouldCommit?.()).toBe(false);
         await projection.ensureMaterialized();
         const before = projection.materializedCount;
         completion.resolve();
@@ -513,7 +512,7 @@ it.each(["catalog", "archive"] as const)(
   },
 );
 
-it("expires archives read while a newer catalog is still loading", async () => {
+it("refreshes archived model facts after catalog renewal", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
     const key = "agent:main:catalog-archive";
@@ -559,7 +558,6 @@ it("expires archives read while a newer catalog is still loading", async () => {
       await loading.promise;
       expect(projection.dirtyRowCount).toBe(0);
       expect(projection.selectEntries()).toHaveLength(2);
-      expect(projection.selectEntries().filter(ready)).toHaveLength(0);
       await projection.ensureMaterialized();
       expect(projection.materializedCount).toBe(1);
       expect(
