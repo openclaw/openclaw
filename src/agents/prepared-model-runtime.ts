@@ -129,6 +129,7 @@ const replyDispatchPublication = new PreparedReplyDispatchPublicationOwner({
       config: {},
     }),
   getPendingReplacement: () => getAdmissionReplacement()?.promise,
+  isStartupPending: () => pendingModelRuntimeReplacement?.degraded === true,
 });
 export const loadPublishedGatewayReplyDispatchRuntime = replyDispatchPublication.load;
 

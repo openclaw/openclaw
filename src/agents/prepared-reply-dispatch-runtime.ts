@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
 import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
 import { readCapturedPreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";
@@ -67,28 +68,39 @@ type PreparedReplyDispatchPublicationHost = Readonly<{
   isGatewayLifecycleActive: () => boolean;
   getConfiguredOwner: (agentId: string) => PreparedModelRuntimeOwner | undefined;
   getPendingReplacement: () => Promise<void> | undefined;
+  isStartupPending: () => boolean;
 }>;
 
 /** Reads one immutable configured Gateway dispatch generation without activating an owner. */
 export class PreparedReplyDispatchPublicationOwner {
   #publication = EMPTY_REPLY_DISPATCH_PUBLICATION;
+  #changed = createDeferredCore();
 
   constructor(private readonly host: PreparedReplyDispatchPublicationHost) {}
 
+  #publish(publication: readonly PreparedReplyDispatchRuntime[]): void {
+    this.#publication = publication;
+    const changed = this.#changed;
+    this.#changed = createDeferredCore();
+    changed.resolve();
+  }
+
   clear(): void {
-    this.#publication = EMPTY_REPLY_DISPATCH_PUBLICATION;
+    this.#publish(EMPTY_REPLY_DISPATCH_PUBLICATION);
   }
 
   advanceConfig(config: OpenClawConfig): void {
-    this.#publication = Object.freeze(
-      this.#publication.map((runtime) => Object.freeze({ ...runtime, config })),
+    this.#publish(
+      Object.freeze(this.#publication.map((runtime) => Object.freeze({ ...runtime, config }))),
     );
   }
 
   rebuild(owners: Iterable<PreparedModelRuntimeOwner>): void {
-    this.#publication = this.host.isGatewayLifecycleActive()
-      ? buildReplyDispatchPublication(owners)
-      : EMPTY_REPLY_DISPATCH_PUBLICATION;
+    this.#publish(
+      this.host.isGatewayLifecycleActive()
+        ? buildReplyDispatchPublication(owners)
+        : EMPTY_REPLY_DISPATCH_PUBLICATION,
+    );
   }
 
   stage(owners: Iterable<PreparedModelRuntimeOwner>): () => void {
@@ -96,14 +108,14 @@ export class PreparedReplyDispatchPublicationOwner {
       ? buildReplyDispatchPublication(owners)
       : EMPTY_REPLY_DISPATCH_PUBLICATION;
     return () => {
-      this.#publication = publication;
+      this.#publish(publication);
     };
   }
 
   remove(agentIds: ReadonlySet<string>): void {
     if (agentIds.size > 0) {
-      this.#publication = Object.freeze(
-        this.#publication.filter((runtime) => !agentIds.has(runtime.agentId)),
+      this.#publish(
+        Object.freeze(this.#publication.filter((runtime) => !agentIds.has(runtime.agentId))),
       );
     }
   }
@@ -111,11 +123,13 @@ export class PreparedReplyDispatchPublicationOwner {
   replace(owners: readonly PreparedModelRuntimeOwner[]): void {
     const replacements = buildReplyDispatchPublication(owners);
     const agentIds = new Set(replacements.map((runtime) => runtime.agentId));
-    this.#publication = Object.freeze(
-      [
-        ...this.#publication.filter((runtime) => !agentIds.has(runtime.agentId)),
-        ...replacements,
-      ].toSorted((left, right) => left.agentId.localeCompare(right.agentId)),
+    this.#publish(
+      Object.freeze(
+        [
+          ...this.#publication.filter((runtime) => !agentIds.has(runtime.agentId)),
+          ...replacements,
+        ].toSorted((left, right) => left.agentId.localeCompare(right.agentId)),
+      ),
     );
   }
 
@@ -152,6 +166,11 @@ export class PreparedReplyDispatchPublicationOwner {
       }
       const runtime = this.#publication.find((candidate) => candidate.agentId === agentId);
       if (!runtime) {
+        if (this.host.isStartupPending()) {
+          assertPreparedModelRuntimeAdmissionCanWait();
+          await racePromiseWithAbortSignal(this.#changed.promise, abortSignal);
+          continue;
+        }
         throw new PreparedModelRuntimeOwnerNotPublishedError(
           `prepared reply dispatch runtime owner was not published for ${agentId}`,
         );
