@@ -95,8 +95,7 @@ function navigationEntry(entry: SessionTreeEntry): SessionTreeEntry {
     const calls =
       "content" in message && Array.isArray(message.content)
         ? message.content.flatMap((item) =>
-            isRecord(item) &&
-            (item.type === "toolCall" || item.type === "toolUse" || item.type === "functionCall")
+            isRecord(item) && ["toolCall", "toolUse", "functionCall"].includes(item.type)
               ? [pickNavigation(item, ["type", "id", "name"])]
               : [],
           )
@@ -138,8 +137,7 @@ function navigationEntry(entry: SessionTreeEntry): SessionTreeEntry {
   } else if (entry.type === "custom" && entry.customType === "openclaw.system-prompt") {
     projected.data = { restart: isRecord(entry.data) && entry.data.restart === true };
   }
-  // SAFETY: The SQL navigation contract keeps every entry discriminant and control field;
-  // payload fields become readable empty placeholders until selected for hydration.
+  // SAFETY: Navigation preserves every entry discriminant and control field with empty payloads.
   return projected as SessionTreeEntry;
 }
 

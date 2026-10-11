@@ -26,6 +26,17 @@ export type SessionActorLifetime = {
   assertReadable(): void;
 };
 
+/** Host-owned live authority, rechecked at both synchronous admission boundaries. */
+export type SessionActorAuthority = {
+  assertCurrent(): void;
+  authorize(
+    stage: "transaction" | "commit",
+    facts: SessionActorHotState,
+    /** Existing kernel source/custody evidence remains subject to its owner's checks. */
+    publication?: unknown,
+  ): void;
+};
+
 /** Complete hot facts. Cold/off-path payloads stay with the bounded history reader. */
 export type SessionActorHotState = {
   target: SessionActorTarget;

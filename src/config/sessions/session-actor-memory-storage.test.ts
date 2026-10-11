@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SessionActor, SessionActorAuthority } from "./session-actor-contract.js";
+import type {
+  SessionActor,
+  SessionActorAuthority,
+  SessionActorStorage,
+} from "./session-actor-contract.js";
 import { createMemorySessionActorOwner } from "./session-actor-memory.js";
-import type { SessionActorStorage } from "./session-actor-storage-contract.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({

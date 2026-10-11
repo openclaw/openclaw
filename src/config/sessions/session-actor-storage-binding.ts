@@ -10,13 +10,11 @@ import type {
   SessionActor,
   SessionActorTarget,
   SessionActorLifetime,
+  SessionActorStorage,
 } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { readMemorySessionActorOwner } from "./session-actor-memory.js";
-import type {
-  SessionActorStorage,
-  SessionActorStorageAuthority,
-} from "./session-actor-storage-contract.js";
+import type { SessionActorStorageAuthority } from "./session-actor-storage-contract.js";
 import type { SessionEntryProjection } from "./session-entry-snapshot-values.js";
 
 /** A caller-selected memory owner; resolving a binding never acquires another backend. */

@@ -10,6 +10,7 @@ import type {
   SessionActorLifetime,
   SessionActorOutcome,
   SessionActorPhaseResults,
+  SessionActorStorage,
 } from "./session-actor-contract.js";
 import { createSessionActorWithExecutor } from "./session-actor-executor.js";
 import {
@@ -39,10 +40,7 @@ import {
   type SessionActorMutation,
 } from "./session-actor-phase.js";
 import { createSessionActorCommittedOutcome } from "./session-actor-receipt.js";
-import type {
-  SessionActorStorage,
-  SessionActorStorageReads,
-} from "./session-actor-storage-contract.js";
+import type { SessionActorStorageReads } from "./session-actor-storage-contract.js";
 import {
   attachSessionEntrySnapshots,
   type SessionEntryProjection,

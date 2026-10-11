@@ -7,6 +7,7 @@ import type {
   SessionActor,
   SessionActorLifetime,
   SessionActorTarget,
+  SessionActorStorage,
 } from "./session-actor-contract.js";
 import type { SessionActorExecutorGuards } from "./session-actor-executor.js";
 import {
@@ -32,7 +33,6 @@ import {
   readSessionActorMemoryStorage,
 } from "./session-actor-memory-storage-dispatch.js";
 import type {
-  SessionActorStorage,
   SessionActorStorageAuthority,
   SessionActorStorageChange,
   SessionActorStorageCommand,
