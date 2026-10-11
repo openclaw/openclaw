@@ -1,7 +1,13 @@
 // K8s manifest tests cover the deployable Kubernetes bundle shape.
-import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { chmodSync, readFileSync, renameSync, statSync } from "node:fs";
+import path from "node:path";
+import { tempWorkspaceSync } from "@openclaw/fs-safe/temp";
+import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type Manifest = Record<string, unknown>;
 
@@ -110,6 +116,106 @@ describe("k8s manifests", () => {
       readOnlyRootFilesystem: true,
       runAsNonRoot: true,
     });
+  });
+
+  it("keeps /tmp sticky-protected through a gateway-tmp subPath", () => {
+    const deployment = readManifest("deployment.yaml");
+    const spec = assertRecord(deployment.spec, "deployment spec");
+    const template = assertRecord(spec.template, "deployment template");
+    const podSpec = assertRecord(template.spec, "pod spec");
+    const containers = asRecords(podSpec.containers, "containers");
+    const gateway = findNamed(containers, "gateway");
+    const mounts = asRecords(gateway.volumeMounts, "gateway volume mounts");
+    const tmpMount = mounts.find((entry) => entry.name === "tmp-volume");
+    expect(tmpMount, "gateway tmp-volume mount").toEqual({
+      name: "tmp-volume",
+      mountPath: "/tmp",
+      subPath: "gateway-tmp",
+    });
+    expect(findNamed(asRecords(podSpec.volumes, "pod volumes"), "tmp-volume")).toEqual({
+      name: "tmp-volume",
+      emptyDir: {},
+    });
+
+    const initContainers = asRecords(podSpec.initContainers, "init containers");
+    const initConfig = findNamed(initContainers, "init-config");
+    const initMounts = asRecords(initConfig.volumeMounts, "init-config volume mounts");
+    const initTmpMount = initMounts.find((entry) => entry.name === "tmp-volume");
+    expect(initTmpMount, "init-config tmp-volume mount").toEqual({
+      name: "tmp-volume",
+      mountPath: "/tmp-volume",
+    });
+    const initSecurityContext = assertRecord(
+      initConfig.securityContext,
+      "init-config security context",
+    );
+    const gatewaySecurityContext = assertRecord(
+      gateway.securityContext,
+      "gateway security context",
+    );
+    expect(initSecurityContext.runAsUser).toBe(gatewaySecurityContext.runAsUser);
+    expect(initSecurityContext.runAsGroup).toBe(gatewaySecurityContext.runAsGroup);
+
+    const initCommand = asStrings(initConfig.command, "init-config command");
+    const script = initCommand.join("\n");
+    expect(script).toContain("mkdir -p /tmp-volume/gateway-tmp");
+    expect(script).toContain("chmod 1777 /tmp-volume/gateway-tmp");
+    expect(script).toContain("exit 1");
+    expect(script).toContain("[ -k /tmp-volume/gateway-tmp ]");
+    // P1: a volume that denies the configured UID must fail loudly, not silently.
+    expect(script).toContain("writable by UID 1000");
+    expect(script).toContain("missing the sticky bit");
+  });
+
+  it.runIf(process.platform !== "win32")("prepares a tmp root the fs-safe guard accepts", () => {
+    const deployment = readManifest("deployment.yaml");
+    const podSpec = assertRecord(
+      assertRecord(assertRecord(deployment.spec, "deployment spec").template, "template").spec,
+      "pod spec",
+    );
+    const initConfig = findNamed(
+      asRecords(podSpec.initContainers, "init containers"),
+      "init-config",
+    );
+    const script = asStrings(initConfig.command, "init-config command").join("\n");
+
+    // Simulate the deployed volume root: disk-backed emptyDir (0777) plus
+    // fsGroup setgid, without the sticky bit.
+    const volumeRoot = tempDirs.make("openclaw-k8s-tmp-volume-");
+    chmodSync(volumeRoot, 0o2777);
+    expect(statSync(volumeRoot).mode & 0o7777).toBe(0o2777);
+
+    // The raw volume root reproduces the shipped failure mode.
+    let rawError: unknown;
+    try {
+      tempWorkspaceSync({ rootDir: volumeRoot, prefix: "probe-" }).cleanup();
+    } catch (error) {
+      rawError = error;
+    }
+    expect((rawError as NodeJS.ErrnoException)?.code).toBe("insecure-permissions");
+
+    const prepScript = script
+      .split("\n")
+      .filter((line) => line.includes("/tmp-volume"))
+      .join("\n")
+      .replaceAll("/tmp-volume", volumeRoot);
+    expect(prepScript).toContain("chmod 1777");
+    execFileSync("sh", ["-c", prepScript], { stdio: "pipe" });
+
+    const prepared = path.join(volumeRoot, "gateway-tmp");
+    expect(statSync(prepared).mode & 0o1000).toBe(0o1000);
+
+    // The subPath mount re-roots gateway-tmp at /tmp, so the 02777 volume
+    // root is not an ancestor at runtime. Mirror that boundary by moving
+    // the prepared dir under safe ancestors (rename preserves its mode).
+    const mounted = path.join(tempDirs.make("openclaw-k8s-tmp-mnt-"), "tmp");
+    renameSync(prepared, mounted);
+    expect(statSync(mounted).mode & 0o1000).toBe(0o1000);
+
+    const workspace = tempWorkspaceSync({ rootDir: mounted, prefix: "probe-" });
+    workspace.writeText("probe.txt", "sticky-tmp");
+    expect(workspace.read("probe.txt").toString()).toBe("sticky-tmp");
+    workspace.cleanup();
   });
 
   it("keeps config and persistence manifests aligned with the gateway", () => {
