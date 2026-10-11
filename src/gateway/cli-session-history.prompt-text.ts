@@ -37,7 +37,11 @@ const SYSTEM_EVENT_TIMESTAMP_LINE =
   /^System: \[(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?: [^\s\]]+)?|unknown-time)\] /u;
 
 function stripLeadingSystemEventLines(text: string): string {
-  const lines = text.replace(/^\n+/u, "").split("\n");
+  // Queued events can follow the producer's fenced conversation metadata.
+  // Keep that context byte-identical while comparing only the event-free turn.
+  const context =
+    text.match(/^(?:Conversation info: )?⟦openclaw:ctx⟧\n```json\n[^\n]*\n```\n\n/u)?.[0] ?? "";
+  const lines = text.slice(context.length).replace(/^\n+/u, "").split("\n");
   let end = 0;
   let hasEvent = false;
   while (end < lines.length && (lines[end] === "System:" || lines[end]?.startsWith("System: "))) {
@@ -47,7 +51,7 @@ function stripLeadingSystemEventLines(text: string): string {
   if (!hasEvent || (end < lines.length && lines[end] !== "")) {
     return text;
   }
-  return lines.slice(end).join("\n");
+  return context + lines.slice(end).join("\n").replace(/^\n+/u, "");
 }
 
 // Correlation/provenance-only view without the context OpenClaw added around

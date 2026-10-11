@@ -466,7 +466,7 @@ suite.define(() => {
                 .closest(".chat-main__conversation")!
                 .getBoundingClientRect();
               const details = element
-                .closest(".chat-gutter-stack")!
+                .closest("openclaw-chat-pane")!
                 .querySelector(".chat-details-toggle")!
                 .getBoundingClientRect();
               const clearOfDetails =

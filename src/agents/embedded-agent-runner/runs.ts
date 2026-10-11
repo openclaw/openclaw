@@ -29,7 +29,10 @@ import {
   waitForReplyOperationOwnerSettlement,
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
-import { getAttachedBackend } from "../../auto-reply/reply/reply-run-registry.state.js";
+import {
+  getAttachedBackend,
+  isReplyOperationAbortable,
+} from "../../auto-reply/reply/reply-run-registry.state.js";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
@@ -84,6 +87,7 @@ import {
   setActiveEmbeddedRunSessionIndexes,
   resolveActiveEmbeddedRunRecoveryBlocker,
   type ActiveEmbeddedRunSnapshot,
+  type AbortAndDrainEmbeddedAgentRunResult,
   type AbandonedEmbeddedRun,
   type EmbeddedAgentQueueHandle,
   type EmbeddedRunCompletionClaim,
@@ -1238,12 +1242,6 @@ export async function waitForEmbeddedAgentRunEnd(
   return true;
 }
 
-export type AbortAndDrainEmbeddedAgentRunResult = {
-  aborted: boolean;
-  drained: boolean;
-  forceCleared: boolean;
-};
-
 export async function abortAndDrainEmbeddedAgentRun(params: {
   sessionId: string;
   sessionKey?: string;
@@ -1251,6 +1249,7 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   forceClear?: boolean;
   reason?: string;
 }): Promise<AbortAndDrainEmbeddedAgentRunResult> {
+  const isStuckRecovery = params.reason === "stuck_recovery";
   const settleMs = params.settleMs ?? 15_000;
   const settleDeadline = Date.now() + settleMs;
   const embeddedRunHandle = ACTIVE_EMBEDDED_RUNS.get(params.sessionId);
@@ -1259,12 +1258,17 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
     ? ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(embeddedRunHandle)?.agentId
     : undefined;
   const replyOperation = resolveActiveReplyOperationForSessionId(params.sessionId);
-  if (
-    params.reason === "stuck_recovery" &&
-    replyOperation &&
-    hasCommittedReplyOperationOutcome(replyOperation)
-  ) {
+  if (isStuckRecovery && replyOperation && hasCommittedReplyOperationOutcome(replyOperation)) {
     return { aborted: false, drained: false, forceCleared: false };
+  }
+  if (
+    isStuckRecovery &&
+    embeddedRunHandle &&
+    (!replyOperation || isReplyOperationAbortable(replyOperation)) &&
+    isEmbeddedRunHandleAbortable(params.sessionId, embeddedRunHandle) &&
+    embeddedRunHandle.recoverStalledModelCall?.() === true
+  ) {
+    return { aborted: true, drained: false, forceCleared: false, recoveringModelAttempt: true };
   }
   const persistenceSnapshot =
     params.forceClear === true && params.sessionKey
@@ -1275,37 +1279,19 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
             (replyOperation ? getAttachedBackend(replyOperation)?.runId : undefined),
         )
       : undefined;
-  const staleExpiryBarrier = params.reason === "stuck_recovery" ? createDeferredCore() : undefined;
-  // Recovery is a staleness expiry: stamp run_stalled on the reply operation
-  // BEFORE any handle abort, or the run loop's abort handler re-enters
-  // abortByUser and misattributes the watchdog kill to the user.
+  const staleExpiryBarrier = isStuckRecovery ? createDeferredCore() : undefined;
+  // Terminal recovery stamps expiry before cancellation can re-enter user abort.
   const expiredReplyRun =
-    params.reason === "stuck_recovery" &&
+    isStuckRecovery &&
     expireStaleReplyRunBySessionId(params.sessionId, "stuck_recovery", {
       afterClearBarrier: staleExpiryBarrier?.promise,
       followupAdmissionBarrierTimeout: settleMs + 1_000,
     });
   const stampedStaleReplyRun =
-    params.reason === "stuck_recovery" && replyOperation?.staleExpiryReason === "stuck_recovery";
-  const waitForExpiredOwnerSettlement = async () => {
-    if (!stampedStaleReplyRun || !replyOperation) {
-      return true;
-    }
-    const settled = await waitForReplyOperationOwnerSettlement(
-      replyOperation,
-      Math.max(100, settleDeadline - Date.now()),
-    );
-    if (!settled) {
-      diag.warn(
-        `stuck recovery: reply owner settlement timed out sessionId=${params.sessionId} settleMs=${settleMs}`,
-      );
-    }
-    return settled;
-  };
+    isStuckRecovery && replyOperation?.staleExpiryReason === "stuck_recovery";
   try {
     if (expiredReplyRun && !ACTIVE_EMBEDDED_RUNS.has(params.sessionId)) {
-      // Let the command lane observe synchronous reply completion before recovery
-      // decides whether to reset it, but keep all owners on the shared drain path.
+      // Let lane completion run before terminal recovery decides whether to reset.
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
@@ -1315,13 +1301,21 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
       aborted || stampedStaleReplyRun
         ? await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs)
         : false;
-    const ownerSettled = await waitForExpiredOwnerSettlement();
-    const drained = embeddedDrained && ownerSettled;
-    // A retained cancel request can complete asynchronously after expire()
-    // returns. Count that exact owner settlement as the accepted abort.
-    if (!aborted && stampedStaleReplyRun && drained) {
-      aborted = true;
+    const ownerSettled =
+      !stampedStaleReplyRun ||
+      !replyOperation ||
+      (await waitForReplyOperationOwnerSettlement(
+        replyOperation,
+        Math.max(100, settleDeadline - Date.now()),
+      ));
+    if (!ownerSettled) {
+      diag.warn(
+        `stuck recovery: reply owner settlement timed out sessionId=${params.sessionId} settleMs=${settleMs}`,
+      );
     }
+    const drained = embeddedDrained && ownerSettled;
+    // Count the exact settled stale owner as the accepted abort.
+    aborted ||= stampedStaleReplyRun && drained;
     const forceCleared =
       params.forceClear === true &&
       ((!expiredReplyRun && stampedStaleReplyRun && !ownerSettled) || !aborted || !drained)
