@@ -269,7 +269,7 @@ export const CloudWorkerPool = defineSolidBridge(
                 notice={
                   view.error ? (
                     <div class="callout warning" role="alert">
-                      {t("cloudWorkersPage.pool.refreshFailed", { error: view.error })}
+                      {t("cloudWorkersPage.pool.refreshFailed", { error: view.error })}{" "}
                       {view.updatedAt !== null
                         ? t("cloudWorkersPage.pool.lastUpdated", {
                             time: formatRelativeTimestamp(view.updatedAt),
