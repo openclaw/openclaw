@@ -9,6 +9,7 @@ import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.
 import {
   SqliteDatabaseGenerationSlot,
   SqliteDatabaseAdmissionRegistry,
+  hasSqliteDatabaseSchemaAdmission,
   type SqliteDatabaseAdmissionCursor,
   readSqliteDatabaseAdmissions,
   readSqliteDatabaseAdmissionIdentity as identity,
@@ -715,24 +716,15 @@ export function suspendSqliteDatabaseAdmission(database: DatabaseSync, suspended
   }
 }
 
-function hasSchemaAdmission(record: Admission | undefined): boolean {
-  const fact = record?.facts.get("sqlite-schema");
-  return Boolean(record && fact && valid(record, fact));
-}
-
 export function hasSqliteDatabaseSchemaAdmissionForPath(location: string): boolean {
-  return hasSchemaAdmission(pathAdmission(location));
+  return hasSqliteDatabaseSchemaAdmission(pathAdmission(location));
 }
 
 /** Consume the already captured physical identity without another filesystem lookup. */
 export function hasSqliteDatabaseSchemaAdmissionForIdentity(
   physicalIdentity: DatabaseFileIdentity,
 ): boolean {
-  if (!physicalIdentity.key.startsWith("file:") || physicalIdentity.birthtime === undefined) {
-    return false;
-  }
-  const key = `${physicalIdentity.key.slice("file:".length)}:${physicalIdentity.birthtime}`;
-  return hasSchemaAdmission(state.registry.records.get(key));
+  return state.registry.hasSchemaAdmissionForIdentity(physicalIdentity);
 }
 
 export function captureSqliteDatabaseAdmissions(
