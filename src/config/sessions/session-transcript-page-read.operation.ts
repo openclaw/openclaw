@@ -1,4 +1,6 @@
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { sessionHistoryCleanupError } from "./session-history-worker-errors.js";
 import type {
   TranscriptPageReadOperation,
   TranscriptPageReadOperationInput,
@@ -7,114 +9,200 @@ import type {
 } from "./session-transcript-page-read.types.js";
 import {
   acquireHistoryDatabaseResource,
-  type HistoryDatabaseResource,
+  type SessionDatabaseCleanup,
   type SessionHistoryDatabaseTarget,
 } from "./session-transcript-worker-resources.js";
 import { retainSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
-const MAX_TRANSCRIPT_PAGE_READ_WINDOW_MS = 5_000;
-const pageReadOperationTails = new WeakMap<HistoryDatabaseResource, Promise<unknown>>();
-const pageReadOperationFailures = new WeakMap<HistoryDatabaseResource, unknown>();
+const MAX_WINDOW_MS = 5_000;
+type Admission = { tail: Promise<unknown>; pending: number; failure?: unknown };
+// Store-level serialization survives resource revocation/replacement until the
+// previous generation's work and cleanup are joined by the existing owner.
+const admissions = new Map<string, Admission>();
 
-/**
- * One admitted transcript-page operation per physical store: queue, native
- * execution and settlement share the caller's single deadline, and custody is
- * held until every phase settles. A cleanup failure rejects `settled` and
- * keeps the resource's admission closed for its retry owner.
- */
+export class TranscriptPageAccountingUnavailableError extends Error {
+  constructor(readonly budget: TranscriptReadAccounting) {
+    super("Transcript page source accounting could not be verified");
+  }
+}
+
+/** Bound the response independently; settlement owns the task and its cleanup. */
 export function startTranscriptPageRead(
   target: SessionHistoryDatabaseTarget,
   input: TranscriptPageReadOperationInput,
 ): TranscriptPageReadOperation {
-  if (input.deadlineAt - performance.now() > MAX_TRANSCRIPT_PAGE_READ_WINDOW_MS) {
-    throw new RangeError(
-      `Transcript page read deadline exceeds the ${MAX_TRANSCRIPT_PAGE_READ_WINDOW_MS} ms operation budget`,
-    );
+  const deadlineAt = input.deadlineAt;
+  const remaining = deadlineAt - performance.now();
+  if (!Number.isFinite(deadlineAt) || remaining > MAX_WINDOW_MS) {
+    throw new RangeError("Transcript page read deadline must be finite and within 5000 ms");
   }
-  if (!Number.isFinite(input.deadlineAt)) {
-    throw new RangeError("Transcript page read deadline must be a finite timestamp");
-  }
+  const captured = {
+    request: {
+      ...input.request,
+      scope: {
+        ...input.request.scope,
+        env: captureSessionTranscriptStorageEnvironment(input.request.scope.env ?? process.env),
+      },
+      limits: { ...input.request.limits },
+      position: input.request.position && { ...input.request.position },
+    },
+    expectedIdentity: { ...input.expectedIdentity },
+  };
   const resource = acquireHistoryDatabaseResource(target);
-  const previous = pageReadOperationTails.get(resource);
-  const priorFailure = pageReadOperationFailures.get(resource);
+  const retained = retainSessionHistoryWorkerDatabase(target);
+  const key = JSON.stringify(resource.database);
+  const admission: Admission = admissions.get(key) ?? { tail: Promise.resolve(), pending: 0 };
+  admissions.set(key, admission);
+  admission.pending++;
+  const previous = admission.tail;
   const controller = new AbortController();
   const signal = input.signal
     ? AbortSignal.any([controller.signal, input.signal])
     : controller.signal;
-  const emptyAccounting: TranscriptReadAccounting = {
+  const response = createDeferredCore<TranscriptPageReadResult>();
+  // Callers may observe settlement first without an unhandled response rejection.
+  void response.promise.catch(() => undefined);
+  // A no-dispatch operation has a verified empty receipt.
+  let budget: TranscriptReadAccounting = {
     scannedEntries: 0,
     materializedBytes: 0,
     exhausted: false,
-    final: false,
+    final: true,
   };
-  let cleanup: Promise<void> = Promise.resolve();
-  const response = (async (): Promise<TranscriptPageReadResult> => {
-    const closedAdmission = (failure: unknown) => {
+  let responded = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const stopResponseWatch = () => {
+    clearTimeout(timer);
+    signal.removeEventListener("abort", interrupted);
+  };
+  const publish = (result: TranscriptPageReadResult) => {
+    if (!responded) {
+      responded = true;
+      stopResponseWatch();
+      response.resolve(result);
+    }
+  };
+  const interrupted = () =>
+    publish({
+      ok: false,
+      error: resource.revoked ? "forbidden" : "timed_out",
+      budget: { ...budget, final: false },
+    });
+  const abort = () =>
+    controller.abort(new WorkerTaskError("Transcript page read was revoked", "unavailable"));
+  resource.aborters.add(abort);
+  if (remaining <= 0) {
+    abort();
+  } else {
+    timer = setTimeout(abort, remaining);
+  }
+  signal.addEventListener("abort", interrupted, { once: true });
+  if (signal.aborted) {
+    interrupted();
+  }
+
+  let readStarted = false;
+  const work = (async (): Promise<TranscriptPageReadResult> => {
+    await previous;
+    if (admission.failure !== undefined) {
       const error = new WorkerTaskError(
-        "Transcript page read admission is closed after a failed cleanup",
+        "Transcript page read admission is closed after failed settlement",
         "unavailable",
       );
-      error.cause = failure;
+      error.cause = admission.failure;
       throw error;
-    };
-    if (priorFailure !== undefined) {
-      closedAdmission(priorFailure);
     }
-    await previous;
-    const settledFailure = pageReadOperationFailures.get(resource);
-    if (settledFailure !== undefined) {
-      closedAdmission(settledFailure);
+    if (signal.aborted || performance.now() >= deadlineAt) {
+      interrupted();
+      return { ok: false, error: resource.revoked ? "forbidden" : "timed_out", budget };
     }
-    const remaining = input.deadlineAt - performance.now();
-    if (remaining <= 0) {
-      return { ok: false, error: "timed_out", budget: { ...emptyAccounting } };
-    }
-    const retained = retainSessionHistoryWorkerDatabase(target);
-    const read = retained.owner.readTranscriptPage(
-      { request: input.request, expectedIdentity: input.expectedIdentity },
+    retained.owner.assertCurrent();
+    // The reader maps ordinary failures to results; only cleanup loss throws.
+    readStarted = true;
+    const result = await retained.owner.readTranscriptPage(
+      captured,
       signal,
-      remaining,
+      deadlineAt - performance.now(),
     );
-    // Custody spans native execution: release only after the read settles, so
-    // the resource cannot be pruned out from under a running task.
-    cleanup = read.then(
-      () => {
-        retained.release();
-      },
-      () => {
-        retained.release();
-      },
-    );
-    // settled observes the primary outcome first; this observer only prevents
-    // an unhandled rejection when the response already rejected.
-    void cleanup.catch(() => undefined);
-    return read;
+    budget = result.budget;
+    if (signal.aborted || performance.now() >= deadlineAt) {
+      interrupted();
+    } else {
+      publish(result);
+    }
+    return result;
   })();
+  let released = false;
+  const release = () => {
+    if (released) {
+      return;
+    }
+    retained.release();
+    released = true;
+    resource.cleanups.delete(recovery);
+    admission.pending--;
+    if (admission.pending === 0 && admissions.get(key) === admission) {
+      admissions.delete(key);
+    }
+  };
+  // A failed operation keeps custody until the database owner has joined native
+  // cleanup. Closing that owner may retry release, but never replays the read.
+  const recovery: SessionDatabaseCleanup = {
+    run: async () => {
+      await Promise.allSettled([work]);
+      release();
+    },
+  };
   const settled = (async (): Promise<TranscriptReadAccounting> => {
-    const result = await response;
-    await cleanup;
-    return result.budget;
+    try {
+      const result = await work;
+      if (!result.budget.final) {
+        throw new TranscriptPageAccountingUnavailableError(result.budget);
+      }
+      release();
+      return result.budget;
+    } catch (error) {
+      // A blocked successor never entered the reader. Its claim is independent
+      // of the predecessor's failure, regardless of the error's class or code.
+      if (!readStarted) {
+        try {
+          release();
+        } catch (cleanupError) {
+          admission.failure ??= cleanupError;
+          resource.cleanups.add(recovery);
+          throw sessionHistoryCleanupError(error, cleanupError, "database close");
+        }
+      } else {
+        admission.failure ??= error;
+        resource.cleanups.add(recovery);
+      }
+      throw error;
+    } finally {
+      stopResponseWatch();
+      resource.aborters.delete(abort);
+    }
   })();
-  // Register the failure flag before advancing the tail so a successor that
-  // observes the settled tail also observes the closed admission.
+  // Register before work resumes: database close joins this effect before it
+  // walks cleanups, including recovery registered by a rejected settlement.
+  resource.hostEffects.add(settled);
   void settled.then(
-    () => undefined,
+    () => resource.hostEffects.delete(settled),
     (error: unknown) => {
-      pageReadOperationFailures.set(resource, error);
+      resource.hostEffects.delete(settled);
+      if (!responded) {
+        responded = true;
+        response.reject(error);
+      }
     },
   );
-  pageReadOperationTails.set(
-    resource,
-    settled.then(
-      () => undefined,
-      () => undefined,
-    ),
+  admission.tail = settled.then(
+    () => undefined,
+    () => undefined,
   );
   return {
-    response,
+    response: response.promise,
     settled,
-    cancel: () => {
-      controller.abort(new WorkerTaskError("Transcript page read was canceled", "unavailable"));
-    },
+    cancel: abort,
   };
 }

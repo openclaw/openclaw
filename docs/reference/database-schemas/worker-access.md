@@ -2710,17 +2710,25 @@ invoking that factory. Schemas, stored bytes, retention, and update behavior are
 unchanged.
 
 Read-only transcript page reads use the existing session-history lane and its
-retained database owner through the internal transcript-page operation. The
-caller supplies one absolute deadline of at most five seconds spanning queue
-wait, native execution, and settlement; the pool timeout, host receipt, and
-cleanup share that single allowance, and a queued successor never receives a
-fresh one. One operation admits per physical store at a time, and custody is
-held until the read settles: the retained reader releases only after the worker
-reply or failure completes, so a running task cannot lose its resource to
-pruning. Cancellation is idempotent and resolves with the observed partial
-accounting marked final:false under the timed_out code; a failed worker
-retirement rejects both the response and settlement and keeps the store's
-admission closed to successors until its retry owner recovers the resource.
+retained database owner through an internal transcript-page operation. One
+absolute deadline of at most five seconds bounds the response, including queue
+wait and execution. Worker dispatch receives only the remaining allowance.
+Settlement separately joins preparation, the owned worker task and host cleanup;
+it may outlast the response deadline while retaining custody. A timed-out or
+canceled response carries observed partial accounting marked `final: false`
+under the `timed_out` code and never publishes a late successful page.
+
+Store admission serializes across resource generations. A verified no-dispatch
+refusal settles with final zero accounting. Settlement resolves only when final
+source accounting and cleanup are verified. A lost worker receipt or failed
+cleanup rejects settlement and keeps admission closed, including after an
+ordinary post-dispatch timeout or cancellation. The existing database owner's
+close/reload/shutdown path joins and retries retained cleanup before releasing
+the failed claim. Successful cleanup alone does not reconstruct lost counts;
+reads are never replayed automatically. Callers must handle this availability
+limit rather than retrying against closed admission. A retained failed claim
+also keeps the shared history lane pending, suppressing its idle retirement and
+retaining its memory-pressure subscription until owner recovery.
 Admission is native read-only: the page dispatcher uses the scoped read-only
 owner rather than the generic helper, so a host-held writable handle never
 receives page-read SQL, and the auxiliary quarantine lookup opens its store
@@ -2730,5 +2738,9 @@ reader-issued writes, DDL, migrations, cold restoration, and missing-store
 creation remain prohibited. Missing, schema-incompatible, and bare stores
 return closed failures with primary bytes unchanged, and no WAL read mark
 survives an operation, so the owner's checkpoint still resets the WAL while
-the reader is idle. These are internal contracts for the later public facade,
-not released SDK surface.
+the reader is idle. The kernel meters source queries, lookahead and decoded
+UTF-8 bytes, with limits of 50 returned records, 1,000 scanned entries and 16 MiB.
+This does not yet qualify all schema/quarantine admission SQL against that
+aggregate meter, or prove a post-snapshot archive/rewrite publication fence.
+Those remain required before a public facade can promise the full contract.
+The operation has no production caller or released SDK export.

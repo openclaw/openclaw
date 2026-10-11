@@ -134,8 +134,8 @@ export function sessionHistoryCleanupError(
   stage: "database close" | "worker retirement",
 ): SessionHistoryCleanupError {
   return new SessionHistoryCleanupError(
-    [error, cleanupError],
-    `${coerceErrorMessage(error)}; ${stage} failed: ${coerceErrorMessage(cleanupError)}`,
+    error === undefined ? [cleanupError] : [error, cleanupError],
+    `${error === undefined ? "" : `${coerceErrorMessage(error)}; `}${stage} failed: ${coerceErrorMessage(cleanupError)}`,
     { cause: cleanupError },
   );
 }

@@ -30,6 +30,7 @@ export type SessionHistoryWorkerRequestRunner = <TResult>(
   signal?: AbortSignal,
   onRequest?: (value: unknown) => void,
   timeoutMs?: number,
+  retainTask?: true,
 ) => Promise<TResult>;
 
 type SessionHistoryWorkerValue = SessionTranscriptWorkerValues[SessionHistoryWorkerInput["kind"]];
@@ -88,7 +89,7 @@ export function createSessionHistoryWorkerReaders(
         scannedEntries: 0,
         materializedBytes: 0,
         exhausted: false,
-        final: false,
+        final: true,
       };
       const assertIdentity = () =>
         assertTranscriptPageIdentity(captured.request.scope.path, captured.expectedIdentity);
@@ -97,6 +98,9 @@ export function createSessionHistoryWorkerReaders(
         return await runRequest(
           () => {
             assertIdentity();
+            // From this point native work may have materialized source data;
+            // only a worker receipt can establish the final amount.
+            budget.final = false;
             return { kind: "transcript-page-read", ...captured };
           },
           JSON.stringify(captured).length * 2,
@@ -109,6 +113,7 @@ export function createSessionHistoryWorkerReaders(
           signal,
           undefined,
           timeoutMs,
+          true,
         );
       } catch (error) {
         // Custody loss is not a store outcome: retirement failures keep the

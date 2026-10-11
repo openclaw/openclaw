@@ -215,47 +215,62 @@ export function retainSessionHistoryWorkerDatabase(
       signal,
       onRequest,
       timeoutMs,
+      retainTask,
     ) => {
       assertCurrent();
       const timeout = timeoutMs ?? 60_000;
       const deadline = performance.now() + timeout;
       let sequence = 0;
       let executionRetired = false;
+      let task: ReturnType<typeof lane.pool.runTask> | undefined;
+      let taskCleanup: SessionDatabaseCleanup | undefined;
+      let primaryError: unknown;
       try {
-        const reply = await lane.pool.run(
-          () => {
-            assertCurrent();
-            const input = prepare();
-            assertCurrent();
-            sequence = ++lane.nativeSequence;
-            owned.nativeSequences.set(lane, sequence);
-            return { ...input, database };
-          },
-          {
-            inputBytes,
-            timeoutMs: timeout,
-            signal,
-            onRequest: onRequest
-              ? async (value, context) => {
-                  context.signal.throwIfAborted();
-                  assertCurrent();
-                  onRequest(value);
-                  assertCurrent();
-                  const remaining = deadline - performance.now();
-                  if (remaining <= 0) {
-                    throw new WorkerTaskError("worker task timed out", "timeout");
-                  }
-                  return { input: null, timeoutMs: remaining };
+        const factory = () => {
+          assertCurrent();
+          const input = prepare();
+          assertCurrent();
+          sequence = ++lane.nativeSequence;
+          owned.nativeSequences.set(lane, sequence);
+          return { ...input, database };
+        };
+        const taskOptions: WorkerTaskOptions<SessionHistoryWorkerInput> = {
+          inputBytes,
+          timeoutMs: timeout,
+          signal,
+          onRequest: onRequest
+            ? async (value, context) => {
+                context.signal.throwIfAborted();
+                assertCurrent();
+                onRequest(value);
+                assertCurrent();
+                const remaining = deadline - performance.now();
+                if (remaining <= 0) {
+                  throw new WorkerTaskError("worker task timed out", "timeout");
                 }
-              : undefined,
-            onExecutionSettled: ({ retired }) => {
-              if (retired) {
-                executionRetired = true;
-                releaseRetiredDatabaseCustody(lane, sequence);
+                return { input: null, timeoutMs: remaining };
               }
-            },
+            : undefined,
+          onExecutionSettled: ({ retired }) => {
+            if (retired) {
+              executionRetired = true;
+              releaseRetiredDatabaseCustody(lane, sequence);
+            }
           },
-        );
+        };
+        task = retainTask ? lane.pool.runTask(factory, taskOptions) : undefined;
+        if (task) {
+          const ownedTask = task;
+          const cleanup: SessionDatabaseCleanup = {
+            run: async () => {
+              await ownedTask.close();
+              owned.cleanups.delete(cleanup);
+            },
+          };
+          taskCleanup = cleanup;
+          owned.cleanups.add(cleanup);
+        }
+        const reply = await (task ? task.result : lane.pool.run(factory, taskOptions));
         const received =
           unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
         if (
@@ -290,14 +305,22 @@ export function retainSessionHistoryWorkerDatabase(
         assertCurrent();
         return value;
       } catch (error) {
+        primaryError = error;
         if (sequence > 0 && !executionRetired) {
           try {
             await rotateDatabaseWorkers(lane);
           } catch (cleanupError) {
-            throw sessionHistoryCleanupError(error, cleanupError, "worker retirement");
+            primaryError = sessionHistoryCleanupError(error, cleanupError, "worker retirement");
+            throw primaryError;
           }
         }
         throw error;
+      } finally {
+        if (taskCleanup) {
+          await taskCleanup.run().catch((cleanupError: unknown) => {
+            throw sessionHistoryCleanupError(primaryError, cleanupError, "worker retirement");
+          });
+        }
       }
     };
     const owner: SessionHistoryWorkerDatabase = {

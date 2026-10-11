@@ -84,7 +84,9 @@ it.each([
       budget:
         phase === "receipt"
           ? receiptBudget
-          : { scannedEntries: 0, materializedBytes: 0, exhausted: false, final: false },
+          : // Rejection before native preparation proves that no source rows
+            // were fetched; the empty accounting receipt is complete.
+            { scannedEntries: 0, materializedBytes: 0, exhausted: false, final: true },
     });
   });
 });
