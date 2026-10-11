@@ -131,7 +131,10 @@ OpenClaw ignores those local summarizer overrides at runtime, and
 An authored `models.providers.*.models[].contextTokens` cap is forwarded to
 Codex thread start and resume as `model_context_window`. Codex clamps the value
 to the model's native maximum and derives automatic compaction from the capped
-window. When the model entry has no authored cap, OpenClaw sends no override.
+window. This applies to configured model chats even when Codex supplies the
+model catalog. When the model entry has no authored cap, OpenClaw sends no
+override. Sessions pinned to an existing native runtime retain their own
+context settings instead of inheriting the outer agent's model cap.
 
 Lossless remains supported as a context engine for assembly, ingestion, and
 maintenance around Codex turns, configured through
