@@ -46,6 +46,7 @@ import type {
 import { hydrateSessionActorState } from "./session-actor-hydration.worker.js";
 import {
   createSessionActorReplica,
+  readSessionActorEntryFacts,
   readSessionActorRowFacts,
   retainSessionActorEntryFacts,
 } from "./session-actor-replica.js";
@@ -383,6 +384,14 @@ it("installs complete outcomes, fences unknowns, and rejects delayed epochs", as
   await withReplica((fixture) => {
     const { replica, load, scope } = fixture;
     const initial = hydrate(fixture);
+    if (initial.target.database.kind !== "file") {
+      throw new Error("Replica fixture requires a durable target");
+    }
+    const target = { ...initial.target, database: initial.target.database };
+    expect(readSessionActorEntryFacts(target)?.predicateColumns).toEqual({
+      session_started_at: null,
+      has_optional_references: 0,
+    });
     const detached = replica.read()!;
     detached.entry!.label = "caller edit";
     expect(replica.read()?.entry?.label).toBe("before");
@@ -390,8 +399,19 @@ it("installs complete outcomes, fences unknowns, and rejects delayed epochs", as
     const accepted = command(initial, "accepted");
     const pending = replica.beginCommand();
     expect(replica.read()).toBeUndefined();
+    replaceSessionEntrySync(scope, {
+      sessionId: "replica-session",
+      updatedAt: 1,
+      label: "before",
+      sessionStartedAt: 23,
+      usageFamilySessionIds: [],
+    });
     const outcome = committed(accepted, load("first", 1));
     expect(pending.settle(outcome)).toBe(true);
+    expect(readSessionActorEntryFacts(target)?.predicateColumns).toEqual({
+      session_started_at: 23,
+      has_optional_references: 1,
+    });
     outcome.receipt.postimage.entry!.label = "receipt caller edit";
     expect(replica.read()?.entry?.label).toBe("before");
     expect(pending.settle(outcome)).toBe(false);
@@ -411,6 +431,16 @@ it("installs complete outcomes, fences unknowns, and rejects delayed epochs", as
       }),
     ).toBe(false);
     expect(replica.read()).toBeUndefined();
+    expect(readSessionActorEntryFacts(target)).toBeUndefined();
+    retainSessionActorEntryFacts(
+      target,
+      { entry: load().entry, snapshots: "full" },
+      "cold-entry-reader",
+    );
+    expect(readSessionActorEntryFacts(target)?.predicateColumns).toEqual({
+      session_started_at: 23,
+      has_optional_references: 1,
+    });
 
     const stale = replica.beginCommand();
     const superseded = load("superseded");
