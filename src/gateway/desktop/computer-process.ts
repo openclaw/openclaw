@@ -201,9 +201,6 @@ export function startComputerHostProcess(params: {
       sessionKey?: string;
     }) {
       await ready.promise;
-      assertActive();
-      request.assertCurrent();
-      request.signal?.throwIfAborted();
       const id = randomUUID();
       let timedOut = false;
       const cancel = () => {
@@ -232,6 +229,9 @@ export function startComputerHostProcess(params: {
       }
       request.signal?.addEventListener("abort", abort, { once: true });
       try {
+        assertActive();
+        request.assertCurrent();
+        request.signal?.throwIfAborted();
         send({
           type: "invoke",
           id,
