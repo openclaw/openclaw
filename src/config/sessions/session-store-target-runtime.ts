@@ -17,7 +17,6 @@ import {
   targetDiscoveryLane,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
-
 import { listConfiguredSessionStoreAgentIds } from "./targets-configured-agents.js";
 
 type PreparedStoreTarget = Extract<SessionStoreTargetReadResult, { kind: "session-store-target" }>;
