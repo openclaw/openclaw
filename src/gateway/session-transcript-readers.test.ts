@@ -107,6 +107,41 @@ describe("session transcript reader facade", () => {
     });
   });
 
+  test("sizes CLI output from the context marker when counters cover the whole turn", async () => {
+    const scope = await writeTranscript("cli-turn-usage", [
+      { type: "session", id: "cli-turn-usage", version: 3 },
+      {
+        type: "message",
+        id: "answer",
+        parentId: null,
+        message: {
+          role: "assistant",
+          api: "cli",
+          content: "multi-call turn",
+          // Counters sum every model call in the turn; contextUsage is the latest call.
+          usage: {
+            input: 135_864,
+            output: 30_000,
+            cacheRead: 37_888,
+            totalTokens: 203_752,
+            contextUsage: { state: "available", promptTokens: 86_876, totalTokens: 88_876 },
+          },
+        },
+      },
+    ]);
+
+    const result = await readSessionTranscriptAccountingAsync(scope, {
+      includeByteSize: false,
+      includeUsage: true,
+    });
+
+    expect(result.usage).toEqual({
+      promptTokens: 86_876,
+      outputTokens: 2_000,
+      trailingMessages: [],
+    });
+  });
+
   test("preflights manual compaction without caller-thread SQL and sees later appends", async () => {
     const scope = await writeTranscript("compact-stats", [
       { type: "session", version: 3, id: "compact-stats" },

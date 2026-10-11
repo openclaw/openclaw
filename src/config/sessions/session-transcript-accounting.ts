@@ -32,7 +32,12 @@ function deriveTranscriptUsageSnapshot(
   trailingMessages: AgentMessage[],
 ): SessionTranscriptUsageSnapshot | undefined {
   const promptTokens = deriveContextPromptTokens({ lastCallUsage: usage });
-  const outputTokens = asPositiveFiniteNumber(usage.output);
+  // Counters can cover a whole multi-call turn; the context marker keeps the latest call.
+  const outputTokens = asPositiveFiniteNumber(
+    usage.contextUsage?.state === "available"
+      ? usage.contextUsage.totalTokens - usage.contextUsage.promptTokens
+      : usage.output,
+  );
   if (!(typeof promptTokens === "number") && !(typeof outputTokens === "number")) {
     return undefined;
   }

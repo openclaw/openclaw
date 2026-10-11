@@ -43,6 +43,10 @@ enum ChatContextUsageCalculator {
     private static func latestRunTokens(in messages: [OpenClawChatMessage]) -> Int? {
         for message in messages.reversed() {
             guard let usage = message.usage else { continue }
+            // Counters can cover a whole multi-call turn; the marker is the latest call alone.
+            if let total = usage.contextUsage?.totalTokens, total > 0 {
+                return total
+            }
             if let total = usage.total, total > 0 {
                 return total
             }
@@ -134,7 +138,9 @@ struct ChatMessageUsagePresentation: Equatable {
 
         // Context pressure mirrors the Control UI prompt size. Output is response data;
         // input plus cache reads/writes is the context the model received for this run.
-        let promptTokens = Double(input ?? 0) + Double(cacheRead ?? 0) + Double(cacheWrite ?? 0)
+        // Whole-turn counters sum several calls, so the latest call's marker wins when present.
+        let promptTokens = usage.contextUsage.map { Double($0.promptTokens) }
+            ?? Double(input ?? 0) + Double(cacheRead ?? 0) + Double(cacheWrite ?? 0)
         let contextPercent: Int?
         if let contextWindowTokens, contextWindowTokens > 0, promptTokens > 0 {
             let roundedPercent = (promptTokens / Double(contextWindowTokens) * 100).rounded()

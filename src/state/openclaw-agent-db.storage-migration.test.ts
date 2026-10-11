@@ -2,7 +2,10 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { decodeMemoryEmbedding } from "../../packages/memory-host-sdk/src/host/embedding-vector.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
-import { decodeUsageCostRollup } from "../infra/session-cost-usage-rollup-codec.js";
+import {
+  decodeUsageCostRollup,
+  USAGE_COST_ROLLUP_VERSION,
+} from "../infra/session-cost-usage-rollup-codec.js";
 import { createSessionUsageRollupData } from "../infra/session-cost-usage-rollup.js";
 import { resolveZstdCodec } from "../infra/zstd-codec.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -76,7 +79,8 @@ function seedHistoricalData(db: DatabaseSync) {
   const rollup = createSessionUsageRollupData();
   rollup.untimestamped.totals.totalTokens = 17;
   const usage = {
-    version: 6,
+    // The cutover carries only current-version rollups; older ones are rebuilt.
+    version: USAGE_COST_ROLLUP_VERSION,
     pricingFingerprint: "synthetic",
     checkpoint: {
       kind: "jsonl",
