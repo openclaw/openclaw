@@ -256,6 +256,7 @@ export function createNativeSessionBindingLeasesV2<TRecord extends NativeSession
       if (!acquired) {
         throw options.errors.acquisitionRejected(key);
       }
+      state.assertLeaseCurrent(key, token);
       const nested = new Map(owned);
       nested.set(key, owner);
       // Exact-token renewal keeps bounded native requests serialized while a

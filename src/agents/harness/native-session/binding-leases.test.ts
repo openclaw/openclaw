@@ -21,6 +21,31 @@ afterEach(() => {
 });
 
 describe("native session binding leases", () => {
+  it("refuses callback entry when acquisition settles after lease expiry", async () => {
+    vi.useFakeTimers();
+    const { state, values, owner } = createLeaseFixture();
+    const withCurrent = state.withCurrent.bind(state);
+    state.withCurrent = (authority) => {
+      const store = withCurrent(authority);
+      return {
+        ...store,
+        async compareAndApply(...args) {
+          const result = await store.compareAndApply(...args);
+          if (args[2].action === "set" && args[2].value.lease) {
+            vi.setSystemTime(args[2].value.lease.expiresAt);
+          }
+          return result;
+        },
+      };
+    };
+    const run = vi.fn(async () => "native effect");
+    await expect(
+      owner.withLease("expired", run, { prepareLease: prepareBindingTestLease }),
+    ).rejects.toThrow("Lost binding lease");
+    expect(run).not.toHaveBeenCalled();
+    expect(values.get("expired")).not.toHaveProperty("lease");
+  });
+
   it.each(["absent", "renewed"])(
     "serializes peer writes behind a %s binding lease",
     async (mode) => {
