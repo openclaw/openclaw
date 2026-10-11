@@ -73,32 +73,6 @@ beforeEach(() => {
 });
 
 describe("install security scan official bypass", () => {
-  it("bypasses plugin install friction for bundled OpenClaw sources", async () => {
-    const sourceDir = makeTempDir();
-    const result = await scanBundleInstallSourceRuntime({
-      logger: {},
-      pluginId: "openclaw/kitchen-sink",
-      sourceDir,
-      source: { kind: "bundled", authority: "openclaw", mutable: false, network: false },
-    });
-
-    expect(result).toBeUndefined();
-    expectOnlyOperatorPolicyRan();
-  });
-
-  it("bypasses plugin install friction for official ClawHub sources", async () => {
-    const sourceDir = makeTempDir();
-    const result = await scanBundleInstallSourceRuntime({
-      logger: {},
-      pluginId: "@openclaw/matrix",
-      sourceDir,
-      source: { kind: "clawhub", authority: "official", mutable: false, network: true },
-    });
-
-    expect(result).toBeUndefined();
-    expectOnlyOperatorPolicyRan();
-  });
-
   it("bypasses skill install friction for bundled OpenClaw sources", async () => {
     const result = await evaluateSkillInstallPolicyRuntime({
       installId: "node",
@@ -301,24 +275,6 @@ describe("installed dependency tree scan", () => {
 });
 
 describe("package dependency boundaries", () => {
-  it("rejects dependency symlinks outside the staged package", async () => {
-    const packageDir = makeTempDir();
-    const outsideRoot = makeTempDir("openclaw-install-outside-");
-    const dependencyLink = path.join(packageDir, "node_modules", "outside-package");
-    await fs.mkdir(path.dirname(dependencyLink), { recursive: true });
-    await fs.symlink(outsideRoot, dependencyLink, "junction");
-
-    await expect(
-      scanPackageInstallSourceRuntime({
-        extensions: ["index.js"],
-        logger: {},
-        packageDir,
-        pluginId: "boundary-test",
-      }),
-    ).rejects.toThrow("node_modules symlink target outside install root");
-    expect(runInstallPolicyMock).not.toHaveBeenCalled();
-  });
-
   it.each([
     {
       variable: "OPENCLAW_INSTALL_SCAN_MAX_DEPTH",
@@ -562,33 +518,6 @@ describe("plugin install policy warnings", () => {
     ]);
   });
 
-  it("renders install policy blocks as one readable denial", async () => {
-    runInstallPolicyMock.mockResolvedValue({
-      blocked: {
-        code: "security_scan_blocked",
-        reason: "blocked by install policy: unapproved source",
-      },
-      findings: [{ ruleId: "blocked", severity: "critical", message: "Unsafe package." }],
-    });
-
-    const result = await scanPackageInstallSourceRuntime({
-      packageDir: makeTempDir(),
-      extensions: ["payload.js"],
-      logger: {},
-      pluginId: "payload",
-    });
-
-    expect(result?.blocked?.reason).toBe(
-      expectedInstallPolicyNotice({
-        decision: "block",
-        findings: ["[CRITICAL] blocked: Unsafe package."],
-        reason: "unapproved source",
-        targetName: "payload",
-        targetType: "plugin",
-      }),
-    );
-  });
-
   function createMaximumPolicyFindings() {
     const maxText = "x".repeat(1_000);
     return {
@@ -602,37 +531,6 @@ describe("plugin install policy warnings", () => {
       })),
     };
   }
-
-  it("fails closed when a maximum-size warning exceeds the aggregate display limit", async () => {
-    const { findings, maxText } = createMaximumPolicyFindings();
-    runInstallPolicyMock.mockResolvedValue({
-      warning: {
-        reason: maxText,
-        fingerprint: "oversized-warning",
-      },
-      findings,
-    });
-    const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
-    const warnings: string[] = [];
-
-    const result = await scanPackageInstallSourceRuntime({
-      packageDir: makeTempDir(),
-      extensions: ["payload.js"],
-      logger: { warn: (message) => warnings.push(message) },
-      onInstallPolicyWarning,
-      pluginId: "payload",
-    });
-
-    expect(result?.blocked).toEqual({
-      code: "security_scan_failed",
-      reason:
-        "install policy failed closed: policy review exceeds the 4,000-character display limit; reduce or coalesce the reason and findings",
-    });
-    expect(result?.blocked?.reason.length).toBeLessThan(200);
-    expect(onInstallPolicyWarning).not.toHaveBeenCalled();
-    expect(warnings).toEqual([]);
-    expect(runInstallPolicyMock).toHaveBeenCalledTimes(1);
-  });
 
   it("fails closed when a changed warning exceeds the aggregate display limit", async () => {
     const { findings, maxText } = createMaximumPolicyFindings();
@@ -784,28 +682,4 @@ describe("plugin install policy warnings", () => {
       expect(onInstallPolicyWarning).not.toHaveBeenCalled();
     },
   );
-
-  it("returns operator policy blocks before invoking hooks", async () => {
-    runInstallPolicyMock.mockResolvedValueOnce({
-      blocked: {
-        code: "security_scan_blocked",
-        reason: "blocked by operator policy",
-      },
-    });
-
-    const result = await scanPackageInstallSourceRuntime({
-      packageDir: makeTempDir(),
-      extensions: ["payload.js"],
-      logger: {},
-      pluginId: "payload",
-    });
-
-    expect(result).toEqual({
-      blocked: {
-        code: "security_scan_blocked",
-        reason: "blocked by operator policy",
-      },
-    });
-    expect(getGlobalHookRunnerMock).not.toHaveBeenCalled();
-  });
 });

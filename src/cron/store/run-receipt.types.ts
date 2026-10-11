@@ -1,34 +1,4 @@
-import type { CronAuthenticatedChannelRequester } from "../../gateway/cron-creator-authority-grant.types.js";
-import type {
-  CronScheduledToolCallerOrigin,
-  CronScheduledToolPolicy,
-} from "../scheduled-tool-policy.js";
 import type { CronAgentScope } from "../types-shared.js";
-import type { CronJobGenerationReadRow } from "./schema.js";
-
-export type CronReceiptAuthorityJobFacts = CronAgentScope & {
-  id: string;
-  enabled: boolean;
-  hasCanonicalDeliveryMode: boolean;
-  configRevision: string;
-  grantDefinitionRevision: string;
-  messageToolAuthorityInputs: { policy: CronScheduledToolPolicy } | undefined;
-  messageActionAuthorityInputs:
-    | {
-        policy: CronScheduledToolPolicy;
-        callerOrigin?: CronScheduledToolCallerOrigin;
-        channelRequester?: CronAuthenticatedChannelRequester;
-        executableRevision?: string;
-      }
-    | undefined;
-  grantDefinitionProjection?: {
-    revision: CronJobGenerationReadRow["grant_definition_revision"];
-    generation: CronJobGenerationReadRow["grant_definition_generation"];
-    updatedAtMs: CronJobGenerationReadRow["grant_definition_updated_at"];
-    jobUpdatedAtMs: CronJobGenerationReadRow["updated_at"];
-  };
-};
-
 export type CronRunReceiptStatus =
   | "running"
   | "ok"
@@ -77,7 +47,7 @@ export type CronRunReceiptCurrentReadCommand = {
 
 export type CronRunReceiptCurrentFacts = {
   receipt: CronRunReceiptHandle | undefined;
-  job: CronReceiptAuthorityJobFacts | undefined;
+  job: (CronAgentScope & { hasCanonicalDeliveryMode: boolean }) | undefined;
   deletionBlocked: boolean;
 };
 

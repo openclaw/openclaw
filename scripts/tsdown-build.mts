@@ -681,17 +681,13 @@ export function describeInsufficientTsdownHeap(
     : TSDOWN_MAX_OLD_SPACE_MB_ENV;
   const fatal = explicitHeapMb === null;
   const outcome = fatal
-    ? budget.unresolvedCgroupMemory
-      ? [
-          "Stopping before any build output is removed. Pick one:",
-          "  - run the build where the process cgroup limit is visible",
-          `  - set ${heapOverrideEnv}=<MB> to explicitly attempt the build anyway`,
-        ]
-      : [
-          "Stopping before any build output is removed. Pick one:",
-          "  - give this machine or container more memory",
-          `  - set ${heapOverrideEnv}=<MB> to explicitly attempt the build anyway`,
-        ]
+    ? [
+        "Stopping before any build output is removed. Pick one:",
+        budget.unresolvedCgroupMemory
+          ? "  - run the build where the process cgroup limit is visible"
+          : "  - give this machine or container more memory",
+        `  - set ${heapOverrideEnv}=<MB> to explicitly attempt the build anyway`,
+      ]
     : [
         `Continuing because ${heapOverrideEnv} explicitly requests ${explicitHeapMb}MB. Existing build output will now be cleaned; the build may stall or fail.`,
       ];
@@ -922,8 +918,9 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
   });
   const declarationsEnabled = tsdownDeclarationsEnabled(aiArgs, env);
   const hasForwardedConfig = aiArgs.some(isConfigArg);
+  const mainConfig = hasForwardedConfig && selectsMainConfig(forwardedArgs);
   if (
-    (!hasForwardedConfig || selectsMainConfig(forwardedArgs)) &&
+    (!hasForwardedConfig || mainConfig) &&
     TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.some((group) => forwardedFilters.includes(group)) &&
     TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS.some((group) => forwardedFilters.includes(group))
   ) {
@@ -948,45 +945,17 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
     // Watchers are long-lived, so sequential group orchestration would block forever on the
     // first child. Keep watch mode inside tsdown's single owning process.
     const groups =
-      declarationsEnabled && selectsMainConfig(forwardedArgs)
+      declarationsEnabled && mainConfig
         ? resolveSerializedMainConfigGroups(forwardedFilters)
         : null;
     return [
       resolveTsdownBuildInvocation({
         ...params,
         ...(groups ? { args: [...groups.flatMap((group) => ["--filter", group]), ...aiArgs] } : {}),
-        env: selectsMainConfig(forwardedArgs) ? mainEnv : env,
+        env: mainConfig ? mainEnv : env,
       }),
     ];
   }
-
-  if (hasForwardedConfig) {
-    if (declarationsEnabled && selectsMainConfig(forwardedArgs)) {
-      const serializedGroups = resolveSerializedMainConfigGroups(forwardedFilters);
-      if (serializedGroups) {
-        return serializedGroups.map((group) =>
-          resolveTsdownBuildInvocation({
-            ...params,
-            args: ["--filter", group, ...aiArgs],
-            env: mainEnv,
-          }),
-        );
-      }
-    }
-    return [
-      resolveTsdownBuildInvocation({
-        ...params,
-        env: selectsMainConfig(forwardedArgs) ? mainEnv : env,
-      }),
-    ];
-  }
-
-  const invocations = [
-    resolveTsdownBuildInvocation({
-      ...params,
-      args: ["--config", "tsdown.ai.config.ts", ...aiArgs],
-    }),
-  ];
 
   const forwardedFilterSet = new Set(forwardedFilters);
   const uniqueForwardedFilters = SELECTABLE_MAIN_CONFIG_GROUPS.filter((group) =>
@@ -995,11 +964,32 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
   const hasUnknownFilter = forwardedFilters.some(
     (filter) => filter !== "." && !SELECTABLE_MAIN_CONFIG_GROUPS.includes(filter),
   );
-  const serializedGroups = forwardedFilters.includes(".")
-    ? SERIALIZED_MAIN_CONFIG_GROUPS
-    : !hasUnknownFilter && uniqueForwardedFilters.length > 1
-      ? uniqueForwardedFilters
-      : null;
+  const serializedGroups = hasForwardedConfig
+    ? declarationsEnabled && mainConfig
+      ? resolveSerializedMainConfigGroups(forwardedFilters)
+      : null
+    : forwardedFilters.includes(".")
+      ? SERIALIZED_MAIN_CONFIG_GROUPS
+      : !hasUnknownFilter && uniqueForwardedFilters.length > 1
+        ? uniqueForwardedFilters
+        : null;
+  if (hasForwardedConfig && !serializedGroups) {
+    return [
+      resolveTsdownBuildInvocation({
+        ...params,
+        env: mainConfig ? mainEnv : env,
+      }),
+    ];
+  }
+
+  const invocations = hasForwardedConfig
+    ? []
+    : [
+        resolveTsdownBuildInvocation({
+          ...params,
+          args: ["--config", "tsdown.ai.config.ts", ...aiArgs],
+        }),
+      ];
   if (!declarationsEnabled || (hasForwardedFilter && !serializedGroups)) {
     invocations.push(resolveTsdownBuildInvocation({ ...params, env: mainEnv }));
     return invocations;

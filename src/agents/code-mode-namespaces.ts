@@ -194,19 +194,6 @@ function scopeAtPath(root: McpNamespaceScope, path: readonly string[]): McpNames
   return current;
 }
 
-function toolIdentifiersForServer(
-  usedToolIdentifiers: Map<string, Set<string>>,
-  serverIdentifier: string,
-): Set<string> {
-  const existing = usedToolIdentifiers.get(serverIdentifier);
-  if (existing) {
-    return existing;
-  }
-  const created = new Set<string>(["$api", "resources", "prompts"]);
-  usedToolIdentifiers.set(serverIdentifier, created);
-  return created;
-}
-
 type McpNamespaceModel = {
   root: McpNamespaceScope;
   calls: Map<string, McpNamespaceCall>;
@@ -312,14 +299,13 @@ function createMcpNamespaceModel(
   if (!plan) {
     return undefined;
   }
-  const usedToolIdentifiers = new Map<string, Set<string>>();
   const root: McpNamespaceScope = new Map();
   const calls = new Map<string, McpNamespaceCall>();
   const addCall = (path: string[], call: McpNamespaceCall) => {
     scopeAtPath(root, path.slice(0, -1)).set(path.at(-1)!, { kind: "function", path });
     calls.set(namespacePathKey(path), call);
   };
-  const serverDocs = new Map<string, McpApiServerDoc>();
+  const servers = new Map<string, { doc: McpApiServerDoc; toolIdentifiers?: Set<string> }>();
   const bindings = new Map<string, CodeModeMcpCatalogBinding>();
   for (const entry of plan.entries) {
     const mcp = entry.mcp;
@@ -332,14 +318,16 @@ function createMcpNamespaceModel(
       uniqueIdentifier("server", plan.usedServerIdentifiers);
     const serverScope = scopeAtPath(root, [serverIdentifier]);
     serverScope.set("$serverName", mcp.serverName);
-    let serverDoc = serverDocs.get(serverIdentifier);
-    if (!serverDoc) {
-      serverDoc = {
-        identifier: serverIdentifier,
-        serverName: mcp.serverName,
-        tools: [],
+    let server = servers.get(serverIdentifier);
+    if (!server) {
+      server = {
+        doc: {
+          identifier: serverIdentifier,
+          serverName: mcp.serverName,
+          tools: [],
+        },
       };
-      serverDocs.set(serverIdentifier, serverDoc);
+      servers.set(serverIdentifier, server);
     }
     const path =
       mcp.operation === "resources_list"
@@ -353,7 +341,7 @@ function createMcpNamespaceModel(
               : [
                   uniqueIdentifier(
                     toIdentifier(mcp.toolName, "tool"),
-                    toolIdentifiersForServer(usedToolIdentifiers, serverIdentifier),
+                    (server.toolIdentifiers ??= new Set(["$api", "resources", "prompts"])),
                   ),
                 ];
     bindings.set(entry.id, {
@@ -374,7 +362,7 @@ function createMcpNamespaceModel(
       tool: { toolName, catalogId },
       input: (args) => mapMcpNamespaceInput(entry.parameters, args),
     });
-    serverDoc.tools.push({
+    server.doc.tools.push({
       method: path.join("."),
       path,
       mcpTool: mcp.toolName,
@@ -384,7 +372,7 @@ function createMcpNamespaceModel(
       params: buildMcpParamDocs(entry.parameters),
     });
   }
-  const docs = Array.from(serverDocs.values(), (server) => {
+  const docs = Array.from(servers.values(), ({ doc: server }) => {
     // The model owns these rows until namespace/API publication.
     server.tools = server.tools.toSorted((a, b) => a.method.localeCompare(b.method));
     return server;

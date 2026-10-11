@@ -843,6 +843,20 @@ describe("resolveSystemNodeInfo", () => {
     expect(execFile).not.toHaveBeenCalled();
   });
 
+  it("names the system executable when its SQLite TEXT capability fails", () => {
+    const warning = renderSystemNodeWarning({
+      path: "/usr/bin/node",
+      version: "22.23.3",
+      sqliteVersion: "3.51.3",
+      sqliteProbe: { available: true, version: "3.51.3", text: false, blob: true, json: true },
+      nodeSharedSqlite: false,
+      status: "unsupported",
+      capabilityError: "node:sqlite truncates TEXT at embedded NUL",
+    });
+    expect(warning).toContain("System Node 22.23.3 at /usr/bin/node");
+    expect(warning).toContain("node:sqlite truncates TEXT at embedded NUL");
+  });
+
   it("reports a known unsupported system Node version", () => {
     const selectedNode = "/Users/me/.fnm/node-22/bin/node";
     const warning = renderSystemNodeWarning(

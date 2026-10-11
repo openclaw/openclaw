@@ -5,7 +5,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
-import { withCronReceiptAuthorityMutation } from "../cron/store/receipt-authority-owner.js";
 import {
   deleteCronJobRowInDatabase,
   loadCronRows,
@@ -290,12 +289,7 @@ function consumeInWorker(
   input: Parameters<typeof consumeCronStandingGrant>[1],
 ) {
   const context = captureOpenClawStateWorkerContext(databaseOptions);
-  return consumeCronStandingGrant(
-    context,
-    input,
-    () => {},
-    (run) => withCronReceiptAuthorityMutation(context, run),
-  );
+  return consumeCronStandingGrant(context, input, () => {});
 }
 
 function consume(params: Parameters<typeof grantInput>[0]) {

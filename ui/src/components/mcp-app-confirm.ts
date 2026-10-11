@@ -92,7 +92,7 @@ export class McpAppConfirm {
     }
   }
 
-  private readonly focusStrip = (element: Element | undefined): void => {
+  readonly focusStrip = (element: Element | undefined): void => {
     const pending = this.pending;
     // Lit assigns the ref before inserting the strip into the document.
     queueMicrotask(() => {
@@ -102,7 +102,7 @@ export class McpAppConfirm {
     });
   };
 
-  private finish(accepted: boolean, restoreFocus = true): void {
+  finish(accepted: boolean, restoreFocus = true): void {
     const pending = this.pending;
     if (!pending) {
       return;
@@ -114,6 +114,10 @@ export class McpAppConfirm {
       pending.frame.focus({ preventScroll: true });
     }
     pending.resolve(accepted && current);
+  }
+
+  get current() {
+    return this.pending;
   }
 
   render() {
