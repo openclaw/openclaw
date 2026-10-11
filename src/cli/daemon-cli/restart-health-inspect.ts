@@ -168,6 +168,9 @@ export async function inspectGatewayRestart(params: {
           ...(reachable.channelProbeErrors.length > 0
             ? { channelProbeErrors: reachable.channelProbeErrors }
             : {}),
+          ...(reachable.channelRuntimeWarnings?.length
+            ? { channelRuntimeWarnings: reachable.channelRuntimeWarnings }
+            : {}),
         },
         expectedVersion,
         expectedBuildId,
@@ -236,6 +239,7 @@ export async function inspectGatewayRestart(params: {
     activatedPluginErrors,
     unavailablePlugins,
     channelProbeErrors,
+    channelRuntimeWarnings,
   } = reachability ?? {};
   return finalizeGatewayRestartSnapshot(
     {
@@ -252,6 +256,7 @@ export async function inspectGatewayRestart(params: {
       ...(activatedPluginErrors?.length ? { activatedPluginErrors } : {}),
       ...(unavailablePlugins?.length ? { unavailablePlugins } : {}),
       ...(channelProbeErrors?.length ? { channelProbeErrors } : {}),
+      ...(channelRuntimeWarnings?.length ? { channelRuntimeWarnings } : {}),
     },
     expectedVersion,
     expectedBuildId,

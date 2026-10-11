@@ -1,4 +1,5 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { resolveStateDir } from "../../config/paths.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
@@ -15,6 +16,7 @@ import {
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { redactSupportDiagnosticLine } from "../../logging/diagnostic-support-redaction.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
@@ -205,6 +207,12 @@ export async function verifyUpdatedGateway(
     ...params,
     assertCurrent,
   });
+  const channelWarnings = (health.channelRuntimeWarnings ?? []).map(({ id, error }) =>
+    redactSupportDiagnosticLine(
+      `Channel health warning (${id}: ${error}). Run openclaw health --json to inspect it.`,
+      { env: params.serviceEnv, stateDir: resolveStateDir(params.serviceEnv) },
+    ),
+  );
   if (launchAgentRecovery?.attempted) {
     defaultRuntime.error(
       launchAgentRecovery.recovered ? launchAgentRecovery.message : launchAgentRecovery.detail,
@@ -239,6 +247,9 @@ export async function verifyUpdatedGateway(
       durationMs: endedAtMs - startedAtMs,
       exitCode: failureFacts ? 1 : warning && params.purpose === "recovery" ? null : 0,
       ...(failureFacts ? { failureFacts } : {}),
+      ...(channelWarnings.length
+        ? { warnings: [...(warning ? [warning] : []), ...channelWarnings] }
+        : {}),
       ...(warning
         ? {
             termination: "timeout" as const,
@@ -291,17 +302,19 @@ export async function verifyUpdatedGateway(
             : "Gateway: restarted and verified.",
         ),
       );
-      for (const warning of pluginWarnings) {
-        defaultRuntime.log(theme.warn(warning.message));
+      for (const warning of [...pluginWarnings.map((entry) => entry.message), ...channelWarnings]) {
+        defaultRuntime.log(theme.warn(warning));
       }
     }
     return {
       ok: true,
       score: 7,
       summary:
-        pluginWarnings.length > 0
-          ? "Gateway service, version, channels, and readiness verified; plugin failures need a retry."
-          : "Gateway service, version, plugins, channels, and readiness verified.",
+        channelWarnings.length > 0
+          ? "Gateway service, version, and readiness verified; channel warnings need attention."
+          : pluginWarnings.length > 0
+            ? "Gateway service, version, channels, and readiness verified; plugin failures need a retry."
+            : "Gateway service, version, plugins, channels, and readiness verified.",
       ...(pluginWarnings.length > 0 ? { pluginWarnings } : {}),
     };
   }

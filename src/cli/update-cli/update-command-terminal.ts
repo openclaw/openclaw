@@ -206,6 +206,12 @@ export async function withUpdateCommandTerminalResult<T>(
       ) {
         throw error;
       }
+      if (run && getUpdateRun(run.runId, { env: run.env })?.status === "succeeded") {
+        defaultRuntime.error(
+          `Warning: Update succeeded, but result publication failed: ${createUpdateErrorFact("update", error, run.env).message}`,
+        );
+        return exitCliAfterOutput(defaultRuntime, 0);
+      }
       outcome = {
         error:
           "error" in outcome && outcome.error !== error
