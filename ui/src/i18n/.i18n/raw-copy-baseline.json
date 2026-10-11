@@ -465,6 +465,13 @@
     },
     {
       "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/plugins/consent-dialog.tsx",
+      "text": "v"
+    },
+    {
+      "count": 1,
       "kind": "object-property",
       "name": "description",
       "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
@@ -563,10 +570,17 @@
     },
     {
       "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/search/search-results.ts",
-      "text": "snippet"
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/plugins/security-audit.tsx",
+      "text": "Clean"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/plugins/security-audit.tsx",
+      "text": "Review"
     },
     {
       "count": 1,
@@ -579,7 +593,7 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/skills/library-view.ts",
+      "path": "ui/src/pages/skills/library-view.tsx",
       "text": "SKILL.md"
     },
     {
