@@ -278,6 +278,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     finish(database: DatabaseSync, record: Admission | undefined) {
       const keys = state.pendingWriteScopes.get(database);
       state.pendingWriteScopes.delete(database);
+      let unscoped = !keys;
       if (keys) {
         const local = state.localScopeRevisions.get(database);
         for (const key of keys) {
@@ -287,9 +288,13 @@ export function createSqliteDatabaseWriteReceipts(owner: {
           const revision = record?.writeScopes.get(key);
           if (revision) {
             Atomics.add(new Int32Array(revision), 0, 1);
+          } else if (record) {
+            // Another isolate may have registered the key after this writer's snapshot.
+            unscoped = true;
           }
         }
-      } else {
+      }
+      if (unscoped) {
         state.localUnscopedRevisions.set(
           database,
           (state.localUnscopedRevisions.get(database) ?? 0) + 1,
