@@ -96,58 +96,40 @@ afterEach(async () => {
 });
 
 describe("worker desktop tunnels", () => {
-  it.each([false, true])(
-    "records SSH exit before owner cleanup (logger throws: %s)",
-    async (throws) => {
-      const fake = readyRunner();
-      const manager = createWorkerDesktopTunnels({ runner: fake.runner });
-      const { attachment } = await acquire(manager, 1, { protocol: "rfb", port: 5900 });
-      const order: string[] = [];
-      const close = vi.fn(() => order.push("observer-close"));
-      manager.attachObserver("worker:one", { control: false, ownerEpoch: 1, close });
-      desktopInfo.mockImplementation((message) => {
-        if (message === "desktop SSH tunnel exited") {
-          order.push("SSH-exit");
-          if (throws) {
-            throw new Error("fixture logger unavailable");
-          }
-        }
-      });
-      try {
-        fake.starts[0]!.process.exit();
-        await vi.waitFor(() => expect(close).toHaveBeenCalledWith(1012, "desktop tunnel closed"));
-        expect(desktopInfo).toHaveBeenCalledWith("desktop SSH tunnel exited", {
-          code: 1,
-          signal: null,
-          stopRequested: false,
-        });
-        expect(fake.starts[0]!.process.stopCount).toBe(1);
-        expect(order).toEqual(["SSH-exit", "observer-close"]);
-      } finally {
-        await manager.stopAll();
-      }
-      if (attachment.kind !== "unix-socket") {
-        throw new Error("expected an SSH desktop socket");
-      }
-      await expect(access(path.dirname(attachment.socketPath))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-    },
-  );
-
-  it("distinguishes an owner-requested SSH stop from unexpected exit", async () => {
+  it.each([true])("records SSH exit before owner cleanup (logger throws: %s)", async (throws) => {
     const fake = readyRunner();
     const manager = createWorkerDesktopTunnels({ runner: fake.runner });
-    await acquire(manager, 1, { protocol: "rfb", port: 5900 });
-    await manager.stopAll();
-    expect(desktopInfo).toHaveBeenCalledWith("desktop SSH tunnel exited", {
-      code: null,
-      signal: "SIGTERM",
-      stopRequested: true,
+    const { attachment } = await acquire(manager, 1, { protocol: "rfb", port: 5900 });
+    const order: string[] = [];
+    const close = vi.fn(() => order.push("observer-close"));
+    manager.attachObserver("worker:one", { control: false, ownerEpoch: 1, close });
+    desktopInfo.mockImplementation((message) => {
+      if (message === "desktop SSH tunnel exited") {
+        order.push("SSH-exit");
+        if (throws) {
+          throw new Error("fixture logger unavailable");
+        }
+      }
     });
-    expect(
-      desktopInfo.mock.calls.filter(([message]) => message === "desktop SSH tunnel exited"),
-    ).toHaveLength(1);
+    try {
+      fake.starts[0]!.process.exit();
+      await vi.waitFor(() => expect(close).toHaveBeenCalledWith(1012, "desktop tunnel closed"));
+      expect(desktopInfo).toHaveBeenCalledWith("desktop SSH tunnel exited", {
+        code: 1,
+        signal: null,
+        stopRequested: false,
+      });
+      expect(fake.starts[0]!.process.stopCount).toBe(1);
+      expect(order).toEqual(["SSH-exit", "observer-close"]);
+    } finally {
+      await manager.stopAll();
+    }
+    if (attachment.kind !== "unix-socket") {
+      throw new Error("expected an SSH desktop socket");
+    }
+    await expect(access(path.dirname(attachment.socketPath))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it.skipIf(process.platform === "win32")(

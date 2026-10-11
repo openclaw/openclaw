@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
 import { createNativeTypeScriptParser } from "./native-typescript.mts";
+import { isRecord as object } from "./record-shared.mjs";
 import { parseReleaseVersion } from "./release-version.mjs";
 import {
   isUpdateCompatibilityChunk,
@@ -10,7 +11,6 @@ import {
 import { ModuleGraph, type UpdateCompatibilityOrigin } from "./update-compat-module-graph.mts";
 
 export { isUpdateCompatibilityChunk } from "./update-compat-contract.mjs";
-export const UPDATE_COMPATIBILITY_INVENTORY_FILE = "update-compat-inventory.json";
 const HASHED_CHUNK = /-[A-Za-z0-9_-]{8}\.m?js$/;
 const POST_SWAP_OWNER = /^src\/(?:cli\/update-cli\/|daemon\/|cli\/runtime-cleanup(?:-scope)?\.ts$)/;
 
@@ -61,6 +61,7 @@ export type UpdateCompatibilityRelease = {
   buildId: string;
   commit: string;
   integrity: string;
+  schemaVersions?: unknown;
   chunks: UpdateCompatibilityChunk[];
 };
 export type UpdateCompatibilityInventory = {
@@ -119,6 +120,75 @@ function isPostSwapImport(owner: string, node: ts.CallExpression): boolean {
   return false;
 }
 
+function consumedPromiseAllExports(node: ts.CallExpression): string[] | undefined {
+  const array = node.parent;
+  if (
+    !ts.isArrayLiteralExpression(array) ||
+    !array.elements.every(
+      (element) =>
+        ts.isCallExpression(element) &&
+        element.expression.kind === ts.SyntaxKind.ImportKeyword &&
+        element.arguments.length === 1 &&
+        ts.isStringLiteralLikeNode(element.arguments[0]!),
+    )
+  ) {
+    return undefined;
+  }
+  const call = array.parent;
+  if (
+    !ts.isCallExpression(call) ||
+    call.questionDotToken ||
+    call.arguments.length !== 1 ||
+    !ts.isPropertyAccessExpression(call.expression) ||
+    call.expression.questionDotToken ||
+    !ts.isIdentifier(call.expression.expression) ||
+    call.expression.expression.text !== "Promise" ||
+    call.expression.name.text !== "all" ||
+    !ts.isAwaitExpression(call.parent)
+  ) {
+    return undefined;
+  }
+  const declaration = call.parent.parent;
+  if (
+    !ts.isVariableDeclaration(declaration) ||
+    declaration.initializer !== call.parent ||
+    !ts.isArrayBindingPattern(declaration.name) ||
+    declaration.name.elements.length !== array.elements.length
+  ) {
+    return undefined;
+  }
+  const names: string[][] = [];
+  for (const element of declaration.name.elements) {
+    if (
+      !ts.isBindingElement(element) ||
+      element.dotDotDotToken ||
+      element.initializer ||
+      !element.name ||
+      !ts.isObjectBindingPattern(element.name) ||
+      element.name.elements.length === 0
+    ) {
+      return undefined;
+    }
+    const exports: string[] = [];
+    for (const binding of element.name.elements) {
+      const name = binding.propertyName ?? binding.name;
+      if (
+        binding.dotDotDotToken ||
+        binding.initializer ||
+        !binding.name ||
+        !name ||
+        !ts.isIdentifier(binding.name) ||
+        !ts.isIdentifier(name)
+      ) {
+        return undefined;
+      }
+      exports.push(name.text);
+    }
+    names.push(exports);
+  }
+  return names[array.elements.indexOf(node)];
+}
+
 function consumedExports(node: ts.CallExpression): string[] | undefined {
   let expression: ts.Node = node;
   let awaited = false;
@@ -131,7 +201,7 @@ function consumedExports(node: ts.CallExpression): string[] | undefined {
   }
   // A direct import() is a Promise; its properties are not namespace exports.
   if (!awaited) {
-    return undefined;
+    return consumedPromiseAllExports(node);
   }
   const parent = expression.parent;
   if (ts.isPropertyAccessExpression(parent) && parent.expression === expression) {
@@ -258,6 +328,7 @@ export function recordUpdateCompatibilityRelease(params: {
     buildId: build.buildId,
     commit: build.commit,
     integrity: params.integrity,
+    schemaVersions: packageJson.openclaw?.schemaVersions,
     chunks: [...chunks.values()]
       .toSorted((a, b) => a.path.localeCompare(b.path))
       .map((chunk) => ({
@@ -268,9 +339,6 @@ export function recordUpdateCompatibilityRelease(params: {
   };
 }
 
-function object(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 function safeRelative(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -365,6 +433,7 @@ export function parseUpdateCompatibilityInventory(
       buildId: release.buildId,
       commit: release.commit,
       integrity: release.integrity,
+      schemaVersions: release.schemaVersions,
       chunks,
     };
   });
@@ -599,9 +668,5 @@ export function writeUpdateCompatibilityChunks(params: {
       fs.writeFileSync(destination, contents);
     }
   }
-  fs.writeFileSync(
-    path.join(distDir, UPDATE_COMPATIBILITY_INVENTORY_FILE),
-    `${JSON.stringify(params.inventory, null, 2)}\n`,
-  );
   return [...outputs.keys()].toSorted();
 }

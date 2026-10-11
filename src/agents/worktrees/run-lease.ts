@@ -17,11 +17,7 @@ import {
 } from "./git-lock.js";
 import { worktreePathExists } from "./git.js";
 import { readRegistryWorktree, readRegistryWorktrees } from "./registry-read.js";
-import {
-  claimWorktreeRemovalRow,
-  hasLiveWorktreeRunLeaseRow,
-  releaseWorktreeRunLeaseRow,
-} from "./registry.js";
+import { claimWorktreeRemovalRow, releaseWorktreeRunLeaseRow } from "./registry.js";
 import { setWorktreeRunEndCleanupFailure, withWorktreeRunEnd } from "./run-end-lifecycle.js";
 import {
   admitWorktreeRunLeaseRowAsync,
@@ -410,10 +406,6 @@ export function claimWorktreeRemoval(
     startTime: getFileLockProcessStartTime(pid),
     now: Date.now(),
   });
-}
-
-export function hasLiveWorktreeRunLease(env: NodeJS.ProcessEnv, worktreeId: string): boolean {
-  return hasLiveWorktreeRunLeaseRow(env, worktreeId);
 }
 
 const testing = {

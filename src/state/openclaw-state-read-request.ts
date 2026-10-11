@@ -428,7 +428,6 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   }
   if (
     command.type === "githubPublication.request" ||
-    command.type === "githubRepository.request" ||
     command.type === "githubPublication.lifecycle"
   ) {
     return bytes + Buffer.byteLength(command.requestId, "utf8") + 8;

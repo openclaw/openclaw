@@ -1,10 +1,26 @@
 import "@awesome.me/webawesome/dist/components/dialog/dialog.js";
 import type WaDialog from "@awesome.me/webawesome/dist/components/dialog/dialog.js";
+import type { JSX as SolidJSX } from "@solidjs/web";
 import { css, html, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 import { acquireNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { composedParent } from "../lib/navigation-click.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
+
+type ModalDialogAttributes = SolidJSX.HTMLAttributes<OpenClawModalDialog> & {
+  label: string;
+  manual?: boolean;
+  description?: string;
+  "onModal-cancel"?: (event: Event) => void;
+};
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-modal-dialog": ModalDialogAttributes;
+    }
+  }
+}
 
 const modalLayers = (document.openClawModalLayers ??= new Set<HTMLElement>());
 
@@ -257,16 +273,17 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     this.#returnFocus = null;
     this.#returnFocusOverride = undefined;
     if (returnFocus?.isConnected) {
-      if (!isInert(returnFocus)) {
+      if (!isInert(returnFocus) && !returnFocus.matches(":disabled")) {
         restoreFocus(returnFocus);
       } else {
         const activeElement = document.activeElement;
-        // The containing render may release background inertness after removing the modal.
+        // The containing render may enable the target or release inertness after removal.
         queueMicrotask(() => {
           if (
             !this.isConnected &&
             returnFocus.isConnected &&
             !isInert(returnFocus) &&
+            !returnFocus.matches(":disabled") &&
             document.activeElement === activeElement
           ) {
             restoreFocus(returnFocus);

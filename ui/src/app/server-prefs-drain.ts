@@ -115,8 +115,6 @@ export async function drainPendingPrefs(
         try {
           if (
             !(await loadProfileAppearancePrefs(capturedClient, profileId, gatewayScope, {
-              configObject: writer.state.configSnapshot?.config,
-              canMigrate: false,
               isCurrent: profileIsCurrent,
             })) ||
             !profileIsCurrent()
@@ -145,8 +143,7 @@ export async function drainPendingPrefs(
       }
       expectedBackground = profile.background ?? null;
     }
-    const navigationReceipt =
-      batch.sidebarEntries !== undefined || batch.navigationScope !== undefined;
+    const navigationReceipt = batch.sidebarEntries !== undefined;
     // Until this exact write is acknowledged, storage must retain the aggregate
     // intent for unknown-ack reloads. Only locally composed successors may then
     // observe its additions; remote adoption or an independent edit detaches it.
@@ -282,15 +279,12 @@ export async function drainPendingPrefs(
             writer.state.connected &&
             sync.pushCanWrite &&
             profileId &&
-            (["sidebarEntries", "navigationScope"] as const).some(
-              (key) =>
-                Object.hasOwn(committedBatch, key) &&
-                sync.pendingPrefs &&
-                Object.hasOwn(sync.pendingPrefs, key) &&
-                lastSeen.navigationConfirmation?.[key] !==
-                  lastSeenAtDispatch.navigationConfirmation?.[key] &&
-                !prefValuesEqual(lastSeen[key], committedBatch[key]),
-            )
+            Object.hasOwn(committedBatch, "sidebarEntries") &&
+            sync.pendingPrefs &&
+            Object.hasOwn(sync.pendingPrefs, "sidebarEntries") &&
+            lastSeen.navigationConfirmation?.sidebarEntries !==
+              lastSeenAtDispatch.navigationConfirmation?.sidebarEntries &&
+            !prefValuesEqual(lastSeen.sidebarEntries, committedBatch.sidebarEntries)
           ) {
             // users.prefs has no server revision: an identical read before this commit
             // and an ABA read after it have indistinguishable receipts. Only this raced,
@@ -319,9 +313,7 @@ export async function drainPendingPrefs(
                     sync,
                     sync.pendingScope,
                   )?.navigationConfirmation;
-                  return (["sidebarEntries", "navigationScope"] as const).every(
-                    (key) => confirmation?.[key] === beforeRead?.[key],
-                  );
+                  return confirmation?.sidebarEntries === beforeRead?.sidebarEntries;
                 },
               });
             } catch {
@@ -342,33 +334,27 @@ export async function drainPendingPrefs(
           const publication = { ...committedBatch };
           let superseded = false;
           const confirmedNavigation: ServerUiPrefs = {};
-          const latestNavigation: Partial<Pick<UiSettings, "sidebarEntries" | "navigationScope">> =
-            {};
+          const latestNavigation: Partial<Pick<UiSettings, "sidebarEntries">> = {};
           if (navigationReceipt) {
-            for (const key of ["sidebarEntries", "navigationScope"] as const) {
-              // Shared lastSeen is already-confirmed profile-only navigation. Keep the
-              // local read cache aligned so a later reconcile cannot roll it backward.
-              const confirmed = SYNCED_PREFS[key].extract(lastSeen[key]);
-              if (profilePrefs && confirmed !== undefined) {
-                Object.assign(confirmedNavigation, { [key]: confirmed });
-              }
-              if (!Object.hasOwn(publication, key)) {
-                continue;
-              }
-              const held = sync.pendingPrefs && Object.hasOwn(sync.pendingPrefs, key);
-              const newer =
-                (lastSeen.navigationConfirmation?.[key] !==
-                  lastSeenAtDispatch.navigationConfirmation?.[key] ||
-                  !prefValuesEqual(lastSeen[key], lastSeenAtDispatch[key])) &&
-                !prefValuesEqual(lastSeen[key], committedBatch[key]);
-              if (!held || newer) {
-                // Clearing an outbox may mean a sibling settled or the user cancelled,
-                // not permission for this older receipt to publish its committed value.
-                delete publication[key];
-                superseded = true;
-                if (held && newer && confirmed !== undefined) {
-                  Object.assign(latestNavigation, { [key]: confirmed });
-                }
+            // Shared lastSeen is already-confirmed profile-only navigation. Keep the
+            // local read cache aligned so a later reconcile cannot roll it backward.
+            const confirmed = SYNCED_PREFS.sidebarEntries.extract(lastSeen.sidebarEntries);
+            if (profilePrefs && confirmed !== undefined) {
+              confirmedNavigation.sidebarEntries = confirmed;
+            }
+            const held = sync.pendingPrefs && Object.hasOwn(sync.pendingPrefs, "sidebarEntries");
+            const newer =
+              (lastSeen.navigationConfirmation?.sidebarEntries !==
+                lastSeenAtDispatch.navigationConfirmation?.sidebarEntries ||
+                !prefValuesEqual(lastSeen.sidebarEntries, lastSeenAtDispatch.sidebarEntries)) &&
+              !prefValuesEqual(lastSeen.sidebarEntries, committedBatch.sidebarEntries);
+            if (Object.hasOwn(publication, "sidebarEntries") && (!held || newer)) {
+              // Clearing an outbox may mean a sibling settled or the user cancelled,
+              // not permission for this older receipt to publish its committed value.
+              delete publication.sidebarEntries;
+              superseded = true;
+              if (held && newer && confirmed !== undefined) {
+                latestNavigation.sidebarEntries = confirmed;
               }
             }
           }
@@ -407,10 +393,8 @@ export async function drainPendingPrefs(
           if (publication.sidebarEntries) {
             latestNavigation.sidebarEntries = publication.sidebarEntries;
           }
-          for (const key of ["sidebarEntries", "navigationScope"] as const) {
-            if (sync.pendingPrefs && Object.hasOwn(sync.pendingPrefs, key)) {
-              delete latestNavigation[key];
-            }
+          if (sync.pendingPrefs && Object.hasOwn(sync.pendingPrefs, "sidebarEntries")) {
+            delete latestNavigation.sidebarEntries;
           }
           if (Object.keys(latestNavigation).length) {
             sync.applyServerPrefsPatch(latestNavigation);

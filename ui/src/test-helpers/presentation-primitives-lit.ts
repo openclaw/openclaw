@@ -28,8 +28,6 @@ keyboardStyles.textContent = kbdStyles.cssText;
 document.head.append(keyboardStyles);
 let checked = false;
 let segment = "balanced";
-let visible = false;
-let secret = "synthetic-token";
 const options = [
   { value: "fast", label: "Fast" },
   { value: "balanced", label: "Balanced" },
@@ -197,24 +195,6 @@ function controls() {
             options,
             onChange: (next) => {
               segment = next;
-              draw();
-            },
-          }),
-        }),
-        settings.renderSettingsRow({
-          title: "Secret",
-          control: settings.renderSettingsSecretInput({
-            ariaLabel: "Secret",
-            value: secret,
-            visible,
-            showLabel: "Show secret",
-            hideLabel: "Hide secret",
-            toggleLabel: "Toggle secret",
-            onInput: (next) => {
-              secret = next;
-            },
-            onToggle: () => {
-              visible = !visible;
               draw();
             },
           }),

@@ -306,6 +306,7 @@ function buildPluginReport(
             env: params?.env,
             logger: params?.logger,
             loadModules: false,
+            throwOnLoadError: false,
             onlyPluginIds,
             manifestRegistry: metadataSnapshot.manifestRegistry,
             runtimeContext: context,

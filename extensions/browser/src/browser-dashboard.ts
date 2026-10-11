@@ -24,7 +24,6 @@ import {
   getOptionalBrowserStateRuntime,
   isBrowserStateRuntimeCurrent,
   readCurrentBrowserState,
-  type BrowserDashboardOperation,
   type BrowserSessionTabAuthority,
   type BrowserStateRuntime,
 } from "./browser-runtime-state.js";
@@ -432,7 +431,6 @@ export async function assertBrowserDashboardTargetCurrent(
 
 async function serializeDashboardOperation(
   request: BrowserDashboardRequest,
-  kind: "materialize" | "stop",
   authority: BrowserDashboardAuthority,
   execute: (
     definition: BrowserDashboardDefinition,
@@ -445,42 +443,13 @@ async function serializeDashboardOperation(
   const operations = runtime.dashboardOperations;
   const key = operationKey(definition);
   const previous = operations.get(key);
-  let materializationFailure: BrowserDashboardOperation["materializationFailure"];
   const promise = (async () => {
+    // A failed open does not poison queued callers; each gets its own attempt.
     await previous?.promise.catch(() => undefined);
-    if (kind === "materialize") {
-      materializationFailure = previous?.materializationFailure;
-    }
     const current = await requireDefinition(definition, boundAuthority);
-    if (
-      materializationFailure &&
-      !materializationFailure.callerCancelled &&
-      sameBrowserDashboardDefinition(materializationFailure.definition, current)
-    ) {
-      throw materializationFailure.error;
-    }
-    materializationFailure = undefined;
-    try {
-      return await execute(current, boundAuthority);
-    } catch (error) {
-      if (kind === "materialize") {
-        let callerCancelled = false;
-        try {
-          assertAuthority(boundAuthority);
-        } catch {
-          callerCancelled = true;
-        }
-        materializationFailure = { error, definition: current, callerCancelled };
-      }
-      throw error;
-    }
+    return await execute(current, boundAuthority);
   })();
-  const pending = {
-    promise,
-    get materializationFailure() {
-      return materializationFailure;
-    },
-  };
+  const pending = { promise };
   // Publish each admitted successor before awaiting it, so Stop follows the full queue.
   operations.set(key, pending);
   try {
@@ -497,15 +466,11 @@ export async function requestBrowserDashboard(
   request: BrowserDashboardRequest & { resume?: boolean },
   authority: BrowserDashboardAuthority = {},
 ): Promise<BrowserDashboardResponse> {
-  return await serializeDashboardOperation(
-    request,
-    "materialize",
-    authority,
-    (definition, current) =>
-      withBrowserRequestScope(
-        { managedOnly: true, assertCurrent: () => assertDefinitionCurrent(definition, current) },
-        async () => await materialize(definition, request.resume === true, current),
-      ),
+  return await serializeDashboardOperation(request, authority, (definition, current) =>
+    withBrowserRequestScope(
+      { managedOnly: true, assertCurrent: () => assertDefinitionCurrent(definition, current) },
+      async () => await materialize(definition, request.resume === true, current),
+    ),
   );
 }
 
@@ -529,7 +494,7 @@ export async function stopBrowserDashboard(
   request: BrowserDashboardRequest,
   authority: BrowserDashboardAuthority = {},
 ): Promise<BrowserDashboardResponse> {
-  return await serializeDashboardOperation(request, "stop", authority, stopMaterializedDashboard);
+  return await serializeDashboardOperation(request, authority, stopMaterializedDashboard);
 }
 
 async function stopMaterializedDashboard(

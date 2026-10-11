@@ -23,6 +23,7 @@ import {
   validateStreamScheduleMetadata,
 } from "./schedule-options.js";
 import {
+  assertCronCliJobSpec,
   getCronChannelOptions,
   handleCronCliError,
   parseCronIntegerOption,
@@ -100,7 +101,7 @@ export function registerCronEditCommand(cron: Command) {
       .option("--failure-alert-to <dest>", "Failure alert destination")
       .option("--failure-alert-cooldown <duration>", "Minimum time between alerts (e.g. 1h, 30m)")
       .option("--failure-alert-include-skipped", "Count consecutive skipped runs toward alerts")
-      .option("--failure-alert-exclude-skipped", "Alert only on execution errors")
+      .option("--failure-alert-exclude-skipped", "Exclude skips except local-provider outages")
       .option("--failure-alert-mode <mode>", "Failure alert delivery mode (announce or webhook)")
       .option(
         "--failure-alert-account-id <id>",
@@ -132,26 +133,17 @@ export function registerCronEditCommand(cron: Command) {
           if (typeof opts.session === "string" && !sessionTarget) {
             throw new CronCliError("--session must be main, isolated, current, or session:<id>");
           }
-          if (sessionTarget === "main" && (opts.message || opts.command || opts.commandArgv)) {
-            throw new CronCliError(
-              "Main jobs cannot use --message or --command; use --system-event or --session isolated.",
-            );
-          }
-          if (
-            (sessionTarget === "current" || sessionTarget?.startsWith("session:")) &&
-            typeof opts.script === "string"
-          ) {
-            throw new CronCliError("Script jobs require --session main or --session isolated.");
-          }
-          if (
-            (sessionTarget === "isolated" ||
-              sessionTarget === "current" ||
-              sessionTarget?.startsWith("session:")) &&
-            opts.systemEvent
-          ) {
-            throw new CronCliError(
-              "Isolated jobs cannot use --system-event; use --message, --command, or --session main.",
-            );
+          const payloadKind = opts.systemEvent
+            ? "systemEvent"
+            : typeof opts.script === "string"
+              ? "script"
+              : opts.command || opts.commandArgv
+                ? "command"
+                : opts.message
+                  ? "agentTurn"
+                  : undefined;
+          if (sessionTarget && payloadKind) {
+            await assertCronCliJobSpec({ sessionTarget, payload: { kind: payloadKind } });
           }
           const hasExplicitChatDelivery =
             parseCronThreadIdOption(opts.threadId) !== undefined ||

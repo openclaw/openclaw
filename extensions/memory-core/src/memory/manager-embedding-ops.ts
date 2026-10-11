@@ -29,7 +29,6 @@ import { readSessionResetRecallCutoffMetadata } from "../session-reset-recall-me
 import type { EmbeddingProvider } from "./embeddings.js";
 import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import { prepareMemoryIndexInWorker } from "./manager-cpu-worker-runtime.js";
-import { readMemoryDatabaseRevision } from "./manager-db-kernel.js";
 import {
   MemoryManagerEmbeddingCacheOps,
   type MemoryEmbeddingCacheCandidate,
@@ -150,7 +149,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     const database = this.database;
     const generation = {
       database,
-      databaseRevision: readMemoryDatabaseRevision(database.db),
+      databaseRevision: database.facts.revision,
       cacheWritesInvalidated: false,
       providerKey,
       identities,
@@ -494,14 +493,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     if (this.batch.enabled) {
       return this.batch.concurrency;
     }
-    const configured = this.settings.remote?.nonBatchConcurrency;
-    if (typeof configured === "number" && Number.isFinite(configured)) {
-      return Math.max(1, Math.floor(configured));
-    }
     const provider = this.syncProviderGeneration
       ? this.syncProviderGeneration.provider
       : this.provider;
-    return provider?.id === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
+    return provider?.id === "local" || provider?.id === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
   }
 
   private async writeChunks(

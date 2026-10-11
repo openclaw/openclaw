@@ -27,14 +27,21 @@ it("keeps an inspected native image outside Doctor's disposable database snapsho
       const plugin = state.path("native-plugin");
       fs.mkdirSync(plugin);
       const require = createRequire(import.meta.url);
-      const koffi = createRequire(require.resolve("koffi"));
-      const nativePackage = path.dirname(
-        koffi.resolve(`@koromix/koffi-${process.platform}-${process.arch}`),
-      );
-      fs.copyFileSync(
-        path.join(nativePackage, `${process.platform}_${process.arch}`, "koffi.node"),
-        path.join(plugin, "koffi.node"),
-      );
+      const nativeRequire = createRequire(require.resolve("@openclaw/fs-safe/package.json"));
+      const manifest = nativeRequire("./package.json") as {
+        optionalDependencies: Record<string, string>;
+      };
+      const nativeImages = Object.keys(manifest.optionalDependencies)
+        .filter((name) => name.startsWith(`@openclaw/fs-safe-${process.platform}-${process.arch}`))
+        .flatMap((name) => {
+          try {
+            return [nativeRequire.resolve(name)];
+          } catch {
+            return [];
+          }
+        });
+      expect(nativeImages).toHaveLength(1);
+      fs.copyFileSync(nativeImages[0]!, path.join(plugin, "fixture.node"));
       fs.writeFileSync(path.join(plugin, "companion.txt"), "retained native companion");
       fs.writeFileSync(
         path.join(plugin, "package.json"),
@@ -57,8 +64,8 @@ it("keeps an inspected native image outside Doctor's disposable database snapsho
         `
 const fs = require("node:fs");
 const path = require("node:path");
-const image = fs.realpathSync(require.resolve("./koffi.node"));
-const addon = require("./koffi.node");
+const image = fs.realpathSync(require.resolve("./fixture.node"));
+const addon = require("./fixture.node");
 globalThis[Symbol.for("doctor-native-capture-proof")] = {
   addon, image, privateStateDir: process.env.OPENCLAW_STATE_DIR,
   companion: path.join(path.dirname(image), "companion.txt"),

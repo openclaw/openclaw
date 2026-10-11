@@ -4,7 +4,6 @@
  * shared across module reloads and runtime seams.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { REUSED_CONTEXT_WINDOW_CACHE_STATE } from "./context-cache.js";
 
 const CONTEXT_WINDOW_RUNTIME_STATE_KEY = Symbol.for("openclaw.contextWindowRuntimeState");
 
@@ -30,12 +29,6 @@ export const CONTEXT_WINDOW_RUNTIME_STATE = (globalState[CONTEXT_WINDOW_RUNTIME_
   configLoadFailures: 0,
   nextConfigLoadAttemptAtMs: 0,
 });
-if (!REUSED_CONTEXT_WINDOW_CACHE_STATE) {
-  // Released modules kept cache maps outside this singleton. Force one fresh load
-  // instead of pairing their completed marker with newly introduced empty maps.
-  CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = null;
-  CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration = null;
-}
 
 /** Invalidate prepared context metadata while a replacement load is staged. */
 export function beginContextWindowCacheRefresh(): void {

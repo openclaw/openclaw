@@ -41,6 +41,7 @@ import {
   isFailedWorkerPlacementEnvironmentGone,
   matchesWorkerPlacementTarget,
 } from "./placement-target.js";
+import { clearLocalTurnClaimsInDatabase } from "./placement-turn-claims.js";
 import { assertSessionWorkspaceUnreserved } from "./placement-workspace-reservation.kernel.js";
 import { hasWorkerWorkspacePendingResult } from "./placement-workspace-result.js";
 import { consumePreparedEnvironment } from "./prepared-environment-store.js";
@@ -203,6 +204,13 @@ function startWorkerPlacementDispatch(
 }
 
 export const placementLifecycleOperations = {
+  "workerPlacements.clearLocalTurnClaims": (
+    input: { nowMs?: number },
+    { write }: WorkerWriteOperationContext,
+  ) =>
+    write(({ db, path }) => clearLocalTurnClaimsInDatabase(db, path, input.nowMs ?? Date.now()), {
+      operationLabel: "workerPlacements.clearLocalTurnClaims",
+    }),
   "workerPlacements.startDispatch": operation(
     "workerPlacements.startDispatch",
     (
