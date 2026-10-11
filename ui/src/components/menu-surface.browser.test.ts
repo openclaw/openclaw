@@ -319,7 +319,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
     const { page } = await import("vitest/browser");
     await page.elementLocator(element).hover();
     await Promise.all(element.getAnimations().map((animation) => animation.finished));
-    await expect.poll(() => getComputedStyle(element).backgroundColor).toBe(expected);
+    expect(getComputedStyle(element).backgroundColor).toBe(expected);
   }
 
   it.each(["dark", "light"] as const)(

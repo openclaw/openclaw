@@ -643,8 +643,14 @@ export class CronPageController {
       onOpenCreate: (patch) => this.openCreate(patch),
       onClosePanel: () => this.closePanel(),
       onClone: (job) => this.cloneJob(job),
-      onToggle: (job, enabled) =>
-        this.runCronAdminTask((cronState) => toggleCronJob(cronState, job, enabled)),
+      onToggle: (job, enabled) => {
+        const scope = this.gateway.capture();
+        const editorGeneration = this.deliveryDirectory.generation;
+        this.runCronAdminTask(async (cronState) => {
+          await toggleCronJob(cronState, job, enabled);
+          this.deliveryDirectory.reconcileRoute(cronState, scope, editorGeneration);
+        });
+      },
       onRun: (job, mode) =>
         this.runCronAdminTask((cronState) => runCronJob(cronState, job.id, mode ?? "force")),
       onRemove: (job) => void this.removeJob(job),

@@ -12,21 +12,15 @@ function ollamaAssistant(text: string, extra?: AssistantMessage["content"]): Ass
   });
 }
 
-function commentarySignature(id: string, text: string): AssistantMessage["content"][number] {
-  return {
-    type: "text",
-    text,
-    textSignature: JSON.stringify({ v: 1, id, phase: "commentary" }),
-  };
-}
-
 describe("native Ollama pre-tool narration", () => {
-  it("withholds two narrated tool rounds and delivers the final answer exactly once", async () => {
+  it("streams two narrated tool rounds and the final answer exactly once", async () => {
     const { session, emit } = createStubSessionHarness();
     const onBlockReply = vi.fn();
+    const expected: string[] = [];
+    const texts = () => onBlockReply.mock.calls.map(([payload]) => payload.text);
     const subscription = subscribeEmbeddedAgentSession({
       session,
-      runId: "run-ollama-withhold",
+      runId: "run-ollama-stream",
       onBlockReply,
       blockReplyBreak: "text_end",
       blockReplyChunking: { minChars: 4, maxChars: 200 },
@@ -55,10 +49,10 @@ describe("native Ollama pre-tool narration", () => {
         assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: narration },
       });
       await subscription.waitForPendingEvents();
-      expect(onBlockReply).not.toHaveBeenCalled();
+      expected.push(narration);
+      expect(texts()).toEqual(expected);
 
-      // Native Ollama closes unsigned text before terminal tool classification.
-      // Await this boundary so a premature durable flush cannot hide in the queue.
+      // Native Ollama keeps the same unsigned text through the tool boundary.
       emit({
         type: "message_update",
         message: unsigned,
@@ -70,7 +64,7 @@ describe("native Ollama pre-tool narration", () => {
         },
       });
       await subscription.waitForPendingEvents();
-      expect(onBlockReply).not.toHaveBeenCalled();
+      expect(texts()).toEqual(expected);
 
       for (const event of [
         {
@@ -99,7 +93,7 @@ describe("native Ollama pre-tool narration", () => {
         message: {
           ...unsigned,
           stopReason: "toolUse",
-          content: [commentarySignature(`commentary-${index}`, narration), toolCall],
+          content: [...unsigned.content, toolCall],
         },
       });
       emit({
@@ -116,7 +110,7 @@ describe("native Ollama pre-tool narration", () => {
         isError: false,
       });
       await subscription.waitForPendingEvents();
-      expect(onBlockReply).not.toHaveBeenCalled();
+      expect(texts()).toEqual(expected);
     }
 
     const answer = "Both files are checked.";
@@ -138,11 +132,11 @@ describe("native Ollama pre-tool narration", () => {
       },
     });
     await subscription.waitForPendingEvents();
-    expect(onBlockReply).not.toHaveBeenCalled();
+    expected.push(answer);
+    expect(texts()).toEqual(expected);
     emit({ type: "message_end", message: finalMessage });
     await subscription.waitForPendingEvents();
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls[0]?.[0]).toMatchObject({ text: answer });
+    expect(texts()).toEqual(expected);
   });
 
   it.each(["stop", "length"] as const)(
@@ -184,7 +178,7 @@ describe("native Ollama pre-tool narration", () => {
         assistantMessageEvent: { type: "text_end", contentIndex: 1, content: answer },
       });
       await subscription.waitForPendingEvents();
-      expect(onBlockReply).not.toHaveBeenCalled();
+      expect(onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual([answer]);
       emit({ type: "message_end", message: finalMessage });
       await subscription.waitForPendingEvents();
       expect(onBlockReply).toHaveBeenCalledTimes(1);
