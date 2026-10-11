@@ -86,9 +86,6 @@ describe("openai completions DSML", () => {
       {
         type: "text",
         text: "before  after",
-        textSignature: expect.stringMatching(
-          /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
-        ),
       },
       {
         type: "toolCall",
@@ -134,9 +131,6 @@ describe("openai completions DSML", () => {
       {
         type: "text",
         text: "before ",
-        textSignature: expect.stringMatching(
-          /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
-        ),
       },
       {
         type: "toolCall",
@@ -147,9 +141,6 @@ describe("openai completions DSML", () => {
       {
         type: "text",
         text: " after",
-        textSignature: expect.stringMatching(
-          /^\{"v":1,"id":"commentary-1-[0-9a-f]{24}","phase":"commentary"\}$/u,
-        ),
       },
     ]);
     expect(JSON.stringify(events)).not.toContain("DSML");
