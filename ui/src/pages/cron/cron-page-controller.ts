@@ -21,7 +21,12 @@ import {
   updateCronJobsFilter,
   validateCronForm,
 } from "../../lib/cron/index.ts";
-import { loadCronRuns, loadMoreCronRuns, updateCronRunsFilter } from "../../lib/cron/runs.ts";
+import {
+  loadCronRuns,
+  loadCronRunsForJob,
+  loadMoreCronRuns,
+  updateCronRunsFilter,
+} from "../../lib/cron/runs.ts";
 import type { CronFormState, CronState } from "../../lib/cron/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
@@ -81,7 +86,6 @@ export class CronPageController {
   readonly runTranscript: CronRunTranscript;
   private pendingRouteData: ReturnType<typeof resolveCronRouteData> | null = null;
   private routeJobRequested = false;
-  highlightedRunId: string | null = null;
   private pendingRunScroll = false;
   private modelSuggestionsRequest: { state: CronState; agentId: string } | null = null;
   readonly deliveryDirectory = new DeliveryConversationsController({
@@ -289,7 +293,7 @@ export class CronPageController {
     this.detailTab = "settings";
     this.pendingRouteData = routeData.jobId || routeData.session ? routeData : null;
     this.routeJobRequested = false;
-    this.highlightedRunId = null;
+    this.cron.cronRunsRunId = null;
     this.pendingRunScroll = false;
     this.publish();
   }
@@ -302,7 +306,7 @@ export class CronPageController {
     if (panelKey !== this.lastPanelKey) {
       this.lastPanelKey = panelKey;
       this.runTranscript.close();
-      this.detailTab = editingJobId && this.highlightedRunId ? "history" : "settings";
+      this.detailTab = editingJobId && this.cron.cronRunsRunId ? "history" : "settings";
       const scroller = this.host.closest(".content");
       if (scroller instanceof HTMLElement && typeof scroller.scrollTo === "function") {
         scroller.scrollTo({ top: 0 });
@@ -449,28 +453,20 @@ export class CronPageController {
   selectJob(job: CronJob, runId: string | null = null) {
     this.clearHeartbeatScratch();
     this.pendingRouteData = null;
-    this.highlightedRunId = runId;
     this.pendingRunScroll = Boolean(runId);
     if (runId) {
       this.detailTab = "history";
     }
     this.cron.cronCreateOpen = false;
     startCronEdit(this.cron, job);
+    void this.runCronTask(async (cronState) => {
+      // Claim the run pane before awaiting to retire the previous job's history.
+      await loadCronRunsForJob(cronState, job.id, runId);
+    });
     this.deliveryDirectory.openEditor();
-    this.publishCronState();
     if (job.payload?.kind === "heartbeat") {
       void this.loadHeartbeatScratch(this.cron, job.id, this.heartbeatScratchRequest);
     }
-    void this.runCronTask(async (cronState) => {
-      // Claim the run pane before awaiting to retire the previous job's history.
-      await this.refreshRunsScope(cronState, job.id);
-    });
-  }
-
-  private refreshRunsScope(cronState: CronState, jobId: string | null) {
-    updateCronRunsFilter(cronState, { cronRunsScope: jobId === null ? "all" : "job" });
-    cronState.cronRunsJobId = jobId;
-    return loadCronRuns(cronState);
   }
 
   private clearHeartbeatScratch() {
@@ -593,7 +589,7 @@ export class CronPageController {
       }
       // The overview must resume all-job history after removing its selected task.
       if (current.cronRunsScope === "job" && current.cronRunsJobId === null) {
-        await this.refreshRunsScope(current, null);
+        await loadCronRunsForJob(current, null);
       }
     });
   }
@@ -602,7 +598,7 @@ export class CronPageController {
     this.resetEditor(false);
     this.publishCronState();
     void this.runCronTask(async (cronState) => {
-      await this.refreshRunsScope(cronState, null);
+      await loadCronRunsForJob(cronState, null);
     });
   }
 
@@ -631,7 +627,7 @@ export class CronPageController {
       cronState.cronCreateOpen = false;
       // Creating returns to the overview's all-job history.
       if (cronState.cronRunsScope === "job") {
-        await this.refreshRunsScope(cronState, null);
+        await loadCronRunsForJob(cronState, null);
       }
     });
   }
