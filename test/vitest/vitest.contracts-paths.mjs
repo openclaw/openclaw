@@ -1,7 +1,6 @@
 // Loader-free contract ownership shared by Vitest configs and changed-test routing.
 export const channelSurfaceContractPatterns = [
   "src/channels/plugins/contracts/channel-catalog.contract.test.ts",
-  "src/channels/plugins/contracts/channel-import-guardrails.test.ts",
   "src/channels/plugins/contracts/mattermost-read-authority.contract.test.ts",
   "src/channels/plugins/contracts/message-tool-artifact.contract.test.ts",
   "src/channels/plugins/contracts/outbound-payload.contract.test.ts",

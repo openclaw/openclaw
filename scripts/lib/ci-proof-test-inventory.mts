@@ -1632,7 +1632,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/channels/plugins/acp-stateful-target-driver.test.ts",
   "src/channels/plugins/bundled.shape-guard.test.ts",
   "src/channels/plugins/configured-state.test.ts",
-  "src/channels/plugins/contracts/channel-import-guardrails.test.ts",
   "src/channels/plugins/contracts/mattermost-read-authority.contract.test.ts",
   "src/channels/plugins/contracts/plugin-shape.contract.test.ts",
   "src/channels/plugins/contracts/session-binding.registry-backed.contract.test.ts",
