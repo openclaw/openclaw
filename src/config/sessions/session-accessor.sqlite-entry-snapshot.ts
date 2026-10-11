@@ -6,10 +6,7 @@ import {
   readSessionEntryRowScan,
   type ResolvedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
-import type {
-  SessionEntryWindowFacts,
-  SessionEntryWindowRow,
-} from "./session-accessor.sqlite-provenance.js";
+import type { SessionEntryWindowFacts } from "./session-accessor.sqlite-provenance.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 /** Exact reads already own nested values; retain them through identity publication. */
@@ -48,11 +45,8 @@ export function captureSessionEntrySnapshot(
   selected: ResolvedSessionEntryRow,
 ): SqliteLifecycleTargetSnapshot[number] {
   let window: SessionEntryWindowFacts | undefined;
-  if (selected.row.window_json !== undefined) {
-    const row = selected.row.window_json
-      ? (JSON.parse(selected.row.window_json) as SessionEntryWindowRow) // SAFETY: The window-column SQL projection or actor.window produces this JSON.
-      : null;
-    window = { sessionId: selected.row.current_session_id, row };
+  if (selected.row.window !== undefined) {
+    window = { sessionId: selected.row.current_session_id, row: selected.row.window };
   }
   return {
     entry: selected.entry,

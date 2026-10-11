@@ -23,7 +23,10 @@ import {
   projectSqliteSessionParticipants,
   projectSqliteSessionParticipantsBatch,
 } from "./session-accessor.sqlite-participant-projection.js";
-import { sessionEntryWindowFactsExpression } from "./session-accessor.sqlite-provenance.js";
+import {
+  selectSessionEntryWindowFacts,
+  takeSessionEntryWindowFacts,
+} from "./session-accessor.sqlite-provenance.js";
 import { parseSessionEntryJson as parseSessionEntryRow } from "./session-accessor.sqlite-status.js";
 import type { SessionEntryReadScope } from "./session-accessor.types.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
@@ -349,7 +352,7 @@ export function readExactSessionEntryRow(
           ...structuredClone(selected.row),
           ...(includeWindowFacts
             ? {
-                window_json: actor.window ? JSON.stringify(actor.window) : null,
+                window: actor.window ? structuredClone(actor.window) : null,
                 member_ids_json: JSON.stringify(
                   actor.hot.members.map((member) => member.identityId),
                 ),
@@ -420,7 +423,13 @@ function readSelectedSessionEntryRows(
           )
       : selectReadableSessionEntryRows(database, projection);
   const windowQuery = options?.includeWindowFacts
-    ? baseQuery.select(sessionEntryWindowFactsExpression())
+    ? baseQuery
+        .leftJoin(
+          selectSessionEntryWindowFacts(database),
+          "entry_window.window_session_id",
+          "session_nodes.current_session_id",
+        )
+        .selectAll("entry_window")
     : baseQuery;
   const eb = expressionBuilder<OpenClawAgentKyselyDatabase, "session_nodes">();
   // Old stores have no board tables until first use; branch before compiling SQL.
@@ -449,13 +458,19 @@ function readSelectedSessionEntryRows(
           .as("member_ids_json"),
       )
     : boardQuery;
-  return executeSqliteQuerySync(
+  const rows = executeSqliteQuerySync(
     database.db,
     (typeof selection === "string"
       ? query.where("session_nodes.session_key", "=", selection)
       : query.where("session_nodes.session_key", "in", sqliteStringSet(selection))
     ).orderBy("session_nodes.session_key", "asc"),
   ).rows;
+  return options?.includeWindowFacts
+    ? rows.map((row) => {
+        const window = takeSessionEntryWindowFacts(row);
+        return { ...row, window };
+      })
+    : rows;
 }
 
 /** Capture exact rows once; failed cohort acquisition retains single-key error isolation. */

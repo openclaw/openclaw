@@ -1,5 +1,4 @@
-import { expressionBuilder, type Selectable } from "kysely";
-import { jsonObjectFrom } from "kysely/helpers/sqlite";
+import type { Selectable } from "kysely";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -36,22 +35,47 @@ const sessionEntryWindowColumns = [
   "transcript_updated_at",
 ] as const;
 
-export function sessionEntryWindowFactsExpression() {
-  const eb = expressionBuilder<OpenClawAgentKyselyDatabase, "session_nodes">();
-  return jsonObjectFrom(
-    eb
-      .selectFrom("session_windows")
-      .select(sessionEntryWindowColumns)
-      .whereRef("session_windows.session_id", "=", "session_nodes.current_session_id"),
-  )
-    .$castTo<string | null>()
-    .as("window_json");
-}
-
 export type SessionEntryWindowRow = Pick<
   Selectable<OpenClawAgentKyselyDatabase["session_windows"]>,
   (typeof sessionEntryWindowColumns)[number]
 >;
+
+type SessionEntryWindowFactSelection = {
+  [Column in keyof SessionEntryWindowRow]: `session_windows.${Column} as window_${Column}`;
+}[keyof SessionEntryWindowRow];
+
+const sessionEntryWindowFactSelections = sessionEntryWindowColumns.map(
+  // SAFETY: The column and its prefixed alias are generated together from the typed schema keys.
+  (column) => `session_windows.${column} as window_${column}` as SessionEntryWindowFactSelection,
+);
+
+export function selectSessionEntryWindowFacts(database: Pick<OpenClawAgentDatabase, "db">) {
+  return getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
+    .selectFrom("session_windows")
+    .select(sessionEntryWindowFactSelections)
+    .as("entry_window");
+}
+
+type JoinedSessionEntryWindow = {
+  [Column in keyof SessionEntryWindowRow as `window_${Column}`]?:
+    | SessionEntryWindowRow[Column]
+    | null;
+};
+
+/** Detach the scalar LEFT JOIN projection from the canonical node columns. */
+export function takeSessionEntryWindowFacts(
+  row: JoinedSessionEntryWindow & { session_key: string },
+): SessionEntryWindowRow | null {
+  const present = row.window_session_id !== null;
+  const entries = sessionEntryWindowColumns.map((column) => {
+    const alias = `window_${column}` as const;
+    const value = row[alias];
+    delete row[alias];
+    return [column, value];
+  });
+  // SAFETY: The join selects every typed window column; Object.fromEntries erases those known keys.
+  return present ? (Object.fromEntries(entries) as SessionEntryWindowRow) : null;
+}
 
 export type SessionEntryWindowFacts = {
   sessionId: string;
