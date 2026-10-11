@@ -720,49 +720,6 @@ describe("server-channels auto restart", () => {
     }
   });
 
-  it("retains the admitted teardown owner for a failed stop retry after account removal", async () => {
-    const originalConfig: OpenClawConfig = {
-      channels: { discord: { accounts: { alpha: { enabled: true } } } },
-    };
-    let config = originalConfig;
-    let stopFails = true;
-    const stopAccount = vi.fn(async (_context: ChannelGatewayContext<TestAccount>) => {
-      if (stopFails) {
-        throw new Error("first stop failed");
-      }
-    });
-    installTestRegistry(
-      createTestPlugin({
-        listAccountIds: (cfg) => Object.keys(cfg.channels?.discord?.accounts ?? {}),
-        resolveAccount: (cfg, id) => {
-          const account = cfg.channels?.discord?.accounts?.[id ?? DEFAULT_ACCOUNT_ID];
-          if (!account) {
-            throw new Error(`Account ${id} no longer exists`);
-          }
-          return account;
-        },
-        startAccount: async ({ abortSignal }) => await waitForAbort(abortSignal),
-        stopAccount,
-      }),
-    );
-    const manager = createManager({ getRuntimeConfig: () => config });
-    await manager.startChannels();
-    await flushMicrotasks();
-    await expect(manager.stopChannel("discord", "alpha", { manual: false })).rejects.toThrow(
-      "first stop failed",
-    );
-    config = { channels: { discord: { accounts: {} } } };
-    stopFails = false;
-    await expect(
-      manager.stopChannel("discord", "alpha", { manual: false }),
-    ).resolves.toBeUndefined();
-    expect(stopAccount).toHaveBeenCalledTimes(2);
-    expect(stopAccount.mock.calls[1]?.[0].cfg).toBe(originalConfig);
-    expect(stopAccount.mock.calls[1]?.[0].account).toBe(
-      originalConfig.channels?.discord?.accounts?.alpha,
-    );
-  });
-
   it.each(["hook-timeout", "task-timeout"] as const)(
     "releases retired channel slots for explicit replacement after %s",
     async (failure) => {
@@ -978,32 +935,50 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalledTimes(2);
   });
 
-  it("reports unfinished work to a strict caller joining a non-strict stop", async () => {
-    const releaseTask = createDeferred();
-    const stopAccount = vi.fn(async () => {});
-    installTestRegistry(
-      createTestPlugin({ startAccount: async () => releaseTask.promise, stopAccount }),
-    );
-    const manager = createManager();
-    await manager.startChannels();
-    await flushMicrotasks();
-    const firstStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
-    const strictStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
-      manual: false,
-      strict: true,
-    });
-    const rejected = expect(strictStop).rejects.toThrow("still owns running work");
-    try {
-      await vi.advanceTimersByTimeAsync(5_000);
-      await firstStop;
-      await rejected;
-      expect(stopAccount).toHaveBeenCalledOnce();
-    } finally {
-      releaseTask.resolve();
+  it.each(["task", "preparation"] as const)(
+    "reports unfinished %s to a strict caller joining a non-strict stop",
+    async (pending) => {
+      const preparing = createDeferred();
+      const releasePreparation = createDeferred();
+      const releaseTask = createDeferred();
+      const stopAccount = vi.fn(async () => {});
+      installTestRegistry(
+        createTestPlugin({
+          startAccount: async () => releaseTask.promise,
+          stopAccount,
+          isConfigured: async () => {
+            if (pending === "preparation") {
+              preparing.resolve();
+              await releasePreparation.promise;
+            }
+            return true;
+          },
+        }),
+      );
+      const manager = createManager();
+      const starting = manager.startChannels();
+      await (pending === "preparation" ? preparing.promise : starting);
       await flushMicrotasks();
-      await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
-    }
-  });
+      const firstStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
+      const strictStop = manager
+        .stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false, strict: true })
+        .catch((error: unknown) => error);
+      try {
+        await vi.advanceTimersByTimeAsync(5_000);
+        await firstStop;
+        expect(await strictStop).toEqual(
+          expect.objectContaining({ message: expect.stringContaining("still owns running work") }),
+        );
+        expect(stopAccount).toHaveBeenCalledOnce();
+      } finally {
+        releasePreparation.resolve();
+        releaseTask.resolve();
+        await starting;
+        await flushMicrotasks();
+        await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+      }
+    },
+  );
 
   it("keeps a timed-out stop hook failure authoritative after late task settlement", async () => {
     const releaseTask = createDeferred();

@@ -146,6 +146,9 @@ Gateway restart.
 By default, changing `agents.defaults.mediaMaxMb` restarts channel runtimes so their inherited
 attachment limits take effect together. Automatic reloads preserve manually
 stopped accounts; use an explicit channel start to resume those accounts.
+For channels that support account-scoped reloads, removing a named account stops
+only that account and clears its runtime state. Sibling accounts stay connected,
+and unrelated Gateway requests do not delay the removal. Changes to shared settings or `accounts.default` still reload the whole channel.
 
 Model runtime selection keeps your authored settings separate from catalog defaults.
 Hot reload and secrets reload preserve that distinction: catalog compatibility

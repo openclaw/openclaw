@@ -49,6 +49,7 @@ import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 import * as modelRuntimeReload from "./server-reload-model-runtime-scope.js";
 import {
   registerGatewaySecretCredentialReloadCases,
+  registerSecretAccountIdentityReloadCases,
   type CredentialReloadHarnessOptions,
 } from "./server-secrets-reload.test-support.js";
 import {
@@ -417,26 +418,11 @@ describe("gateway aux handlers", () => {
     expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
   });
 
-  it("restarts only the changed account when a secret change is account-scoped", async () => {
-    const buildReloadPlan = () =>
-      createReloadPlan({
-        restartChannelAccounts: new Map([["slack", new Set(["ops"])]]),
-      });
-    activateSnapshot(slackConfig("old-slack-secret"));
-    const prepareRuntimeSecretsSnapshot = mockResolvedSecrets(slackConfig("new-slack-secret"));
-    const { reload, respond, startChannel, stopChannel } =
-      createSecretsReloadHarnessWithChannelMocks({
-        prepareRuntimeSecretsSnapshot,
-        buildReloadPlan,
-      });
-
-    await reload();
-
-    expect(stopChannel.mock.calls).toEqual([["slack", "ops", { manual: false }]]);
-    expect(startChannel.mock.calls).toEqual([
-      ["slack", "ops", { reason: "secrets-reload", preserveManualStop: true }],
-    ]);
-    expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
+  registerSecretAccountIdentityReloadCases((before, after) => {
+    activateSnapshot(before);
+    return createSecretsReloadHarnessWithChannelMocks({
+      prepareRuntimeSecretsSnapshot: mockResolvedSecrets(after),
+    });
   });
 
   registerGatewaySecretCredentialReloadCases(createCredentialReloadHarness);

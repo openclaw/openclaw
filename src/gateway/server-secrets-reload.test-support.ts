@@ -1,10 +1,19 @@
 // Additional credential-owner lifecycle cases registered in the existing auxiliary-handler suite.
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { normalizeAccountId } from "../routing/account-id.js";
 import {
   listActiveDegradedSecretOwners,
   SecretSurfaceUnavailableError,
   type DegradedSecretOwner,
 } from "../secrets/runtime-degraded-state.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 
 export type CredentialReloadHarnessOptions = {
   ownerAccountId?: string;
@@ -12,6 +21,56 @@ export type CredentialReloadHarnessOptions = {
   manualStop?: boolean;
   createFailure?: (owner: DegradedSecretOwner) => Error;
 };
+
+export function registerSecretAccountIdentityReloadCases(
+  createHarness: (
+    before: OpenClawConfig,
+    after: OpenClawConfig,
+  ) => {
+    reload: () => Promise<void>;
+    respond: ReturnType<typeof vi.fn>;
+    startChannel: ReturnType<typeof vi.fn>;
+    stopChannel: ReturnType<typeof vi.fn>;
+  },
+) {
+  it.each([true, false])(
+    "secrets.reload preserves the listed account identity (canonical=%s)",
+    async (canonical) => {
+      const previous = captureActivePluginRegistrySnapshot();
+      onTestFinished(() => restoreActivePluginRegistrySnapshot(previous));
+      const plugin: ChannelPlugin = {
+        ...createChannelTestPluginBase({ id: "mattermost" }),
+        reload: { configPrefixes: ["channels.mattermost"], accountScopedRestart: true },
+        config: {
+          listAccountIds: (cfg) => {
+            const ids = Object.keys(cfg.channels?.mattermost?.accounts ?? {});
+            return canonical ? ids.map(normalizeAccountId) : ids;
+          },
+          resolveAccount: () => ({}),
+        },
+      };
+      setActivePluginRegistry(
+        createTestRegistry([{ pluginId: "mattermost", plugin, source: "test" }]),
+      );
+      const config = (token: string): OpenClawConfig => ({
+        channels: {
+          mattermost: { accounts: { Root: { botToken: token }, Ada: { botToken: "unchanged" } } },
+        },
+      });
+      const { reload, respond, startChannel, stopChannel } = createHarness(
+        config("old-secret"),
+        config("new-secret"),
+      );
+      await reload();
+      const accountId = canonical ? "root" : "Root";
+      expect(stopChannel.mock.calls).toEqual([["mattermost", accountId, { manual: false }]]);
+      expect(startChannel.mock.calls).toEqual([
+        ["mattermost", accountId, { reason: "secrets-reload", preserveManualStop: true }],
+      ]);
+      expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
+    },
+  );
+}
 
 type CredentialReloadHarness = {
   owner: DegradedSecretOwner;

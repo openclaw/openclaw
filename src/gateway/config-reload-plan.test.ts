@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
 import type { OpenClawPluginDefinition } from "../plugins/plugin-definition.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { normalizeAccountId } from "../routing/account-id.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { diffGatewayReloadPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
@@ -58,6 +61,52 @@ describe("Gateway core reload policy", () => {
         );
       }
       expect(buildGatewayReloadPlan(["models.mode"]).restartServices).toEqual(new Set());
+    },
+  );
+
+  it.each([
+    { before: ["Root", "Ada"], after: ["Ada"], key: "Root", canonical: true, target: "root" },
+    { before: ["Root"], after: ["Root"], key: "Root", canonical: true, target: "root" },
+    { before: ["Root"], after: [], key: "Root", canonical: false, target: "Root" },
+    { before: ["Root"], after: ["root"], key: "Root", canonical: false, target: null },
+    { before: ["Root", "root"], after: ["root"], key: "Root", canonical: false, target: null },
+    { before: ["Default"], after: [], key: "Default", canonical: true, target: null },
+    { before: ["team.ops"], after: [], key: "team.ops", canonical: true, target: null },
+    {
+      before: ["team", "team.ops"],
+      after: ["team"],
+      key: "team.ops",
+      canonical: true,
+      target: null,
+    },
+  ])(
+    "uses the listed runtime identity for $key: $before -> $after (canonical=$canonical)",
+    ({ before, after, key, canonical, target }) => {
+      const config = (ids: string[]): OpenClawConfig => ({
+        channels: { mattermost: { accounts: Object.fromEntries(ids.map((id) => [id, {}])) } },
+      });
+      const plugin: ChannelPlugin = {
+        ...createChannelTestPluginBase({ id: "mattermost" }),
+        reload: { configPrefixes: ["channels.mattermost"], accountScopedRestart: true },
+        config: {
+          listAccountIds: (cfg) => {
+            const ids = Object.keys(cfg.channels?.mattermost?.accounts ?? {});
+            return canonical ? ids.map(normalizeAccountId) : ids;
+          },
+          resolveAccount: () => ({}),
+        },
+      };
+      setActivePluginRegistry(
+        createTestRegistry([{ pluginId: "mattermost", plugin, source: "test" }]),
+      );
+      const plan = buildGatewayReloadPlan([`channels.mattermost.accounts.${key}`], {
+        previousConfig: config(before),
+        candidateConfig: config(after),
+      });
+      expect(plan.restartChannels).toEqual(new Set(target === null ? ["mattermost"] : []));
+      expect(plan.restartChannelAccounts).toEqual(
+        target === null ? new Map() : new Map([["mattermost", new Set([target])]]),
+      );
     },
   );
 
