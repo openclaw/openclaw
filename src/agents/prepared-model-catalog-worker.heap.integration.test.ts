@@ -174,6 +174,7 @@ type NativeCatalogSample = {
   arrayBuffers: number;
   modelId: string;
   rejected?: boolean;
+  neighborRejected?: boolean;
   effects?: number;
 };
 
@@ -396,30 +397,57 @@ it.each(["native", "compiled"] as const)(
   60_000,
 );
 
-it("rejects a released generation using a retained module's replacement API", async () => {
+it("rejects neighboring and released generations using a retained replacement API", async () => {
   const fixture = await createNativeCatalogFixture({
-    setup: `const gate = Promise.withResolvers();
-let stale;
-let effects = 0;`,
+    setup: `const slot = globalThis[Symbol.for("openclaw.nativeRetentionAuthority")] ??= {
+  gate: Promise.withResolvers(), effects: 0
+};
+slot.call ??= () => {
+  latestApi.registerProvider({ id: "foreign-provider", label: "Foreign", auth: [] });
+  slot.effects++;
+};`,
     catalog: `if (revision === 0) {
-        stale = gate.promise.then(() => {
-          latestApi.registerProvider({ id: "stale-provider", label: "Stale", auth: [] });
-          effects++;
-        });
-      } else if (catalogs >= 3) {
-        gate.resolve();
+        slot.stale = slot.gate.promise.then(slot.call);
+      } else if (revision === 2) {
+        let neighborRejected = false;
+        try { slot.call(); } catch (error) {
+          if (!error.message.includes("calling workspace generation")) throw error;
+          neighborRejected = true;
+        }
+        slot.gate.resolve();
         let rejected = false;
-        try { await stale; } catch { rejected = true; }
-        extra = { rejected, effects };
+        try { await slot.stale; } catch (error) {
+          if (!error.message.includes("calling workspace generation")) throw error;
+          rejected = true;
+        }
+        extra = { rejected, neighborRejected, effects: slot.effects };
       }`,
   });
+  const neighbor = makeTempDir("openclaw-native-authority-neighbor-");
   try {
-    await fixture.run(0);
-    await fixture.run(1);
-    const afterRelease = await fixture.run(1);
-    expect(afterRelease.rejected).toBe(true);
-    expect(afterRelease.effects).toBe(0);
-    expect(afterRelease.evaluations).toBe(1);
+    const first = await fixture.run(0);
+    const replacement = await fixture.run(1);
+    const foreign = await fixture.run(2, neighbor);
+    const stillLive = await fixture.run(1);
+    expect(replacement.url).toBe(first.url);
+    expect(replacement.registrations).toBe(2);
+    expect(foreign.url).not.toBe(first.url);
+    expect(foreign.neighborRejected).toBe(true);
+    expect(foreign.rejected).toBe(true);
+    expect(foreign.effects).toBe(0);
+    expect(stillLive.url).toBe(first.url);
+    expect(stillLive.modelId).toBe("revision-1");
+    if (process.env.OPENCLAW_NATIVE_RETENTION_MEASURE === "1") {
+      console.log(
+        JSON.stringify({
+          case: "native-esm-registration-authority",
+          first,
+          replacement,
+          foreign,
+          stillLive,
+        }),
+      );
+    }
   } finally {
     await fixture.close();
   }
