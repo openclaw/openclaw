@@ -86,9 +86,7 @@ export function createSessionReconciliation(host: Host) {
       if (observation && !alreadyObserved) {
         host.mutations.observePendingFields(
           row,
-          row.rowMode === "compact"
-            ? pendingFields.filter((field) => Object.hasOwn(row, field))
-            : pendingFields,
+          row.rowMode ? pendingFields.filter((field) => Object.hasOwn(row, field)) : pendingFields,
           agentId,
         );
       }

@@ -90,12 +90,13 @@ export function createSessionRowProvenance() {
             ? offered
             : current;
     const older = newer === offered ? current : offered;
+    const olderValues: Record<string, unknown> = older;
     const next = { ...newer, key: current.key };
     // Compact rows and optional enrichment omit fields rather than clearing them.
     for (const field of [
       ...enrichmentFields,
       ...(newer.rowMode === "dashboard"
-        ? Object.keys(older).filter((field) => !SESSION_DASHBOARD_ROW_FIELDS.has(field))
+        ? Object.keys(older).filter((name) => !SESSION_DASHBOARD_ROW_FIELDS.has(name))
         : newer.rowMode === "compact"
           ? SESSION_ROW_DETAIL_FIELDS
           : []),
@@ -103,9 +104,9 @@ export function createSessionRowProvenance() {
       if (
         !Object.hasOwn(next, field) &&
         !observations.get(newer)?.cleared?.has(field) &&
-        older[field] !== undefined
+        olderValues[field] !== undefined
       ) {
-        Object.assign(next, { [field]: older[field] });
+        Object.assign(next, { [field]: olderValues[field] });
       }
     }
     if (next.swarm && older.swarm) {

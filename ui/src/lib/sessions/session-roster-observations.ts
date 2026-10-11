@@ -176,6 +176,7 @@ export function createSessionRosterObservations(
         entry.snapshot.sessionId !== null &&
         projected.row.sessionId !== entry.snapshot.sessionId &&
         matchesTarget(projected.row, entry.target) &&
+        entry.isValid(projected.row.sessionId ?? "") &&
         (projected.row.updatedAt ?? 0) >= (entry.snapshot.row?.updatedAt ?? 0);
       if (projected.retire || replacement) {
         entry.snapshot = { ...entry.snapshot, row: null, retired: true };

@@ -19,6 +19,42 @@ function result(sessions: GatewaySessionRow[]): SessionsListResult {
   };
 }
 
+it("keeps a valid descriptor when an invalid replacement is observed", () => {
+  const connection = createGatewayConnectionLifecycle({
+    phase: "connected",
+    client: createTestGatewayClient(async () => ({})),
+  });
+  const observations = createSessionRosterObservations(
+    {
+      connection,
+      observerError: () => null,
+      readState: () => ({ result: null, agentId: "main" }),
+      decorate: (value) => value,
+    },
+    new Map(),
+  );
+  const row: GatewaySessionRow = {
+    key: "agent:main:valid",
+    kind: "direct",
+    sessionId: "current",
+    updatedAt: 1,
+  };
+  const registered = observations.registerRow({ key: row.key, agentId: "main" }, () => {}, {
+    isValid: (sessionId) => sessionId === "current",
+    decorate: (value) => value,
+  });
+  observations.stageObservedRows([row], connection.capture(), "main", 1)();
+  observations.stageObservedRows(
+    [{ ...row, sessionId: "rejected", updatedAt: 2 }],
+    connection.capture(),
+    "main",
+    2,
+  )();
+  expect(registered.isCurrent()).toBe(true);
+  expect(registered.current()).toEqual(row);
+  connection.dispose();
+});
+
 it.each(["main", "global"])(
   "projects %s receipts from lists and descriptors without indexing unrelated identities",
   (key) => {

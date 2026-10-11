@@ -265,7 +265,7 @@ export function createSessionCapability(
       for (const row of admitted?.sessions ?? []) {
         mutations.observePendingFields(
           row,
-          row.rowMode === "compact"
+          row.rowMode
             ? optimisticSessionRowFields.filter((field) => Object.hasOwn(row, field))
             : optimisticSessionRowFields,
           agentId,

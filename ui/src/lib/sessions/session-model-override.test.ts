@@ -14,16 +14,24 @@ import {
 } from "./session-capability.test-support.ts";
 
 describe("session model override lifecycle", () => {
-  it.each([
-    { source: "primary", outcome: "success" },
-    { source: "primary", outcome: "rejection" },
-    { source: "supplemental", outcome: "success" },
-    { source: "supplemental", outcome: "rejection" },
-    { source: "descriptor", outcome: "success" },
-    { source: "descriptor", outcome: "rejection" },
-  ] as const)(
-    "preserves omitted compact settings through $source reads and patch $outcome",
-    async ({ source, outcome }) => {
+  it.each(
+    (
+      [
+        { source: "primary", outcome: "success" },
+        { source: "primary", outcome: "rejection" },
+        { source: "supplemental", outcome: "success" },
+        { source: "supplemental", outcome: "rejection" },
+        { source: "descriptor", outcome: "success" },
+        { source: "descriptor", outcome: "rejection" },
+      ] as const
+    ).flatMap((scenario) =>
+      (["compact", "dashboard"] as const).map((rowMode) =>
+        Object.assign({}, scenario, { rowMode }),
+      ),
+    ),
+  )(
+    "preserves omitted $rowMode settings through $source reads and patch $outcome",
+    async ({ source, outcome, rowMode }) => {
       const initial: GatewaySessionRow = {
         key: "agent:main:compact-settings",
         sessionId: "compact-settings",
@@ -65,7 +73,7 @@ describe("session model override lifecycle", () => {
           sessionId: initial.sessionId,
           kind: "direct",
           updatedAt: 2,
-          rowMode: "compact",
+          rowMode,
         };
         if (source === "primary") {
           await sessions.refresh({ agentId: "main", force: true });
