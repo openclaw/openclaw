@@ -13,6 +13,7 @@ const promptFiles = [
   "AGENTS.md",
   ".agents/skills/example/SKILL.md",
   ".codex/skills/local/SKILL.md",
+  "users/Profile_123/USER.md",
 ];
 let root: string;
 let repo: string;
@@ -72,15 +73,18 @@ beforeEach(async () => {
 afterEach(() => vi.unstubAllEnvs());
 
 it.each(["lf", "crlf"])(
-  "preserves %s prompt bytes and stat data across complete materialization",
+  "preserves %s project and personal prompt bytes and stat data across complete materialization",
   async (eol) => {
     await write(".gitattributes", `* text=auto eol=${eol}\n`);
     await requireGit(repo, ["config", "filter.unused.smudge", "unused-filter-must-not-run"]);
     await write(".agents/.gitattributes", "* text eol=lf\n");
+    await write("users/.gitattributes", "* text eol=crlf\n");
+    await write("users/Profile_123/.gitattributes", "USER.md text eol=lf\n");
     await requireGit(repo, ["add", "."]);
     await requireGit(repo, ["commit", "-qm", "prompt line endings"]);
     commit = await requireGit(repo, ["rev-parse", "HEAD"]);
     await write("AGENTS.md", "uncommitted instructions must not reach the model\n");
+    await write("users/Profile_123/USER.md", "uncommitted personal instructions\n");
     let early: Awaited<ReturnType<typeof snapshot>> | undefined;
     const result = await create(async (preparedCommit) => {
       expect(preparedCommit).toBe(commit);
@@ -92,7 +96,7 @@ it.each(["lf", "crlf"])(
       expect(early.map((file) => file.bytes.toString())).toEqual(
         promptFiles.map(
           (relative) =>
-            `committed ${relative}${eol === "crlf" && !relative.startsWith(".agents/") ? "\r\n" : "\n"}`,
+            `committed ${relative}${eol === "crlf" && !relative.startsWith(".agents/") && !relative.startsWith("users/") ? "\r\n" : "\n"}`,
         ),
       );
     });
@@ -105,6 +109,9 @@ it.each(["lf", "crlf"])(
     expect(await requireGit(destination, ["status", "--porcelain"])).toBe("");
     expect(await fs.readFile(path.join(repo, "AGENTS.md"), "utf8")).toBe(
       "uncommitted instructions must not reach the model\n",
+    );
+    expect(await fs.readFile(path.join(repo, "users/Profile_123/USER.md"), "utf8")).toBe(
+      "uncommitted personal instructions\n",
     );
   },
 );
@@ -126,19 +133,20 @@ it.each([".gitattributes", ".codex/config.toml"])(
   },
 );
 
-it.skipIf(process.platform === "win32")(
-  "retains ordinary checkout for linked prompt files",
-  async () => {
-    await fs.symlink("../AGENTS.md", path.join(repo, ".agents/linked.md"));
-    await requireGit(repo, ["add", ".agents/linked.md"]);
-    await requireGit(repo, ["commit", "-qm", "linked prompt input"]);
-    commit = await requireGit(repo, ["rev-parse", "HEAD"]);
-    const ready = vi.fn(async () => {});
-    expect((await create(ready)).code).toBe(0);
-    expect(ready).not.toHaveBeenCalled();
-    expect(await fs.readlink(path.join(destination, ".agents/linked.md"))).toBe("../AGENTS.md");
-  },
-);
+it.skipIf(process.platform === "win32").each([
+  { file: ".agents/linked.md", target: "../AGENTS.md" },
+  { file: "users/Profile_123/USER.md", target: "../../AGENTS.md" },
+])("retains ordinary checkout for linked prompt file $file", async ({ file, target }) => {
+  await fs.rm(path.join(repo, file), { force: true });
+  await fs.symlink(target, path.join(repo, file));
+  await requireGit(repo, ["add", file]);
+  await requireGit(repo, ["commit", "-qm", "linked prompt input"]);
+  commit = await requireGit(repo, ["rev-parse", "HEAD"]);
+  const ready = vi.fn(async () => {});
+  expect((await create(ready)).code).toBe(0);
+  expect(ready).not.toHaveBeenCalled();
+  expect(await fs.readlink(path.join(destination, file))).toBe(target);
+});
 
 it("removes its partial checkout when the prompt consumer rejects preparation", async () => {
   await expect(

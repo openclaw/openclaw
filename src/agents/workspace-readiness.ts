@@ -10,11 +10,11 @@ export type AgentWorkspaceReadiness = Readonly<{
 
 const workspaceReadiness = resolveGlobalSingleton(
   Symbol.for("openclaw.agentWorkspaceReadiness"),
-  () => new AsyncLocalStorage<AgentWorkspaceReadiness>(),
+  () => new AsyncLocalStorage<AgentWorkspaceReadiness | undefined>(),
 );
 
 export function runWithAgentWorkspaceReadiness<T>(
-  readiness: AgentWorkspaceReadiness,
+  readiness: AgentWorkspaceReadiness | undefined,
   run: () => Promise<T>,
 ): Promise<T> {
   return workspaceReadiness.run(readiness, run);

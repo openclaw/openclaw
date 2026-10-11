@@ -19,6 +19,7 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
+import { toErrorObject } from "../../infra/errors.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { materializeProjectClone, refreshProjectClone } from "../../projects/project-clone.js";
 import { parseConfiguredProjectGitUrl } from "../../projects/project-git-url.runtime.js";
@@ -310,9 +311,10 @@ export function prepareSessionWorkspace(params: {
       // One failed preparation cancels the admitted turn. Concurrent tool calls
       // observe that same failure rather than each starting a new preparation.
       if (!signal.aborted) {
-        preparationFailure = new Error(
-          `Workspace preparation failed: ${error instanceof Error ? error.message : String(error)} Retry this session after checking its repository.`,
-          { cause: error },
+        // Preserve typed causes and actionable text in the bounded error displays.
+        preparationFailure = toErrorObject(
+          error,
+          "Workspace preparation failed; check the repository and retry.",
         );
         controller.abort(preparationFailure);
       }

@@ -168,7 +168,15 @@ async function promptPaths(options: CheckoutSource): Promise<string[] | undefine
     ) {
       return undefined;
     }
-    if (!name.includes("/") || /^(?:\.agents|\.codex|skills)\//u.test(normalized)) {
+    // Personal bootstrap reads users/<canonical profile>/USER.md; include its attribute ancestry.
+    const personalBootstrap =
+      normalized === "users/.gitattributes" ||
+      /^users\/[a-z0-9][a-z0-9_-]{0,127}\/(?:user\.md|\.gitattributes)$/u.test(normalized);
+    if (
+      !name.includes("/") ||
+      /^(?:\.agents|\.codex|skills)\//u.test(normalized) ||
+      personalBootstrap
+    ) {
       if (!/^100(?:644|755)$/u.test(entry.mode)) {
         return undefined;
       }
