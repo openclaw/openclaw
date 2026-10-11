@@ -53,16 +53,22 @@ describe("session list resolver cache", () => {
       );
       let insideRow = false;
       let rowReads = 0;
+      const observedEntries: typeof entries = {};
+      // Getters preserve property-read accounting while keeping config snapshots cloneable.
+      for (const id of Object.keys(entries)) {
+        Object.defineProperty(observedEntries, id, {
+          enumerable: true,
+          get() {
+            if (insideRow) {
+              rowReads++;
+            }
+            return entries[id];
+          },
+        });
+      }
       const cfg: OpenClawConfig = {
         agents: {
-          entries: new Proxy(entries, {
-            get(target, key, receiver) {
-              if (insideRow && typeof key === "string" && Object.hasOwn(target, key)) {
-                rowReads++;
-              }
-              return Reflect.get(target, key, receiver);
-            },
-          }),
+          entries: observedEntries,
           defaults: { model: { primary: "example/roster-model" }, thinkingDefault: "off" },
         },
       };

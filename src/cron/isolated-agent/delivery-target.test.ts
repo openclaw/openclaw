@@ -40,6 +40,7 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveSessionStorePathCore: vi.fn().mockReturnValue("/tmp/test-store.json"),
 }));
 
+// mock-isolation: exercise delivery routing with controlled session entries, without worker I/O.
 vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
   readSessionEntriesFromStoreInWorker: async ({
     agentId,
