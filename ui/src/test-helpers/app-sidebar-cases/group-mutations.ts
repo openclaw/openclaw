@@ -95,7 +95,7 @@ describe("AppSidebar group mutation collapsed state", () => {
       new CustomEvent("wa-select", {
         bubbles: true,
         cancelable: true,
-        detail: { item: { value } },
+        detail: { item },
       }),
     );
     await vi.dynamicImportSettled();
@@ -346,14 +346,14 @@ describe("AppSidebar group mutation collapsed state", () => {
       new CustomEvent("wa-select", {
         bubbles: true,
         cancelable: true,
-        detail: { item: { value: "rename-group" } },
+        detail: { item: rename },
       }),
     );
     dropdown?.dispatchEvent(
       new CustomEvent("wa-select", {
         bubbles: true,
         cancelable: true,
-        detail: { item: { value: "delete-group" } },
+        detail: { item: remove },
       }),
     );
 

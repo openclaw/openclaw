@@ -320,7 +320,9 @@ describe("AppSidebar session mutation feedback", () => {
     menu.querySelector("wa-dropdown")?.dispatchEvent(
       new CustomEvent("wa-select", {
         bubbles: true,
-        detail: { item: { value: "assign-owner:human:profile-bob" } },
+        detail: {
+          item: menu.querySelector('wa-dropdown-item[value="assign-owner:human:profile-bob"]')!,
+        },
       }),
     );
 
@@ -346,7 +348,7 @@ describe("AppSidebar session mutation feedback", () => {
     selfMenu.querySelector("wa-dropdown")?.dispatchEvent(
       new CustomEvent("wa-select", {
         bubbles: true,
-        detail: { item: { value: selfItem?.getAttribute("value") } },
+        detail: { item: selfItem },
       }),
     );
 

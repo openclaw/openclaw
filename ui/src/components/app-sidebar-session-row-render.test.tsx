@@ -1,26 +1,26 @@
 /* @vitest-environment jsdom */
 
-import { cleanup, render } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import "../test-helpers/app-sidebar-suite.ts";
 import { createContext, createGateway, createSessions } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { renderAppSidebarOnline } from "./app-sidebar-online.tsx";
 import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
 import { renderRecentSession } from "./app-sidebar-session-row-render.tsx";
-import { AppSidebarOwner } from "./app-sidebar.tsx";
-
-afterEach(cleanup);
+import { AppSidebarOwner, type AppSidebarElement } from "./app-sidebar.tsx";
 
 function createHost() {
   const context = createContext(
     createGateway(createTestGatewayClient(async () => ({}))),
     createSessions("main", []),
   );
-  const host = new AppSidebarOwner({ sidebarAgentsMode: "roster" }, context);
-  host.sessionOwnershipVisibility = { filters: true, avatars: true };
   const container = document.createElement("div");
+  const props = document.createElement("openclaw-app-sidebar") as AppSidebarElement;
+  props.sidebarAgentsMode = "roster";
+  const host = new AppSidebarOwner(props, context, container);
+  host.sessionOwnershipVisibility = { filters: true, avatars: true };
   document.body.append(container);
   return { host, container };
 }
@@ -48,7 +48,7 @@ it.each([false, true])(
         return Reflect.get(target, key, receiver);
       },
     });
-    render(
+    mountSolid(
       () =>
         renderRecentSession({
           host: observedHost,
@@ -93,6 +93,32 @@ it.each([false, true])(
   },
 );
 
+it("updates a pinned session's resolved avatar without replacing its row", () => {
+  const { host, container } = createHost();
+  const session = projectSidebarSession({ key: "agent:main:pinned" });
+  const [avatar, setAvatar] = createSignal("Loading avatar");
+  mountSolid(
+    () =>
+      renderRecentSession({
+        host,
+        session,
+        get icon() {
+          const label = avatar();
+          return <span data-pinned-avatar>{label}</span>;
+        },
+      }),
+    { container },
+  );
+  const row = container.querySelector(".sidebar-recent-session");
+  expect(container.querySelector("[data-pinned-avatar]")?.textContent).toBe("Loading avatar");
+
+  setAvatar("Ada");
+  flush();
+
+  expect(container.querySelector("[data-pinned-avatar]")?.textContent).toBe("Ada");
+  expect(container.querySelector(".sidebar-recent-session")).toBe(row);
+});
+
 it("keeps Online facepiles idle until presence or time-sensitive ordering changes", async () => {
   vi.useFakeTimers();
   const now = 1_800_000_000_000;
@@ -111,7 +137,7 @@ it("keeps Online facepiles idle until presence or time-sensitive ordering change
       return Reflect.get(target, key, receiver);
     },
   });
-  render(() => renderAppSidebarOnline(observedHost), { container });
+  mountSolid(() => renderAppSidebarOnline(observedHost), { container });
   const update = () => {
     setRevision((value) => value + 1);
     flush();

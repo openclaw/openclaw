@@ -1,3 +1,4 @@
+import type { WaSelectEvent } from "@awesome.me/webawesome/dist/events/select.js";
 import type { ReactiveController } from "lit";
 import { createEffect, createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
@@ -293,10 +294,8 @@ function SidebarAgentRosterContent(
                         class="sidebar-customize-menu sidebar-agent-roster__menu"
                         placement="bottom-end"
                         onWa-show={() => roster.host().dismissTransientMenus()}
-                        onWa-select={(
-                          event: CustomEvent<{ item: HTMLElement & { value?: string } }>,
-                        ) => {
-                          switch (event.detail.item.value) {
+                        onWa-select={(event: WaSelectEvent) => {
+                          switch (event.detail.item.getAttribute("value")) {
                             case "main":
                               roster.host().openMainSession(card().id);
                               break;
@@ -401,14 +400,14 @@ function SidebarNewSessionMenuContent(props: RosterProps) {
         placement="bottom-end"
         aria-label={t("agentChip.agents")}
         onWa-show={() => roster.host().dismissTransientMenus()}
-        onWa-select={(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
+        onWa-select={(event: WaSelectEvent) => {
           const item = event.detail.item;
           event.preventDefault();
-          if (item.dataset.nativeNavigation) {
-            delete item.dataset.nativeNavigation;
+          if (item.hasAttribute("data-native-navigation")) {
+            item.removeAttribute("data-native-navigation");
             return;
           }
-          const id = item.value;
+          const id = item.getAttribute("value");
           if (access().allowed && id && roster.cards().some((card) => card.id === id)) {
             dropdown.open = false;
             roster.host().requestOpenNewSession(id);
@@ -433,7 +432,7 @@ function SidebarNewSessionMenuContent(props: RosterProps) {
                 if (shouldHandleNavigationClick(event)) {
                   event.preventDefault();
                 } else if (event.currentTarget instanceof HTMLElement) {
-                  event.currentTarget.dataset.nativeNavigation = "true";
+                  event.currentTarget.setAttribute("data-native-navigation", "");
                 }
               }}
             >

@@ -343,9 +343,12 @@ describe("AppSidebar session source lifecycle", () => {
     sidebar.onUpdateSidebarEntries = (entries) => {
       sidebar.sidebarEntries = entries;
     };
-    sidebar
-      .querySelector(`[data-sidebar-entry="session:${key}"] wa-dropdown`)!
-      .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "remove" } } }));
+    const pinMenu = sidebar.querySelector(`[data-sidebar-entry="session:${key}"] wa-dropdown`)!;
+    pinMenu.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: pinMenu.querySelector('wa-dropdown-item[value="remove"]')! },
+      }),
+    );
     await sidebar.updateComplete;
     expect(pinnedEntry()).toBeNull();
     expect(sidebar.sidebarEntries).toEqual([]);

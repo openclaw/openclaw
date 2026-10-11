@@ -237,7 +237,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   const subtitle = createMemo(() => subtitleState().subtitle),
     narration = createMemo(() => subtitleState().narration),
     toolName = createMemo(() => subtitleState().toolName);
-  const indicators = renderSidebarSessionIndicators(host(), session, display(), icon());
+  const indicators = renderSidebarSessionIndicators(host(), session, display(), icon);
   const running = createMemo(() => indicators.running),
     stateId = createMemo(() => indicators.stateId),
     metaId = createMemo(() => indicators.metaId),

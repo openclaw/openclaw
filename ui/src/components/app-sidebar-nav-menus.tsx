@@ -1,3 +1,4 @@
+import type { WaSelectEvent } from "@awesome.me/webawesome/dist/events/select.js";
 import type { JSX } from "@solidjs/web";
 import { createMemo, For } from "solid-js";
 import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
@@ -51,7 +52,7 @@ export function renderSidebarDropdown(params: {
   position: SidebarMenuPosition;
   className: string;
   label: string;
-  onSelect: (item: HTMLElement & { value: string }) => void;
+  onSelect: (item: Element) => void;
   onTabAway: () => void;
   onClose: (restoreFocus: boolean) => void;
   content: JSX.Element;
@@ -63,7 +64,7 @@ export function renderSidebarDropdown(params: {
       placement="bottom-start"
       prop:distance={0}
       aria-label={params.label}
-      onWa-select={(event: CustomEvent<{ item: HTMLElement & { value: string } }>) => {
+      onWa-select={(event: WaSelectEvent) => {
         event.preventDefault();
         params.onSelect(event.detail.item);
       }}
@@ -169,7 +170,9 @@ function renderMoreMenuRoute(params: SidebarMoreMenuParams, routeId: SidebarNavR
       onClick={(event: MouseEvent) => {
         if (!shouldHandleNavigationClick(event)) {
           // wa-select also fires for native clicks; mark them so it does not add SPA navigation.
-          (event.currentTarget as HTMLElement).dataset.nativeNavigation = "true";
+          if (event.currentTarget instanceof Element) {
+            event.currentTarget.setAttribute("data-native-navigation", "");
+          }
           return;
         }
         event.preventDefault();
@@ -196,11 +199,11 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams): JSX.Elemen
       return t("nav.more");
     },
     onSelect: (item) => {
-      if (item.dataset.nativeNavigation) {
-        delete item.dataset.nativeNavigation;
+      if (item.hasAttribute("data-native-navigation")) {
+        item.removeAttribute("data-native-navigation");
         return;
       }
-      const value = item.value;
+      const value = item.getAttribute("value") ?? undefined;
       if (value === "customize") {
         params.onEditPinnedItems();
         return;
@@ -259,7 +262,8 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams): 
     get label() {
       return t("nav.customize");
     },
-    onSelect: ({ value }) => {
+    onSelect: (item) => {
+      const value = item.getAttribute("value") ?? undefined;
       if (value === "reset") {
         params.onReset();
       } else if (value?.startsWith("plugin:")) {
@@ -319,7 +323,12 @@ export function renderSidebarPluginNavigationMenu(params: {
     get label() {
       return params.item.label;
     },
-    onSelect: ({ value }) => void params.onSelect(value),
+    onSelect: (item) => {
+      const value = item.getAttribute("value");
+      if (value) {
+        void params.onSelect(value);
+      }
+    },
     get content() {
       return (
         <For each={params.item.actions ?? []}>

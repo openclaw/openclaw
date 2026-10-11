@@ -115,7 +115,8 @@ export function renderSidebarSessionGroupMenuForController(
           get label() {
             return t("sessionsView.groupMenu", { group: menu.group });
           },
-          onSelect: ({ value }) => {
+          onSelect: (item) => {
+            const value = item.getAttribute("value") ?? undefined;
             if (
               (value === "group-defaults" ||
                 value === "rename-group" ||
@@ -222,7 +223,8 @@ export function renderSidebarCatalogViewMenuForController(
           get label() {
             return t("chat.sidebar.catalogViewOptions");
           },
-          onSelect: ({ value }) => {
+          onSelect: (item) => {
+            const value = item.getAttribute("value") ?? undefined;
             const view = sidebarFilterMenuViewForValue(value);
             if (view) {
               controller.setFilterMenuView(view);

@@ -1,3 +1,4 @@
+import type { WaSelectEvent } from "@awesome.me/webawesome/dist/events/select.js";
 import type { JSX } from "@solidjs/web";
 import { createMemo, For } from "solid-js";
 import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
@@ -149,7 +150,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
       placement="top-start"
       prop:distance={0}
       aria-label={t("profilePage.identity.menuLabel")}
-      onWa-select={(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
+      onWa-select={(event: WaSelectEvent) => {
         const value = consumeSidebarMenuSelection(event, params.onClose);
         if (!value) {
           return;

@@ -185,14 +185,22 @@ describe("personal navigation rail", () => {
     ]);
     const pin = sidebar.querySelector('.sidebar-rail [data-sidebar-entry="route:usage"]')!;
     const menu = pin.querySelector("wa-dropdown")!;
-    menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "before" } } }));
+    menu.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: menu.querySelector('wa-dropdown-item[value="before"]')! },
+      }),
+    );
     await sidebar.updateComplete;
     expect(sidebar.sidebarEntries).toEqual([
       "person:offline",
       "route:usage",
       "session:agent:other:unloaded",
     ]);
-    menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "remove" } } }));
+    menu.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: menu.querySelector('wa-dropdown-item[value="remove"]')! },
+      }),
+    );
     await sidebar.updateComplete;
     expect(sidebar.sidebarEntries).toEqual(["person:offline", "session:agent:other:unloaded"]);
   });

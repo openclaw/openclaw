@@ -1,3 +1,4 @@
+import type { WaSelectEvent } from "@awesome.me/webawesome/dist/events/select.js";
 import { t } from "../lib/reactive/i18n.ts";
 import "../styles/sidebar-reorder.css";
 import { Icon } from "./solid/icon.tsx";
@@ -40,14 +41,8 @@ export function renderSidebarReorderMenu(params: {
             ?.toggleAttribute("disabled", adjacent(menu, position) === null);
         }
       }}
-      onWa-select={async (
-        event: CustomEvent<{
-          item: {
-            value?: string;
-          };
-        }>,
-      ) => {
-        const position = event.detail.item.value;
+      onWa-select={async (event: WaSelectEvent) => {
+        const position = event.detail.item.getAttribute("value");
         if (position === "remove") {
           params.onRemove?.();
           return;

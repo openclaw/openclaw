@@ -25,7 +25,7 @@ export function renderSidebarSessionIndicators(
   host: SessionListHost,
   readSession: () => SidebarRecentSession,
   display?: CatalogBackingSessionDisplay,
-  icon?: JSX.Element,
+  readIcon?: () => JSX.Element,
   headerSummary?: Parameters<typeof renderTeamSessionSlots>,
 ) {
   const team = createMemo(() => host.sidebarAgentsMode === "roster");
@@ -128,7 +128,7 @@ export function renderSidebarSessionIndicators(
       ownerViewing(),
       channelAvatarAuth(),
       team(),
-      icon,
+      readIcon?.(),
       runVisibility(),
     ),
   );

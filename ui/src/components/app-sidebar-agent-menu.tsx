@@ -1,3 +1,4 @@
+import type { WaSelectEvent } from "@awesome.me/webawesome/dist/events/select.js";
 import type { JSX } from "@solidjs/web";
 import { createMemo, For } from "solid-js";
 import type { NavigationRouteId } from "../app-navigation.ts";
@@ -76,17 +77,17 @@ export function closeMenuAfterOwnDropdownHide(
 }
 
 export function consumeSidebarMenuSelection(
-  event: CustomEvent<{ item: HTMLElement & { value?: string } }>,
+  event: WaSelectEvent,
   onClose: (restoreFocus?: boolean) => void,
 ): string | undefined {
   event.preventDefault();
   const item = event.detail.item;
-  if (item.dataset.nativeNavigation) {
-    delete item.dataset.nativeNavigation;
+  if (item.hasAttribute("data-native-navigation")) {
+    item.removeAttribute("data-native-navigation");
     onClose(false);
     return undefined;
   }
-  const value = item.value;
+  const value = item.getAttribute("value") ?? undefined;
   if (value) {
     onClose(false);
     if (value.startsWith(LINK_VALUE_PREFIX)) {
@@ -208,8 +209,12 @@ function renderIdentityMenuHelpSubmenu(): JSX.Element {
           value={`${LINK_VALUE_PREFIX}${encodeURIComponent(link.href)}`}
           data-new-tab-action
           onClick={(event: MouseEvent) => {
-            if (event.target instanceof Element && event.target.closest("a")) {
-              (event.currentTarget as HTMLElement).dataset.nativeNavigation = "true";
+            if (
+              event.target instanceof Element &&
+              event.target.closest("a") &&
+              event.currentTarget instanceof Element
+            ) {
+              event.currentTarget.setAttribute("data-native-navigation", "");
             }
           }}
         >
@@ -265,10 +270,11 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams): JSX.Elem
       aria-label={menuLabel()}
       onPointerEnter={params.onPointerEnter}
       onPointerLeave={params.onPointerLeave}
-      onWa-select={(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
+      onWa-select={(event: WaSelectEvent) => {
         const value = consumeSidebarMenuSelection(event, (restoreFocus) =>
           params.onClose(
-            restoreFocus || (event.detail.item.value === "scope:all" && params.rosterMode),
+            restoreFocus ||
+              (event.detail.item.getAttribute("value") === "scope:all" && params.rosterMode),
           ),
         );
         if (!value) {
