@@ -3396,7 +3396,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
 // These configurations own their Gateway after the shared server has closed.
-describe("OpenAI-compatible HTTP API (e2e)", () => {
+describe("OpenAI-compatible HTTP API (e2e) with independent Gateways", () => {
   it("binds the Gateway lifecycle resolver to chat-completion runs", async () => {
     const started = await startGatewayServerWithRetries({
       port: await getGatewayTestPort(),
