@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { hasErrnoCode } from "../infra/errno.js";
+import { hasErrnoCode, isMissingPathError } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
   capturePluginDependencies,
@@ -149,9 +149,20 @@ export function assertPluginNativeNamespaceHost(
   pluginRoot: string,
 ): void {
   const pluginDirectory = fs.realpathSync(pluginRoot);
+  let sourceDirectory: string | undefined;
+  try {
+    sourceDirectory = fs.realpathSync(fact.sourceDirectory);
+  } catch (error) {
+    if (!isMissingPathError(error)) {
+      throw error;
+    }
+  }
   // Hoisted native dependencies need not have a host peer. The admitting plugin does,
   // and any host visible from the native directory must agree with that selection.
-  for (const directory of new Set([pluginDirectory, fs.realpathSync(fact.sourceDirectory)])) {
+  for (const directory of new Set([
+    pluginDirectory,
+    ...(sourceDirectory ? [sourceDirectory] : []),
+  ])) {
     const candidate = createRequire(path.join(directory, "native-host.cjs"))
       .resolve.paths("openclaw")
       ?.map((modules) => path.join(modules, "openclaw"))
@@ -594,6 +605,7 @@ export function inspectPluginNativeNamespaceSources(
 function admittedPluginNativeHardlinks(
   member: PluginNativeNamespaceFact["members"][string],
   stat: fs.BigIntStats,
+  source = member.source,
 ): string[] | undefined {
   if (!member.admissionHardlinks) {
     return undefined;
@@ -604,9 +616,9 @@ function admittedPluginNativeHardlinks(
       return candidate?.isFile() && candidate.dev === stat.dev && candidate.ino === stat.ino;
     });
   const live = inventory();
-  const current = fs.lstatSync(member.source, { bigint: true, throwIfNoEntry: false });
+  const current = fs.lstatSync(source, { bigint: true, throwIfNoEntry: false });
   const verified = inventory();
-  const finalSource = fs.lstatSync(member.source, { bigint: true, throwIfNoEntry: false });
+  const finalSource = fs.lstatSync(source, { bigint: true, throwIfNoEntry: false });
   return current?.isFile() &&
     finalSource?.isFile() &&
     current.dev === stat.dev &&
@@ -671,12 +683,13 @@ export function pluginNativeNamespaceUntrustedHardlinks(
 export function trackPluginNativeNamespaceAdmissionLink(
   namespace: PluginNativeNamespaceFact,
   member: PluginNativeNamespaceFact["members"][string],
+  source: string,
   target: string,
 ): () => void {
-  const before = fs.statSync(member.source, { bigint: true });
-  const admitted = admittedPluginNativeHardlinks(member, before);
+  const before = fs.statSync(source, { bigint: true });
+  const admitted = admittedPluginNativeHardlinks(member, before, source);
   return () => {
-    const after = fs.statSync(member.source, { bigint: true });
+    const after = fs.statSync(source, { bigint: true });
     if (
       admitted &&
       after.dev === before.dev &&
@@ -685,13 +698,11 @@ export function trackPluginNativeNamespaceAdmissionLink(
     ) {
       const inventory = [...admitted, target];
       for (const candidate of Object.values(namespace.members)) {
-        const stat = fs.statSync(candidate.source, { bigint: true, throwIfNoEntry: false });
-        if (
-          candidate.admissionHardlinks &&
-          stat?.isFile() &&
-          stat.dev === after.dev &&
-          stat.ino === after.ino
-        ) {
+        const ownsInode = candidate.admissionHardlinks?.some((filename) => {
+          const stat = fs.statSync(filename, { bigint: true, throwIfNoEntry: false });
+          return stat?.isFile() && stat.dev === after.dev && stat.ino === after.ino;
+        });
+        if (ownsInode) {
           candidate.admissionHardlinks = inventory;
         }
       }

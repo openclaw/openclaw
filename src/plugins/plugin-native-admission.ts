@@ -380,7 +380,12 @@ export function createPluginNativeAdmission(
       ...fact,
       sourceIdentity: pluginSourceStatIdentity(fs.statSync(input, { bigint: true })),
     };
-    const extendAdmissionLinks = trackPluginNativeNamespaceAdmissionLink(namespace, member, target);
+    const extendAdmissionLinks = trackPluginNativeNamespaceAdmissionLink(
+      namespace,
+      member,
+      input,
+      target,
+    );
     if (linkPluginNativeReference(input, target, linked) === "hardlink") {
       hardlinkedTargets.add(target);
       extendAdmissionLinks();

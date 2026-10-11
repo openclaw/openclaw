@@ -12,8 +12,10 @@ import {
   settlePluginNativeAdmissions,
 } from "./plugin-native-admission-state.js";
 import {
+  assertPluginNativeNamespaceHost,
   pluginNativeNamespacesOwnSourceHardlinks,
   pluginNativeNamespaceUntrustedHardlinks,
+  trackPluginNativeNamespaceAdmissionLink,
 } from "./plugin-native-namespace.js";
 import type { PluginNativeNamespaceFact } from "./plugin-source-admission.types.js";
 import { pluginSourceStatIdentity } from "./plugin-source-file.js";
@@ -25,6 +27,34 @@ const captureBudget = {
   maxFileBytes: 8 * 1024 * 1024,
   maxTotalBytes: 64 * 1024 * 1024,
 };
+
+it("fails closed when the native source directory cannot be resolved", async () => {
+  await withOpenClawTestState({ label: "native-source-realpath-denied" }, async (state) => {
+    const sourceDirectory = state.path("source");
+    const pluginRoot = state.path("plugin");
+    fs.mkdirSync(sourceDirectory, { recursive: true });
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    const fact: PluginNativeNamespaceFact = {
+      sourceDirectory,
+      capturedRoot: state.path("capture"),
+      managed: true,
+      members: {},
+    };
+    const realpath = fs.realpathSync.bind(fs);
+    const denied = Object.assign(new Error("denied"), { code: "EACCES" });
+    const failure = vi.spyOn(fs, "realpathSync").mockImplementation(((filename: fs.PathLike) => {
+      if (filename === sourceDirectory) {
+        throw denied;
+      }
+      return realpath(filename);
+    }) as unknown as typeof fs.realpathSync);
+    try {
+      expect(() => assertPluginNativeNamespaceHost(fact, pluginRoot, pluginRoot)).toThrow(denied);
+    } finally {
+      failure.mockRestore();
+    }
+  });
+});
 
 it("keeps strict and budgeted native captures private while charging reuse once", async () => {
   await withOpenClawTestState({ label: "managed-native-reused-budget" }, async (state) => {
@@ -230,6 +260,7 @@ it("recognizes admission-owned hardlinks split across namespace receipts", async
           source,
           sourceIdentity: pluginSourceStatIdentity(stat),
           capturedIdentity: pluginSourceStatIdentity(stat),
+          boundaryChecked: true,
           admissionHardlinks: [source, capture],
           contentHash: "0".repeat(64),
           sizeBytes: Number(stat.size),
@@ -239,6 +270,53 @@ it("recognizes admission-owned hardlinks split across namespace receipts", async
     expect(pluginNativeNamespacesOwnSourceHardlinks(captures.map(namespace), source, stat)).toBe(
       true,
     );
+  });
+});
+
+it("propagates recovery links across members after an original source is removed", async () => {
+  await withOpenClawTestState({ label: "native-recovery-link-propagation" }, async (state) => {
+    const retained = state.path("retained.node");
+    const peer = state.path("peer.node");
+    const target = state.path("target.node");
+    const external = state.path("external.node");
+    fs.writeFileSync(retained, "native fixture");
+    fs.linkSync(retained, peer);
+    const stat = fs.statSync(retained, { bigint: true });
+    const member = (source: string): PluginNativeNamespaceFact["members"][string] => ({
+      source,
+      sourceIdentity: pluginSourceStatIdentity(stat),
+      capturedIdentity: pluginSourceStatIdentity(stat),
+      boundaryChecked: true,
+      admissionHardlinks: [retained, peer],
+      contentHash: "0".repeat(64),
+      sizeBytes: Number(stat.size),
+    });
+    const removedMember = member(state.path("removed.node"));
+    const retainedMember = member(retained);
+    const namespace: PluginNativeNamespaceFact = {
+      sourceDirectory: path.dirname(retained),
+      capturedRoot: state.path("capture"),
+      managed: true,
+      members: { removed: removedMember, retained: retainedMember },
+    };
+
+    const recordLink = trackPluginNativeNamespaceAdmissionLink(
+      namespace,
+      removedMember,
+      retained,
+      target,
+    );
+    fs.linkSync(retained, target);
+    recordLink();
+
+    expect(removedMember.admissionHardlinks).toEqual([retained, peer, target]);
+    expect(retainedMember.admissionHardlinks).toEqual([retained, peer, target]);
+    fs.linkSync(retained, external);
+    expect(
+      pluginNativeNamespaceUntrustedHardlinks([
+        { ...namespace, members: { retained: retainedMember } },
+      ]),
+    ).toContain(retained);
   });
 });
 
