@@ -7,6 +7,7 @@ import { readSessionActivitySummary } from "./activity-summary.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import { hasPendingSessionTranscriptArchives } from "./session-accessor.sqlite-archive-store-kernel.js";
 import { assertSessionCreationLabelAvailable } from "./session-accessor.sqlite-creation-read.js";
+import { readWrittenSessionEntryPostimage } from "./session-accessor.sqlite-entry-cache.js";
 import {
   sessionSharingEntriesEqual,
   type SessionEntryProjectionFacts,
@@ -18,7 +19,6 @@ import { readSessionNodesGeneration } from "./session-accessor.sqlite-entry-revi
 import {
   deleteLegacySessionEntryRows,
   readExactSessionEntryRow,
-  readWrittenSessionEntryPostimage,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { captureSessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
@@ -40,6 +40,7 @@ import {
   hasSessionEntryPublicationCapacity,
 } from "./session-entry-publication-source.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshots.js";
+import { assertQuestionAliasRelocation } from "./session-question-recovery-owner.js";
 import { readStagedSessionTranscriptAuthority } from "./session-transcript-authority.js";
 import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { SessionEntry } from "./types.js";
@@ -247,6 +248,13 @@ export function commitSessionEntryReplacementsInDatabase(
       transactionEntries.set(sessionKey, transactionRow.entry);
     }
   }
+  for (const replacement of input.replacements) {
+    for (const key of replacement.previousSessionKeys ?? []) {
+      if (key !== replacement.sessionKey) {
+        assertQuestionAliasRelocation(transactionEntries.get(key));
+      }
+    }
+  }
   beforeReplacements();
   if (input.preparedTranscript) {
     const { sessionKey, sessionId, events } = input.preparedTranscript;
@@ -289,6 +297,7 @@ export function commitSessionEntryReplacementsInDatabase(
       replacement.sessionKey,
       {
         rehomeMembers: selectedBefore?.sessionId === replacement.entry.sessionId,
+        validatedEntries: transactionEntries,
       },
     );
     if (replacement.previousSessionKeys?.some((key) => key !== replacement.sessionKey)) {

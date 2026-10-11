@@ -9,8 +9,11 @@ import {
 import { readSqliteDatabaseSiblingWriteRevision } from "../../infra/sqlite-database-admission.js";
 import {
   getAdmittedSqliteSchemaFacts,
+  getSqliteReadScopeRevision,
+  type SqliteReadScopeRevision,
   runSqliteReadOperationSync,
 } from "../../infra/sqlite-schema-facts.js";
+import { communicationEntryBinding } from "../../sessions/communication-admission.js";
 import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -35,10 +38,11 @@ import {
   sessionEntryCaches,
   type SqliteSessionEntryCache,
 } from "./session-accessor.sqlite-entry-cache-state.js";
-import type {
-  SessionEntryCacheDatabase,
-  SessionEntryCacheReadOptions,
-  SessionEntryCacheSnapshot,
+import {
+  sessionSharingEntriesEqual,
+  type SessionEntryCacheDatabase,
+  type SessionEntryCacheReadOptions,
+  type SessionEntryCacheSnapshot,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 import {
   prepareExactSessionEntryRowReads,
@@ -516,4 +520,136 @@ export function publishSessionEntryCacheParticipantUpdate(
     }
   }
   publishSessionEntryCacheInvalidation(database, { sessionKey, facts }, writeGeneration);
+}
+
+const writtenEntryPostimages = new WeakMap<
+  SessionEntry,
+  {
+    database: OpenClawAgentDatabase["db"];
+    sessionKey: string;
+    revision: SqliteReadScopeRevision;
+    entry: SessionEntry;
+  }
+>();
+
+/** Only the exact writer result can lend its persisted projection before another mutation. */
+export function readWrittenSessionEntryPostimage(
+  database: OpenClawAgentDatabase,
+  sessionKey: string,
+  written: SessionEntry,
+): SessionEntry | undefined {
+  const postimage = writtenEntryPostimages.get(written);
+  return postimage?.database === database.db &&
+    postimage.sessionKey === sessionKey &&
+    postimage.revision === getSqliteReadScopeRevision(database.db)
+    ? postimage.entry
+    : undefined;
+}
+
+/** Publish committed writer facts before the actor refreshes its committed projection. */
+export function publishWrittenSessionEntry(
+  database: OpenClawAgentDatabase,
+  {
+    sessionKey,
+    entry,
+    previousEntry,
+    entryJson,
+    snapshotEntry,
+    snapshots,
+    allowStoredAliases,
+    writeGeneration,
+  }: {
+    sessionKey: string;
+    entry: SessionEntry;
+    previousEntry: SessionEntry | undefined;
+    entryJson: string;
+    snapshotEntry: SessionEntry;
+    snapshots: readonly SessionEntrySnapshot[] | undefined;
+    allowStoredAliases?: boolean;
+    writeGeneration: SqliteSessionEntryCacheWriteGeneration | undefined;
+  },
+): void {
+  publishSessionEntryCacheInvalidation(
+    database,
+    {
+      sessionKey,
+      entry,
+      sharingUnchanged:
+        !allowStoredAliases &&
+        sessionSharingEntriesEqual(previousEntry, {
+          ...entry,
+          owner: previousEntry?.owner,
+        }),
+      entryJson,
+      snapshotEntry,
+      snapshots,
+      sideMetadata: structuredClone({
+        owner: previousEntry?.owner,
+        participants: previousEntry?.participants,
+        participantCount: previousEntry?.participantCount,
+      }),
+      previousEntry,
+      ...(!allowStoredAliases
+        ? {
+            facts: {
+              kind: "entry" as const,
+              previousSessionId: previousEntry?.sessionId,
+              sessionId: entry.sessionId,
+              category: entry.category?.trim() || null,
+              communicationBinding: communicationEntryBinding(entry),
+              clearMembers:
+                previousEntry !== undefined && previousEntry.sessionId !== entry.sessionId,
+              lifecycleChanged:
+                previousEntry?.sessionId !== entry.sessionId ||
+                previousEntry?.lifecycleRevision !== entry.lifecycleRevision,
+            },
+          }
+        : {}),
+    },
+    writeGeneration,
+  );
+}
+
+/** Retain the postimage only after publication and native actor projection refresh. */
+export function retainWrittenSessionEntryPostimage(
+  database: OpenClawAgentDatabase,
+  {
+    sessionKey,
+    entry,
+    previousEntry,
+    entryJson,
+    allowStoredAliases,
+    sideMetadataUnchanged,
+  }: {
+    sessionKey: string;
+    entry: SessionEntry;
+    previousEntry: SessionEntry | undefined;
+    entryJson: string;
+    allowStoredAliases?: boolean;
+    sideMetadataUnchanged: boolean;
+  },
+): void {
+  const revision = getSqliteReadScopeRevision(database.db);
+  if (!allowStoredAliases && sideMetadataUnchanged && revision) {
+    const postimage = projectSessionEntryCacheUpdate(
+      entryJson,
+      structuredClone({
+        owner: previousEntry?.owner,
+        ...(previousEntry?.sessionId === entry.sessionId
+          ? {
+              participants: previousEntry.participants,
+              participantCount: previousEntry.participantCount,
+            }
+          : {}),
+      }),
+    );
+    if (postimage) {
+      writtenEntryPostimages.set(entry, {
+        database: database.db,
+        sessionKey,
+        revision,
+        entry: postimage,
+      });
+    }
+  }
 }

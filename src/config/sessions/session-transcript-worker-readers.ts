@@ -470,6 +470,7 @@ export function createSessionHistoryWorkerReaders(
       "a conversation delivery receipt",
       (value) => value.record,
     ),
+    readQuestions: reader("session-question-read", "durable questions", (value) => value.result),
     readGoalOperationReceipt: reader(
       "goal-operation-receipt",
       "a Goal operation receipt",

@@ -2016,3 +2016,8 @@ src/config/sessions/transcript-write-context.ts
 src/sessions/session-lifecycle-events.ts
 src/sessions/session-row-facts.ts
 src/state/openclaw-agent-worker-store.ts
+src/sessions/communication-admission.ts
+src/sessions/communication-policy.ts
+src/state/openclaw-agent-questions-schema.ts
+src/state/openclaw-agent-schema-migration-finalize.ts
+src/config/sessions/session-questions-custody-error.ts

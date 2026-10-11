@@ -20,6 +20,7 @@ import {
   SqliteTranscriptMutationConflictError,
 } from "../config/sessions/session-mutation-conflict-error.js";
 import { SessionPendingInputCustodyError } from "../config/sessions/session-pending-input-custody-error.js";
+import { SessionQuestionCustodyRetiredError } from "../config/sessions/session-questions-custody-error.js";
 import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence-error.js";
 import {
   parseTranscriptAppendRefusal,
@@ -57,6 +58,7 @@ import {
 import { SessionMetadataUnavailableError } from "./session-metadata-unavailable-error.js";
 
 const MESSAGE_ONLY_ERRORS = {
+  "question-custody-retired": SessionQuestionCustodyRetiredError,
   "worktree-source-changed": SessionWorktreeSourceChangedError,
   "model-account-authority": ModelAccountConnectAuthorityError,
   "duplicate-agent": DuplicateAgentError,

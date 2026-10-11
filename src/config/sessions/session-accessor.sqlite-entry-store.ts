@@ -1,10 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
+import { isMainThread } from "node:worker_threads";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  sqliteStringSet,
-} from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import {
   sqliteSessionIdWriteScope,
   withoutSqliteDatabaseWriteScope,
@@ -15,7 +12,6 @@ import {
   type SqliteReadScopeRevision,
 } from "../../infra/sqlite-schema-facts.js";
 import { getChildLogger } from "../../logging/logger.js";
-import { communicationEntryBinding } from "../../sessions/communication-admission.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
@@ -27,12 +23,13 @@ import {
   upsertConversationIdentities,
 } from "./session-accessor.sqlite-conversation.js";
 import { commitSqliteSessionDeletion } from "./session-accessor.sqlite-deletion.js";
-import { projectSessionEntryCacheUpdate } from "./session-accessor.sqlite-entry-cache-projection.js";
 import {
   publishSessionEntryCacheInvalidation,
   trackSessionEntryCacheWrite,
+  publishWrittenSessionEntry,
+  retainWrittenSessionEntryPostimage,
 } from "./session-accessor.sqlite-entry-cache.js";
-import { sessionSharingEntriesEqual } from "./session-accessor.sqlite-entry-cache.types.js";
+import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-deletion.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
 import {
   parseReadableSessionEntryData,
@@ -46,23 +43,16 @@ import { advanceSessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite
 import {
   clearSessionCollaborationForKey,
   copySessionNodeArtifactsForRepair,
-  deleteSessionDeliveryArtifacts,
-  deleteSessionNodeArtifacts,
 } from "./session-accessor.sqlite-node-artifacts.js";
-import { hasSqliteSessionOwnerColumns } from "./session-accessor.sqlite-owner-projection.js";
 import { withProjectedParticipants } from "./session-accessor.sqlite-participant-projection.js";
 import { prepareSessionEntryWindowRow } from "./session-accessor.sqlite-provenance.js";
-import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
   bindSessionNode,
   bindSessionRoot,
   normalizeSessionEntryTimestamp,
 } from "./session-accessor.sqlite-session-row.js";
-import {
-  hasValidSessionEntryIdentity,
-  parseSessionEntryJson as parseSessionEntryRow,
-} from "./session-accessor.sqlite-status.js";
+import { hasValidSessionEntryIdentity } from "./session-accessor.sqlite-status.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import {
   assertCanonicalSessionEntryLineageWrite,
@@ -78,6 +68,11 @@ import {
 } from "./session-entry-snapshots.js";
 import { resolveSessionPublicShare } from "./session-public-share.js";
 import {
+  assertQuestionAliasRelocation,
+  assertQuestionLifecycleWorker,
+} from "./session-question-recovery-owner.js";
+import { retireSessionQuestionsInDatabase } from "./session-questions-retirement.worker.js";
+import {
   projectCanonicalSessionEntryShape,
   stripRuntimeOnlySessionSkillsFields,
 } from "./store-entry-shape.js";
@@ -86,6 +81,7 @@ import {
   resolveDeliveryProvenCanonicalSessionKey,
 } from "./store-entry.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
+export { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-deletion.js";
 export {
   parseReadableSqliteSessionEntryRow,
   readExactSessionEntryRow,
@@ -97,30 +93,6 @@ export {
   readSessionEntryCount,
   readSessionEntryStore,
 } from "./session-accessor.sqlite-entry-inventory.js";
-
-const writtenEntryPostimages = new WeakMap<
-  SessionEntry,
-  {
-    database: OpenClawAgentDatabase["db"];
-    sessionKey: string;
-    revision: SqliteReadScopeRevision;
-    entry: SessionEntry;
-  }
->();
-
-/** Only the exact writer result can lend its persisted projection before another mutation. */
-export function readWrittenSessionEntryPostimage(
-  database: OpenClawAgentDatabase,
-  sessionKey: string,
-  written: SessionEntry,
-): SessionEntry | undefined {
-  const postimage = writtenEntryPostimages.get(written);
-  return postimage?.database === database.db &&
-    postimage.sessionKey === sessionKey &&
-    postimage.revision === getSqliteReadScopeRevision(database.db)
-    ? postimage.entry
-    : undefined;
-}
 
 /** Exact reads already own nested values; retain them through identity publication. */
 export function readSessionIdentitySnapshot(
@@ -231,153 +203,6 @@ export function normalizeLifecycleTarget(target: {
   };
 }
 
-export function deleteSessionEntryRows(
-  database: OpenClawAgentDatabase,
-  sessionKey: string,
-  options: {
-    deleteOwnedWindows?: boolean;
-    deliveryCleanupKeys?: readonly string[];
-    validatedEntry?: SessionEntry;
-  } = {},
-): void {
-  // Doctor supplies the exact row it validated; the runtime parser deliberately rejects that shape.
-  const previousEntry =
-    options.validatedEntry ?? readExactSessionEntryRow(database, sessionKey)?.entry;
-  if (previousEntry) {
-    commitSqliteSessionDeletion(sessionKey, previousEntry);
-  }
-  const db = getSessionKysely(database.db);
-  const windows = executeSqliteQuerySync(
-    database.db,
-    db.selectFrom("session_windows").select("session_id").where("session_key", "=", sessionKey),
-  ).rows;
-  // Skip the survivor scan when maintenance reclaimed every window. Otherwise, project
-  // reference metadata before acquiring rows to avoid loading unrelated saved prompts.
-  const survivingNodes =
-    windows.length > 0
-      ? executeSqliteQuerySync(
-          database.db,
-          db
-            .selectFrom("session_nodes")
-            .select(["current_session_id", "entry_json", "session_key"])
-            .where("session_key", "!=", sessionKey)
-            .orderBy("session_key", "asc"),
-        ).rows
-      : [];
-  for (const window of windows) {
-    const survivingNode = survivingNodes.find((node) => {
-      if (node.current_session_id === window.session_id) {
-        return true;
-      }
-      const entry = parseSessionEntryRow(node);
-      return entry ? collectSessionStateIdsForEntry(entry).includes(window.session_id) : false;
-    });
-    if (survivingNode) {
-      withSqliteDatabaseWriteScope(
-        database.db,
-        [sessionKey, survivingNode.session_key, sqliteSessionIdWriteScope(window.session_id)],
-        () =>
-          executeSqliteQuerySync(
-            database.db,
-            db
-              .updateTable("session_windows")
-              .set({ session_key: survivingNode.session_key })
-              .where("session_id", "=", window.session_id),
-          ),
-      );
-    }
-  }
-  const remainingWindow = options.deleteOwnedWindows
-    ? undefined
-    : executeSqliteQueryTakeFirstSync(
-        database.db,
-        db
-          .selectFrom("session_windows")
-          .select(["session_id", "updated_at"])
-          .where("session_key", "=", sessionKey)
-          .orderBy("updated_at", "desc")
-          .orderBy("session_id", "asc")
-          .limit(1),
-      );
-  withSqliteDatabaseWriteScope(
-    database.db,
-    [sessionKey, ...windows.map((window) => sqliteSessionIdWriteScope(window.session_id))],
-    () => {
-      if (options.deleteOwnedWindows) {
-        deleteSessionDeliveryArtifacts(database, sessionKey, options.deliveryCleanupKeys);
-      }
-      if (options.deleteOwnedWindows || remainingWindow) {
-        deleteSessionNodeArtifacts(database, sessionKey);
-      }
-      if (remainingWindow) {
-        clearSqliteSessionEntryPreservingWindows(database, {
-          sessionId: remainingWindow.session_id,
-          sessionKey,
-          updatedAt: remainingWindow.updated_at,
-        });
-      } else {
-        executeSqliteQuerySync(
-          database.db,
-          db.deleteFrom("session_nodes").where("session_key", "=", sessionKey),
-        );
-      }
-    },
-  );
-  publishSessionEntryCacheInvalidation(database, { sessionKey, facts: { kind: "removed" } });
-}
-
-/** Remove the logical entry while retaining its node-owned transcript windows. */
-function clearSqliteSessionEntryPreservingWindows(
-  database: OpenClawAgentDatabase,
-  params: { sessionId: string; sessionKey: string; updatedAt: number },
-): void {
-  writeSessionEntrySnapshots(database, params.sessionKey, []);
-  retainLegacyAcpMigrationSourcesForEntry(database.db, params.sessionKey, undefined);
-  const db = getSessionKysely(database.db);
-  const cleared = {
-    current_session_id: params.sessionId,
-    entry_json: "{}",
-    entry_valid: -1,
-    updated_at: params.updatedAt,
-    status: null,
-    created_at: null,
-    created_via: null,
-    created_actor_type: null,
-    created_actor_id: null,
-    project_id: null,
-    parent_session_key: null,
-    spawned_by: null,
-    fork_source_session_key: null,
-    fork_source_session_id: null,
-    fork_source_entry_id: null,
-    label: null,
-    display_name: null,
-    category: null,
-    icon: null,
-    pinned_at: null,
-    archived_at: null,
-    last_read_at: null,
-    last_interaction_at: null,
-    last_activity_at: null,
-    ...(hasSqliteSessionOwnerColumns(database.db)
-      ? {
-          owner_actor_type: null,
-          owner_actor_id: null,
-          owner_assigned_by_type: null,
-          owner_assigned_by_id: null,
-          owner_assigned_at: null,
-        }
-      : {}),
-  } as const;
-  executeSqliteQuerySync(
-    database.db,
-    db
-      .insertInto("session_nodes")
-      .values({ session_key: params.sessionKey, ...cleared })
-      .onConflict((conflict) => conflict.column("session_key").doUpdateSet(cleared)),
-  );
-}
-
 export function deleteLifecycleTargetRows(
   database: OpenClawAgentDatabase,
   target: { canonicalKey: string; storeKeys: string[] },
@@ -399,14 +224,20 @@ export function deleteLegacySessionEntryRows(
   if (legacyKeys.length === 0) {
     return;
   }
+  const removals = legacyKeys
+    .filter((key) => key !== sessionKey)
+    .map((legacyKey) => ({
+      legacyKey,
+      previousEntry:
+        options.validatedEntries?.get(legacyKey) ??
+        readExactSessionEntryRow(database, legacyKey)?.entry,
+    }));
+  // Preflight the complete batch before hooks, rehoming, or the first deletion.
+  for (const { previousEntry } of removals) {
+    assertQuestionAliasRelocation(previousEntry);
+  }
   const db = getSessionKysely(database.db);
-  for (const legacyKey of legacyKeys) {
-    if (legacyKey === sessionKey) {
-      continue;
-    }
-    const previousEntry =
-      options.validatedEntries?.get(legacyKey) ??
-      readExactSessionEntryRow(database, legacyKey)?.entry;
+  for (const { legacyKey, previousEntry } of removals) {
     if (previousEntry) {
       commitSqliteSessionDeletion(legacyKey, previousEntry);
     }
@@ -420,6 +251,17 @@ export function deleteLegacySessionEntryRows(
         db.deleteFrom("session_nodes").where("session_key", "=", legacyKey),
       ),
     );
+    if (!isMainThread && previousEntry) {
+      retireSessionQuestionsInDatabase(
+        database,
+        {
+          sessionKey: legacyKey,
+          sessionId: previousEntry.sessionId,
+          lifecycleRevision: previousEntry.lifecycleRevision,
+        },
+        `retired:${previousEntry.sessionId}`,
+      );
+    }
     publishSessionEntryCacheInvalidation(database, { sessionKey: legacyKey });
   }
   publishSessionEntryCacheInvalidation(database, { sessionKey });
@@ -460,6 +302,8 @@ export function writeSessionEntry(
     profileInvolvement?: SessionEntry["profileInvolvement"];
     /** Only the provider review owner may replace a generation-bound pause. */
     providerReviewMutation?: boolean;
+    /** Only durable question custody may replace the restart replay exclusion marker. */
+    questionOwnerMutation?: boolean;
     /** Canonical row revalidated in this write transaction; null proves absence. */
     canonicalPreviousEntry?: SessionEntry | null;
     /** Participant facts were acquired at this native revision, not borrowed from a CAS snapshot. */
@@ -497,6 +341,23 @@ export function writeSessionEntry(
       : options.allowStoredAliases && options.previousEntry !== undefined
         ? (options.previousEntry ?? undefined)
         : readExactSessionEntryRow(database, sessionKey)?.entry;
+  if (
+    canonicalPreviousEntry &&
+    (canonicalPreviousEntry.sessionId !== normalizedEntry.sessionId ||
+      canonicalPreviousEntry.lifecycleRevision !== normalizedEntry.lifecycleRevision)
+  ) {
+    assertQuestionLifecycleWorker(canonicalPreviousEntry);
+  }
+  if (!options.questionOwnerMutation && !options.allowStoredAliases) {
+    normalizedEntry = {
+      ...normalizedEntry,
+      durableQuestionOwners:
+        canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId &&
+        canonicalPreviousEntry.lifecycleRevision === normalizedEntry.lifecycleRevision
+          ? canonicalPreviousEntry.durableQuestionOwners
+          : undefined,
+    };
+  }
   const previousRevision =
     options.canonicalPreviousEntry === undefined
       ? getSqliteReadScopeRevision(database.db)
@@ -520,6 +381,16 @@ export function writeSessionEntry(
           ? canonicalPreviousEntry.providerReview
           : undefined,
     };
+  }
+  if (normalizedEntry.durableQuestionOwners) {
+    normalizedEntry.durableQuestionOwners = normalizedEntry.durableQuestionOwners.filter(
+      (owner) =>
+        owner.sessionId === normalizedEntry.sessionId &&
+        owner.lifecycleRevision === normalizedEntry.lifecycleRevision,
+    );
+    if (normalizedEntry.durableQuestionOwners.length === 0) {
+      delete normalizedEntry.durableQuestionOwners;
+    }
   }
   if (normalizedEntry.providerReview?.sessionId !== normalizedEntry.sessionId) {
     delete normalizedEntry.providerReview;
@@ -695,6 +566,17 @@ export function writeSessionEntry(
           canonicalPreviousEntry.lifecycleRevision !== normalizedEntry.lifecycleRevision)
       ) {
         retainLegacyAcpMigrationSourcesForEntry(database.db, sessionKey, normalizedEntry);
+        if (!isMainThread) {
+          retireSessionQuestionsInDatabase(
+            database,
+            {
+              sessionKey,
+              sessionId: canonicalPreviousEntry.sessionId,
+              lifecycleRevision: canonicalPreviousEntry.lifecycleRevision,
+            },
+            `retired:${canonicalPreviousEntry.sessionId}`,
+          );
+        }
       }
       const writeWindow =
         canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId
@@ -713,46 +595,16 @@ export function writeSessionEntry(
       return { writeGeneration, sessionRow, sideMetadataUnchanged };
     },
   );
-  publishSessionEntryCacheInvalidation(
-    database,
-    {
-      sessionKey,
-      entry: normalizedEntry,
-      sharingUnchanged:
-        !options.allowStoredAliases &&
-        sessionSharingEntriesEqual(canonicalPreviousEntry, {
-          ...normalizedEntry,
-          owner: canonicalPreviousEntry?.owner,
-        }),
-      entryJson: persisted.entryJson,
-      snapshotEntry: canonicalEntry,
-      snapshots: persisted.snapshotsChanged ? persisted.snapshots : undefined,
-      sideMetadata: structuredClone({
-        owner: canonicalPreviousEntry?.owner,
-        participants: canonicalPreviousEntry?.participants,
-        participantCount: canonicalPreviousEntry?.participantCount,
-      }),
-      previousEntry: canonicalPreviousEntry,
-      ...(!options.allowStoredAliases
-        ? {
-            facts: {
-              kind: "entry" as const,
-              previousSessionId: canonicalPreviousEntry?.sessionId,
-              sessionId: normalizedEntry.sessionId,
-              category: normalizedEntry.category?.trim() || null,
-              communicationBinding: communicationEntryBinding(normalizedEntry),
-              clearMembers:
-                canonicalPreviousEntry !== undefined &&
-                canonicalPreviousEntry.sessionId !== normalizedEntry.sessionId,
-              lifecycleChanged:
-                canonicalPreviousEntry?.sessionId !== normalizedEntry.sessionId ||
-                canonicalPreviousEntry?.lifecycleRevision !== normalizedEntry.lifecycleRevision,
-            },
-          }
-        : {}),
-    },
-    written.writeGeneration,
-  );
+  publishWrittenSessionEntry(database, {
+    sessionKey,
+    entry: normalizedEntry,
+    previousEntry: canonicalPreviousEntry,
+    entryJson: persisted.entryJson,
+    snapshotEntry: canonicalEntry,
+    snapshots: persisted.snapshotsChanged ? persisted.snapshots : undefined,
+    allowStoredAliases: options.allowStoredAliases,
+    writeGeneration: written.writeGeneration,
+  });
   if (actor) {
     const previousRow = actor.entryRows.get(sessionKey)?.row;
     const row = {
@@ -784,28 +636,13 @@ export function writeSessionEntry(
       };
     }
   }
-  const revision = getSqliteReadScopeRevision(database.db);
-  if (!options.allowStoredAliases && written.sideMetadataUnchanged && revision) {
-    const postimage = projectSessionEntryCacheUpdate(
-      persisted.entryJson,
-      structuredClone({
-        owner: canonicalPreviousEntry?.owner,
-        ...(canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId
-          ? {
-              participants: canonicalPreviousEntry.participants,
-              participantCount: canonicalPreviousEntry.participantCount,
-            }
-          : {}),
-      }),
-    );
-    if (postimage) {
-      writtenEntryPostimages.set(normalizedEntry, {
-        database: database.db,
-        sessionKey,
-        revision,
-        entry: postimage,
-      });
-    }
-  }
+  retainWrittenSessionEntryPostimage(database, {
+    sessionKey,
+    entry: normalizedEntry,
+    previousEntry: canonicalPreviousEntry,
+    entryJson: persisted.entryJson,
+    allowStoredAliases: options.allowStoredAliases,
+    sideMetadataUnchanged: written.sideMetadataUnchanged,
+  });
   return normalizedEntry;
 }

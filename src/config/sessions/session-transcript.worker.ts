@@ -512,6 +512,28 @@ serveOwnedWorkerTasks(
         );
         return { kind: "conversation-delivery", record: result.found ? result.value : undefined };
       }
+      if (request.kind === "session-question-read") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { readSessionQuestions, readSessionQuestionCustodyInDatabase } =
+          await import("./session-questions.kernel.worker.js");
+        const result = withOpenClawAgentDatabaseReadOnly(
+          (database) =>
+            request.custodyBinding && request.operation.kind === "get"
+              ? readSessionQuestionCustodyInDatabase(
+                  database,
+                  request.custodyBinding,
+                  request.operation.id,
+                )
+              : readSessionQuestions(database, request.operation),
+          { ...request.database, env: cloneEnvWithPlatformSemantics(request.env) },
+          { snapshot: Boolean(request.custodyBinding) },
+        );
+        return {
+          kind: "session-question-read",
+          result: result.found ? result.value : request.operation.kind === "list" ? [] : undefined,
+        };
+      }
       if (request.kind === "goal-operation-receipt") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");

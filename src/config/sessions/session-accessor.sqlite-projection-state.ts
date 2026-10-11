@@ -29,6 +29,10 @@ import {
 import { appendSessionResetBoundary } from "./session-accessor.sqlite-reset-boundary.js";
 import type { ResolvedSqliteReadScope } from "./session-accessor.sqlite-scope.js";
 import { SessionEntryLifecycleUpsertConflictError } from "./session-mutation-conflict-error.js";
+import {
+  assertQuestionAliasRelocation,
+  assertQuestionLifecycleWorker,
+} from "./session-question-recovery-owner.js";
 import type { SessionEntry } from "./types.js";
 
 type ProjectedLifecycleCommitOptions = Omit<ProjectedLifecycleCommitInput, "maintenance"> & {
@@ -102,6 +106,22 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
     }
     return shouldRemove;
   });
+  const preservedKeys = new Set(projected.upsertedEntries.map((upsert) => upsert.sessionKey));
+  for (const removal of validatedRemovals) {
+    if (!preservedKeys.has(removal.sessionKey)) {
+      const relocated = projected.upsertedEntries.some(
+        (upsert) =>
+          upsert.sessionKey !== removal.sessionKey &&
+          (removal.expectedEntry.sessionId === upsert.entry.sessionId ||
+            removal.expectedEntry.sessionId === upsert.entry.previousSessionId),
+      );
+      if (relocated) {
+        assertQuestionAliasRelocation(removal.expectedEntry);
+      } else {
+        assertQuestionLifecycleWorker(removal.expectedEntry);
+      }
+    }
+  }
   const archivedTranscripts = deleteMaterializedSessionStatePlans(
     database,
     removalPlans,

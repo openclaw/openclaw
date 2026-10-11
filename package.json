@@ -5,7 +5,7 @@
     "updateAdmissionProtocol": 1,
     "schemaVersions": {
       "state": 20,
-      "agent": 25
+      "agent": 26
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
