@@ -50,6 +50,7 @@ import type { AmbientTranscriptWatermark, SessionEntry } from "../config/session
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
+  getSessionEntryAsync,
   projectPluginSessionEntry,
   projectPluginSessionEntryPatch,
   type SessionStoreEntrySummary,
