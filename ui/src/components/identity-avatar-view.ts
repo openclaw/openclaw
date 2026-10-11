@@ -1,9 +1,9 @@
-import { html, noChange, nothing, type AttributePart } from "lit";
+import { html, noChange, nothing, render, type AttributePart } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { Directive, directive } from "lit/directive.js";
 import { guard } from "lit/directives/guard.js";
 import { until } from "lit/directives/until.js";
-import { createRoot, createSignal, flush } from "solid-js";
+import { createEffect, createRoot, createSignal, flush, onCleanup } from "solid-js";
 import {
   isThemeAvatarHatId,
   type ThemeBranding,
@@ -29,6 +29,18 @@ import {
 } from "./solid/identity-avatar-image.tsx";
 import { renderThemeBrandIcon } from "./theme-brand-icon.ts";
 import { AVATAR_HAT_SPRITES } from "./theme-flair-sprites.ts";
+
+// The existing artwork helpers own the children of these named leaf containers.
+export function avatarArtwork(read: () => unknown) {
+  let target: HTMLElement;
+  createEffect(read, (template) => {
+    render(template, target);
+  });
+  onCleanup(() => render(nothing, target));
+  return (element: HTMLElement) => {
+    target = element;
+  };
+}
 
 type IdentityAvatarFallback = Extract<ResolvedIdentityAvatar, { kind: "initials" }>;
 

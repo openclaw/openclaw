@@ -1,3 +1,4 @@
+import type { ReactiveControllerHost } from "lit";
 import { fetchControlUiResource, subscribeBrowserAuthRestored } from "../app/browser-http.ts";
 
 type AvatarRouteEntry = {
@@ -164,10 +165,20 @@ export class AuthenticatedAvatarRouteLoader {
     }
   };
 
+  private readonly changed: () => void;
+
   constructor(
-    private readonly changed: () => void,
+    changed: (() => void) | ReactiveControllerHost,
     private readonly options: { retryUnavailable?: boolean } = {},
-  ) {}
+  ) {
+    this.changed = typeof changed === "function" ? changed : () => changed.requestUpdate();
+    if (typeof changed !== "function") {
+      changed.addController({
+        hostConnected: () => this.connect(),
+        hostDisconnected: () => this.disconnect(),
+      });
+    }
+  }
 
   connect() {
     this.connected = true;

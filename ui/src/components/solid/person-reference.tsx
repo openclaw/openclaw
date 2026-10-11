@@ -1,4 +1,3 @@
-import { html, nothing, render } from "lit";
 import { createEffect, createMemo, onCleanup, onSettled, Show, untrack } from "solid-js";
 import type { UsersListResult } from "../../../../packages/gateway-protocol/src/schema/users.js";
 import { buildControlUiUserAvatarPath } from "../../../../src/gateway/control-ui-user-avatar-route.js";
@@ -27,7 +26,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { resolveIdentityAvatarView } from "../identity-avatar-view.ts";
-import { renderPersonActivityCard } from "../person-activity-card.ts";
+import { updatePersonActivityCard } from "../person-activity-card.ts";
 import { observePersonActivityData } from "../person-activity-data.ts";
 import { personActivityRouting } from "../person-activity-link.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "../portaled-hovercard.ts";
@@ -144,7 +143,7 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
     portal.markTrigger(trigger);
     card.addEventListener("pointerleave", portal.handleCardPointerLeave);
     // The unported helper alone owns the portal's children; Solid owns the trigger.
-    portal.mount(trigger, card, "vertical", true, () => render(nothing, card));
+    portal.mount(trigger, card, "vertical", true, () => updatePersonActivityCard(card));
     document.addEventListener("pointerdown", outside, true);
     document.addEventListener("focusin", outside, true);
     document.addEventListener("keydown", escape, true);
@@ -231,59 +230,61 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
       const scope = connection.capture();
       const route = context?.router.getState().location;
       portal.renderContents(card, () =>
-        render(
-          user && context
-            ? renderPersonActivityCard({
-                user,
-                sessionData: data,
-                watchAgentId: resolveUiDefaultAgentId(defaults),
-                mainKey: resolveUiConfiguredMainKey(defaults),
-                globalScope: isUiGlobalScopeConfigured(defaults),
-                routing: personActivityRouting(context, close),
-                openSession: (row, agentId) => {
-                  const face = resolveSessionPreferredFace(row);
-                  const target = sessionNavigationTarget({
-                    face,
-                    sessionKey: row.key,
-                    row,
-                    fallbackAgentId: agentId,
-                    basePath: context.basePath,
-                    mainKey: resolveUiConfiguredMainKey(defaults),
-                  });
-                  close();
-                  runSessionNavigationIntent(props.host, {
-                    agentId,
-                    face,
-                    sessionKey: row.key,
-                    commit: () => {
-                      if (
-                        !scope ||
-                        context.router.getState().location !== route ||
-                        !connection.isCurrent(scope)
-                      ) {
-                        return false;
-                      }
-                      prepareSessionNavigationHandoff(
-                        context.gateway,
-                        target.options.pathname,
-                        row.key,
-                      );
-                      context.navigate(face, target.options);
-                      selectApplicationSession({
-                        selection: context.agentSelection,
-                        gateway: context.gateway,
-                        sessionKey: row.key,
-                        agentId,
-                      });
-                      return true;
-                    },
-                  });
-                },
-              })
-            : html`<div class="person-reference__status" role="status">
-                ${person === undefined ? t("common.loading") : t("chat.mentions.unavailable")}
-              </div>`,
-          card,
+        untrack(() =>
+          updatePersonActivityCard(
+            card,
+            user && context
+              ? {
+                  user,
+                  sessionData: data,
+                  watchAgentId: resolveUiDefaultAgentId(defaults),
+                  mainKey: resolveUiConfiguredMainKey(defaults),
+                  globalScope: isUiGlobalScopeConfigured(defaults),
+                  routing: personActivityRouting(context, close),
+                  openSession: (row, agentId) => {
+                    const face = resolveSessionPreferredFace(row);
+                    const target = sessionNavigationTarget({
+                      face,
+                      sessionKey: row.key,
+                      row,
+                      fallbackAgentId: agentId,
+                      basePath: context.basePath,
+                      mainKey: resolveUiConfiguredMainKey(defaults),
+                    });
+                    close();
+                    runSessionNavigationIntent(props.host, {
+                      agentId,
+                      face,
+                      sessionKey: row.key,
+                      commit: () => {
+                        if (
+                          !scope ||
+                          context.router.getState().location !== route ||
+                          !connection.isCurrent(scope)
+                        ) {
+                          return false;
+                        }
+                        prepareSessionNavigationHandoff(
+                          context.gateway,
+                          target.options.pathname,
+                          row.key,
+                        );
+                        context.navigate(face, target.options);
+                        selectApplicationSession({
+                          selection: context.agentSelection,
+                          gateway: context.gateway,
+                          sessionKey: row.key,
+                          agentId,
+                        });
+                        return true;
+                      },
+                    });
+                  },
+                }
+              : person === undefined
+                ? t("common.loading")
+                : t("chat.mentions.unavailable"),
+          ),
         ),
       );
       portal.position();

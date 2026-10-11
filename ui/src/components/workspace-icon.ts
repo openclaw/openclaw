@@ -19,17 +19,9 @@ class WorkspaceIcon extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) connectionId: string | undefined;
   /** Route whose bytes the browser refused to decode; keyed so a new session retries. */
   @state() private undecodableRouteUrl: string | null = null;
-  private readonly loader = new AuthenticatedAvatarRouteLoader(() => this.requestUpdate(), {
+  private readonly loader = new AuthenticatedAvatarRouteLoader(this, {
     retryUnavailable: true,
   });
-
-  constructor() {
-    super();
-    this.addController({
-      hostConnected: () => this.loader.connect(),
-      hostDisconnected: () => this.loader.disconnect(),
-    });
-  }
 
   override render() {
     return this.loader.withActiveRoutes(() => this.renderContent());
