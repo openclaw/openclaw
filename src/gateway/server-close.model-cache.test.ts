@@ -248,7 +248,7 @@ it.each(["active", "closing-memory"] as const)(
           },
         },
       };
-      const createMemory = await createGatewayMemoryCloseRegistryFactory(memoryConfig);
+      const createMemory = createGatewayMemoryCloseRegistryFactory(memoryConfig);
       const memoryFailure = new Error("queued-model memory close refused");
       const memoryClose = vi.fn(async () => {
         memoryEntered.resolve();
