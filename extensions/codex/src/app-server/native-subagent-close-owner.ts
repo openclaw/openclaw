@@ -65,7 +65,9 @@ export class CodexNativeSubagentCloseOwner {
   }
 
   hasPending(state: ParentState): boolean {
-    return [...(this.calls.get(state)?.values() ?? [])].some((call) => call.settlement);
+    return [...(this.calls.get(state)?.values() ?? [])].some(
+      (call) => call.settlement !== undefined,
+    );
   }
 
   settlements(state: ParentState): Promise<void>[] {

@@ -717,5 +717,3 @@ const CODEX_APP_SERVER_APPROVAL_REQUEST_METHODS = new Set([
 export function isCodexAppServerApprovalRequest(method: string): boolean {
   return CODEX_APP_SERVER_APPROVAL_REQUEST_METHODS.has(method);
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
