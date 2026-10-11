@@ -172,7 +172,7 @@ describe("sendCronAnnouncePayloadStrict", () => {
     expect(mocks.buildOutboundSessionContext).toHaveBeenCalledWith({
       cfg: {},
       agentId: "main",
-      sessionKey: "cron:job-1:failure",
+      sessionKey: undefined,
     });
   });
 

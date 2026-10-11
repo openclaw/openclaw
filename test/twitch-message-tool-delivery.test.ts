@@ -173,7 +173,8 @@ describe("Twitch message-tool delivery", () => {
                 receipt: { platformMessageIds: ["fixture-sent-1"] },
               },
             });
-            expect.soft(transcriptUpdated).toHaveBeenCalledTimes(1);
+            // The producing conversation owns source replies; only cross-target sends add history.
+            expect.soft(transcriptUpdated).toHaveBeenCalledTimes(explicit && !sameSource ? 1 : 0);
           } else {
             expect.soft(result.details).toMatchObject({
               deliveryStatus: "suppressed",
