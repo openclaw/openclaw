@@ -215,8 +215,6 @@ export async function resolveApprovedWorkerModel(params: ResolveApprovedWorkerMo
       }),
       provider: resolved.ref.provider,
       model: resolved.ref.model,
-      config: lifecycleConfig,
-      agentDir,
       workspaceDir,
       modelRef,
       runtimeSnapshot,

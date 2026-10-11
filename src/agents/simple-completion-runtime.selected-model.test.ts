@@ -2,10 +2,8 @@ import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sessionEntryRuntime from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  executeWorkerInference,
-  type WorkerInferenceExecutionParams,
-} from "../gateway/worker-environments/inference-runtime.js";
+import type { WorkerInferenceExecutionParams } from "../gateway/worker-environments/inference-runtime.js";
+import { executeWorkerInference } from "../gateway/worker-environments/inference.js";
 import * as workerTurnOwner from "../gateway/worker-environments/placement-turn-claim-events.js";
 import { prepareWorkerTurnModel } from "../gateway/worker-environments/worker-turn-model.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";

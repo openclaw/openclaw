@@ -28,7 +28,7 @@ import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js"
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../../test-utils/port-claims.js";
-import { executeWorkerInference } from "./inference-runtime.js";
+import { executeWorkerInference } from "./inference.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import { bindWorkerTurnCapabilities, bindWorkerTurnOwner } from "./placement-turn-claim-events.js";

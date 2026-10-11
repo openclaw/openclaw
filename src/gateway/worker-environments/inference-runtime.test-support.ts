@@ -24,10 +24,8 @@ import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
-import {
-  executeWorkerInference,
-  type WorkerInferenceExecutionParams,
-} from "./inference-runtime.js";
+import type { WorkerInferenceExecutionParams } from "./inference-runtime.js";
+import { executeWorkerInference } from "./inference.js";
 import * as workerTurnOwners from "./placement-turn-claim-events.js";
 import { prepareWorkerTurnModel } from "./worker-turn-model.js";
 

@@ -36,6 +36,8 @@ import type {
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
+import type { WorkerInferenceExecutor } from "./connection-identity.js";
+import type { PreparedWorkerInference } from "./inference-model.js";
 import {
   ERROR_MESSAGES,
   inferenceError,
@@ -45,13 +47,11 @@ import {
 import { createWorkerToolCallStream } from "./inference-tool-call-stream.js";
 import {
   getWorkerTurnToolSurface,
-  getWorkerTurnInference,
   readWorkerTurnPromptCacheContext,
 } from "./placement-turn-claim-events.js";
 import { formatWorkerInferenceError } from "./worker-error.js";
 
 type WorkerInferenceStreamEvent = WorkerInferenceEventParams["event"];
-export type WorkerInferenceExecutor = import("./inference.js").WorkerInferenceExecutor;
 export type WorkerInferenceExecutionParams = Parameters<WorkerInferenceExecutor>[0];
 
 function buildContext(context: WorkerInferenceContext): Context | undefined {
@@ -118,8 +118,12 @@ function toWorkerStreamEvent(
   return undefined;
 }
 
-export const executeWorkerInference: WorkerInferenceExecutor = async (params) => {
+export const executePreparedWorkerInference = async (
+  approved: PreparedWorkerInference,
+  params: WorkerInferenceExecutionParams,
+): ReturnType<WorkerInferenceExecutor> => {
   const { identity, request, signal } = params;
+  const { config, agentDir } = approved.runtimeSnapshot;
   if (identity.sessionId !== request.sessionId) {
     return inferenceError("session-not-attached");
   }
@@ -130,8 +134,7 @@ export const executeWorkerInference: WorkerInferenceExecutor = async (params) =>
     return inferenceError("cancelled");
   }
   const promptCacheContext = readWorkerTurnPromptCacheContext(identity);
-  const approved = getWorkerTurnInference(identity);
-  if (!promptCacheContext || !approved) {
+  if (!promptCacheContext) {
     return inferenceError("session-not-attached");
   }
   const runContext = getAgentRunContext(request.runId);
@@ -169,8 +172,8 @@ export const executeWorkerInference: WorkerInferenceExecutor = async (params) =>
         : logicalModel;
     const providerStream = registerProviderStreamForModel({
       model: providerModel,
-      cfg: approved.config,
-      agentDir: approved.agentDir,
+      cfg: config,
+      agentDir,
       workspaceDir: approved.workspaceDir,
     });
     const authValue = prepared.auth.apiKey;
@@ -199,7 +202,7 @@ export const executeWorkerInference: WorkerInferenceExecutor = async (params) =>
         : {}),
     };
     const fastMode = resolveFastModeState({
-      cfg: approved.config,
+      cfg: config,
       provider: approved.provider,
       model: approved.model,
       agentId: target.agentId,
@@ -213,7 +216,7 @@ export const executeWorkerInference: WorkerInferenceExecutor = async (params) =>
       Date.now();
     applyExtraParamsToAgent(
       streamAgent,
-      approved.config,
+      config,
       approved.provider,
       approved.model,
       {
@@ -233,7 +236,7 @@ export const executeWorkerInference: WorkerInferenceExecutor = async (params) =>
       target.agentId,
       approved.workspaceDir,
       providerModel,
-      approved.agentDir,
+      agentDir,
       undefined,
       {
         nativeWebSearchPolicyContext: {
@@ -277,7 +280,7 @@ export const executeWorkerInference: WorkerInferenceExecutor = async (params) =>
     const trace = createDiagnosticTraceContextFromActiveScope();
     let modelCallSeq = 0;
     const stream = wrapStreamFnWithDiagnosticModelCallEvents(scopedStream, {
-      config: approved.config,
+      config,
       runId: request.runId,
       sessionKey: target.sessionKey,
       sessionId: request.sessionId,
@@ -286,12 +289,12 @@ export const executeWorkerInference: WorkerInferenceExecutor = async (params) =>
       api: model.api,
       contextTokenBudget: model.contextTokens ?? model.contextWindow,
       trace,
-      contentCapture: resolveDiagnosticModelContentCapturePolicy(approved.config),
+      contentCapture: resolveDiagnosticModelContentCapturePolicy(config),
       nextCallId: () => `${request.runId}:${request.turnId}:worker-model:${(modelCallSeq += 1)}`,
     });
     const recordUsage = (rawUsage: Usage) => {
       const durationMs = Math.max(0, Date.now() - startedAt);
-      if (!isDiagnosticsEnabled(approved.config)) {
+      if (!isDiagnosticsEnabled(config)) {
         return;
       }
       const usage = normalizeUsage(rawUsage);
@@ -305,7 +308,7 @@ export const executeWorkerInference: WorkerInferenceExecutor = async (params) =>
           cost: resolveModelCostConfig({
             provider: model.provider,
             model: model.id,
-            config: approved.config,
+            config,
           }),
         });
       emitTrustedDiagnosticEvent({
@@ -402,7 +405,7 @@ export const executeWorkerInference: WorkerInferenceExecutor = async (params) =>
             stopReason: event.reason,
           });
           if (terminal.kind === "provider-replay-unavailable") {
-            if (isDiagnosticsEnabled(approved.config)) {
+            if (isDiagnosticsEnabled(config)) {
               const { bytes, limitBytes, reason } = terminal.details;
               emitTrustedDiagnosticEvent({
                 type: "payload.large",
