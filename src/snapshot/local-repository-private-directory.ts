@@ -4,7 +4,7 @@ import { createPrivateSqliteDirectory } from "../infra/sqlite-private-directory.
 export function isPrivateDirectoryAlreadyExists(error: unknown): boolean {
   return process.platform === "win32"
     ? error instanceof FsSafeError && error.code === "already-exists"
-    : (error as NodeJS.ErrnoException).code === "EEXIST";
+    : (error as NodeJS.ErrnoException).code === "EEXIST"; // SAFETY: POSIX fs.mkdir errors.
 }
 
 export async function createPrivateSnapshotDirectory(directoryPath: string): Promise<void> {
