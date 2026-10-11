@@ -73,6 +73,15 @@ describe("cron edit", () => {
     ],
     [["--trigger-script", "", "--clear-trigger"], "--trigger-script must not be blank"],
     [["--script", " ", "--pacing-min", "30m"], "--script must not be blank"],
+    [["--session", "main", "--message", "resume"], 'sessionTarget "main" requires'],
+    [
+      ["--session", "current", "--system-event", "resume"],
+      'sessionTarget "current" cannot run systemEvent: systemEvent only runs in the main session',
+    ],
+    [
+      ["--session", "session:agent:main:conversation", "--script", "missing.js"],
+      'sessionTarget "session:agent:main:conversation" cannot run script payloads',
+    ],
     [["--tools", "", "--clear-tools", "--pacing-min", "30m"], "Use --tools or --clear-tools"],
     [["--agent", "main", "--clear-agent"], "Use --agent or --clear-agent"],
     [
@@ -322,6 +331,21 @@ describe("cron edit", () => {
 });
 
 describe("automation mutation options", () => {
+  it("uses target-specific guidance when adding a system event to a conversation", async () => {
+    await reject(
+      [
+        ...addArgs,
+        "--at",
+        "+3m",
+        "--session",
+        "session:agent:main:conversation",
+        "--system-event",
+        "resume",
+      ],
+      'sessionTarget "session:agent:main:conversation" cannot run systemEvent: systemEvent only runs in the main session',
+    );
+  });
+
   it.each([
     ["add", ["--at", "2030-01-01T09:00:00", "--tz", "Invalid/Timezone"], "Invalid --tz"],
     ["add", ["--at", "2030-01-01T09:00:00Z", "--tz", "Invalid/Timezone"], "Invalid --tz"],
