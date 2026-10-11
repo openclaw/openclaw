@@ -324,7 +324,7 @@ All settings live under `plugins.entries.memory-core.config.dreaming`.
   Enable or disable the dreaming sweep.
 </ParamField>
 <ParamField path="phases.deep.maxPriorEntryLossFraction" type="number" default="0.25">
-  Reject a consolidation rewrite or append compaction when it removes more than this fraction of prior entries. Append compaction only removes whole machine-generated promotion sections.
+  Reject a consolidation rewrite or append compaction when it removes more than this fraction of prior entries. Append compaction only removes whole machine-generated promotion and consolidation sections.
 </ParamField>
 <ParamField path="frequency" type="string" default="0 3 * * *">
   Cron cadence for the full dreaming sweep.
