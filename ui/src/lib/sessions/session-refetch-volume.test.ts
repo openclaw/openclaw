@@ -76,7 +76,6 @@ it("bounds list reads across two viewers and three streaming sessions for three 
     });
     const stop = store.subscribe(() => {});
     const activity = new SessionActivityController(() => {});
-    activity.connect();
     void sessions.refresh({ agentId: "main", force: true });
     void activity.load(client, { personId: null, time: "all", query: "" });
     return { reads, sessions, store, activity, stop, source, client, agents };

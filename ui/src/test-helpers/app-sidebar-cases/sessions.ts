@@ -343,8 +343,13 @@ describe("AppSidebar session source lifecycle", () => {
     sidebar.onUpdateSidebarEntries = (entries) => {
       sidebar.sidebarEntries = entries;
     };
+    await sidebar.sidebarMenus.preloadMenuRenderer();
+    pinnedEntry()!.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+    );
+    await sidebar.updateComplete;
     sidebar
-      .querySelector(`[data-sidebar-entry="session:${key}"] wa-dropdown`)!
+      .querySelector(".sidebar-rail-pin-menu")!
       .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "remove" } } }));
     await sidebar.updateComplete;
     expect(pinnedEntry()).toBeNull();

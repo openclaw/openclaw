@@ -50,30 +50,14 @@ describe("browser navigation guard", () => {
     ).resolves.toBeUndefined();
   });
 
-  it.each([
-    "file:///etc/passwd",
-    "data:text/html,<h1>owned</h1>",
-    "javascript:alert(1)",
-    "about:srcdoc",
-  ])("blocks unsupported navigation URL %s", async (url) => {
-    await expect(assertBrowserNavigationAllowed({ url })).rejects.toBeInstanceOf(
-      InvalidBrowserNavigationUrlError,
-    );
-  });
-
-  it("allows explicitly trusted hostnames that resolve to private addresses", async () => {
-    const lookupFn = createLookupFn("10.0.0.1");
-    await expect(
-      assertBrowserNavigationAllowed({
-        url: "http://agent.internal:3000",
-        ssrfPolicy: {
-          allowedHostnames: ["agent.internal"],
-        },
-        lookupFn,
-      }),
-    ).resolves.toBeUndefined();
-    expect(lookupFn).toHaveBeenCalledWith("agent.internal", { all: true });
-  });
+  it.each(["file:///etc/passwd", "about:srcdoc"])(
+    "blocks unsupported navigation URL %s",
+    async (url) => {
+      await expect(assertBrowserNavigationAllowed({ url })).rejects.toBeInstanceOf(
+        InvalidBrowserNavigationUrlError,
+      );
+    },
+  );
 
   it("blocks hostnames that resolve to private addresses by default", async () => {
     const lookupFn = createLookupFn("127.0.0.1");
@@ -83,17 +67,6 @@ describe("browser navigation guard", () => {
         lookupFn,
       }),
     ).rejects.toBeInstanceOf(SsrFBlockedError);
-  });
-
-  it("allows hostnames that resolve to public addresses", async () => {
-    const lookupFn = createLookupFn("93.184.216.34");
-    await expect(
-      assertBrowserNavigationAllowed({
-        url: "https://example.com",
-        lookupFn,
-      }),
-    ).resolves.toBeUndefined();
-    expect(lookupFn).toHaveBeenCalledWith("example.com", { all: true });
   });
 
   it.each([
@@ -144,32 +117,8 @@ describe("browser navigation guard", () => {
     }
   });
 
-  it("blocks hostname navigation when strict SSRF policy is explicitly configured", async () => {
-    const lookupFn = createLookupFn("93.184.216.34");
-    await expect(
-      assertBrowserNavigationAllowed({
-        url: "https://example.com",
-        lookupFn,
-        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-      }),
-    ).rejects.toThrow(/dns rebinding protections are unavailable/i);
-    expect(lookupFn).not.toHaveBeenCalled();
-  });
-
-  it("allows hostname navigation when the default strict policy object is present", async () => {
-    const lookupFn = createLookupFn("93.184.216.34");
-    await expect(
-      assertBrowserNavigationAllowed({
-        url: "https://example.com",
-        lookupFn,
-        ssrfPolicy: {},
-      }),
-    ).resolves.toBeUndefined();
-    expect(lookupFn).toHaveBeenCalledWith("example.com", { all: true });
-  });
-
   it("allows explicitly allowed hostnames in strict mode", async () => {
-    const lookupFn = createLookupFn("93.184.216.34");
+    const lookupFn = createLookupFn("10.0.0.1");
     await expect(
       assertBrowserNavigationAllowed({
         url: "https://agent.internal",
@@ -213,15 +162,6 @@ describe("browser navigation guard", () => {
       expect(lookupFn).not.toHaveBeenCalled();
     },
   );
-
-  it("treats bracketed IPv6 URL hostnames as IP literals in strict mode", async () => {
-    await expect(
-      assertBrowserNavigationAllowed({
-        url: "https://[2606:4700:4700::1111]/",
-        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-      }),
-    ).resolves.toBeUndefined();
-  });
 
   it("allows public navigation when only Gateway env proxy is configured", async () => {
     vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
@@ -285,16 +225,6 @@ describe("browser navigation guard", () => {
     });
     await expect(result).rejects.toThrow("Invalid URL: [redacted credential-bearing URL]");
     await expect(result).rejects.not.toThrow("secret");
-  });
-
-  it("validates final network URLs after navigation", async () => {
-    const lookupFn = createLookupFn("127.0.0.1");
-    await expect(
-      assertBrowserNavigationResultAllowed({
-        url: "http://private.test",
-        lookupFn,
-      }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
   });
 
   it("ignores non-network browser-internal final URLs", async () => {

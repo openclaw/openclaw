@@ -105,6 +105,11 @@ suite.define(() => {
       await composer.fill("");
       await waitForSettledFormControls(page, [{ locator: composer, value: "" }]);
       await expect.poll(() => draft.count()).toBe(0);
+      // Opening Home collapses the desktop list while keeping the rail available.
+      await page
+        .locator(".sidebar-rail")
+        .getByRole("button", { name: "Sessions", exact: true })
+        .click();
       await secondRow.getByRole("link").click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(secondKey));
       await expect.poll(() => draft.count()).toBe(0);
