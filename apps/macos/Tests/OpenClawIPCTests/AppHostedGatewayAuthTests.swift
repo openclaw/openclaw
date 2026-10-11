@@ -10,11 +10,24 @@ struct AppHostedGatewayAuthTests {
             ["gateway": ["mode": "local"]],
             ["gateway": ["auth": ["mode": "token"]]],
             ["gateway": ["auth": ["token": " \n"]]],
+            ["env": ["vars": ["OTHER": "x"]]],
+            ["env": ["vars": ["OPENCLAW_GATEWAY_TOKEN": " "]]],
         ]
         for root in persist {
             #expect(AppHostedGatewayAuth.decision(root: root, environment: [:]) == .persist)
         }
         let keep: [[String: Any]] = [
+            ["$include": "./base.json"],
+            ["gateway": ["$include": "./gateway.json"]],
+            ["gateway": ["mode": "local", "auth": ["$include": "./auth.json"]]],
+            ["env": ["vars": ["OPENCLAW_GATEWAY_PASSWORD": "test-password"]]],
+            ["env": ["OPENCLAW_GATEWAY_TOKEN": "test-token"]],
+            ["env": ["vars": ["openclaw_gateway_token": "test-token"]]],
+            ["env": "invalid"],
+            ["env": ["vars": ["OPENCLAW_GATEWAY_TOKEN": ""], "OPENCLAW_GATEWAY_TOKEN": "test-token"]],
+            ["env": ["vars": ["$include": "./gateway-env.json"]]],
+            ["env": ["$include": "./env.json"]],
+            ["env": ["vars": "invalid"]],
             ["gateway": ["auth": ["token": "test-configured-token"]]],
             ["gateway": ["auth": ["token": "${OPENCLAW_GATEWAY_TOKEN}"]]],
             ["gateway": ["auth": ["token": "$OTHER_TOKEN"]]],
