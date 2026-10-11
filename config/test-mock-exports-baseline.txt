@@ -1747,7 +1747,6 @@
 ["extensions/workboard/index.test.ts","./src/store.js","b749a888c1ebe4af21829497411189cd2dfd4154aa54a231f352da87f71733b8",1]
 ["extensions/workboard/src/sessions-board.test.ts","openclaw/plugin-sdk/logging-core","0b3ec9cec3895d4840ed1c9df417931f61189b1c15512a218d1b1d1778b57d56",1]
 ["extensions/workboard/src/sqlite-store-policy.test.ts","openclaw/plugin-sdk/plugin-state-runtime","04527de3229ceacbc61b638b5eab5490dfd682583f0ed59877c107412b89e20d",1]
-["extensions/workboard/src/sqlite-store-policy.test.ts","openclaw/plugin-sdk/sqlite-worker-runtime","d18e2725d053afd14094dd6fb461c67e6c22a0d98b6575ed2b6a4a4f92fb2cc1",1]
 ["extensions/xai/catalog-defaults.test.ts","openclaw/plugin-sdk/provider-auth-runtime","005e66becdcf07db6e8006b7aa7eaff697d8a4b292d7a7a4669eaf6ef8e309dc",1]
 ["extensions/xai/image-generation-provider.test.ts","openclaw/plugin-sdk/provider-auth-runtime","eb5c37bf125f5fa367efe98a452d35bf05f27f507d2580cdc66ca9fab4f8a891",1]
 ["extensions/xai/image-generation-provider.test.ts","openclaw/plugin-sdk/provider-http","7b2f0c7c2dd8572eee44cc8e58f5e0cc8ee46811adf0de7d387455c0abc47471",1]

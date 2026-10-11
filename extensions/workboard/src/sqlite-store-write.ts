@@ -1,5 +1,6 @@
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import type { SQLInputValue } from "node:sqlite";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
+import type { SqlConnection } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import {
   compileSqliteQueryBindings,
   executeSqliteQueryTakeFirstSync,
@@ -31,7 +32,7 @@ export function bindNull(value: unknown): SQLInputValue {
 }
 
 export function prepareWorkboardUpsert(
-  db: DatabaseSync,
+  db: SqlConnection,
   table: "workboard_cards" | "workboard_boards" | "workboard_notification_subscriptions",
   fields: Record<string, () => SQLInputValue>,
   preserved: readonly string[] = [],
@@ -60,7 +61,7 @@ export function prepareWorkboardUpsert(
 }
 
 function insertChildren<T>(
-  db: DatabaseSync,
+  db: SqlConnection,
   table: (typeof CARD_CHILD_TABLES)[number],
   cardId: string,
   entries: readonly T[] | undefined,
@@ -92,7 +93,7 @@ function insertChildren<T>(
   }
 }
 
-export function insertCard(db: DatabaseSync, card: WorkboardCard): void {
+export function insertCard(db: SqlConnection, card: WorkboardCard): void {
   const board = executeSqliteQueryTakeFirstSync(
     db,
     getNodeSqliteKysely<{ workboard_boards: { id: string; kind: string | null } }>(db)

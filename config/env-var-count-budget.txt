@@ -11,4 +11,5 @@
 # OPENCLAW_NODE_EXEC_FALLBACK was removed by the core subsystem cleanup (#164153).
 # Codex computer-use derives the same environment keys from option names instead of repeating literals.
 # OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS (#168350) is the owner-approved updater-to-Doctor post-activation handoff.
-456
+# OPENCLAW_EXPERIMENTAL_POSTGRES_URL is the approved dev/conformance-only workboard pilot.
+457

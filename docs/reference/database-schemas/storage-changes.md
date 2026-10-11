@@ -86,6 +86,36 @@ not runtime backend support or a choice of per-agent PostgreSQL topology.
 The lexical gate examines `.sql` files minus comments, all static parts of templates whose tag's final identifier ends in `sql` (case-insensitive), strings and untagged templates starting after whitespace and `(` with an uppercase SQL statement keyword, and the `orReplace`/`orIgnore`/`orAbort`/`orFail`/`orRollback` method calls; construct regexes remain case-insensitive, exclude SQL double-quoted text, require `name(` for functions, and require `PRAGMA <name>` or `pragma_<name>(` for `data_version`/`schema_version`/`user_version`.
 Prose, fragments without a statement prefix, and substitutions are ignored, accepting under-counts for assembled SQL; both revisions use identical rules without type, symbol, import, or SQL token-role analysis, and runtime behavior and schemas are unchanged.
 
+### Experimental PostgreSQL engine (workboard pilot)
+
+`OPENCLAW_EXPERIMENTAL_POSTGRES_URL` selects PostgreSQL for the workboard plugin
+store only. This environment variable is for development and conformance testing,
+not supported deployment configuration. SQLite remains the supported store and
+the default when the variable is unset; updates require no configuration or data
+migration for SQLite stores. Other OpenClaw stores continue to use SQLite.
+
+The workboard database path holds a small SQLite anchor with a durable store
+UUID. Its first 16 hexadecimal characters select the PostgreSQL schema
+`openclaw_workboard_<uuid-prefix>`; moving the anchor preserves that identity.
+Back up and restore both the anchor and its PostgreSQL schema together.
+The pilot refuses an existing SQLite workboard store containing data; it does
+not port that data to PostgreSQL. Opening an anchor without the experimental URL
+refuses and names its PostgreSQL schema; it never creates SQLite workboard tables
+in the anchor. This check runs once per open, never per operation. The connection
+owns its `search_path`.
+Writers use `READ COMMITTED` with one transaction-scoped advisory lock derived
+from the store UUID; snapshot reads use `REPEATABLE READ READ ONLY`. Connections set
+`synchronous_commit=off` to match SQLite WAL with `synchronous=NORMAL`: an operating
+system or database crash can lose recent acknowledged commits.
+
+`pnpm db:postgres:gen --target workboard` generates the workboard DDL from its
+SQLite schema; `pnpm db:postgres:check` verifies freshness. Admission installs the
+tables and records the current store version in one transaction. There are no
+PostgreSQL migrations yet: an existing version mismatch refuses to open and names
+the expected version. PostgreSQL text cannot store NUL characters, so NUL-bearing
+values fail with an engine error. This pilot does not enable multiple active
+Gateways against the same store.
+
 ### Keep operations at the owning store
 
 Session cleanup reads entry metadata and missing-transcript classifications in one

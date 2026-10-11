@@ -4,9 +4,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect } from "vitest";
 import { workboardSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
+import { sqliteOnly as test } from "./test/sqlite-only.js";
 
 const workerModuleUrl = resolveRuntimeWorkerUrl(workboardSqliteBackendEntrypoint);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -36,7 +37,8 @@ function explainWorkboardQueryPlan(
 }
 
 describe("Workboard SQLite schema admission", () => {
-  it("restores dropped card child indexes without changing the schema version", async () => {
+  // Inspects and repairs native SQLite indexes and EXPLAIN QUERY PLAN output.
+  test("restores dropped card child indexes without changing the schema version", async () => {
     const dir = tempDirs.make("openclaw-workboard-index-reopen-");
     const dbPath = path.join(dir, "workboard.sqlite");
     const initialized = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
@@ -88,7 +90,8 @@ describe("Workboard SQLite schema admission", () => {
     }
   });
 
-  it("migrates a version 2 workboard table to STRICT without losing rows", async () => {
+  // Builds a legacy SQLite file and verifies its STRICT-table migration.
+  test("migrates a version 2 workboard table to STRICT without losing rows", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-strict-migration-"));
     const dbPath = path.join(dir, "workboard.sqlite");
     const initialized = createWorkboardSqliteStores({ dbPath, workerModuleUrl });

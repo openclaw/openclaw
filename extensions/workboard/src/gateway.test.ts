@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import { registerWorkboardGatewayMethods } from "./gateway.js";
 import { startEmptySessionsBoardService } from "./test/sessions-board.js";
+import { sqliteOnly as test } from "./test/sqlite-only.js";
 import {
   createWorkboardSqliteTestHarness,
   createWorkboardSqliteTestStore,
@@ -132,7 +133,8 @@ describe("workboard gateway methods", () => {
     expect(reenabled.mock.calls[0]?.[0]).toBe(true);
   });
 
-  it.each(["card-read", "attachment-write", "attachment-committed", "metadata-write"] as const)(
+  // Inspects committed and orphaned blobs through a native SQLite file handle.
+  test.each(["card-read", "attachment-write", "attachment-committed", "metadata-write"] as const)(
     "rejects attachment bytes when %s observes hot disable",
     async (phase) => {
       const { api, methods } = createGatewayMethodCapture();

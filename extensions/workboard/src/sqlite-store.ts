@@ -5,6 +5,7 @@ import {
   openSqliteWorkerStore,
   readSqliteDatabaseWriteTokenForPath,
   runSqliteWorkerStoreOperation,
+  runSqliteWorkerStoreWrite,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import type { WorkboardPersistence, WorkboardWriteAuthority } from "./persistence-types.js";
@@ -103,6 +104,25 @@ export function createWorkboardSqliteStores(options: {
   ): Promise<WorkboardSqliteOperations[K]["output"]> {
     const authority = writes ? writeAuthority.getStore() : undefined;
     const store = await worker;
+    if (writes && process.env.OPENCLAW_EXPERIMENTAL_POSTGRES_URL) {
+      const result = unwrapWorkboardSqliteResult(
+        await runSqliteWorkerStoreWrite(
+          store,
+          (scope) => scope.execute({ type, input }),
+          () => {
+            if (authority && !authority.active) {
+              throw new Error("Workboard mutation authority has settled.");
+            }
+            authority?.assertCurrent?.();
+          },
+          [databasePath],
+        ),
+      );
+      if (authority && result !== false && result !== "conflict" && result !== "owner_busy") {
+        authority.assertCurrent = undefined;
+      }
+      return result;
+    }
     if (!authority) {
       return unwrapWorkboardSqliteResult(await store.execute({ type, input }));
     }
