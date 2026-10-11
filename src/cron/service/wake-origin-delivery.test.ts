@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
-import type { CronServiceState } from "./state.js";
+import type { CronServiceDeps, CronServiceState } from "./state.js";
 import { wake } from "./wake.js";
 
 const TOPIC_DELIVERY_CONTEXT: DeliveryContext = {
@@ -11,10 +11,7 @@ const TOPIC_DELIVERY_CONTEXT: DeliveryContext = {
 };
 
 function makeStateWithMocks(
-  resolveOriginDeliveryContext?: (params: {
-    sessionKey?: string;
-    agentId?: string;
-  }) => DeliveryContext | undefined,
+  resolveOriginDeliveryContext?: CronServiceDeps["resolveOriginDeliveryContext"],
 ): {
   state: CronServiceState;
   enqueueSystemEvent: ReturnType<typeof vi.fn>;
@@ -40,12 +37,12 @@ function makeStateWithMocks(
 }
 
 describe("cron wake() origin delivery-context carry", () => {
-  it("threads the resolved deliveryContext onto a sessionKey-targeted wake", () => {
+  it("threads the resolved deliveryContext onto a sessionKey-targeted wake", async () => {
     const { state, enqueueSystemEvent, resolveOriginDeliveryContext } = makeStateWithMocks(
-      () => TOPIC_DELIVERY_CONTEXT,
+      async () => TOPIC_DELIVERY_CONTEXT,
     );
 
-    const result = wake(state, {
+    const result = await wake(state, {
       mode: "now",
       text: "check the queue",
       sessionKey: "agent:main:telegram:8661849123:topic:4052",
@@ -64,13 +61,13 @@ describe("cron wake() origin delivery-context carry", () => {
     });
   });
 
-  it("resolves and carries deliveryContext for a sessionKey-only wake (no agentId)", () => {
+  it("resolves and carries deliveryContext for a sessionKey-only wake (no agentId)", async () => {
     // Pins the resolver guard against requiring both sessionKey and agentId.
     const { state, enqueueSystemEvent, resolveOriginDeliveryContext } = makeStateWithMocks(
       () => TOPIC_DELIVERY_CONTEXT,
     );
 
-    wake(state, {
+    await wake(state, {
       mode: "now",
       text: "check the queue",
       sessionKey: "agent:main:telegram:8661849123:topic:4052",
@@ -86,10 +83,10 @@ describe("cron wake() origin delivery-context carry", () => {
     });
   });
 
-  it("omits deliveryContext when no origin context resolves (unchanged default routing)", () => {
+  it("omits deliveryContext when no origin context resolves (unchanged default routing)", async () => {
     const { state, enqueueSystemEvent } = makeStateWithMocks(() => undefined);
 
-    wake(state, {
+    await wake(state, {
       mode: "now",
       text: "check the queue",
       sessionKey: "agent:main:telegram:8661849123:topic:4052",
@@ -102,12 +99,12 @@ describe("cron wake() origin delivery-context carry", () => {
     expect(options).not.toHaveProperty("deliveryContext");
   });
 
-  it("keeps the no-origin call shape (enqueueSystemEvent(text, undefined)) when untargeted", () => {
+  it("keeps the no-origin call shape (enqueueSystemEvent(text, undefined)) when untargeted", async () => {
     const { state, enqueueSystemEvent, resolveOriginDeliveryContext } = makeStateWithMocks(
       () => TOPIC_DELIVERY_CONTEXT,
     );
 
-    wake(state, { mode: "now", text: "no origin" });
+    await wake(state, { mode: "now", text: "no origin" });
 
     expect(resolveOriginDeliveryContext).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith("no origin", undefined);

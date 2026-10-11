@@ -1,4 +1,4 @@
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -131,10 +131,10 @@ export function runsDetachedFromMainSession(job: CronJob): boolean {
   return job.sessionTarget !== "main" || job.payload.kind === "script";
 }
 
-export function resolveMainSessionCronDeliveryContext(
+export async function resolveMainSessionCronDeliveryContext(
   state: CronServiceState,
   job: CronJob,
-): DeliveryContext | undefined {
+): Promise<DeliveryContext | undefined> {
   const targetSessionKey = job.sessionKey?.trim();
   if (!targetSessionKey) {
     return undefined;
@@ -152,7 +152,7 @@ export function resolveMainSessionCronDeliveryContext(
     return undefined;
   }
   try {
-    const sessionEntry = loadSessionEntryReadOnly({
+    const sessionEntry = await readSessionEntryReadOnlyInWorker({
       agentId,
       sessionKey: targetSessionKey,
       storePath,

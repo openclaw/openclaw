@@ -16,6 +16,15 @@ export function projectGateway(source: ApplicationGateway) {
   });
 }
 
+/** Acquiring this projection enables diagnostic capture; the last reader releases it. */
+export function projectGatewayEventLog(source: ApplicationGateway) {
+  return projectSource(source, {
+    read: (gateway) => ({ entries: gateway.eventLog, revision: gateway.eventLogRevision }),
+    subscribe: (gateway, notify) => gateway.subscribeEventLog(notify),
+    equality: "revision",
+  });
+}
+
 export function projectApplicationConfig(source: ApplicationConfigCapability) {
   return projectSource(source, {
     read: (config) => config.current,

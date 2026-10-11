@@ -7,7 +7,6 @@ import {
   type CommandArgs,
 } from "openclaw/plugin-sdk/command-auth-native";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -226,19 +225,14 @@ async function handleDiscordModelPickerInteraction(
     accountId: ctx.accountId,
     threadBindings: ctx.threadBindings,
   });
-  const sessionEntry = await getSessionEntryAsync({
-    agentId: route.agentId,
-    storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
-    sessionKey: route.sessionKey,
-    readConsistency: "latest",
-  });
+  const sessionEntry = await createDiscordModelPickerSessionReader({ cfg, route }, "latest")();
   const pickerData = await loadDiscordModelPickerData(cfg, route.agentId, { sessionEntry });
   const tokenModel = parsed.modelToken
     ? resolveDiscordModelPickerModelRefByToken(pickerData, parsed.modelToken)
     : null;
   const parsedProvider = parsed.provider ?? splitDiscordModelRef(tokenModel ?? "")?.provider;
-  const modelContext = { cfg, route, data: pickerData };
-  const currentModelRef = resolveDiscordModelPickerCurrentModel(modelContext);
+  const modelContext = { cfg, route, data: pickerData, sessionEntry };
+  const currentModelRef = await resolveDiscordModelPickerCurrentModel(modelContext);
   const currentModel = splitDiscordModelRef(currentModelRef);
   const browseProvider =
     parsedProvider ?? currentModel?.provider ?? pickerData.resolvedDefault.provider;
@@ -486,7 +480,7 @@ async function handleDiscordModelPickerInteraction(
     );
     const modelOnlyHost = !supportsDiscordModelPickerRuntimeChoices();
     const supportsModelOnlySelection = () => {
-      const currentEntry = createDiscordModelPickerSessionReader({ cfg, route }, "latest")();
+      const currentEntry = sessionEntry;
       const override = currentEntry?.agentRuntimeOverride?.trim();
       // The old command owner cannot validate native pins against a different model.
       // Preserve those pins; model-only compatibility never invents a runtime choice.
@@ -552,10 +546,6 @@ async function handleDiscordModelPickerInteraction(
       await showNotice("That model picker expired. Reopen /model to try again.");
       return;
     }
-    if (modelOnlyHost && !supportsModelOnlySelection()) {
-      await showNotice(legacyRuntimeNotice);
-      return;
-    }
     const applyResult = await applyDiscordModelPickerSelection({
       ...ctx,
       interaction,
@@ -567,16 +557,17 @@ async function handleDiscordModelPickerInteraction(
       selectedRuntime,
       preferenceScope,
       settleMs: ctx.postApplySettleMs ?? 250,
-      resolveCurrentModel: (currentRoute) =>
-        resolveDiscordModelPickerCurrentModel({
-          ...modelContext,
-          route: currentRoute,
-        }),
-      resolveCurrentRuntime: (currentRoute) =>
-        resolveDiscordModelPickerCurrentRuntime({
+      resolveCurrentSelection: async (currentRoute) => {
+        const currentEntry = await createDiscordModelPickerSessionReader({
           cfg,
           route: currentRoute,
-        }),
+        })();
+        const currentContext = { ...modelContext, route: currentRoute, sessionEntry: currentEntry };
+        return {
+          modelRef: await resolveDiscordModelPickerCurrentModel(currentContext),
+          runtime: resolveDiscordModelPickerCurrentRuntime(currentContext),
+        };
+      },
     });
 
     const delivered = await params.safeInteractionCall("model picker follow-up", () =>

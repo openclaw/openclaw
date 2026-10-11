@@ -180,16 +180,17 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     resolveSourceReplyExpectation({ ctx, cfg, isHeartbeat: params.replyOptions?.isHeartbeat }),
     "empty",
   );
-  const { configuredVisibleReplies, harnessDefaultVisibleReplies } = resolveVisibleRepliesPolicy({
-    cfg,
-    chatType,
-    ctx,
-    entry: sessionStoreEntry.entry,
-    sessionAgentId,
-    sessionKey: acpDispatchSessionKey,
-    sessionStore: sessionStoreEntry.store,
-    turnModelOverride: resolveTurnModelOverride(params.replyOptions),
-  });
+  const { configuredVisibleReplies, harnessDefaultVisibleReplies } =
+    await resolveVisibleRepliesPolicy({
+      cfg,
+      chatType,
+      ctx,
+      entry: sessionStoreEntry.entry,
+      sessionAgentId,
+      sessionKey: acpDispatchSessionKey,
+      sessionStore: sessionStoreEntry.store,
+      turnModelOverride: resolveTurnModelOverride(params.replyOptions),
+    });
   const effectiveVisibleReplies = configuredVisibleReplies ?? harnessDefaultVisibleReplies;
   const prefersMessageToolDelivery =
     params.replyOptions?.sourceReplyDeliveryMode === "message_tool_only" ||

@@ -69,6 +69,12 @@ const mocks = vi.hoisted(() => ({
   open: vi.fn(),
 }));
 vi.mock("../session-utils.js", () => ({ loadGatewaySessionEntryReadOnly: mocks.load }));
+
+vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
+    mocks.load(params.key, { agentId: params.agentId }),
+}));
 vi.mock("../../config/sessions/session-accessor.js", async (original) => ({
   ...(await original<typeof import("../../config/sessions/session-accessor.js")>()),
   loadSessionEntryReadOnly: () => mocks.load().entry,
