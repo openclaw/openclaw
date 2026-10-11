@@ -121,6 +121,8 @@ describe("doctor plugin manifest legacy contract repair", () => {
     expect(legacyPluginManifestContractMigrationToHealthFinding(migration)).toStrictEqual({
       checkId: "core/doctor/legacy-plugin-manifests",
       severity: "warning",
+      category: "fix-now",
+      docsUrl: "https://docs.openclaw.ai/cli/doctor/checks",
       message: "Plugin manifest openai uses legacy top-level capability keys.",
       path: path.join(root, "openclaw.plugin.json"),
       target: "openai",

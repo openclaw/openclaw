@@ -128,8 +128,8 @@ describe("doctor command", () => {
   });
 
   it("routes browser readiness through health contributions", async () => {
-    const { noteChromeMcpBrowserReadiness } = await import("./doctor-browser.js");
-    const browserReadiness = vi.mocked(noteChromeMcpBrowserReadiness);
+    const { collectBrowserReadinessFindings } = await import("./doctor-browser.js");
+    const browserReadiness = vi.mocked(collectBrowserReadinessFindings);
     browserReadiness.mockClear();
     mockDoctorConfigSnapshot({
       config: {

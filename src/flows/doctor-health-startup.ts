@@ -6,7 +6,11 @@ import type { DoctorDatabasePreflight } from "../commands/doctor-database-prefli
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import { resolveDoctorRepairMode } from "../commands/doctor-repair-mode.js";
 import { resolveIsNixMode, resolveStateDir } from "../config/paths.js";
+import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
+import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
 import { createNonExitingRuntime, defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
+import { showDoctorHealthSummary } from "./doctor-health-contribution.js";
 
 export const showDoctorIntro = (message: string) =>
   clackIntro(stylePromptTitle(message) ?? message);
@@ -126,5 +130,29 @@ export async function prepareDoctorInteractiveMaintenance(params: {
       allowExec: params.options.allowExec,
       deep: params.options.deep,
     }),
+  };
+}
+
+export function showDoctorConfigWriteRefusal(
+  ctx: DoctorHealthFlowContext,
+): UpdatePostInstallDoctorResult | undefined {
+  if (!ctx.configWriteRefusal) {
+    return undefined;
+  }
+  showDoctorHealthSummary(ctx);
+  showDoctorOutro(
+    ctx.configResultWriteCommitted === true
+      ? "Doctor finished, but some config fixes were not applied."
+      : "Doctor finished, but config fixes were not applied.",
+  );
+  return {
+    status: "error",
+    failureFacts: [
+      createUpdateFailureFact({
+        check: "config-write",
+        code: ctx.configWriteRefusal,
+        message: "Doctor config fixes were not applied.",
+      }),
+    ],
   };
 }

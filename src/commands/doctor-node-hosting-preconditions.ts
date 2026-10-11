@@ -90,7 +90,13 @@ export async function collectNodeHostingPreconditionFindings(
   }
   const findings: HealthFinding[] = [];
   const warn = (finding: Omit<HealthFinding, "checkId" | "severity">) =>
-    findings.push({ checkId: CHECK_ID, severity: "warning", ...finding });
+    findings.push({
+      checkId: CHECK_ID,
+      severity: "warning",
+      category: "fix-now",
+      docsUrl: "https://docs.openclaw.ai/nodes",
+      ...finding,
+    });
   if (lacksNodeOnboardingPlugin(cfg)) {
     warn({
       message:

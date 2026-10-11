@@ -170,6 +170,8 @@ describe("noteDevicePairingHealth", () => {
           severity: "warning",
           path: "devices.pending",
           target: identity.deviceId + ":" + pending.request.requestId,
+          category: "recommended",
+          docsUrl: "https://docs.openclaw.ai/cli/devices",
           requirement: "scope-upgrade",
           message: expect.stringContaining("Pending scope upgrade"),
           fixHint: expect.stringContaining("openclaw devices approve"),
@@ -213,6 +215,8 @@ describe("noteDevicePairingHealth", () => {
               checkId: "core/doctor/device-pairing",
               severity: "warning",
               path: testCase.findingPath,
+              category: "fix-now",
+              docsUrl: "https://docs.openclaw.ai/cli/devices",
               requirement: testCase.requirement,
               message: expect.stringContaining(
                 testCase.requirement === "pairing-store-legacy-file"

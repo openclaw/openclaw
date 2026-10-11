@@ -6,7 +6,10 @@ import {
   noteDoctorRepairResult,
   resolveDoctorWorkspaceDir,
 } from "./doctor-health-contribution-utils.js";
-import { recordDoctorHealthWarnings } from "./doctor-health-contribution.js";
+import {
+  recordDoctorHealthWarnings,
+  renderStructuredHealthFindings,
+} from "./doctor-health-contribution.js";
 
 export async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyPluginManifestContracts } =
@@ -165,6 +168,7 @@ export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext):
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
     onWarnings: (warnings) => recordDoctorHealthWarnings(ctx, [], warnings),
+    onFindings: (findings) => renderStructuredHealthFindings(ctx, findings),
     ...(ctx.configResult.postSessionPluginMigration
       ? { postSessionPluginMigration: ctx.configResult.postSessionPluginMigration }
       : {}),

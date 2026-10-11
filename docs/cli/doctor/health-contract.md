@@ -36,14 +36,18 @@ Repair contexts can carry `dryRun`/`diff` requests; repair results can return st
 
 A finding includes:
 
-| Field             | Purpose                                                |
-| ----------------- | ------------------------------------------------------ |
-| `checkId`         | Stable id for skip/only filters and CI allowlists.     |
-| `severity`        | `info`, `warning`, or `error`.                         |
-| `message`         | Human-readable problem statement.                      |
-| `path`            | Config, file, or logical path when available.          |
-| `line` / `column` | Source location when available.                        |
-| `ocPath`          | Precise `oc://` address when a check can point to one. |
-| `fixHint`         | Suggested operator action or repair summary.           |
+| Field             | Purpose                                                                                        |
+| ----------------- | ---------------------------------------------------------------------------------------------- |
+| `checkId`         | Stable id for skip/only filters and CI allowlists.                                             |
+| `severity`        | `info`, `warning`, or `error`.                                                                 |
+| `message`         | Human-readable problem statement.                                                              |
+| `path`            | Config, file, or logical path when available.                                                  |
+| `line` / `column` | Source location when available.                                                                |
+| `ocPath`          | Precise `oc://` address when a check can point to one.                                         |
+| `fixHint`         | Concrete next step; say when no action is needed.                                              |
+| `category`        | Optional `fix-now`, `recommended`, or `historical` operator priority, independent of severity. |
+| `docsUrl`         | Documentation explaining the finding and its remedy.                                           |
 
 Core doctor checks that declare structured health checks stay attached to the ordered doctor contribution that owns their human `doctor` / `doctor --fix` behavior. The shared structured health registry is the extension point: bundled and plugin-backed checks run after core doctor checks once their owning package registers them in the active command path. `openclaw/plugin-sdk/health` exposes the same contract for plugin authors.
+
+Set `category` at the producing check. Do not classify free-form message text. Absent a category, warning/error findings require attention and info findings are recommendations. Historical findings describe retained evidence, not current readiness. Doctor summarizes remaining findings after repair verification.

@@ -405,12 +405,9 @@ vi.mock("../flows/doctor-tool-schema-runtime.js", () => ({
   collectRuntimeToolSchemaFindings: vi.fn().mockResolvedValue([]),
 }));
 
+// mock-isolation: Doctor fixtures isolate host browser probes; the real browser owner has its production-path permission proof.
 vi.mock("./doctor-browser.js", () => ({
-  maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
-    changes: [],
-    warnings: [],
-  }),
-  noteChromeMcpBrowserReadiness: vi.fn().mockResolvedValue(undefined),
+  collectBrowserReadinessFindings: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("./doctor-memory-recall.js", () => ({

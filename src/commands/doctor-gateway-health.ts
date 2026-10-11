@@ -77,6 +77,10 @@ export async function collectGatewayHealthFindings(
           checkId: "core/doctor/gateway-health",
           severity: "info",
           message: replacement,
+          category: "historical",
+          fixHint:
+            "No action needed if the current Gateway is healthy. This records the previous installation replacement.",
+          docsUrl: "https://docs.openclaw.ai/cli/doctor/recovery",
           path: "gateway.mode",
         },
       ]

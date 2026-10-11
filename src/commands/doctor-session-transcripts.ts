@@ -15,6 +15,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { isHistoricalSessionSqliteMigrationIssue } from "../infra/session-sqlite-migration-issues.js";
 import { listExistingAgentDatabaseTargets } from "../infra/session-sqlite-migration-readers.js";
 import { createLegacyStateMigrationStepReceipt } from "../infra/state-migrations.messages.js";
 import { runPostSessionPluginDoctorStateRepairs } from "../infra/state-migrations.plugin-doctor.js";
@@ -32,7 +33,10 @@ import {
 import { repairLegacySessionExecPolicy } from "./doctor-session-exec-policy.js";
 import { repairReservedIncognitoSessionKeys } from "./doctor-session-incognito-key-repair.js";
 import { isInformationalMissingSessionIndex } from "./doctor-session-sqlite-types.js";
-import { formatSessionSqliteMigrationWarnings } from "./doctor-session-sqlite-warnings.js";
+import {
+  collectSessionSqliteMigrationFindings,
+  formatSessionSqliteMigrationWarnings,
+} from "./doctor-session-sqlite-warnings.js";
 import { repairLegacySessionTitles } from "./doctor-session-title-repair.js";
 import { repairLegacySessionWorktreeWorkspaces } from "./doctor-session-worktree-workspace.js";
 import {
@@ -180,6 +184,7 @@ export async function noteSessionTranscriptHealth(options?: {
   postSessionPluginMigrationPlanBound?: boolean;
   onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void;
   onWarnings?: (warnings: readonly string[]) => void;
+  onFindings?: (findings: readonly import("../flows/health-checks.js").HealthFinding[]) => void;
 }): Promise<LegacyStateMigrationStepReceipt | undefined> {
   const params = {
     ...options,
@@ -474,7 +479,9 @@ export async function noteSessionTranscriptHealth(options?: {
     (target) => !isInformationalMissingSessionIndex(target),
   );
   const actionableIssues = actionableTargets.reduce(
-    (count, target) => count + target.issues.length,
+    (count, target) =>
+      count +
+      target.issues.filter((issue) => !isHistoricalSessionSqliteMigrationIssue(issue)).length,
     0,
   );
   const lines = [
@@ -494,15 +501,20 @@ export async function noteSessionTranscriptHealth(options?: {
       `- Archived ${report.totals.archivedUnreferencedJsonlFiles} unreferenced JSONL artifact(s).`,
     );
   }
-  if (actionableIssues > 0) {
-    const warnings = formatSessionSqliteMigrationWarnings(actionableTargets, params.env);
-    params.onWarnings?.(warnings);
+  const warnings = formatSessionSqliteMigrationWarnings(actionableTargets, params.env);
+  params.onWarnings?.(warnings);
+  const findings = collectSessionSqliteMigrationFindings(actionableTargets, params.env);
+  if (params.onFindings) {
+    params.onFindings(findings);
+  } else {
     lines.push(...warnings.map((warning) => `- ${warning}`));
+  }
+  if (actionableIssues > 0) {
     lines.push(
       `- Found ${actionableIssues} session SQLite issue(s). Inspect with "${formatCliCommand("openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents", params.env)}".`,
     );
   }
-  if (!params.shouldRepair && actionableTargets.length > 0) {
+  if (!params.shouldRepair && actionableTargets.some((target) => target.legacyEntries > 0)) {
     lines.push(
       '- Run "openclaw doctor --fix" to migrate legacy session metadata/transcripts to SQLite.',
     );

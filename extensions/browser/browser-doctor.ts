@@ -1,4 +1,1 @@
-export {
-  maybeRepairOwnedChromeExtensionNativeHosts,
-  noteChromeMcpBrowserReadiness,
-} from "./src/doctor-browser.js";
+export { collectBrowserReadinessFindings } from "./src/doctor-browser.js";

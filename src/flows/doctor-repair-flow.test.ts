@@ -170,7 +170,14 @@ describe("runDoctorHealthRepairs", () => {
     expect(result.warnings).toEqual(["test/skipped repair skipped: manual confirmation required"]);
   });
 
-  it.each(["skipped", "failed", "throws", "unavailable", "validation-failed"] as const)(
+  it.each([
+    "skipped",
+    "failed",
+    "throws",
+    "detect-throws",
+    "unavailable",
+    "validation-failed",
+  ] as const)(
     "preserves unresolved split findings after a successful sibling repair (%s)",
     async (outcome) => {
       const unresolvedId = `test/split-${outcome}`;
@@ -179,6 +186,9 @@ describe("runDoctorHealthRepairs", () => {
         kind: "core",
         description: "unresolved split check",
         async detect(_checkContext, scope) {
+          if (outcome === "detect-throws") {
+            throw new Error("inspection unavailable");
+          }
           if (outcome === "validation-failed" && scope !== undefined) {
             throw new Error("validation unavailable");
           }
@@ -208,7 +218,20 @@ describe("runDoctorHealthRepairs", () => {
         "test/repaired-first",
         unresolvedId,
       ]);
-      expect(result.remainingFindings).toEqual([warningFinding(unresolvedId)]);
+      if (outcome === "detect-throws") {
+        expect(result.remainingFindings).toMatchObject([
+          {
+            checkId: unresolvedId,
+            category: "fix-now",
+            message: "Doctor could not complete unresolved split check: inspection unavailable",
+            fixHint: expect.stringContaining("rerun openclaw doctor"),
+            docsUrl: "https://docs.openclaw.ai/cli/doctor/running#understanding-findings",
+          },
+        ]);
+        expect(result.warnings).toEqual([`${unresolvedId} detect failed: inspection unavailable`]);
+      } else {
+        expect(result.remainingFindings).toEqual([warningFinding(unresolvedId)]);
+      }
       expect(result.checksRun).toBe(2);
       expect(result.checksRepaired).toBe(outcome === "validation-failed" ? 2 : 1);
       expect(result.checksValidated).toBe(1);

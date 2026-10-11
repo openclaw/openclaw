@@ -41,12 +41,9 @@ vi.mock("./doctor-auth-legacy-oauth.js", () => ({
   })),
 }));
 
+// mock-isolation: Fast-path fixtures isolate host browser probes and keep unrelated browser runtime outside this test graph.
 vi.mock("./doctor-browser.js", () => ({
-  maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
-    changes: [],
-    warnings: [],
-  }),
-  noteChromeMcpBrowserReadiness: vi.fn().mockResolvedValue(undefined),
+  collectBrowserReadinessFindings: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("./doctor-claude-cli.js", () => ({

@@ -3,10 +3,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  maybeRepairOwnedChromeExtensionNativeHosts,
-  noteChromeMcpBrowserReadiness,
-} from "../browser-doctor.js";
+import { collectBrowserReadinessFindings } from "../browser-doctor.js";
 import {
   chromeProductRoots,
   installStableChromeExtension,
@@ -95,20 +92,15 @@ describe("general Doctor browser profile permission boundary", () => {
       }
       vi.stubEnv("OPENCLAW_STATE_DIR", value.stateDir);
       for (const allowSystemProfileImport of [false, undefined, true]) {
-        const noteFn = vi.fn();
-        await noteChromeMcpBrowserReadiness(
-          { browser: { allowSystemProfileImport, extensionRelay: { allowLegacyAuth: false } } },
-          { noteFn },
-        );
+        const findings = await collectBrowserReadinessFindings({
+          browser: { allowSystemProfileImport, extensionRelay: { allowLegacyAuth: false } },
+        });
         expect(value.accesses).toEqual([]);
-        const notes = noteFn.mock.calls.map(([message]) => String(message)).join("\n");
-        if (platform === "darwin") {
-          expect(notes).toContain(
-            `cookie import is ${allowSystemProfileImport === false ? "disabled" : "enabled"}`,
-          );
-          expect(notes).toContain("profile discovery skipped");
-          expect(notes).not.toContain("cookie databases found:");
-        }
+        const notes = findings
+          .map((finding) => `${finding.message}\n${finding.fixHint}`)
+          .join("\n");
+        expect(notes).not.toContain("cookie import");
+        expect(notes).not.toContain("profile discovery skipped");
         if (installed) {
           expect(notes).toContain("native bootstrap was not inspected");
           expect(notes).toContain("openclaw browser extension status --json");
@@ -117,22 +109,4 @@ describe("general Doctor browser profile permission boundary", () => {
       }
     },
   );
-
-  it("reports native-host repair as skipped without discovering profiles or claiming changes", async () => {
-    const value = await protectedProfiles(process.platform, true);
-    vi.spyOn(os, "homedir").mockReturnValue(value.homeDir);
-    for (const [key, entry] of Object.entries(value.deps.env)) {
-      vi.stubEnv(key, entry);
-    }
-    vi.stubEnv("OPENCLAW_STATE_DIR", value.stateDir);
-    vi.stubEnv("CHROME_CONFIG_HOME", path.join(value.homeDir, ".config"));
-    vi.stubEnv("XDG_CONFIG_HOME", path.join(value.homeDir, ".config"));
-    const result = await maybeRepairOwnedChromeExtensionNativeHosts();
-    expect(value.accesses).toEqual([]);
-    expect(result.changes).toEqual([]);
-    expect(result.status).toBe("skipped");
-    expect(result.reason).toContain("Doctor does not inspect personal browser profiles");
-    expect(result.warnings.join("\n")).toContain("native-host repair skipped");
-    expect(result.warnings.join("\n")).toContain("openclaw browser extension install");
-  });
 });

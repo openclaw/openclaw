@@ -6,6 +6,7 @@ import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-superv
 import { runWriteConfigHealth } from "./doctor-health-contribution-runners.config.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import { resolveDoctorMode } from "./doctor-health-contribution-utils.js";
+import { renderStructuredHealthFindings } from "./doctor-health-contribution.js";
 import { recordDoctorHealthWarnings } from "./doctor-health-contribution.js";
 
 export async function runCommandOwnerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -118,8 +119,8 @@ export async function runGitHubProjectHealth(ctx: DoctorHealthFlowContext): Prom
 }
 
 export async function runBrowserHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { noteChromeMcpBrowserReadiness } = await import("../commands/doctor-browser.js");
-  await noteChromeMcpBrowserReadiness(ctx.cfg);
+  const { collectBrowserReadinessFindings } = await import("../commands/doctor-browser.js");
+  renderStructuredHealthFindings(ctx, await collectBrowserReadinessFindings(ctx.cfg));
 }
 
 export async function runOpenAIOAuthTlsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -129,17 +130,28 @@ export async function runOpenAIOAuthTlsHealth(ctx: DoctorHealthFlowContext): Pro
 }
 
 export async function runWhatsappResponsivenessHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { noteWhatsappResponsivenessHealth } =
+  const { collectWhatsappResponsivenessHealthFindings } =
     await import("../commands/doctor-whatsapp-responsiveness.js");
-  noteWhatsappResponsivenessHealth({
-    cfg: ctx.cfg,
-    status: ctx.gatewayStatus,
-  });
+  renderStructuredHealthFindings(
+    ctx,
+    collectWhatsappResponsivenessHealthFindings({
+      cfg: ctx.cfg,
+      status: ctx.gatewayStatus,
+    }),
+  );
 }
 
 export async function runDevicePairingHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { noteDevicePairingHealth } = await import("../commands/doctor-device-pairing.js");
-  await noteDevicePairingHealth({ cfg: ctx.cfg, healthOk: ctx.healthOk ?? false, env: ctx.env });
+  const { collectDevicePairingHealthFindings } =
+    await import("../commands/doctor-device-pairing.js");
+  renderStructuredHealthFindings(
+    ctx,
+    await collectDevicePairingHealthFindings({
+      cfg: ctx.cfg,
+      healthOk: ctx.healthOk ?? false,
+      env: ctx.env,
+    }),
+  );
 }
 
 export async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<void> {

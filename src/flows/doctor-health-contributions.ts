@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 // Doctor health contributions preserve the ordered interactive doctor flow while
 // exposing the same checks to structured lint and repair commands.
-import fs from "node:fs";
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV } from "../commands/doctor/shared/update-phase.js";
@@ -20,6 +19,7 @@ import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import {
   runCoreContributionHealth,
+  runCoreHealthFindingNote,
   runStructuredHealthRepairs,
 } from "./doctor-health-contribution-core.js";
 import type {
@@ -31,7 +31,10 @@ import {
   resolveDoctorMode,
   resolveDoctorWorkspaceDir,
 } from "./doctor-health-contribution-utils.js";
-import { recordDoctorHealthWarnings } from "./doctor-health-contribution.js";
+import {
+  recordDoctorHealthWarnings,
+  renderStructuredHealthFindings,
+} from "./doctor-health-contribution.js";
 import { resolveFinalDoctorHealthContributions } from "./doctor-health-contributions-final.js";
 import { resolveInitialDoctorHealthContributions } from "./doctor-health-contributions-initial.js";
 import { admitDoctorUpdateInspection, resolveDoctorUpdateBudget } from "./doctor-update-budget.js";
@@ -88,31 +91,7 @@ async function reportDeferredLegacyState(ctx: DoctorHealthFlowContext): Promise<
 }
 
 async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { formatCliCommand } = await import("../cli/command-format.js");
-  const { hasAmbiguousGatewayAuthModeConfig } = await import("../gateway/auth-mode-policy.js");
-  const { note } = await import("../../packages/terminal-core/src/note.js");
-  if (!ctx.cfg.gateway?.mode) {
-    const lines = [
-      "gateway.mode is unset; gateway start will be blocked.",
-      `Fix: run ${formatCliCommand("openclaw configure")} and set Gateway mode (local/remote).`,
-      `Or set directly: ${formatCliCommand("openclaw config set gateway.mode local")}`,
-    ];
-    if (!fs.existsSync(ctx.configPath)) {
-      lines.push(`Missing config: run ${formatCliCommand("openclaw setup")} first.`);
-    }
-    note(lines.join("\n"), "Gateway");
-  }
-  if (resolveDoctorMode(ctx.cfg) === "local" && hasAmbiguousGatewayAuthModeConfig(ctx.cfg)) {
-    note(
-      [
-        "gateway.auth.token and gateway.auth.password are both configured while gateway.auth.mode is unset.",
-        "Set an explicit mode to avoid ambiguous auth selection and startup/runtime failures.",
-        `Set token mode: ${formatCliCommand("openclaw config set gateway.auth.mode token")}`,
-        `Set password mode: ${formatCliCommand("openclaw config set gateway.auth.mode password")}`,
-      ].join("\n"),
-      "Gateway auth",
-    );
-  }
+  await runCoreHealthFindingNote(ctx, "core/doctor/gateway-config");
 }
 
 async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -659,9 +638,17 @@ async function runDoctorHealthContributionList(
         ) {
           throw error;
         }
-        const { note } = await import("../../packages/terminal-core/src/note.js");
         const message = `${contribution.id} run failed: ${scrubDoctorErrorMessage(error)}`;
-        note(message, "Doctor warnings");
+        renderStructuredHealthFindings(ctx, [
+          {
+            checkId: contribution.id,
+            severity: "warning",
+            category: "fix-now",
+            message: `Doctor could not complete ${contribution.label}: ${scrubDoctorErrorMessage(error)}`,
+            fixHint:
+              "Resolve the reported inspection failure, then rerun openclaw doctor. This check could not establish its health.",
+          },
+        ]);
         recordDoctorHealthWarnings(ctx, [], [message]);
       }
     }
