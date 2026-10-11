@@ -47,7 +47,9 @@ it("preserves profile order when requester authority ends after update preparati
         profileId: "openai:new",
         createIfMissing: true,
         assertCurrent: () => {
-          if (!current) throw new Error("Login requester revoked");
+          if (!current) {
+            throw new Error("Login requester revoked");
+          }
         },
       }),
     ).rejects.toThrow("Login requester revoked");
