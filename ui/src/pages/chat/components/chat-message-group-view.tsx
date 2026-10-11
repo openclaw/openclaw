@@ -30,9 +30,9 @@ import {
   FULL_MESSAGE_RETRY_REVISION_LIMIT,
   hasMessageActionButtons,
   MessageActions,
-  type MessageActionDetails,
   ReplyButton,
 } from "./chat-message-markdown-view.tsx";
+import type { MessageActionDetails } from "./chat-message-markdown.types.ts";
 import { GroupMessageReactions } from "./chat-message-reaction-chips-view.tsx";
 import { messageReactionOptions } from "./chat-message-reaction-model.ts";
 import { ChatSendStatus } from "./chat-message-send-status-view.tsx";

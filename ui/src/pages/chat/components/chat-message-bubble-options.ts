@@ -8,7 +8,7 @@ import type { PresentationValue } from "../../../lit/presentation-binding.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
-import type { MessageActionDetails } from "./chat-message-markdown-view.tsx";
+import type { MessageActionDetails } from "./chat-message-markdown.types.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import type { AssistantMessageDisclosure } from "./chat-message-text-preparation.ts";
 import type { ReplyLine } from "./chat-reply-attribution.ts";

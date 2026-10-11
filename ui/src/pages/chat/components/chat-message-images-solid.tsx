@@ -538,7 +538,7 @@ export type MessageImagesProps = {
 };
 
 export function MessageImages(props: MessageImagesProps): JSX.Element {
-  let slots: { image: ImageBlock; key: symbol }[] = [];
+  let slots: { image: ImageBlock; key: symbol; options: ImageRenderOptions }[] = [];
   let scope = "";
   let policyKey: string | undefined;
   let canonicalMessageKey: string | undefined;
@@ -571,6 +571,8 @@ export function MessageImages(props: MessageImagesProps): JSX.Element {
     const previousSlots = new Map(
       previousImages.map((image, index) => [image.factIndex, slots[index]?.key]),
     );
+    // Publish options with the slot key so retiring images keep their previous policy.
+    const imageOptions = { ...options, galleryImages: options?.galleryImages ?? images };
     slots = images.map((image, index) => {
       const slot = slots[index];
       const previous =
@@ -586,6 +588,7 @@ export function MessageImages(props: MessageImagesProps): JSX.Element {
       return {
         image,
         key: (continuing && preservePresentation && previous) || Symbol("image-slot"),
+        options: imageOptions,
       };
     });
     scope = nextScope;
@@ -611,15 +614,7 @@ export function MessageImages(props: MessageImagesProps): JSX.Element {
         ]}
       >
         <For each={projection()} keyed={(slot) => slot.key}>
-          {(slot) => (
-            <MessageImage
-              image={slot().image}
-              options={{
-                ...props.options,
-                galleryImages: props.options?.galleryImages ?? props.images,
-              }}
-            />
-          )}
+          {(slot) => <MessageImage image={slot().image} options={slot().options} />}
         </For>
         {props.previews}
       </div>

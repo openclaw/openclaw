@@ -5,7 +5,7 @@ import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gatew
 import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
-import type { NormalizedMessage, ChatReplyTarget } from "../../../lib/chat/chat-types.ts";
+import type { NormalizedMessage } from "../../../lib/chat/chat-types.ts";
 import { readHumanMentions } from "../../../lib/chat/human-mentions.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import {
@@ -21,6 +21,7 @@ import {
   resolveSourceMessageId,
 } from "../chat-message-recovery.ts";
 import { persistedMessageEntryId } from "../chat-thread.ts";
+import type { MessageActionDetails, MessageReplyTarget } from "./chat-message-markdown.types.ts";
 import { extractMessageMediaText } from "./chat-message-media.ts";
 import {
   type MessageReactionAction,
@@ -30,17 +31,6 @@ import {
 import { MessageReactionPicker } from "./chat-message-reactions-view.tsx";
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
-
-export type MessageReplyTarget = ChatReplyTarget;
-
-export type MessageActionDetails = {
-  /** Source for context copy, independent of footer visibility and reply truncation. */
-  copyMarkdown?: string;
-  markdown?: string;
-  fullMessage?: { messageId: string; state: AssistantMessageExpansionState | undefined };
-  replyTarget?: MessageReplyTarget;
-  reactionMessageId?: string;
-};
 
 // Loading and completion each advance the revision: three automatic attempts.
 export const FULL_MESSAGE_RETRY_REVISION_LIMIT = 6;

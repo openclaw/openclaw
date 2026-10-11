@@ -83,9 +83,10 @@ export function AssistantAttachmentStatusCard(
             >
               <span class="chat-assistant-attachment-card__status-badge">{props.badge}</span>
               <Show when={props.reason}>
+                {" "}
                 <span class="chat-assistant-attachment-card__status-separator" aria-hidden="true">
                   ·
-                </span>
+                </span>{" "}
                 <span class="chat-assistant-attachment-card__status-reason">{props.reason}</span>
               </Show>
             </span>

@@ -2,10 +2,9 @@ import { solidContent } from "../../../lit/solid-content.tsx";
 import {
   MessageActions,
   ReplyButton,
-  type MessageActionDetails,
-  type MessageReplyTarget,
   type renderSolidMessageActionButtons,
 } from "./chat-message-markdown-view.tsx";
+import type { MessageActionDetails, MessageReplyTarget } from "./chat-message-markdown.types.ts";
 export * from "./chat-message-markdown-view.tsx";
 
 export function renderMessageActionButtons(
