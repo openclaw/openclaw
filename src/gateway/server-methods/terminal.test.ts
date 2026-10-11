@@ -164,7 +164,6 @@ describe("terminal gateway policy", () => {
     ).toBeUndefined();
     expect(sessionMocks.loadGatewaySessionEntryReadOnly).toHaveBeenCalledWith(agentSessionKey, {
       agentId: "main",
-      clone: false,
     });
   });
 

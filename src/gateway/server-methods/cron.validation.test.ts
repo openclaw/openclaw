@@ -45,10 +45,8 @@ import {
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import * as cronCallerScope from "./cron-caller-scope.js";
-import {
-  registerCronCreatorSessionTests,
-  type CronCreatorSessionLookup,
-} from "./cron-creator-session.test-support.js";
+import { registerCronCreatorSessionTests } from "./cron-creator-session.test-support.js";
+import { loadGatewaySessionEntry } from "./cron-session-reader.test-support.js";
 import {
   createCronTestContext,
   callerClientWithCronCreatorAuthority,
@@ -76,12 +74,6 @@ const { makeStorePath } = createCronStoreHarness({ prefix: "cron-gateway-validat
 
 const getRuntimeConfig = vi.hoisted(() =>
   vi.fn<() => OpenClawConfig>(() => ({}) as OpenClawConfig),
-);
-const loadGatewaySessionEntry = vi.hoisted(() =>
-  vi.fn((sessionKey: string): CronCreatorSessionLookup => ({
-    canonicalKey: sessionKey,
-    entry: undefined,
-  })),
 );
 const cronRunRecordsOverride = vi.hoisted(() =>
   vi.fn<
@@ -120,17 +112,6 @@ vi.mock("../../config/config.js", async () => {
     getRuntimeConfig,
   };
 });
-
-vi.mock("../session-utils.js", () => ({
-  loadSessionEntry: loadGatewaySessionEntry,
-  loadGatewaySessionEntryReadOnly: loadGatewaySessionEntry,
-}));
-
-vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
-  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
-    loadGatewaySessionEntry(params.key, { agentId: params.agentId }),
-}));
 
 // mock-isolation: Validation fixtures do not read live session delivery metadata.
 vi.mock("../../cron/delivery-preview.js", () => ({
