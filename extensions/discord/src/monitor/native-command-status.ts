@@ -1,6 +1,7 @@
 import type { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
+import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
 import type { BaseComponentInteraction, CommandInteraction } from "../internal/discord.js";
 import type { DispatchDiscordCommandInteractionResult } from "./native-command-dispatch.js";
 import {
@@ -29,7 +30,7 @@ export async function maybeDeliverDiscordDirectStatus(params: {
   preferFollowUp: boolean;
   responseEphemeral?: boolean;
   effectiveRoute: ResolvedAgentRoute;
-  respond: (content: string, options?: { ephemeral?: boolean }) => Promise<void>;
+  respond: (content: string, options?: { ephemeral?: boolean }) => Promise<boolean>;
 }): Promise<DispatchDiscordCommandInteractionResult | null> {
   if (params.suppressReplies || params.commandName !== "status") {
     return null;
@@ -44,6 +45,17 @@ export async function maybeDeliverDiscordDirectStatus(params: {
     isGroup: params.isGroup,
     defaultGroupActivation: params.defaultGroupActivation,
   });
+  const recordReply = async (replyText: string) => {
+    await recordDeliveredCommandExchange({
+      config: params.cfg,
+      agentId: params.effectiveRoute.agentId,
+      sessionKey: params.commandTargetSessionKey?.trim() || params.sessionKey,
+      commandText: "/status",
+      commandId: `discord:${params.accountId}:${params.commandTargetSessionKey?.trim() || params.sessionKey}:${params.interaction.id}`,
+      replyId: "status",
+      replyText,
+    });
+  };
   if (statusReply && hasRenderableReplyPayload(statusReply)) {
     await deliverDiscordInteractionReply({
       interaction: params.interaction,
@@ -52,9 +64,13 @@ export async function maybeDeliverDiscordDirectStatus(params: {
       ...resolveDiscordInteractionReplyOptions(params),
       preferFollowUp: params.preferFollowUp,
       responseEphemeral: params.responseEphemeral,
+      onDelivered: recordReply,
     });
   } else {
-    await params.respond("Status unavailable.");
+    const delivered = await params.respond("Status unavailable.");
+    if (delivered) {
+      await recordReply("Status unavailable.");
+    }
   }
   return { accepted: true, effectiveRoute: params.effectiveRoute };
 }

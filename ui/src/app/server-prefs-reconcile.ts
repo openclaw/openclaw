@@ -170,17 +170,9 @@ function resolveServerUiPrefStateFromSnapshot<K extends SyncedPrefKey>(
 
 function isServerUiPrefReady(
   key: SyncedPrefKey,
-  {
-    appearanceReady,
-    navigationReady = appearanceReady,
-    sidebarEntriesReady = navigationReady,
-  }: ServerUiPrefReadiness,
+  { appearanceReady, navigationReady = appearanceReady }: ServerUiPrefReadiness,
 ): boolean {
-  return key === "sidebarEntries"
-    ? sidebarEntriesReady
-    : isNavigationPref(key)
-      ? navigationReady
-      : appearanceReady || !isAppearancePref(key);
+  return isNavigationPref(key) ? navigationReady : appearanceReady || !isAppearancePref(key);
 }
 
 function serverUiPrefsSnapshotDelta(
@@ -189,7 +181,6 @@ function serverUiPrefsSnapshotDelta(
   {
     appearanceReady,
     navigationReady = appearanceReady,
-    sidebarEntriesReady = navigationReady,
     scopeChanged,
     firstSnapshot,
     shadowPrefs,
@@ -197,7 +188,6 @@ function serverUiPrefsSnapshotDelta(
   }: {
     appearanceReady: boolean;
     navigationReady?: boolean;
-    sidebarEntriesReady?: boolean;
     scopeChanged: boolean;
     firstSnapshot: boolean;
     shadowPrefs: ServerUiPrefs | null;
@@ -214,7 +204,6 @@ function serverUiPrefsSnapshotDelta(
     const ready = isServerUiPrefReady(prefKey, {
       appearanceReady,
       navigationReady,
-      sidebarEntriesReady,
     });
     if (Object.hasOwn(prefs, prefKey)) {
       if (
@@ -287,38 +276,32 @@ function reconcileNavigationSnapshot(
   shadowPrefs: ServerUiPrefs | null,
   hasProfile: boolean,
   identityChanged: boolean,
-  sidebarEntriesReady = profilePrefs !== null,
   localNavigation: ReturnType<typeof loadLocalNavigationPreferences> = null,
   retainedLocalKeys: ReadonlySet<SyncedPrefKey> = new Set(),
 ): ServerUiPrefs {
   const changed: ServerUiPrefs = {};
-  for (const key of ["sidebarEntries", "navigationScope"] as const) {
-    if (!hasProfile) {
-      // Retired shared-config mirrors are not authority to reset browser-owned shortcuts.
-      delete lastSeen[key];
-    } else if (profilePrefs === null || (key === "sidebarEntries" && !sidebarEntriesReady)) {
-      // Incomplete reads retain confirmed profile values, never inferred absence.
-      delete prefs[key];
-      if (Object.hasOwn(lastSeen, key)) {
-        Object.assign(prefs, { [key]: lastSeen[key] });
-      }
-    } else if (!Object.hasOwn(prefs, key)) {
-      Object.assign(prefs, {
-        [key]: key === "sidebarEntries" ? [...DEFAULT_SIDEBAR_ENTRIES] : "mine",
-      });
+  if (!hasProfile) {
+    // Retired shared-config mirrors are not authority to reset browser-owned shortcuts.
+    delete lastSeen.sidebarEntries;
+  } else if (profilePrefs === null) {
+    // Incomplete reads retain confirmed profile values, never inferred absence.
+    delete prefs.sidebarEntries;
+    if (Object.hasOwn(lastSeen, "sidebarEntries")) {
+      prefs.sidebarEntries = lastSeen.sidebarEntries;
     }
-    if (identityChanged) {
-      const confirmedDelta =
-        profilePrefs !== null &&
-        (key !== "sidebarEntries" || sidebarEntriesReady) &&
-        !retainedLocalKeys.has(key) &&
-        !prefValuesEqual(prefs[key], lastSeen[key]);
-      Object.assign(changed, {
-        [key]:
-          shadowPrefs?.[key] ??
-          (localNavigation && !confirmedDelta ? localNavigation[key] : (prefs[key] ?? null)),
-      });
-    }
+  } else if (!Object.hasOwn(prefs, "sidebarEntries")) {
+    prefs.sidebarEntries = [...DEFAULT_SIDEBAR_ENTRIES];
+  }
+  if (identityChanged) {
+    const confirmedDelta =
+      profilePrefs !== null &&
+      !retainedLocalKeys.has("sidebarEntries") &&
+      !prefValuesEqual(prefs.sidebarEntries, lastSeen.sidebarEntries);
+    changed.sidebarEntries =
+      shadowPrefs?.sidebarEntries ??
+      (localNavigation && !confirmedDelta
+        ? localNavigation.sidebarEntries
+        : (prefs.sidebarEntries ?? null));
   }
   return changed;
 }
@@ -431,23 +414,19 @@ export function applyServerUiPrefs(
   delete lastSeen.navigationConfirmation;
   if (hooks.profileId && !hooks.navigationConfirmed) {
     // Config/appearance application cannot publish a stale profile cache over a sibling read.
-    for (const key of ["sidebarEntries", "navigationScope"] as const) {
-      const confirmed = SYNCED_PREFS[key].extract(lastSeen[key]);
-      if (confirmed !== undefined) {
-        Object.assign(prefs, { [key]: confirmed });
-      }
+    const confirmed = SYNCED_PREFS.sidebarEntries.extract(lastSeen.sidebarEntries);
+    if (confirmed !== undefined) {
+      prefs.sidebarEntries = confirmed;
     }
   }
   if (hooks.navigationConfirmed) {
     // Local retention covers the old/unknown baseline, not a newer confirmed navigation value.
-    for (const key of ["sidebarEntries", "navigationScope"] as const) {
-      if (
-        isServerUiPrefReady(key, readiness) &&
-        Object.hasOwn(lastSeen, key) &&
-        !prefValuesEqual(prefs[key], lastSeen[key])
-      ) {
-        retainedLocalKeys.delete(key);
-      }
+    if (
+      isServerUiPrefReady("sidebarEntries", readiness) &&
+      Object.hasOwn(lastSeen, "sidebarEntries") &&
+      !prefValuesEqual(prefs.sidebarEntries, lastSeen.sidebarEntries)
+    ) {
+      retainedLocalKeys.delete("sidebarEntries");
     }
   }
   retainPendingAppearanceSnapshot(prefs, lastSeen, readiness.appearanceReady);
@@ -459,7 +438,6 @@ export function applyServerUiPrefs(
     shadowPrefs,
     Boolean(hooks.profileId),
     navigationIdentityChanged && Boolean(hooks.profileId || scopeChanged),
-    readiness.sidebarEntriesReady,
     loadLocalNavigationPreferences(gatewayScope, hooks.profileId),
     retainedLocalKeys,
   );
@@ -517,17 +495,12 @@ export async function refreshProfileAppearancePrefs(options: {
   onApplied: (patch: Partial<UiSettings>) => void;
   onThemeChanged?: (theme: ThemeName | null) => void;
   isCurrent?: () => boolean;
-  onError?: (error: unknown) => void;
-  canWrite?: boolean | (() => boolean);
 }): Promise<boolean> {
   const scope = options.scope ?? options.client.gatewayUrl;
   const isCurrent = options.isCurrent ?? (() => true);
   if (
     !(await loadProfileAppearancePrefs(options.client, options.profileId, scope, {
-      configObject: options.configObject,
-      canMigrate: options.canWrite ?? false,
       isCurrent,
-      onSidebarEntriesUnavailable: options.onError,
     })) ||
     !isCurrent()
   ) {
@@ -547,11 +520,6 @@ function resolveProfilePreferenceReadiness(
   return {
     appearanceReady: profileReady || scopeChanged,
     navigationReady: profileReady,
-    sidebarEntriesReady:
-      !profileId ||
-      (prefs !== null &&
-        (profilePreferencesState.appearance?.sidebarEntriesReady === true ||
-          Object.hasOwn(prefs, "sidebarEntries"))),
   };
 }
 

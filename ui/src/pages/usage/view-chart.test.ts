@@ -150,7 +150,10 @@ describe("DailyChartCompact", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-05-14T12:00:00.000Z"));
     const base = createUsageProps();
-    const [filters, setFilters] = createSignal({ ...base.filters, timeZone: "utc" as const });
+    const [filters, setFilters] = createSignal<UsageProps["filters"]>({
+      ...base.filters,
+      timeZone: "utc",
+    });
     const onDatesChange = vi.fn((patch: Partial<UsageProps["filters"]>) =>
       setFilters((current) => ({ ...current, ...patch })),
     );

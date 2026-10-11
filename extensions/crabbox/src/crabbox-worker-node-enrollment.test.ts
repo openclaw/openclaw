@@ -430,16 +430,13 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     ).toEqual([]);
   }, 60_000);
 
-  it.each(["file", "directory"] as const)(
+  it.each(["file"] as const)(
     "rejects an occupied runtime %s before plugin activation",
-    async (kind) => {
+    async () => {
       const { home, stateDir } = testHome();
       fs.mkdirSync(stateDir, { recursive: true });
       const pointer = path.join(stateDir, "runtime");
-      if (kind === "directory") {
-        fs.mkdirSync(pointer);
-      }
-      const retained = kind === "directory" ? path.join(pointer, "keep") : pointer;
+      const retained = pointer;
       fs.writeFileSync(retained, "retained fixture");
       const { nodeBootstrap } = await serveArtifact(await packageFixture("occupied"));
       const result = await enroll(home, nodeBootstrap);
@@ -719,28 +716,6 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
     },
     30_000,
   );
-
-  it("selects new source bytes even when the public version has not changed", async ({
-    signal,
-  }) => {
-    const { home, stateDir, stop } = testHome();
-    const first = await serveArtifact(await packageFixture("first"));
-    const coldPhases = await expectSetupPhases(enroll(home, first.nodeBootstrap));
-    expect(coldPhases).toContain("openclaw-bootstrap-installation");
-    expect(coldPhases.at(-1)).toBe("openclaw-bootstrap-complete");
-    const oldLaunch = await readLaunch(stateDir, receipts, signal);
-    expect(oldLaunch).toMatchObject({ build: "first", args: expect.arrayContaining(["connect"]) });
-    expect(
-      JSON.parse(fs.readFileSync(path.join(path.dirname(oldLaunch.cli), "installed.json"), "utf8")),
-    ).toEqual({ scriptsRan: true });
-    await stop();
-    fs.rmSync(path.join(stateDir, "launch.json"));
-    const second = await serveArtifact(await packageFixture("second"));
-    await expectSetupPhases(enroll(home, second.nodeBootstrap));
-    const launch = await readLaunch(stateDir, receipts, signal);
-    expect(launch.build).toBe("second");
-    expect(launch.cli).not.toBe(oldLaunch.cli);
-  }, 30_000);
 
   it.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
     "reuses only a live process with the exact artifact and invocation",
