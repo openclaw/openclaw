@@ -521,6 +521,11 @@ async function verifyAndActivateCandidate(
       return undefined;
     }
     const profileId = staged.authProfileId;
+    // Commit moves pending install records into the plugin index, outside authored config.
+    const committedRoute = await project(
+      candidate,
+      stripPendingPluginInstallRecords(sourceCandidate),
+    );
     return await activatePreparedSetupCredential(
       ctx,
       profileId,
@@ -529,7 +534,7 @@ async function verifyAndActivateCandidate(
       async () => {
         const latest = await readSnapshot();
         const current = latest.runtimeConfig ?? latest.config;
-        if (!isDeepStrictEqual(await project(current, latest.sourceConfig), verifiedRoute)) {
+        if (!isDeepStrictEqual(await project(current, latest.sourceConfig), committedRoute)) {
           throw new SetupInferenceOwnerDriftError(
             "The connection changed before credential activation. Test the saved sign-in again.",
           );

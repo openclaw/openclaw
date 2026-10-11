@@ -535,6 +535,57 @@
       }
     },
     {
+      "name": "@coreweave/serverless-inference",
+      "description": "CoreWeave Inference model provider plugin maintained by CoreWeave.",
+      "source": "external",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "coreweave",
+          "label": "CoreWeave Inference"
+        },
+        "providers": [
+          {
+            "id": "coreweave",
+            "name": "CoreWeave Inference",
+            "docs": "https://github.com/coreweave/serverless-inference-openclaw-plugin#readme",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "COREWEAVE_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "coreweave-api-key",
+                "choiceLabel": "CoreWeave Inference API key",
+                "appGuidedSecret": true,
+                "choiceHint": "Uses your W&B API key",
+                "groupId": "coreweave",
+                "groupLabel": "CoreWeave Inference",
+                "groupHint": "Open models on CoreWeave GPUs (formerly Weights & Biases Inference)",
+                "optionKey": "coreweaveApiKey",
+                "cliFlag": "--coreweave-api-key",
+                "cliOption": "--coreweave-api-key <key>",
+                "cliDescription": "CoreWeave API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@coreweave/serverless-inference@0.1.1",
+          "defaultChoice": "clawhub",
+          "expectedIntegrity": "sha256:00f069c04f3fd6c0d77565e185a8a7b03cb4a2c7f126867fe5ebb306e9e4c41c",
+          "minHostVersion": ">=2026.9.6"
+        }
+      }
+    },
+    {
       "name": "@openclaw/deepinfra-provider",
       "description": "OpenClaw DeepInfra provider plugin.",
       "source": "official",

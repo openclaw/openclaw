@@ -185,13 +185,16 @@ async function prepareSetupInferenceOptions(deps: DetectSetupInferenceDeps, agen
       utilityModel = `${selection.provider}/${selection.modelId}`;
     }
   }
-  const installOptions = listSetupInferenceInstallOptions(
-    resolveProviderInstallCatalogEntries({
-      config: cfg,
-      workspaceDir: workspace,
-      includeUntrustedWorkspacePlugins: false,
-    }),
-    authChoices,
+  const installEntries = resolveProviderInstallCatalogEntries({
+    config: cfg,
+    workspaceDir: workspace,
+    includeUntrustedWorkspacePlugins: false,
+  });
+  const installOptions = listSetupInferenceInstallOptions(installEntries, authChoices);
+  const manualInstallChoices = installEntries.filter(
+    (entry) =>
+      !allAuthChoices.some((choice) => choice.choiceId === entry.choiceId) &&
+      (deps.enablePluginInConfig ?? enablePluginInConfig)(cfg, entry.pluginId).enabled,
   );
   const authOptions = [
     ...listSetupInferenceAuthOptions(authChoices),
@@ -218,7 +221,7 @@ async function prepareSetupInferenceOptions(deps: DetectSetupInferenceDeps, agen
     ...(utilityModel && setupSelection?.modelTarget === "utility"
       ? { setupModel: utilityModel }
       : {}),
-    manualProviders: listSetupInferenceManualProviders(authChoices),
+    manualProviders: listSetupInferenceManualProviders([...authChoices, ...manualInstallChoices]),
     authOptions,
     prepareOptions: listSetupInferencePrepareOptions(authChoices),
     nativeSessionCatalogs,

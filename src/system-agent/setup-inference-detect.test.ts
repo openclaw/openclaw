@@ -4,12 +4,14 @@ import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { InferenceBackendCandidate } from "../commands/onboard-inference-ambient.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
+import type { ProviderInstallCatalogEntry } from "../plugins/provider-install-catalog.js";
 import type { ProviderAppGuidedSetupCandidate, ProviderPlugin } from "../plugins/types.js";
 import type { DetectSetupInferenceDeps, SetupInferenceDetection } from "./setup-inference-core.js";
 import { detectSetupInference } from "./setup-inference-detect.js";
 
 const fixture = vi.hoisted(() => ({
   loadAuthProfileStore: vi.fn<() => AuthProfileStore>(),
+  installEntries: vi.fn<() => ProviderInstallCatalogEntry[]>(() => []),
   withSetupProviderAuthMethod: vi.fn(),
 }));
 
@@ -39,8 +41,9 @@ vi.mock("./setup-native-session-catalogs.js", () => ({
   listSetupNativeSessionCatalogs: () => [],
   requiresSetupNativeSessionCatalogConsent: () => false,
 }));
-vi.mock("../plugins/provider-install-catalog.js", () => ({
-  resolveProviderInstallCatalogEntries: () => [],
+vi.mock("../plugins/provider-install-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/provider-install-catalog.js")>()),
+  resolveProviderInstallCatalogEntries: fixture.installEntries,
 }));
 vi.mock("../plugins/enable.js", () => ({
   enablePluginInConfig: (config: OpenClawConfig) => ({ enabled: true, config }),
@@ -97,6 +100,7 @@ function detectWithProvider(
 
 beforeEach(() => {
   vi.useFakeTimers();
+  fixture.installEntries.mockReturnValue([]);
   fixture.loadAuthProfileStore.mockReturnValue({
     version: 1,
     profiles: {
@@ -120,6 +124,54 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
+});
+
+describe("manual provider catalog discovery", () => {
+  it.each([
+    { name: "fresh install", present: true },
+    { name: "installed without opt-in", present: false, installed: true },
+    { name: "unsupported installed platform", present: false, installed: true, platform: true },
+    { name: "policy blocked", present: false, blocked: true },
+    { name: "detected only", present: false, detectedOnly: true },
+    { name: "non-text", present: false, nonText: true },
+    { name: "no pasted-key opt-in", present: false, noOptIn: true },
+  ])("exposes only eligible external manual choices: $name", async (testCase) => {
+    fixture.installEntries.mockReturnValue([
+      {
+        ...choice,
+        appGuidedSecret: !testCase.noOptIn,
+        ...(testCase.detectedOnly ? { assistantVisibility: "detected-only" as const } : {}),
+        ...(testCase.nonText ? { onboardingScopes: ["image-generation" as const] } : {}),
+        label: "Fixture service",
+        origin: "bundled",
+        install: { npmSpec: "@fixture/provider", defaultChoice: "npm" },
+      },
+    ]);
+    const result = await detectWithProvider(async () => null, [], {
+      choices: testCase.installed
+        ? [
+            {
+              ...choice,
+              appGuidedSecret: false,
+              ...(testCase.platform ? { platforms: [] } : {}),
+            },
+          ]
+        : [],
+      ...(testCase.blocked
+        ? {
+            enablePluginInConfig: (config: OpenClawConfig) => ({
+              config,
+              pluginId: "fixture",
+              enabled: false,
+              reason: "disabled",
+            }),
+          }
+        : {}),
+    });
+    expect(result.manualProviders.map((provider) => provider.id)).toEqual(
+      testCase.present ? ["fixture-local"] : [],
+    );
+  });
 });
 
 describe("setup inference discovery deadline", () => {

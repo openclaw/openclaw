@@ -139,6 +139,13 @@ expose `appGuidedSetup.detectAvailability` to mark its setup choice as detected
 when the local service is reachable but no model qualifies for automatic setup.
 The availability check is also read-only.
 
+Catalog entries for external providers can also declare `appGuidedSecret` when
+one pasted key and provider defaults are sufficient. This makes the choice
+available in app setup before installation. Connecting runs the normal plugin
+installation and capability approval flow before using the supplied key. The
+published plugin manifest must declare the same capability so the choice remains
+available after installation.
+
 ### Login choices
 
 **Connect** in Models requires `credentialOnly: true` plus `appGuidedAuth` or
