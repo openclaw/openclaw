@@ -118,7 +118,7 @@ export function LogsView(props: LogsProps) {
                     type="checkbox"
                     checked={props.levelFilters[level]}
                     onChange={(event) => props.onLevelToggle(level, event.currentTarget.checked)}
-                  />
+                  />{" "}
                   <span>{level}</span>
                 </label>
               )}

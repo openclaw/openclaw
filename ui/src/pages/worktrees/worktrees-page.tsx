@@ -164,6 +164,7 @@ export function WorktreesView(props: { model: WorktreesModel }) {
                     aria-label={t("worktrees.repo")}
                     disabled={view().operation === "create"}
                     value={view().createRepoRoot}
+                    onInput={(event) => model.update({ createRepoRoot: event.currentTarget.value })}
                     onChange={(event) => {
                       model.update({
                         createRepoRoot: event.currentTarget.value,

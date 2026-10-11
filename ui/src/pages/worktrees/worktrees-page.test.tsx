@@ -668,6 +668,36 @@ describe("WorktreesPage lifecycle", () => {
     expect(page.model.loading).toBe(false);
   });
 
+  it("keeps an in-progress repository draft when the list refresh completes", async () => {
+    const pendingList = deferred<unknown>();
+    const request = vi.fn((method: string) =>
+      method === "worktrees.list" ? pendingList.promise : Promise.resolve({ branches: [] }),
+    );
+    const page = createWorktreesPage(request);
+    page.model.createOpen = true;
+    page.mount();
+    await waitForList(request);
+
+    const repository = page.element.querySelector<HTMLInputElement>(
+      'input[aria-label="Repository"]',
+    )!;
+    repository.value = "/tmp/new-repo";
+    repository.dispatchEvent(new Event("input", { bubbles: true }));
+    pendingList.resolve({ worktrees: [] });
+    await waitForSolid(() => expect(page.model.loading).toBe(false));
+
+    expect(repository.value).toBe("/tmp/new-repo");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("worktrees.branches");
+    repository.dispatchEvent(new Event("change", { bubbles: true }));
+    await waitForSolid(() =>
+      expect(request).toHaveBeenCalledWith(
+        "worktrees.branches",
+        { repoRoot: "/tmp/new-repo" },
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      ),
+    );
+  });
+
   it("locks the create draft and its toggle until create settles", async () => {
     const pendingCreate = deferred<unknown>();
     const request = vi.fn((method: string) => {
