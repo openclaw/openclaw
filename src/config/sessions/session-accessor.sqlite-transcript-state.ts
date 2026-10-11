@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import type { InsertResult, UpdateResult } from "kysely";
 import {
   createSqliteQueryCache,
   executeSqliteQuerySync,
@@ -384,29 +383,24 @@ export function ensureTranscriptSessionRoot(
           }
         }
       }
-      executeSqliteQuerySync<InsertResult | UpdateResult>(
+      executeSqliteQuerySync(
         database.db,
-        actor?.window
-          ? db
-              .updateTable("session_windows")
-              .set({ updated_at: updatedAt })
-              .where("session_id", "=", scope.sessionId)
-          : db
-              .insertInto("session_windows")
-              .values({
-                session_id: scope.sessionId,
-                session_key: scope.sessionKey,
-                previous_session_id: null,
-                reason: null,
-                session_scope: "conversation",
-                created_at: updatedAt,
-                updated_at: updatedAt,
-              })
-              .onConflict((conflict) =>
-                conflict.column("session_id").doUpdateSet({
-                  updated_at: updatedAt,
-                }),
-              ),
+        db
+          .insertInto("session_windows")
+          .values({
+            session_id: scope.sessionId,
+            session_key: scope.sessionKey,
+            previous_session_id: null,
+            reason: null,
+            session_scope: "conversation",
+            created_at: updatedAt,
+            updated_at: updatedAt,
+          })
+          .onConflict((conflict) =>
+            conflict.column("session_id").doUpdateSet({
+              updated_at: updatedAt,
+            }),
+          ),
       );
       if (actor?.window) {
         actor.window.updated_at = updatedAt;
