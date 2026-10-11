@@ -411,10 +411,10 @@ it and the active profile or container hint. See [memory index](/cli/memory#memo
 
 All under `memory.search.query`:
 
-| Key          | Type     | Default | Description                               |
-| ------------ | -------- | ------- | ----------------------------------------- |
-| `maxResults` | `number` | `6`     | Max memory hits returned before injection |
-| `minScore`   | `number` | `0.35`  | Minimum relevance score to include a hit  |
+| Key          | Type     | Default | Description                                                                              |
+| ------------ | -------- | ------- | ---------------------------------------------------------------------------------------- |
+| `maxResults` | `number` | `6`     | Max memory hits returned before injection                                                |
+| `minScore`   | `number` | `0.35`  | Minimum relevance score before recency decay, including importance and project weighting |
 
 Without a per-call `maxResults`, primary-only `memory_search` calls use this
 configured limit, including `corpus=memory` and `corpus=sessions`. Wiki and
@@ -529,6 +529,10 @@ Prevents re-embedding unchanged text during reindex or transcript updates.
 Available for `gemini`, `openai`, and `voyage`. OpenAI batch is typically fastest and cheapest for large backfills.
 
 Batch enablement is the only remote batching setting. Concurrency, polling, and timeout behavior are provider-owned.
+
+For ordinary embedding requests, a recognized error with one explicit item cap
+sizes the retry batches directly. Unusable or conflicting caps fall back to
+halving the rejected batch. Successful slices retain their input order and cache entries.
 
 ---
 
@@ -788,7 +792,7 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 
 <Note>
 - Dreaming writes machine state to `memory/.dreams/`.
-- Dreaming writes human-readable narrative output to `DREAMS.md` (or existing `dreams.md`).
+- Dreaming combines Light, REM, and promoted Deep memories into at most one diary entry per workspace per sweep in `DREAMS.md` (or existing `dreams.md`). Phase reports remain separate, and sweeps without new material produce no diary entry.
 - Deep consolidation stores the prior `MEMORY.md` in SQLite-backed plugin state and records rewrite counts and highlights in `DREAMS.md`.
 - Untrusted and system-derived candidates are structurally excluded before consolidation and durable promotion.
 - `dreaming.model` uses the existing plugin subagent trust gate; set `plugins.entries.memory-core.subagent.allowModelOverride: true` before enabling it.

@@ -11,14 +11,12 @@ import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js"
 import * as executionIdentityContext from "../audit/execution-identity-context.js";
 import * as sqlite from "../infra/node-sqlite.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
-import { runSqlitePinnedReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
-import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
-import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { OpenClawQuarantineReadCleanupError } from "./openclaw-quarantine-error.js";
-import { publishStateSchemaVersionAdmission } from "./openclaw-state-db-admission.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -27,7 +25,6 @@ import {
   recordOpenClawStateDatabaseOpenFailure,
 } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import { markCurrentStateSchemaVersion } from "./openclaw-state-db-maintenance.js";
 import {
   closeRetainedOpenClawStateReadConnections,
   openOpenClawStateReadOnlyLocation,
@@ -270,35 +267,37 @@ it.each(["ordinary-first", "maintenance-first"] as const)(
   },
 );
 
-it("rejects pinned, transactional, asynchronous and retired direct-read results", () => {
+it("rejects pinned, transactional and asynchronous direct-read results", () => {
   const { pathname, root } = fixture();
-  const reader = prepareOpenClawStateDirectReader(
-    captureOpenClawStateWorkerContext({ path: pathname, env: { OPENCLAW_STATE_DIR: root } }),
-  );
+  const context = captureOpenClawStateWorkerContext({
+    path: pathname,
+    env: { OPENCLAW_STATE_DIR: root },
+  });
+  const prepare = () => prepareOpenClawStateDirectReader(context);
+  const reader = prepare();
   const db = reader.read((database) => database.db);
   const read = () => reader.read(() => db.prepare("SELECT value FROM sample").get()?.value);
   db.exec("BEGIN");
   try {
     expect(read).toThrow("transaction or snapshot");
+    expect(prepare).toThrow("transaction or snapshot");
+    expect(db.prepare("SELECT value FROM sample").get()?.value).toBe(1);
   } finally {
     db.exec("ROLLBACK");
   }
-  runSqlitePinnedReadSnapshotSync(db, () => {
+  expect(prepare().read(() => db.prepare("SELECT value FROM sample").get()?.value)).toBe(1);
+  runSqliteReadSnapshotSync(db, () => {
     expect(read).toThrow("transaction or snapshot");
+    expect(prepare).toThrow("transaction or snapshot");
+    expect(db.prepare("SELECT value FROM sample").get()?.value).toBe(1);
   });
+  expect(prepare().read(() => db.prepare("SELECT value FROM sample").get()?.value)).toBe(1);
   expect(() => reader.read(() => Promise.resolve(1))).toThrow("must remain synchronous");
-  expect(() =>
-    reader.read(() => {
-      const value = db.prepare("SELECT value FROM sample").get()?.value;
-      closeRetainedOpenClawStateReadConnections();
-      return value;
-    }),
-  ).toThrow("reader is closed");
 });
 
 function acpFixture() {
   const state = fixture();
-  const peer = new (sqlite.requireNodeSqlite().DatabaseSync)(state.pathname);
+  const peer = sqlite.openNodeSqliteDatabase(state.pathname);
   peer.exec(
     extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "acp_sessions", {
       endMarker: "CREATE TABLE IF NOT EXISTS acp_replay_sessions",
@@ -332,7 +331,7 @@ it("batches ACP rows with revision admission and retains the following warm look
         });
         expect(observation.queries).toHaveLength(count);
       };
-      await check(null, 1);
+      await check(null, 0);
       observation.queries.length = 0;
       expect(
         await workerRead({ ...command, entries: [{ keys: [`${key}-missing`] }] }),
@@ -340,21 +339,21 @@ it("batches ACP rows with revision admission and retains the following warm look
         ok: true,
         rows: [null],
       });
-      expect(observation.queries).toHaveLength(2);
+      expect(observation.queries).toHaveLength(1);
       insert(key, "inserted");
-      await check("inserted", 2);
+      await check("inserted", 1);
       expect(
         observation.queries.filter((sql) =>
           /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql),
         ),
-      ).toHaveLength(1);
-      await check("inserted", 1);
+      ).toHaveLength(0);
+      await check("inserted", 0);
       peer.prepare("UPDATE acp_sessions SET runtime_session_name='updated'").run();
-      await check("updated", 2);
       await check("updated", 1);
+      await check("updated", 0);
       peer.prepare("DELETE FROM acp_sessions").run();
-      await check(null, 2);
       await check(null, 1);
+      await check(null, 0);
     } finally {
       observation.restore();
     }
@@ -516,7 +515,7 @@ it("reuses one reader in registered worker commands, refreshes idle, and reopens
   expect.soft(observation.queries.filter((sql) => userVersion.test(sql))).toHaveLength(1);
   expect.soft(observation.queries.filter((sql) => catalogRead.test(sql))).toHaveLength(1);
   expect(await value()).toBe(1);
-  // First admission uses its native pragma; the retained observation caches on its second use.
+  // Warm reads retain native prepared statements without probing for external writers.
   expect(await value()).toBe(1);
   prepare.mockClear();
   observation.queries.length = 0;
@@ -526,7 +525,7 @@ it("reuses one reader in registered worker commands, refreshes idle, and reopens
   expect(prepare).not.toHaveBeenCalled();
   expect(observation.queries.filter((sql) => configSelect.test(sql))).toHaveLength(10);
   expect(observation.queries.filter((sql) => contentVersionSelect.test(sql))).toHaveLength(0);
-  expect(observation.queries.filter((sql) => dataVersion.test(sql))).toHaveLength(10);
+  expect(observation.queries.filter((sql) => dataVersion.test(sql))).toHaveLength(0);
   expect(countOpens()).toBe(1);
   const peer = new native.DatabaseSync(pathname);
   try {
@@ -558,8 +557,8 @@ it("reuses one reader in registered worker commands, refreshes idle, and reopens
         /^PRAGMA (?:schema_version|user_version)$/iu.test(sql),
     ),
   ).toEqual([]);
-  // Reopened handles borrow format facts and admit only row freshness.
-  expect(prepare.mock.calls.filter(([sql]) => dataVersion.test(sql))).toHaveLength(1);
+  // Reopened handles borrow admitted format facts without a freshness query.
+  expect(prepare.mock.calls.filter(([sql]) => dataVersion.test(sql))).toHaveLength(0);
   observation.restore();
 });
 
@@ -698,7 +697,7 @@ it("observes peer commits and closes only the invalidated physical identity", ()
       observation.queries.filter((sql) =>
         /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql),
       ),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
     expect(first.read(({ db }) => db)).toBe(reader);
     expect(peer.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()?.busy).toBe(0);
   } finally {
@@ -741,79 +740,6 @@ it.each(["query", "schema"] as const)("evicts a reader after %s failure and reco
       peer.close();
     }
   }
-});
-
-it("publishes migration-owned content markers through rollback and authorizer checks", () => {
-  using database = sqlite.openNodeSqliteDatabase(":memory:");
-  for (const table of ["config_machine_state", "audit_events", "update_runs"]) {
-    database.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table));
-  }
-  database.prepare("INSERT INTO config_machine_state VALUES (?, '1', 1)").run(CONTENT_VERSION_KEY);
-  database
-    .prepare(`INSERT INTO update_runs (
-    run_id, created_at_ms, updated_at_ms, trigger, phase, status,
-    origin_json, target_json, before_json, after_json, steps_json, verification_json, repair_json
-  ) VALUES ('deferred-marker', ?, ?, 'cli', 'verifying', 'running', '{}', '{}',
-    '{"version":"2026.9.2"}', '{}', '[]', '{}', '[]')`)
-    .run(Date.now(), Date.now());
-  database.exec("PRAGMA user_version=1");
-  admitSqliteSchema(database);
-  const read = (published?: number) =>
-    runSqliteReadOperationSync(database, () => readStateSchemaContentVersion(database, published));
-  expect(read()).toBe(1);
-  const refusal = new Error("synthetic migration rollback");
-  runSqliteImmediateTransactionSync(database, () => {
-    expect(() =>
-      runSqliteImmediateTransactionSync(database, () => {
-        database
-          .prepare("UPDATE config_machine_state SET value_json='2' WHERE state_key=?")
-          .run(CONTENT_VERSION_KEY);
-        publishStateSchemaVersionAdmission(database, { userVersion: 1, contentVersion: 2 });
-        expect(read()).toBe(2);
-        throw refusal;
-      }),
-    ).toThrow(refusal);
-    expect(
-      database
-        .prepare("SELECT value_json FROM config_machine_state WHERE state_key=?")
-        .get(CONTENT_VERSION_KEY),
-    ).toEqual({ value_json: "1" });
-    expect(read()).toBe(1);
-    database.exec("SAVEPOINT raw_marker");
-    database
-      .prepare("UPDATE config_machine_state SET value_json='2' WHERE state_key=?")
-      .run(CONTENT_VERSION_KEY);
-    publishStateSchemaVersionAdmission(database, { userVersion: 1, contentVersion: 2 });
-    expect(read()).toBe(2);
-    database.exec("ROLLBACK TO raw_marker; RELEASE raw_marker");
-    expect(
-      database
-        .prepare("SELECT value_json FROM config_machine_state WHERE state_key=?")
-        .get(CONTENT_VERSION_KEY),
-    ).toEqual({ value_json: "1" });
-    expect(read()).toBe(1);
-  });
-  expect(read()).toBe(1);
-  expect(() =>
-    runSqliteImmediateTransactionSync(database, () => {
-      markCurrentStateSchemaVersion(database);
-      expect(read()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-      throw refusal;
-    }),
-  ).toThrow(refusal);
-  expect(read()).toBe(1);
-  runSqliteImmediateTransactionSync(database, () => markCurrentStateSchemaVersion(database));
-  expect(read()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-  expect(read(OPENCLAW_STATE_SCHEMA_VERSION + 1)).toBe(OPENCLAW_STATE_SCHEMA_VERSION + 1);
-  expect(read()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-  database.setAuthorizer((action, table) =>
-    action === constants.SQLITE_READ && table === "config_machine_state"
-      ? constants.SQLITE_DENY
-      : constants.SQLITE_OK,
-  );
-  expect(read).toThrowError(expect.objectContaining({ code: "ERR_SQLITE_ERROR", errcode: 23 }));
-  database.setAuthorizer(null);
-  expect(read()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
 });
 
 it.skipIf(typeof sqlite.requireNodeSqlite().DatabaseSync.prototype.setAuthorizer !== "function")(

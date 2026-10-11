@@ -177,18 +177,32 @@
       "text": "/verbose"
     },
     {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/components/lobster-pet-scene-view.tsx",
+      "text": "a message in a bottle"
+    },
+    {
       "count": 2,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/components/lobster-pet-scene-view.ts",
+      "path": "ui/src/components/lobster-pet-scene-view.tsx",
       "text": "z"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/components/lobster-pet-scene-view.ts",
+      "path": "ui/src/components/lobster-pet-scene-view.tsx",
       "text": "Z"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/lobster-pet-sprites-wild.tsx",
+      "text": "(o) (o)"
     },
     {
       "count": 1,
@@ -215,42 +229,42 @@
       "count": 1,
       "kind": "object-property",
       "name": "label",
-      "path": "ui/src/components/provider-icon.ts",
+      "path": "ui/src/components/provider-icon-data.ts",
       "text": "AWS"
     },
     {
       "count": 1,
       "kind": "object-property",
       "name": "label",
-      "path": "ui/src/components/provider-icon.ts",
+      "path": "ui/src/components/provider-icon-data.ts",
       "text": "Azure"
     },
     {
       "count": 1,
       "kind": "object-property",
       "name": "label",
-      "path": "ui/src/components/provider-icon.ts",
+      "path": "ui/src/components/provider-icon-data.ts",
       "text": "Daytona"
     },
     {
       "count": 1,
       "kind": "object-property",
       "name": "label",
-      "path": "ui/src/components/provider-icon.ts",
+      "path": "ui/src/components/provider-icon-data.ts",
       "text": "Google Cloud"
     },
     {
       "count": 1,
       "kind": "object-property",
       "name": "label",
-      "path": "ui/src/components/provider-icon.ts",
+      "path": "ui/src/components/provider-icon-data.ts",
       "text": "Hetzner"
     },
     {
       "count": 1,
       "kind": "object-property",
       "name": "label",
-      "path": "ui/src/components/provider-icon.ts",
+      "path": "ui/src/components/provider-icon-data.ts",
       "text": "Machine0"
     },
     {
@@ -426,7 +440,14 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/new-session/cloud-target.ts",
-      "text": "openclaw connect --service --session-host"
+      "text": "openclaw config set nodeHost.workerRuns.enabled true"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/new-session/cloud-target.ts",
+      "text": "openclaw node install --force"
     },
     {
       "count": 1,

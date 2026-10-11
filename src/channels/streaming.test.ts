@@ -58,6 +58,28 @@ describe("buildChannelProgressDraftLine", () => {
     expect(failed).not.toBe(running);
   });
 
+  it.each([undefined, 40])("bounds prepared path titles at maxLineChars=%s", (maxLineChars) => {
+    const path = `/tmp/${"deep/".repeat(40)}file.txt`;
+    const entry = { streaming: { progress: { maxLineChars } } };
+    const line = buildChannelProgressDraftLineForEntry(
+      entry,
+      {
+        event: "item",
+        itemKind: "tool",
+        name: "read",
+        title: `Read from ${path}`,
+        meta: `from ${path}`,
+        status: "failed",
+      },
+      { toolIcons: true },
+    );
+
+    expect(line?.label).toContain("…");
+    expect(line?.label).toMatch(/file\.txt$/);
+    expect(line?.text).toContain("failed");
+    expect(Array.from(line!.text).length).toBeLessThanOrEqual(maxLineChars ?? 120);
+  });
+
   it("keeps plan arguments out of generic tool and item rows", () => {
     const name = "progress_card";
     const args = {

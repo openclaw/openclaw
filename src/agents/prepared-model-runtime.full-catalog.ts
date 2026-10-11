@@ -36,6 +36,7 @@ import {
 } from "./prepared-model-runtime-auth.js";
 import type {
   PreparedModelRuntimeAgentFacts,
+  PreparedModelRuntimeCatalogAccess,
   PreparedModelRuntimeCatalogFacts,
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
@@ -195,7 +196,7 @@ export async function prepareFullCatalogFacts(
       input.config,
       input.env,
     );
-    const completeModelCatalog = {
+    const completeModelCatalog: ModelCatalogSnapshot = {
       ...modelCatalog,
       staticEntries:
         input.config.models?.mode === "replace"
@@ -489,8 +490,22 @@ export function prepareModelCatalogPublication(
     ).toSorted(compareModelCatalogEntries);
   // Route dedupe follows another round of normalization callbacks; acquire its policy afresh.
   const routeKeyOf = createModelCatalogIdentityKeyResolver();
+  const providerOutcomes: NonNullable<ModelCatalogSnapshot["providerOutcomes"]>[number][] = [];
+  for (const outcome of catalog.providerOutcomes ?? []) {
+    const accepted = previous?.providerOutcomes?.find(
+      (candidate) => candidate.provider === outcome.provider,
+    );
+    providerOutcomes.push(
+      outcome.status !== "ready" &&
+        retainedProviders.has(normalizeProvider(outcome.provider)) &&
+        accepted?.listedModelIds !== undefined
+        ? { ...outcome, listedModelIds: accepted.listedModelIds }
+        : outcome,
+    );
+  }
   const published: ModelCatalogSnapshot = {
     ...catalog,
+    providerOutcomes,
     entries: retain(catalog.entries, previous?.entries ?? []),
     routeVariants: retain(catalog.routeVariants, previous?.routeVariants ?? [], (entry) =>
       JSON.stringify([routeKeyOf(entry), entry.api, entry.baseUrl, entry.nativeRuntime]),
@@ -614,19 +629,6 @@ export function markPreparedModelCatalogFull(snapshot: ModelCatalogSnapshot): Mo
   return snapshot;
 }
 
-export type PreparedModelRuntimeCatalogAccess = Readonly<{
-  initialAuth: PreparedModelCatalogAuth;
-  accountCatalog?: NonNullable<PreparedModelRuntimeSnapshot["accountCatalog"]>;
-  isCurrent: () => boolean;
-  withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;
-  readFullModelCatalog: () => ModelCatalogSnapshot | undefined;
-  recheckNativeLogin: () => void;
-  refreshExpiredModelCatalog: () => void;
-  readPublishedModels: () => ReadonlyMap<string, readonly Model[]> | undefined;
-  loadFullModelCatalog: NonNullable<PreparedModelRuntimeSnapshot["loadFullModelCatalog"]>;
-  loadNativeModelCatalog: NonNullable<PreparedModelRuntimeSnapshot["loadNativeModelCatalog"]>;
-  loadAuth: NonNullable<Parameters<typeof bindPreparedModelRuntimeAuth>[1]["load"]>;
-}>;
 export function createPreparedModelRuntimeSnapshot(
   catalogOwner: PreparedModelRuntimeSnapshot["catalogOwner"],
   agentFacts: PreparedModelRuntimeAgentFacts,

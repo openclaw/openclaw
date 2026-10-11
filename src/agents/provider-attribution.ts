@@ -357,6 +357,14 @@ function resolveProviderAttributionPolicy(
           "User-Agent": userAgent,
         },
       };
+    case "opencode":
+      return {
+        ...policy,
+        verification: "internal-runtime",
+        reviewNote:
+          "Identify OpenClaw on native OpenCode Zen requests without impersonating OpenCode.",
+        headers: { "User-Agent": userAgent },
+      };
     case "opencode-go":
       return {
         ...policy,
@@ -417,13 +425,12 @@ export function resolveProviderRequestPolicy(
       attributionProvider = "xai";
     }
   } else if (
-    provider === "opencode-go" &&
     policy?.enabledByDefault &&
-    endpointClass === "opencode-go-native"
+    ((provider === "opencode-go" && endpointClass === "opencode-go-native") ||
+      (provider === "opencode" && endpointClass === "opencode-native"))
   ) {
-    // The documented identification contract belongs to Go's native endpoint.
-    // A custom baseUrl is a proxy and must not inherit OpenClaw attribution.
-    attributionProvider = "opencode-go";
+    // Native OpenCode routes identify OpenClaw; custom proxies do not inherit attribution.
+    attributionProvider = provider;
   }
   // OpenRouter and Vercel AI Gateway attribution follows the endpoint, so custom provider
   // ids pointed at their hosts are attributed too; custom proxy baseUrls are withheld.

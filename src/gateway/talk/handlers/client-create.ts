@@ -105,14 +105,7 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
       connId: client?.connId,
       sessionKey: params.sessionKey,
     });
-    const requested = replacement
-      ? {
-          ...params,
-          provider: replacement.provider,
-          model: replacement.model,
-          voice: replacement.voice,
-        }
-      : params;
+    const requested = replacement ? { ...params, ...replacement.launch } : params;
     const runtimeConfig = context.getRuntimeConfig();
     const realtimeConfig = buildTalkRealtimeConfig(
       runtimeConfig,

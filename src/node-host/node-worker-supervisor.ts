@@ -5,10 +5,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  completeWorkerLaunchDescriptor,
-  type WorkerLaunchDescriptor,
-} from "../worker/launch-descriptor.js";
+import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import {
   nodeWorkerPlanHash,
   nodeWorkerTurnMatchesIdentity,
@@ -21,7 +18,10 @@ import type {
   NodeWorkerWorkspaceRetainInput,
   NodeWorkerWorkspaceRetainResult,
 } from "../worker/node-workspace-retain-protocol.js";
-import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpoint.js";
+import {
+  parseWorkerConnectionEndpoint,
+  type WorkerConnectionEndpoint,
+} from "../worker/worker-connection-endpoint.js";
 import type { NodeWorkerProcessInput } from "../worker/worker-process-observation.js";
 import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
 import { NodeWorkerCapacity } from "./node-worker-capacity.js";
@@ -168,7 +168,11 @@ class NodeWorkerSupervisor {
     signal?: AbortSignal,
   ): Promise<NodeWorkerLaunchReceipt> {
     const input = validateNodeWorkerLaunchInput(structuredClone(rawInput));
-    const descriptor = completeWorkerLaunchDescriptor(input.descriptor, connectionEndpoint);
+    const parsedEndpoint = parseWorkerConnectionEndpoint(connectionEndpoint);
+    if (!parsedEndpoint) {
+      throw new Error("invalid worker launch descriptor");
+    }
+    const descriptor = { ...input.descriptor, connectionEndpoint: parsedEndpoint };
     const claimInput: NodeWorkerLaunchClaim = {
       launchId: input.launchId,
       planHash: nodeWorkerPlanHash(input),

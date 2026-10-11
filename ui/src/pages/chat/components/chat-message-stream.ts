@@ -141,7 +141,10 @@ export function renderStreamGroupPart(
   }
   const source = prepareChatMessageRender({
     role: "assistant",
-    content: [{ type: "text", text: part.text }],
+    content: [
+      ...(part.thinking ? [{ type: "thinking", thinking: part.thinking }] : []),
+      { type: "text", text: part.text },
+    ],
     timestamp: part.startedAt,
   });
   return renderGroupedMessage(
@@ -151,7 +154,7 @@ export function renderStreamGroupPart(
       ...opts,
       isStreaming: part.isStreaming,
       entryRef: opts.entryRefFor?.(part.key),
-      showReasoning: false,
+      showReasoning: Boolean(part.thinking),
       // Settled segments can be replied to without transcript IDs or footer actions.
       messageActions: resolveMessageActionDetails(source, {
         messageId: part.key,

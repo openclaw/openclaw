@@ -134,8 +134,11 @@ suite.define(() => {
           const researchPath = new URL(
             controlUiSessionUrl(suite.server.baseUrl, researchRows[0]!.key),
           ).pathname;
+          // Save the settled route after its loader consumes the navigation hints.
           await page.waitForURL(
-            (url) => url.pathname === researchPath || url.pathname.startsWith(`${researchPath}/`),
+            (url) =>
+              (url.pathname === researchPath || url.pathname.startsWith(`${researchPath}/`)) &&
+              url.search === "",
           );
           await rowFor(researchRows[1]!.key).waitFor({ state: "visible" });
           researchHistory = { url: page.url(), connections };
@@ -153,12 +156,19 @@ suite.define(() => {
         const method = operation === "rename" ? "sessions.patch" : "sessions.patchMany";
         await gateway.deferNext(method);
         if (operation === "rename") {
-          // The inline editor permits navigation while the mutation is pending;
-          // the sidebar rename dialog intentionally holds focus until it settles.
-          await page
-            .getByRole("button", { name: "Rename session Original name", exact: true })
-            .click();
-          const input = page.locator(".chat-pane__session-title-input");
+          if (filter === "All") {
+            await rowFor(original.key).click({ button: "right" });
+            await page.getByRole("menuitem", { name: "Rename…", exact: true }).click();
+          } else {
+            await page
+              .getByRole("button", { name: "Rename session Original name", exact: true })
+              .click();
+          }
+          const input = page.locator(
+            filter === "All"
+              ? 'openclaw-modal-dialog[label="Rename session"] input'
+              : ".chat-pane__session-title-input",
+          );
           await input.fill("Renamed original");
           await input.press("Enter");
           const request = await waitForPatch(

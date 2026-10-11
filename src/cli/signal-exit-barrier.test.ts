@@ -12,7 +12,8 @@ import {
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
 
-it("retains an exclusive process exit owner until its exact release", () => {
+it("retains an exclusive process exit owner until its exact release", async () => {
+  const previousExitCode = process.exitCode;
   const owner = vi.fn();
   const other = vi.fn();
   const release = registerSignalExitOwner(owner);
@@ -45,11 +46,14 @@ it("retains an exclusive process exit owner until its exact release", () => {
     } finally {
       releaseSame();
     }
-    expect(() => exitAfterSignalExitBarriers(0)).toThrow(exited);
-    expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+    exitAfterSignalExitBarriers(0);
+    await expect(waitForCliSignalExit()).resolves.toBe(0);
+    expect(process.exitCode).toBe(0);
+    expect(exit).not.toHaveBeenCalled();
   } finally {
     release();
     exit.mockRestore();
+    process.exitCode = previousExitCode;
   }
 });
 
@@ -76,14 +80,15 @@ it.each([
       exitAfterSignalExitBarriers(code);
       exitAfterSignalExitBarriers(0);
       expect(exit).not.toHaveBeenCalled();
-      const finished = expect(waitForCliSignalExit()).rejects.toBe(exited);
+      const finished = expect(waitForCliSignalExit()).resolves.toBe(expected);
       if (failed) {
         drain.reject(new Error("Maintenance failed"));
       } else {
         drain.resolve();
       }
       await finished;
-      expect(exit).toHaveBeenCalledExactlyOnceWith(expected);
+      expect(process.exitCode).toBe(expected);
+      expect(exit).not.toHaveBeenCalled();
     } finally {
       unregister();
       exit.mockRestore();
@@ -110,6 +115,11 @@ it.skipIf(process.platform === "win32").each([
       `import { once } from 'node:events';
          import { installCliSignalExitHandlers, registerSignalExitBarrier } from ${JSON.stringify(new URL("./signal-exit-barrier.ts", import.meta.url).href)};
          installCliSignalExitHandlers();
+         const backstop = setTimeout(() => process.exit(99), 5000);
+         registerSignalExitBarrier(async () => { clearTimeout(backstop); });
+         process.once("beforeExit", () => {
+           if (${JSON.stringify(kind)} === "fallback") process.stdout.write("|natural");
+         });
          if (${JSON.stringify(kind)} === 'execa') {
            const { execa } = await import('execa');
            const child = execa(process.execPath, ['-e', 'setInterval(() => {}, 1000)']);
@@ -124,8 +134,7 @@ it.skipIf(process.platform === "win32").each([
              setImmediate(() => { process.stdout.write('owner drained'); process.exit(23); });
            });
          }
-         process.kill(process.pid, ${JSON.stringify(signal)});
-         setTimeout(() => process.exit(99), 5000);`,
+         process.kill(process.pid, ${JSON.stringify(signal)});`,
     ],
     {
       encoding: "utf8",
@@ -138,7 +147,7 @@ it.skipIf(process.platform === "win32").each([
     expect(result.signal, result.stderr).toBe("SIGTERM");
   } else if (kind === "fallback") {
     expect(result.status, result.stderr).toBe(signal === "SIGINT" ? 130 : 143);
-    expect(result.stdout).toBe("fallback drained");
+    expect(result.stdout).toBe("fallback drained|natural");
   } else {
     expect(result.status, result.stderr).toBe(23);
     expect(result.stdout).toBe("owner drained");

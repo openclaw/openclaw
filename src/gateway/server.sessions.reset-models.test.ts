@@ -107,6 +107,7 @@ const ownedChildMetadata = {
   authProfileOverrideSource: "user",
   authProfileOverrideCompactionCount: 7,
   sendPolicy: "deny",
+  communication: { send: "never", receive: "ask" },
   queueMode: "interrupt",
   queueDebounceMs: 250,
   queueCap: 9,

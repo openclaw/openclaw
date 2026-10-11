@@ -229,6 +229,5 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
       ...(connection.tlsFingerprint ? { tlsFingerprint: connection.tlsFingerprint } : {}),
     },
     session: sessionKey,
-    forceProcessExitOnReturn: true,
   });
 }

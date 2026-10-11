@@ -1,4 +1,7 @@
-import { createCorePluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
+import {
+  createCorePluginStateKeyedStore,
+  type PluginStateKeyedStore,
+} from "../plugin-state/plugin-state-store.js";
 
 export type UsageCostRefreshFailure = {
   agentId: string;
@@ -8,7 +11,9 @@ export type UsageCostRefreshFailure = {
 };
 
 /** Bounded health facts survive worker/process exits; successful refresh retires each fact. */
-export function openUsageCostRefreshFailures(env?: NodeJS.ProcessEnv) {
+export function openUsageCostRefreshFailures(
+  env?: NodeJS.ProcessEnv,
+): Required<PluginStateKeyedStore<UsageCostRefreshFailure>> {
   return createCorePluginStateKeyedStore<UsageCostRefreshFailure>({
     ownerId: "core:usage-cost-cache",
     namespace: "refresh-failures",

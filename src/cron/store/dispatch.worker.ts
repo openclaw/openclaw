@@ -1,5 +1,4 @@
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
-import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import {
@@ -19,6 +18,8 @@ import type { CronStateWorkerOperations } from "./worker-contract.js";
 
 const loadAdmission = createLazyRuntimeModule(() => import("./run-admission.worker.js"));
 let admission: typeof import("./run-admission.worker.js") | undefined;
+const loadFinalization = createLazyRuntimeModule(() => import("./run-finalization.worker.js"));
+let finalization: typeof import("./run-finalization.worker.js") | undefined;
 
 const loadRecovery = createLazyRuntimeModule(() => import("./run-recovery.worker.js"));
 let recovery: typeof import("./run-recovery.worker.js") | undefined;
@@ -36,6 +37,11 @@ const loadStartup = createLazyRuntimeModule(() => import("./startup-plan.worker.
 let startup: typeof import("./startup-plan.worker.js") | undefined;
 
 export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> | undefined {
+  if (type === "cron.finalizeRuns" && !finalization) {
+    return loadFinalization().then((loaded) => {
+      finalization = loaded;
+    });
+  }
   if (type === "cron.planStartup" && !startup) {
     return loadStartup().then((loaded) => {
       startup = loaded;
@@ -68,7 +74,6 @@ export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> 
       "cron.releaseReservations",
       "cron.markDeliveryStarted",
       "cron.finishReceipt",
-      "cron.finalizeRuns",
       "cron.removeStaleFamily",
     ].includes(String(type)) &&
     !admission
@@ -136,11 +141,7 @@ export function executeCronStateCommand(
   switch (command.type) {
     case "cron.registerQuarantine":
       return runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-          registerCronQuarantineInDatabase(db, command.input);
-          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-        },
+        ({ db }) => registerCronQuarantineInDatabase(db, command.input),
         { database, path: database.path, env: getSqliteWorkerStateContext().environment },
         { operationLabel: command.type },
       );
@@ -171,21 +172,20 @@ export function executeCronStateCommand(
       return mutation.mutateCronJobsInWorker(database, command.input);
     case "cron.recordRun":
       return runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-          const result = recordCronRunInDatabase(db, command.input);
-          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-          return result;
-        },
+        ({ db }) => recordCronRunInDatabase(db, command.input),
         { database, path: database.path, env: getSqliteWorkerStateContext().environment },
         { operationLabel: command.type },
       );
+    case "cron.finalizeRuns":
+      if (!finalization) {
+        throw new Error("Cron finalization worker is not prepared");
+      }
+      return finalization.finalizeCronRunsInWorker(database, command.input);
     case "cron.reserveRuns":
     case "cron.activateRun":
     case "cron.releaseReservations":
     case "cron.markDeliveryStarted":
     case "cron.finishReceipt":
-    case "cron.finalizeRuns":
     case "cron.removeStaleFamily":
       if (!admission) {
         throw new Error("Cron admission worker is not prepared");
@@ -201,8 +201,6 @@ export function executeCronStateCommand(
           return admission.markCronDeliveryStartedInWorker(database, command.input);
         case "cron.finishReceipt":
           return admission.finishCronReceiptInWorker(database, command.input);
-        case "cron.finalizeRuns":
-          return admission.finalizeCronRunsInWorker(database, command.input);
         case "cron.removeStaleFamily":
           return admission.removeStaleCronFamilyInWorker(database, command.input);
       }
@@ -227,11 +225,7 @@ export function executeCronStateCommand(
         : maintenance.recordCronFailureAlertOutcomeInWorker(database, command.input);
     case "cron.initializeRunReceipts":
       return runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-          ensureCronRunReceiptSchema(db);
-          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-        },
+        ({ db }) => ensureCronRunReceiptSchema(db),
         { database, path: database.path, env: getSqliteWorkerStateContext().environment },
         { operationLabel: "cron.run-receipt.initialize" },
       );
@@ -240,17 +234,13 @@ export function executeCronStateCommand(
       return executeCronStoreSaveCommand(command, database);
     case "cron.bindReceiptExecution":
       return runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-          const result = bindCronRunReceiptExecutionInDatabase(
+        ({ db }) =>
+          bindCronRunReceiptExecutionInDatabase(
             db,
             command.input.handle,
             command.input.binding,
             prepareCronRunReceiptWriteSchema(db),
-          );
-          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-          return result;
-        },
+          ),
         { database, path: database.path, env: getSqliteWorkerStateContext().environment },
         { operationLabel: "cron.run-receipt.execution-binding" },
       );

@@ -110,6 +110,8 @@ export type SidebarRecentSession = {
   renameValue: string;
   /** Compact repo/branch/node line for work sessions. */
   subtitle?: string;
+  /** Admitted display slot used only while restoring a sidebar snapshot. */
+  snapshotSubtitle?: { subtitle?: string; narration?: string; toolName?: string };
   workContext?: SessionWorkContext;
   active: boolean;
   visuallyActive: boolean;
@@ -127,6 +129,8 @@ export type SidebarRecentSession = {
   archived?: boolean;
   visibility?: SessionVisibility;
   sharingRole?: GatewaySessionRow["sharingRole"];
+  communication?: GatewaySessionRow["communication"];
+  effectiveCommunication?: GatewaySessionRow["effectiveCommunication"];
   draftOwnedBySelf?: boolean;
   category?: string;
   icon?: string;
@@ -324,6 +328,7 @@ export type SidebarSessionPatch = Pick<
   | "icon"
   | "color"
   | "category"
+  | "communication"
 >;
 
 export const SIDEBAR_SESSION_PAGE_SIZE = 10;

@@ -313,6 +313,28 @@ it.each(["agent", "profile", "connection hello"])(
   },
 );
 
+it("keeps a replacement load locked when the previous connection's read completes", async () => {
+  const old = createDeferred<typeof file>();
+  const current = createDeferred<typeof file>();
+  const request = vi.fn().mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
+  const { element, emit } = mount(request);
+  await settle(element);
+  emit({ hello: { ...hello, server: { connId: "connection-2" } } });
+  await settle(element);
+  expect(request).toHaveBeenCalledTimes(2);
+
+  old.resolve(file);
+  await settle(element);
+  expect(element.querySelector("textarea")).toBeNull();
+  expect(button(element, "Save").disabled).toBe(true);
+
+  current.resolve({ ...file, content: "Current instructions" });
+  await settle(element);
+  await input(element, "New draft");
+  expect(element.querySelector("textarea")?.value).toBe("New draft");
+  expect(button(element, "Save").disabled).toBe(false);
+});
+
 it("retains the unsettled draft but ignores an old save completion after reconnecting", async () => {
   const saving = createDeferred<typeof file>();
   const request = vi.fn().mockResolvedValueOnce(file).mockReturnValueOnce(saving.promise);
@@ -334,6 +356,43 @@ it("retains the unsettled draft but ignores an old save completion after reconne
   await settle(element);
   expect(element.querySelector("textarea")?.value).toBe("Old draft");
   expect(element.textContent).toContain("Unsaved changes");
+});
+
+it("preserves newer draft edits after returning to an agent with a pending save", async () => {
+  const saving = createDeferred<typeof file>();
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce(file)
+    .mockReturnValueOnce(saving.promise)
+    .mockResolvedValueOnce({ ...file, agentId: "other", content: "Other instructions" })
+    .mockResolvedValueOnce({ ...file, hash: "hash-3" });
+  const { element, selection } = mount(request);
+  await settle(element);
+  await input(element, "First edit");
+  button(element, "Save").click();
+  await settle(element);
+  selection.set("other");
+  await settle(element);
+  selection.set("main");
+  await settle(element);
+  await input(element, "Second edit");
+
+  saving.resolve({ ...file, content: "First edit", hash: "hash-2" });
+  await settle(element);
+  expect(element.querySelector("textarea")?.value).toBe("Second edit");
+  expect(element.textContent).toContain("Unsaved changes");
+  expect(button(element, "Save").disabled).toBe(false);
+
+  await input(element, file.content);
+  expect(button(element, "Save").disabled).toBe(false);
+  button(element, "Save").click();
+  expect(request).toHaveBeenLastCalledWith("users.personalFile.set", {
+    agentId: "main",
+    content: file.content,
+    expectedHash: "hash-2",
+  });
+  await settle(element);
+  expect(element.textContent).toContain("Saved");
 });
 
 it("rejects a response for a different profile rather than enabling a save", async () => {

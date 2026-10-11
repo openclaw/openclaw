@@ -239,6 +239,11 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
       false,
     )
     .option(
+      "--inspect-release-retention",
+      "Record inspect-only release retention after installing a compatible bridge",
+      false,
+    )
+    .option(
       "--previous-updater-stopped",
       "Confirm the previous updater has settled and stopped scheduling",
       false,
@@ -274,6 +279,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           runtime: requiredUpdateLeafString(opts, "runtime"),
           previousUpdaterStopped: true,
           enableActivation: opts.enableActivation === true,
+          inspectReleaseRetention: opts.inspectReleaseRetention === true,
           json: Boolean(opts.json) || inheritedUpdateJson(command),
         });
       }),

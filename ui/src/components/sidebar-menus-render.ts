@@ -58,7 +58,6 @@ export function renderSidebarCustomizeMenuForController(controller: SidebarMenus
   if (!position) {
     return nothing;
   }
-  const trigger = controller.customizeMenuTrigger;
   const toggleEntry = (entry: string) => {
     const canonical = host.reconciledSidebarZone().sidebarEntries;
     host.onUpdateSidebarEntries?.(
@@ -73,13 +72,7 @@ export function renderSidebarCustomizeMenuForController(controller: SidebarMenus
     preferencesBrowserOnly: host.preferencesBrowserOnly,
     isRouteEnabled: (routeId) => controller.isRouteEnabled(routeId),
     pluginNavigation: host.pluginNavigation(),
-    onTabAway: () => trigger?.focus(),
-    onClose: (restoreFocus) => {
-      if (controller.customizeMenuPosition !== position) {
-        return;
-      }
-      controller.closePositionedMenu("customize", { restoreFocus });
-    },
+    ...controller.positionedMenuHandlers("customize"),
     onToggleRoute: (routeId) =>
       toggleEntry(serializeSidebarEntry({ type: "route", route: routeId })),
     onTogglePlugin: (key) => toggleEntry(serializeSidebarEntry({ type: "plugin", key })),
@@ -88,7 +81,9 @@ export function renderSidebarCustomizeMenuForController(controller: SidebarMenus
       // (other agents, still-loading caches) must survive a route reset.
       const sessions = host
         .reconciledSidebarZone()
-        .sidebarEntries.filter((entry) => entry.startsWith("session:"));
+        .sidebarEntries.filter(
+          (entry) => entry.startsWith("session:") || entry.startsWith("person:"),
+        );
       host.onUpdateSidebarEntries?.([...DEFAULT_SIDEBAR_ENTRIES, ...sessions]);
       controller.closePositionedMenu("customize", { restoreFocus: true });
     },
@@ -162,7 +157,6 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusC
   if (!position) {
     return nothing;
   }
-  const trigger = controller.identityMenuTrigger;
   const selfUser = host.sessionDataContext
     ? gatewayPresentationScope(host.sessionDataContext.gateway).displayUser
     : null;
@@ -200,13 +194,7 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusC
     canRetryConnection: canRetryGatewayStatus(host.connectionStatus),
     themeMode: host.themeMode,
     triggerWidth: position.width,
-    onTabAway: () => trigger?.focus(),
-    onClose: (restoreFocus) => {
-      if (controller.identityMenuPosition !== position) {
-        return;
-      }
-      controller.closePositionedMenu("identity", { restoreFocus });
-    },
+    ...controller.positionedMenuHandlers("identity"),
     onNavigate: (routeId, options) => host.onNavigate?.(routeId, options),
     onPairMobile: () => host.onPairMobile?.(),
     onRetryConnect: host.onRetryConnect,
@@ -282,13 +270,16 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
       <openclaw-session-menu
         .session=${{
           label: session.label,
+          target: { key: session.key, agentId: session.agentId },
           sessionId: session.sessionId ?? null,
           isChild: session.isChild,
           hasChildren: session.childSessionKeys.length > 0,
-          pinned: session.pinned,
+          pinned: host.sessionOrganizer.isPersonalSessionPin(session.key),
           pinnable: session.pinnable,
           unread: allUnread,
           hiddenFromInvolvingMe: session.hiddenFromInvolvingMe,
+          communication: session.communication,
+          effectiveCommunication: session.effectiveCommunication,
           archived: allArchived,
           snoozedUntil: session.snoozedUntil ?? null,
           archiving: rows.some((row) => context?.sessions.archiveVisibility(row.key) === "pending"),
@@ -299,6 +290,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
             sharedCategory !== null &&
             rows.every((row) => categoryClearReturnsToGroups(row, host.sessionsGrouping)),
         }}
+        .involvingMeContext=${host.sessionInvolvingMeFilterActive}
         .selectionCount=${rows.length}
         .compact=${isMobileNavLayout()}
         .lastActive=${batchRows ? "" : formatSidebarTimestamp(session.updatedAt)}
@@ -361,12 +353,9 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
               }
               break;
             case "toggle-pin":
-              void host.sessionOrganizer.patchSession(
-                session,
-                { pinned: !session.pinned },
-                {
-                  sessionScope: true,
-                },
+              host.sessionOrganizer.setPersonalSessionPin(
+                session.key,
+                !host.sessionOrganizer.isPersonalSessionPin(session.key),
               );
               break;
             case "toggle-involving-me":
@@ -390,6 +379,11 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
               break;
             case "set-icon":
               void host.sessionOrganizer.patchSession(session, { icon: action.icon });
+              break;
+            case "set-communication":
+              void host.sessionOrganizer.patchSession(session, {
+                communication: action.communication,
+              });
               break;
             case "reset-appearance":
               void host.sessionOrganizer.patchSession(session, { icon: null, color: null });
@@ -474,20 +468,13 @@ export function renderSidebarMoreMenuForController(controller: SidebarMenusContr
   if (!position) {
     return nothing;
   }
-  const trigger = controller.moreMenuTrigger;
   return renderSidebarMoreMenu({
     position,
     basePath: host.basePath,
     activeRouteId: host.activeRouteId,
     sidebarEntries: host.sidebarEntries,
     isRouteEnabled: (routeId) => controller.isRouteEnabled(routeId),
-    onTabAway: () => trigger?.focus(),
-    onClose: (restoreFocus) => {
-      if (controller.moreMenuPosition !== position) {
-        return;
-      }
-      controller.closePositionedMenu("more", { restoreFocus });
-    },
+    ...controller.positionedMenuHandlers("more"),
     onNavigateRoute: (routeId) => {
       controller.closePositionedMenu("more", { restoreFocus: true });
       host.onNavigate?.(routeId);

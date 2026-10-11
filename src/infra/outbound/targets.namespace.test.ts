@@ -325,7 +325,7 @@ describe("outbound channel namespace targets", () => {
     expect(resolved).toMatchObject({ channel: "none", reason: "no-target" });
   });
 
-  it("applies heartbeat allow-from policy to an exact directory destination", async () => {
+  it("applies asynchronously prepared heartbeat policy to an exact directory destination", async () => {
     const resolveTarget = vi.fn(({ to, allowFrom }: { to?: string; allowFrom?: string[] }) =>
       to === "C123456" && allowFrom?.includes("operator")
         ? { ok: false as const, error: new Error("recipient not allowed") }
@@ -336,9 +336,11 @@ describe("outbound channel namespace targets", () => {
       outbound: { deliveryMode: "direct", resolveTarget },
       messaging: { targetPrefixes: ["a"] },
     });
+    const resolveAllowFrom = vi.fn(() => ["legacy-operator"]);
     plugin.config = {
       ...plugin.config,
-      resolveAllowFrom: () => ["operator"],
+      resolveAllowFrom,
+      resolveAllowFromAsync: async () => ["operator"],
     };
 
     const resolved = await resolveNamespaceHeartbeat(plugin);
@@ -347,6 +349,7 @@ describe("outbound channel namespace targets", () => {
     expect(resolveTarget).toHaveBeenCalledWith(
       expect.objectContaining({ to: "C123456", allowFrom: ["operator"], mode: "heartbeat" }),
     );
+    expect(resolveAllowFrom).not.toHaveBeenCalled();
   });
 
   it("fails closed when heartbeat policy rejects an ordinary resolved directory target", async () => {
