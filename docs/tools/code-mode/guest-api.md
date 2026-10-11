@@ -218,7 +218,9 @@ command defines its own payload; check the result before composing it. `nodes.ge
 name and returns a handle with `id`, `name`, and `invoke(command, params?)`.
 Invocation uses the normal `nodes` tool path, so pairing, command policy, scopes,
 approvals, timeouts, hooks, and telemetry are unchanged. A handle includes
-`listDir(path)` only when the node advertises `fs.listDir`. It does not include
+`listDir(path)` only when the node advertises `fs.listDir`, and that listing
+omits files: use the normal shell `exec` tool with a node host for complete
+directory contents. It does not include
 `exec`: the generic nodes surface reserves `system.run` for the normal shell
 `exec` tool with a node host.
 
