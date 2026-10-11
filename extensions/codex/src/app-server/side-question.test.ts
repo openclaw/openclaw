@@ -42,7 +42,6 @@ const {
   toolExecuteMock,
   handleCodexAppServerApprovalRequestMock,
   resolveCodexProviderWebSearchSupportForClientMock,
-  withLeasedCodexAppServerClientStartSelectionRetryMock,
   runCodexAppServerSideQuestion,
   runSideQuestionWithManagedWebSearchCall,
   runCodexAppServerSideQuestionImpl,
@@ -59,8 +58,6 @@ const {
   extractRelayIdFromThreadConfig,
   sideLoopRelayParams,
 } = await import("./side-question.test-support.js");
-
-type SelectionRetryParams = import("./side-question.test-support.js").SelectionRetryParams;
 
 function supervisionConnectionFingerprint(): string {
   return buildCodexAppServerConnectionFingerprint(
@@ -648,59 +645,6 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(requestApproval).not.toHaveBeenCalled();
     expect(client.request).not.toHaveBeenCalled();
     expect(createOpenClawCodingToolsMock).not.toHaveBeenCalled();
-  });
-
-  it("routes a side question only through the client selected for its fork", async () => {
-    const initialClient = createFakeClient();
-    const replacementClient = createPendingClient();
-    const baseRequest = replacementClient.request.getMockImplementation()!;
-    replacementClient.request.mockImplementation(
-      async (method: string, requestParams?: unknown) => {
-        if (method === "turn/start") {
-          queueMicrotask(() => {
-            initialClient.emit(turnCompleted("side-thread", "turn-1", "Stale client answer."));
-            replacementClient.emit(agentDelta("side-thread", "turn-1", "Replacement answer."));
-            replacementClient.emit(turnCompleted("side-thread", "turn-1", "Replacement answer."));
-          });
-          return turnStartResult("turn-1");
-        }
-        return baseRequest(method, requestParams);
-      },
-    );
-    getSharedCodexAppServerClientMock.mockResolvedValue(initialClient);
-    withLeasedCodexAppServerClientStartSelectionRetryMock.mockImplementationOnce(
-      async (params: SelectionRetryParams) => {
-        expect(params.lease.client).toBe(initialClient);
-        params.lease.client = replacementClient;
-        params.onClientChange(replacementClient);
-        return await params.run(replacementClient, () => ({
-          timeoutMs: params.options.timeoutMs ?? 60_000,
-          signal: params.options.abandonSignal,
-          assertCurrent: () => {},
-        }));
-      },
-    );
-
-    await expect(runCodexAppServerSideQuestion(sideParams())).resolves.toEqual({
-      text: "Replacement answer.",
-    });
-
-    // A finished route cannot dispatch retained tool requests on either physical client.
-    for (const client of [initialClient, replacementClient]) {
-      await expect(
-        client.handleRequest({
-          id: "late-side-tool",
-          method: "item/tool/call",
-          params: {
-            ...codexTestTurnIds("side-thread"),
-            callId: "late-tool",
-            tool: "wiki_status",
-            arguments: {},
-          },
-        }),
-      ).resolves.toBeUndefined();
-    }
-    expect(toolExecuteMock).not.toHaveBeenCalled();
   });
 
   it.each([

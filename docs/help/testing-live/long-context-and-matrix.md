@@ -22,7 +22,7 @@ read_when:
   token observations. These measurements are informational, not pass/fail
   latency targets.
 - Long output: `OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_OUTPUT=1` requires a
-  deterministic response between 4000 and 8000 output tokens.
+  fixed-format response between 4000 and 8000 output tokens.
 - Optional raw read-tool stress:
   `OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_TOOL_OUTPUT=1`. It is not part of the
   default recipe because the effective tool surface may use Code Mode instead
@@ -64,7 +64,7 @@ benchmarks. They fail unless the following runtime contracts hold:
 - Native Codex reports an effective window of `875900`, grows beyond the
   `700000` total-scope threshold without a manual compact, and automatically
   compacts on the next turn.
-- Each runtime produces a deterministic long response between 4000 and 8000
+- Each runtime produces a fixed-format long response between 4000 and 8000
   output tokens and preserves a durable marker through compaction and a
   Gateway restart.
 
@@ -115,7 +115,7 @@ OPENCLAW_LIVE_GATEWAY_OPENAI_API_DEFAULT=1 \
 ```
 
 This proof leaves `OPENCLAW_LIVE_GATEWAY_MODELS` unset, resolves the model through
-the fresh onboarding inference-selection seam, asserts `openai/gpt-6-astra`, and then
+the fresh onboarding inference-selection path, asserts `openai/gpt-6-astra`, and then
 runs a real gateway turn with that resolved model.
 
 GPT-5.6 embedded OpenClaw matrix:
@@ -142,7 +142,7 @@ Docker notes:
   fallback cannot hide a Codex harness regression.
 - Matrix targets run sequentially in one container. The Docker script scales its
   default 35-minute timeout by target count; any outer shell or CI timeout must
-  allow the same total. Canonical CI keeps each GPT-5.6 target in a separate shard.
+  allow the same total. Upstream CI keeps each GPT-5.6 target in a separate shard.
 
 ### Recommended live recipes
 

@@ -66,6 +66,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/i18n/locales/en-login.ts":
     case "ui/src/lib/gateway-secret-shape.ts":
       return "login-runtime";
+    case "ui/src/components/solid/copy-button.tsx":
+      // Login recovery uses this control before the chat route can finish loading.
+      return "control-ui-core";
     case "ui/src/components/sidebar-update-card.ts":
     case "ui/src/styles/sidebar-update-card.css":
       return "sidebar-update-runtime";
@@ -167,7 +170,7 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 // Shared boot needs a smaller partition cap because its dense chat
                 // modules can exceed the compressed-size budget after regrouping.
                 minSize: 16 * 1024,
-                maxSize: (route === "shared" ? 1344 : 1408) * 1024,
+                maxSize: (route === "shared" ? 1280 : 1408) * 1024,
               };
             }),
             ...(["shared", "new", "chat"] as const).map((route) => {

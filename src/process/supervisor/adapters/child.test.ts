@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import { writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -37,10 +36,6 @@ vi.mock("../../kill-tree.js", () => ({
 }));
 vi.mock("../../../infra/windows-encoding.js", () => ({ createWindowsOutputDecoder: decoderMock }));
 vi.mock("../service-child-relay-host.js", () => ({ createServiceChildRelayAdapter: relayMock }));
-
-if (process.platform !== "win32") {
-  createRequire(import.meta.url)("koffi");
-}
 
 let start: ReturnType<typeof readyChildAdapter>;
 let roots: typeof import("../../../infra/windows-install-roots.js").getWindowsInstallRoots;

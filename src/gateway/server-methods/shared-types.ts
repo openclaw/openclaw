@@ -491,7 +491,11 @@ export type GatewayRequestOptions = {
   expectedProfileBinding?: import("../expected-profile.js").ExpectedProfileBinding;
   /** In-process source refresh before handler entry; never retained by the handler. */
   prepareDispatchCurrent?: () => Promise<void>;
-  /** In-process Gateway lifetime guard composed into durable session mutations. */
+  /**
+   * In-process Gateway lifetime guard composed into durable session mutations.
+   * @deprecated For approval persistence use api.runtime.gateway.request with host-bound authority;
+   * opaque approval commit callbacks are removed in the next Plugin SDK major.
+   */
   sessionMutationCommitGuard?: () => void;
   /** In-process caller lifetime; never serialized into a Gateway request frame. */
   signal?: AbortSignal;

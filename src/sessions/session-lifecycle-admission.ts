@@ -3,7 +3,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
-import { getAgentRunLifecycleGeneration } from "../infra/agent-run-registry.js";
 import {
   bindGatewayContextResolver,
   hasGatewayContextOwner,
@@ -57,7 +56,6 @@ type SessionWorkRun = Readonly<{
   controlUiVisible?: boolean;
 }>;
 type SessionWorkAdmission = HandoffSessionWorkAdmission & {
-  lifecycleGeneration: string;
   run?: SessionWorkRun;
   phase: "pending" | "acquired";
   owner?: symbol;
@@ -67,6 +65,7 @@ type SessionWorkAdmission = HandoffSessionWorkAdmission & {
 
 type SessionLifecycleMutationOwner = {
   identities: readonly string[];
+  kind?: SessionLifecycleMutationKind;
 };
 
 type SessionWorkAdmissionClosure = SessionLifecycleMutationOwner & { reason: Error };
@@ -75,10 +74,8 @@ type SessionLifecycleAdmissionState = {
   lifecycleQueues: Map<string, StoreWriterQueue>;
   mutationQueues: Map<string, StoreWriterQueue>;
   activeAdmissions: Map<string, Set<SessionWorkAdmission>>;
-  activeMutations: Map<string, number>;
-  activeMutationRuns?: Set<SessionLifecycleMutationOwner>;
+  activeMutationRuns: Set<SessionLifecycleMutationOwner>;
   admissionClosures: Set<SessionWorkAdmissionClosure>;
-  activeMutationKinds: Map<string, Map<SessionLifecycleMutationKind, number>>;
   idleWaiters: Map<string, Set<() => void>>;
   currentAdmissions: AsyncLocalStorage<ReadonlySet<SessionWorkAdmission>>;
 };
@@ -106,18 +103,15 @@ const SESSION_LIFECYCLE_ADMISSION_STATE = resolveGlobalSingleton(
     lifecycleQueues: new Map(),
     mutationQueues: new Map(),
     activeAdmissions: new Map(),
-    activeMutations: new Map(),
     activeMutationRuns: new Set(),
     admissionClosures: new Set(),
-    activeMutationKinds: new Map(),
     idleWaiters: new Map(),
     currentAdmissions: new AsyncLocalStorage(),
   }),
 );
 const {
   activeAdmissions: ACTIVE_SESSION_WORK_ADMISSIONS,
-  activeMutations: ACTIVE_SESSION_LIFECYCLE_MUTATIONS,
-  activeMutationKinds: ACTIVE_SESSION_LIFECYCLE_MUTATION_KINDS,
+  activeMutationRuns: ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS,
   idleWaiters: SESSION_LIFECYCLE_IDLE_WAITERS,
   currentAdmissions: CURRENT_SESSION_WORK_ADMISSIONS,
   admissionClosures: SESSION_WORK_ADMISSION_CLOSURES,
@@ -144,34 +138,24 @@ export {
   getTerminalSessionWorkAdmissionRelease,
 };
 
-// Older runtime chunks can create the shared state without this newer index.
-const ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS =
-  (SESSION_LIFECYCLE_ADMISSION_STATE.activeMutationRuns ??= new Set());
-
 const runWithSessionIdentityLocks = createSessionIdentityLockRunner(
   SESSION_LIFECYCLE_ADMISSION_STATE,
 );
 
 function hasActiveSessionLifecycleMutation(identities: readonly string[]): boolean {
-  return identities.some((identity) => (ACTIVE_SESSION_LIFECYCLE_MUTATIONS.get(identity) ?? 0) > 0);
+  return [...ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS].some((run) =>
+    run.identities.some((identity) => identities.includes(identity)),
+  );
 }
 
 function hasOnlyActiveSessionLifecycleMutationKind(
   identities: readonly string[],
   kind: SessionLifecycleMutationKind,
 ): boolean {
-  let foundActiveMutation = false;
-  for (const identity of identities) {
-    const activeCount = ACTIVE_SESSION_LIFECYCLE_MUTATIONS.get(identity) ?? 0;
-    if (activeCount === 0) {
-      continue;
-    }
-    foundActiveMutation = true;
-    if ((ACTIVE_SESSION_LIFECYCLE_MUTATION_KINDS.get(identity)?.get(kind) ?? 0) !== activeCount) {
-      return false;
-    }
-  }
-  return foundActiveMutation;
+  const active = [...ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS].filter((run) =>
+    run.identities.some((identity) => identities.includes(identity)),
+  );
+  return active.length > 0 && active.every((run) => run.kind === kind);
 }
 
 function sessionWorkAdmissionAbortError(signal: AbortSignal): Error {
@@ -184,8 +168,8 @@ async function waitForNormalizedSessionLifecycleMutationIdle(
   identities: readonly string[],
   signal?: AbortSignal,
 ): Promise<void> {
-  const activeIdentities = identities.filter(
-    (identity) => (ACTIVE_SESSION_LIFECYCLE_MUTATIONS.get(identity) ?? 0) > 0,
+  const activeIdentities = identities.filter((identity) =>
+    hasActiveSessionLifecycleMutation([identity]),
   );
   if (activeIdentities.length === 0) {
     return;
@@ -263,7 +247,7 @@ export async function runExclusiveSessionLifecycleMutation<T>(
     signal,
     operation,
   );
-  const mutationRun: SessionLifecycleMutationOwner = { identities };
+  const mutationRun: SessionLifecycleMutationOwner = { identities, kind: params.kind };
   let mutationActivated = false;
   let removeAbortListener = () => {};
   let releaseWorkAdmissions: (() => void) | undefined;
@@ -278,15 +262,6 @@ export async function runExclusiveSessionLifecycleMutation<T>(
             mutationActivated = true;
             removeAbortListener();
             ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.add(mutationRun);
-            for (const identity of identities) {
-              const activeCount = ACTIVE_SESSION_LIFECYCLE_MUTATIONS.get(identity) ?? 0;
-              ACTIVE_SESSION_LIFECYCLE_MUTATIONS.set(identity, activeCount + 1);
-              if (params.kind) {
-                const kinds = ACTIVE_SESSION_LIFECYCLE_MUTATION_KINDS.get(identity) ?? new Map();
-                kinds.set(params.kind, (kinds.get(params.kind) ?? 0) + 1);
-                ACTIVE_SESSION_LIFECYCLE_MUTATION_KINDS.set(identity, kinds);
-              }
-            }
           },
           diagnostic,
         );
@@ -315,32 +290,17 @@ export async function runExclusiveSessionLifecycleMutation<T>(
             await runWithSessionIdentityLocks(
               identities,
               async () => {
+                ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.delete(mutationRun);
                 for (const identity of identities) {
-                  if (params.kind) {
-                    const kinds = ACTIVE_SESSION_LIFECYCLE_MUTATION_KINDS.get(identity);
-                    const remainingKindCount = (kinds?.get(params.kind) ?? 1) - 1;
-                    if (remainingKindCount > 0) {
-                      kinds?.set(params.kind, remainingKindCount);
-                    } else {
-                      kinds?.delete(params.kind);
-                      if (kinds?.size === 0) {
-                        ACTIVE_SESSION_LIFECYCLE_MUTATION_KINDS.delete(identity);
-                      }
-                    }
-                  }
-                  const remaining = (ACTIVE_SESSION_LIFECYCLE_MUTATIONS.get(identity) ?? 1) - 1;
-                  if (remaining > 0) {
-                    ACTIVE_SESSION_LIFECYCLE_MUTATIONS.set(identity, remaining);
+                  if (hasActiveSessionLifecycleMutation([identity])) {
                     continue;
                   }
-                  ACTIVE_SESSION_LIFECYCLE_MUTATIONS.delete(identity);
                   const waiters = SESSION_LIFECYCLE_IDLE_WAITERS.get(identity);
                   SESSION_LIFECYCLE_IDLE_WAITERS.delete(identity);
                   for (const resolve of waiters ?? []) {
                     resolve();
                   }
                 }
-                ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.delete(mutationRun);
                 releaseWorkAdmissions?.();
               },
               diagnostic,
@@ -413,9 +373,7 @@ function isSessionWorkAdmissionTargetActive(params: {
     Array.from(ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? []).some(
       (admission) =>
         admission.phase === "acquired" &&
-        (!params.owners ||
-          (params.owners.has(admission) &&
-            admission.lifecycleGeneration === getAgentRunLifecycleGeneration())) &&
+        (!params.owners || params.owners.has(admission)) &&
         (admission.identities.size === 1 ||
           identities.every((target) => admission.identities.has(target))),
     ),
@@ -441,9 +399,7 @@ export function captureGatewaySessionWorkAdmissions(resolveGatewayContext: Gatew
   const owners = collectSessionWorkAdmissions(
     ACTIVE_SESSION_WORK_ADMISSIONS.keys(),
     (admission) =>
-      admission.phase === "acquired" &&
-      admission.lifecycleGeneration === getAgentRunLifecycleGeneration() &&
-      hasGatewayContextOwner(admission, resolveGatewayContext),
+      admission.phase === "acquired" && hasGatewayContextOwner(admission, resolveGatewayContext),
   );
   return {
     targets: collectActiveSessionWorkAdmissions(owners),
@@ -454,18 +410,12 @@ export function captureGatewaySessionWorkAdmissions(resolveGatewayContext: Gatew
 
 /** Unique active lifecycle mutations; one run can be indexed under several identities. */
 export function getActiveSessionLifecycleMutationCount(): number {
-  if (ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.size > 0) {
-    return ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.size;
-  }
-  // A mutation from an older loaded chunk may only populate the identity index.
-  return ACTIVE_SESSION_LIFECYCLE_MUTATIONS.size > 0 ? 1 : 0;
+  return ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.size;
 }
 
 /** Snapshot the existing lifecycle identity index for off-thread maintenance planning. */
 export function collectActiveSessionLifecycleMutationIdentities(scope: string): string[] {
-  const identities = [...ACTIVE_SESSION_LIFECYCLE_MUTATIONS]
-    .filter(([, count]) => count > 0)
-    .map(([identity]) => identity);
+  const identities = [...ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS].flatMap((run) => run.identities);
   return [...(collectSessionIdentityTargets(identities).get(scope.trim()) ?? [])].toSorted();
 }
 
@@ -520,7 +470,6 @@ export async function beginSessionWorkAdmission(params: {
   let writerBarrierStarted = false;
   const { promise: releasedPromise, resolve: resolveReleased } = createDeferredCore();
   const admission: SessionWorkAdmission = {
-    lifecycleGeneration: getAgentRunLifecycleGeneration(),
     run: params.run ? Object.freeze({ ...params.run }) : undefined,
     phase: "pending",
     isSettling: params.isSettling,
@@ -533,9 +482,7 @@ export async function beginSessionWorkAdmission(params: {
       try {
         return params.onInterrupt?.(admission.interrupted);
       } finally {
-        if (!writerBarrierStarted) {
-          pendingController.abort(admission.interrupted);
-        }
+        pendingController.abort(admission.interrupted);
       }
     },
     released: releasedPromise,
@@ -613,21 +560,29 @@ export async function beginSessionWorkAdmission(params: {
       identities: rawIdentities,
       signal,
       run: async () => {
-        const current = new Set(CURRENT_SESSION_WORK_ADMISSIONS.getStore());
-        current.add(admission);
-        await CURRENT_SESSION_WORK_ADMISSIONS.run(current, params.assertAllowed, signal);
+        if (params.revalidateAllowed) {
+          await lease.run(async () => await params.assertAllowed(signal));
+        }
         if (isGatewaySubordinateWorkAdmissionClosed()) {
           throw new GatewayDrainingError();
         }
         signal.throwIfAborted();
-        admission.phase = "acquired";
+        if (params.revalidateAllowed) {
+          admission.phase = "acquired";
+        }
         await runExclusiveSessionStoreWrite(
           params.scope,
           async () => {
             writerBarrierStarted = true;
             signal.throwIfAborted();
-            const revalidate = params.revalidateAllowed ?? (() => params.assertAllowed(signal));
-            await lease.run(async () => await revalidate());
+            await lease.run(async () => {
+              if (params.revalidateAllowed) {
+                await params.revalidateAllowed();
+              } else {
+                await params.assertAllowed(signal);
+                admission.phase = "acquired";
+              }
+            });
           },
           { reentrant: true, identities: params.storeWriterIdentities, signal },
         );
@@ -682,7 +637,6 @@ export function captureSessionWorkRunInterruptions(params: {
   const currentAdmissions = CURRENT_SESSION_WORK_ADMISSIONS.getStore();
   const isCurrent = (admission: SessionWorkAdmission) =>
     !admission.interrupted &&
-    admission.lifecycleGeneration === getAgentRunLifecycleGeneration() &&
     identities.some((identity) => ACTIVE_SESSION_WORK_ADMISSIONS.get(identity)?.has(admission));
   const admissions = collectSessionWorkAdmissions(
     identities,

@@ -90,7 +90,8 @@ onboarding installs the Gateway with Bun and records its exact runtime path.
 `--no-onboard` does not create a service on a fresh installation.
 
 With an existing fork executable, add `--bun-path /absolute/path/to/bun` or set
-`OPENCLAW_BUN_PATH`. Published versions require the exact pinned executable;
+`OPENCLAW_BUN_PATH`. Its filename must be `bun` or `bun.exe` (case-insensitive) so
+Gateway services can pin it. Published versions require the exact pinned executable;
 custom package specs also require `--bun-path` and are checked against the
 installed package's pin before running the CLI. Stock Bun, git-checkout builds,
 Windows, and musl/Alpine are unsupported by this installer path.
@@ -139,6 +140,35 @@ explicitly selected Node toolchain still uses its own adjacent npm installation.
 Gateway process inspection recognizes Bun's `--watch` and `--hot` flags. ACP bridge detection recognizes Bun and the current runtime executable, including custom filenames. Portable cloud worker archives target Node when built with either runtime, and worker inference errors omit runtime stack properties from their bounded diagnostic messages.
 
 ## Known limitations
+
+### Updating from 2026.9.9 with a Bun Gateway
+
+The 2026.9.9 updater checks a Bun-hosted Gateway's runtime as if it were Node.
+After you pin the Gateway service to Bun, `openclaw update` from 2026.9.9 fails
+at the package swap with `global-install-failed` ("Recovery requires a supported
+external Node executable") and leaves the existing install and Gateway running.
+Updates driven by **2026.10.1** and later recognize the Bun runtime.
+
+For this one update, return the Gateway to Node, update, then pin Bun again with
+the updated CLI. The verified sequence updated a published 2026.9.9 npm-global
+install to 2026.10.1 on macOS:
+
+```sh
+node=/path/to/node-24/bin/node
+bun=/path/to/openclaw-bun
+package=/path/to/lib/node_modules/openclaw
+
+"$node" "$package/openclaw.mjs" gateway install --runtime node --runtime-path "$node" --force --json
+"$node" "$package/openclaw.mjs" update --yes
+"$bun" --no-install "$package/openclaw.mjs" gateway install --runtime bun --runtime-path "$bun" --force --json
+```
+
+Wait for each Gateway restart to report ready before the next command. On macOS,
+run the last command from a shell with Homebrew `sqlite` installed or
+`OPENCLAW_SQLITE_LIBRARY` set (see
+[SQLite library selection](/install/bun-compatibility#sqlite-library-selection));
+the service keeps that selection. The re-pinned service includes `--no-install`,
+which 2026.10.1 adds to Bun service commands.
 
 ### Updating from 2026.9.7 with an older system Node
 

@@ -27,12 +27,7 @@ const DEFAULT_MINIMAX_VLM_TIMEOUT_MS = 60_000;
 
 export function isMinimaxVlmProvider(provider: string): boolean {
   const normalized = provider.trim().toLowerCase();
-  return (
-    normalized === "minimax" ||
-    normalized === "minimax-cn" ||
-    normalized === "minimax-portal" ||
-    normalized === "minimax-portal-cn"
-  );
+  return ["minimax", "minimax-cn", "minimax-portal", "minimax-portal-cn"].includes(normalized);
 }
 
 export function isMinimaxVlmModel(provider: string, modelId: string): boolean {

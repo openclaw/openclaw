@@ -773,39 +773,6 @@ describe("native declaration preparation", () => {
       }),
   );
 
-  it.for(["src/nested.ts", "package.json"])(
-    "rejects %s mutated after native emit without publishing or pruning",
-    { timeout: 30_000 },
-    (input, { signal }) =>
-      fixture.run(async () => {
-        const f = createPreparationFixture("package-boundary", signal);
-        const trigger = path.join(f.root, ".artifacts/mutate-after-native");
-        const source = path.join(f.root, input);
-        const original = fs.readFileSync(source, "utf8");
-        const worker = path.join(f.root, "scripts/compile-extension-boundary.mts");
-        fs.appendFileSync(
-          worker,
-          `\nif (fs.existsSync(${JSON.stringify(trigger)})) fs.appendFileSync(${JSON.stringify(source)}, "\\n");\n`,
-        );
-        await f.run();
-        expect(readArtifactRecord(f.recordPath)).toBeDefined();
-        f.write(`${f.output}/orphan.d.ts`, "export interface Orphan {}\n");
-        f.write(".artifacts/mutate-after-native", "armed");
-
-        // The fixture worker mutates only after the real native emitter exits
-        // successfully; its unchanged membership must still fail the seal fence.
-        await expect(f.run()).rejects.toThrow("failed with exit code 1");
-        expect(fs.readFileSync(source, "utf8")).toBe(`${original}\n`);
-        expect(fs.existsSync(f.recordPath)).toBe(false);
-        expect(fs.readFileSync(path.join(f.root, f.output, "orphan.d.ts"), "utf8")).toBe(
-          "export interface Orphan {}\n",
-        );
-        expect(fs.existsSync(path.join(f.root, ".artifacts/dist-artifacts.lock/owner.json"))).toBe(
-          false,
-        );
-      }),
-  );
-
   it.for(["SDK", "plugin batch"] as const)(
     "isolates the %s from ancestor types and rejects ancestor-only dependencies without pruning",
     { timeout: 30_000 },

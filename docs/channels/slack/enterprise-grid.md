@@ -268,7 +268,7 @@ the sending bot's installed workspaces, then selecting one shared workspace.
 An explicit workspace-qualified owner target is preserved. If that verification
 fails, the detached-send guard remains in effect. Other detached or
 proactive calls must provide a workspace-qualified target; bare channel and
-user IDs fail closed because those IDs can be reused by different workspaces.
+user IDs are rejected because those IDs can be reused by different workspaces.
 Actions without a destination parameter, such as `member-info` and
 `emoji-list`, require trusted current Slack conversation context.
 
@@ -295,7 +295,7 @@ Enterprise `toolsBySender` keys accept `id:<sender-id>`,
 `channel:slack:<sender-id>`, or `"*"`, including stable bot IDs such as
 `id:B0123456789`. Run `openclaw doctor --fix` to migrate unprefixed sender IDs.
 Names, slugs, display names, and email
-addresses fail startup. IDs must use Slack's canonical uppercase prefix and body
+addresses fail startup. IDs must use Slack's required uppercase prefix and body
 (for example, `C0123456789` or `U0123456789`); lowercase and short lookalikes
 fail startup. Enterprise accounts cannot enable
 `dangerouslyAllowNameMatching`. Enterprise accounts may set the global
