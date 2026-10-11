@@ -1,6 +1,6 @@
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { createConfigIO } from "../config/io.factory.js";
-import { isConfigReadFailure } from "../config/io.invalid-config.js";
+import { createConfigReadError, isConfigReadFailure } from "../config/io.invalid-config.js";
 import {
   readConfigFileSnapshot,
   readConfigFileSnapshotWithPluginMetadata,
@@ -165,6 +165,9 @@ export async function readAdmittedConfigSnapshot(params: {
             let read = await measureDoctorConfigPreflightStep("admission.plugin-config", () =>
               params.readSnapshot(coreRecovery ? { isolateEnv: true } : undefined),
             );
+            if (isConfigReadFailure(read.snapshot)) {
+              throw createConfigReadError(read.snapshot);
+            }
             const recovery = await measureDoctorConfigPreflightStep(
               "admission.config-recovery",
               () => createConfigIO(recoveryOptions).prepareConfigRecovery(read.snapshot),
