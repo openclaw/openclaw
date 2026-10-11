@@ -23,7 +23,11 @@ import {
   type StoreWriterQueue,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
-import { runMemoryDatabaseFacts, runMemorySourceState } from "./manager-cpu-worker-runtime.js";
+import {
+  runMemoryDatabaseFacts,
+  runMemorySourceState,
+  runMemoryVectorLoad,
+} from "./manager-cpu-worker-runtime.js";
 import { memoryDatabaseTableExists } from "./manager-db-kernel.js";
 import { closeMemoryDatabase, openMemoryDatabaseReadOnlyAtPath } from "./manager-db.js";
 import { withMemoryIndexGeneration } from "./manager-index-generation-lease.js";
@@ -210,6 +214,9 @@ export class MemoryIndexDatabase {
     revision: 0,
     hasIndexedChunks: false,
     hasSemanticChunks: false,
+    invalidatedSources: [],
+    hasVectorTable: false,
+    vectorState: { state: "empty" },
   };
   vectorDegradedWriteWarningShown = false;
   closed = false;
@@ -625,7 +632,33 @@ export class MemoryIndexDatabase {
     );
   }
 
-  async updateIndexStructure<Key extends "vector.ensure" | "vector.retireLegacy">(
+  async prepareVector(extensionPath: string | undefined, assertCurrent: () => void) {
+    if (this.readOnly) {
+      const target = this.writeOptions;
+      if (!target?.agentId || !target.path) {
+        throw new Error("Memory vector inspection requires its captured database target");
+      }
+      const loaded = await runMemoryVectorLoad(
+        { agentId: target.agentId, databasePath: target.path },
+        extensionPath,
+      );
+      if (!loaded.ok || !loaded.extensionPath) {
+        throw new Error(loaded.error ?? "unknown sqlite-vec load error");
+      }
+      return { extensionPath: loaded.extensionPath, retiredLegacy: false };
+    }
+    return this.retryPublication(() =>
+      this.executePublication(
+        {
+          type: "vector.prepare",
+          input: { state: { ...this.publicationState(), extensionPath } },
+        },
+        assertCurrent,
+      ),
+    );
+  }
+
+  async updateIndexStructure<Key extends "vector.ensure">(
     command: { type: Key; input: MemoryPublicationOperations[Key]["input"] },
     assertCurrent: () => void,
   ) {

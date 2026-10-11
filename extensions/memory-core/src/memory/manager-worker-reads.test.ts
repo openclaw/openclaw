@@ -17,6 +17,7 @@ import * as cpuRuntime from "./manager-cpu-worker-runtime.js";
 import type { MemoryIndexDatabase } from "./manager-database-context.js";
 import {
   createManagerIndexFixture,
+  memoryIndexFixtureWriter,
   readPublishedSessionIndex,
 } from "./manager-index.test-support.js";
 import { observePublishedSql } from "./manager-publication-observer.test-support.js";
@@ -27,6 +28,44 @@ describe("memory manager retained worker reads", () => {
   const fixture = createManagerIndexFixture({
     getMemorySearchManager,
     closeAllMemorySearchManagers,
+  });
+
+  it("reopens invalidated source state without host data reads", async () => {
+    await fs.writeFile(path.join(fixture.paths.memory, "cold.md"), "Alpha cold source.");
+    const config = fixture.createConfig({ provider: "none", sources: ["memory"] });
+    const initial = await fixture.getFreshManager(config, "cli");
+    await initial.sync({ reason: "baseline", force: true });
+    memoryIndexFixtureWriter(initial).prepare("UPDATE memory_index_sources SET hash = ''").run();
+    await initial.close();
+    const observed = observeHostDataSql();
+    try {
+      const manager = await fixture.getFreshManager(config, "cli");
+      expect(Reflect.get(manager, "memorySourceProvenanceRepairPending")).toBe(true);
+      expect(observed.queries.filter((sql) => /memory_index_sources/iu.test(sql))).toEqual([]);
+    } finally {
+      observed.restore();
+    }
+  });
+
+  it("loads vectors and publishes a full reindex without host SQLite", async () => {
+    await fs.writeFile(path.join(fixture.paths.memory, "vectors.md"), "Alpha vector source.");
+    const manager = await fixture.getFreshManager(
+      fixture.createConfig({
+        provider: "openai",
+        sources: ["memory"],
+        vectorEnabled: true,
+      }),
+      "cli",
+    );
+    const observed = observeHostDataSql();
+    try {
+      await manager.sync({ reason: "cold-vectors", force: true });
+      expect(observed.queries).toEqual([]);
+    } finally {
+      observed.restore();
+    }
+    expect((await manager.search("alpha", { minScore: 0 })).length).toBeGreaterThan(0);
+    expect(Reflect.get(manager, "publishedDatabase").facts.hasVectorTable).toBe(true);
   });
 
   it("keeps transcript statistics off the host during session catch-up", async () => {

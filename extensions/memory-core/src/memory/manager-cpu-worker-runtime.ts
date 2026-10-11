@@ -132,6 +132,15 @@ export async function runMemoryDatabaseFacts(databasePath: string, agentId: stri
   return result.facts;
 }
 
+export async function runMemoryVectorLoad(target: MemoryReadTarget, extensionPath?: string) {
+  const result = await runRetrieval(
+    { ...target, kind: "vector-load", extensionPath },
+    {},
+    "vector capability",
+  );
+  return result.result;
+}
+
 export async function runMemoryRecallMetadata(
   target: MemoryReadTarget,
   query: Omit<
