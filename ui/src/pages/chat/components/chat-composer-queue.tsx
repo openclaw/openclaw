@@ -1,4 +1,4 @@
-import { For, createMemo, onCleanup } from "solid-js";
+import { For, createMemo, createRenderEffect, onCleanup } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../i18n/index.ts";
 import {
@@ -323,6 +323,17 @@ function ChatQueueItem(rowProps: {
   const steered = createMemo(() => item().queueMode === "steer" && stateLabel() === null);
   const busy = createMemo(() => item().sendState === "executing-command");
   const editing = createMemo(() => edit()?.editingId === item().id);
+  let editInput: HTMLTextAreaElement | undefined;
+  createRenderEffect(
+    () => (editing() ? (edit()?.editingText ?? item().text) : undefined),
+    (value) => {
+      // Recovery may publish its draft after the editor mounts. Native input already matches.
+      if (editInput && value !== undefined && editInput.value !== value) {
+        editInput.value = value;
+        fitQueueEditInput(editInput);
+      }
+    },
+  );
   const mentionText = createMemo(() =>
     editing() ? (edit()?.editingText ?? item().text) : item().text,
   );
@@ -508,7 +519,10 @@ function ChatQueueItem(rowProps: {
         <textarea
           class="chat-queue__edit-input"
           rows="1"
-          ref={(element) => mountQueueEditInput(element, edit()?.editingText ?? item().text)}
+          ref={(element) => {
+            editInput = element;
+            mountQueueEditInput(element, edit()?.editingText ?? item().text);
+          }}
           aria-label={t("chat.queue.editQueuedMessage")}
           onBeforeInput={(event: InputEvent) => {
             if (event.currentTarget instanceof HTMLTextAreaElement) {

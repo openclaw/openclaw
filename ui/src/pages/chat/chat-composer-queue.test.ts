@@ -323,7 +323,7 @@ describe("chat composer queue reordering", () => {
     const onQueueEditChange = vi.fn();
     const onQueueEditSubmit = vi.fn();
     const onQueueEditCancel = vi.fn();
-    const container = renderQueue({
+    const props = {
       queue: [waiting("a", 1)],
       queuedEdit: queueEdit({
         editingId: "a",
@@ -333,7 +333,8 @@ describe("chat composer queue reordering", () => {
         onCancel: onQueueEditCancel,
       }),
       onQueueRemove: vi.fn(),
-    });
+    };
+    const container = renderQueue(props);
     const editor = container.querySelector<HTMLTextAreaElement>(".chat-queue__edit-input")!;
     expect(editor.value).toBe("a draft");
     editor.dispatchEvent(new FocusEvent("focus"));
@@ -341,6 +342,18 @@ describe("chat composer queue reordering", () => {
     editor.value = "updated draft";
     editor.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onQueueEditChange).toHaveBeenCalledWith("updated draft");
+    const valueWrites = vi.spyOn(editor, "value", "set");
+    const publishDraft = (editingText: string) =>
+      render(
+        renderChatQueue({ ...props, queuedEdit: { ...props.queuedEdit, editingText } }),
+        container,
+      );
+    publishDraft("updated draft");
+    expect(container.querySelector(".chat-queue__edit-input")).toBe(editor);
+    expect(valueWrites).not.toHaveBeenCalled();
+    publishDraft("recovered draft");
+    expect(editor.value).toBe("recovered draft");
+    expect(valueWrites).toHaveBeenCalledExactlyOnceWith("recovered draft");
     editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(onQueueEditCancel).toHaveBeenCalledOnce();
     editor.dispatchEvent(

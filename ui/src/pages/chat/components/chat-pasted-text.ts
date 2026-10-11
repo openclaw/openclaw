@@ -127,6 +127,7 @@ declare module "@solidjs/web" {
         "prop:onOpen"?: ChatPastedText["onOpen"];
         "prop:composerAction"?: ChatPastedText["composerAction"];
         "prop:composerRemoveAction"?: ChatPastedText["composerRemoveAction"];
+        "prop:admission"?: ChatPastedText["admission"];
       };
     }
   }
