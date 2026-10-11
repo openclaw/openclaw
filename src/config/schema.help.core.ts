@@ -1,6 +1,7 @@
 import { META_FIELD_HELP } from "./schema.meta.js";
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
 import { CLOUD_WORKER_FIELD_HELP } from "./zod-schema.cloud-workers.js";
+import { DATABASE_FIELD_HELP } from "./zod-schema.database.js";
 import { DESKTOP_FIELD_HELP } from "./zod-schema.desktop.js";
 import { STORAGE_FIELD_HELP } from "./zod-schema.storage.js";
 import { TELEMETRY_FIELD_HELP } from "./zod-schema.telemetry.js";
@@ -85,6 +86,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   cloudWorkers:
     "Opt-in cloud worker profiles for disposable remote environments. When this section is omitted or has no profiles, cloud worker creation remains unavailable and existing gateway/node status behavior is unchanged.",
   ...CLOUD_WORKER_FIELD_HELP,
+  ...DATABASE_FIELD_HELP,
   ...STORAGE_FIELD_HELP,
   ...DESKTOP_FIELD_HELP,
   gateway:

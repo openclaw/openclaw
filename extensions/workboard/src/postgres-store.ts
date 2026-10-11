@@ -6,10 +6,14 @@ import {
   getAdmittedSqliteSchemaFacts,
   runSqliteImmediateTransactionSync,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import type { WorkboardDatabaseInput } from "./database-config.js";
 import { WORKBOARD_POSTGRES_SCHEMA_SQL } from "./workboard-postgres-schema.js";
 import { SCHEMA_VERSION } from "./workboard-schema.js";
 
-export function openWorkboardPostgresDatabase(anchor: DatabaseSync, url: string) {
+export function openWorkboardPostgresDatabase(
+  anchor: DatabaseSync,
+  input: NonNullable<WorkboardDatabaseInput>,
+) {
   const identity = runSqliteImmediateTransactionSync(anchor, () => {
     admitSqliteSchema(anchor);
     if (
@@ -42,7 +46,7 @@ export function openWorkboardPostgresDatabase(anchor: DatabaseSync, url: string)
       return { storeId: row.store_id, schema: row.schema };
     }
     const storeId = randomUUID();
-    const schema = `openclaw_workboard_${storeId.replaceAll("-", "").slice(0, 16)}`;
+    const schema = `${input.schemaPrefix}_workboard_${storeId.replaceAll("-", "").slice(0, 16)}`;
     anchor
       .prepare(
         "INSERT INTO openclaw_engine_anchor (store_id, engine, schema) VALUES (?, 'postgres', ?)",
@@ -50,7 +54,14 @@ export function openWorkboardPostgresDatabase(anchor: DatabaseSync, url: string)
       .run(storeId, schema);
     return { storeId, schema };
   });
-  const db = new PostgresSyncConnection(url, identity.schema, anchor, identity.storeId);
+  let db: PostgresSyncConnection;
+  try {
+    db = new PostgresSyncConnection(input.connection, identity.schema, anchor, identity.storeId);
+  } catch {
+    throw new Error(
+      "Cannot open workboard PostgreSQL connection; verify database.postgres.connection and server availability.",
+    );
+  }
   try {
     db.exec(
       `BEGIN ISOLATION LEVEL READ COMMITTED; SELECT pg_advisory_xact_lock(${db.advisoryLockKey})`,

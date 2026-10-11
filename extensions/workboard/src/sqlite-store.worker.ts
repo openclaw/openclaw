@@ -2,6 +2,7 @@ import type {
   SqliteWorkerBackend,
   SqliteWorkerCommand,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import type { WorkboardDatabaseInput } from "./database-config.js";
 import type {
   WorkboardSqliteOperations,
   WorkboardSqliteWorkerOperations,
@@ -15,10 +16,10 @@ type ConnectionCommand = Exclude<
 >;
 
 export function createSqliteWorkerBackend(
-  _input: undefined,
+  input: WorkboardDatabaseInput,
   context: { databasePath: string },
 ): SqliteWorkerBackend<WorkboardSqliteWorkerOperations> {
-  const initial = createWorkboardSqliteKernel(context.databasePath);
+  const initial = createWorkboardSqliteKernel(context.databasePath, undefined, input);
   const connections = new Map<number, Connection>();
   // Broker admission opens the native database; the first logical lease adopts it.
   connections.set(0, { kernel: initial, close: initial.close });
@@ -109,9 +110,13 @@ export function createSqliteWorkerBackend(
           connections.delete(0);
           const kernel =
             unclaimed?.kernel ??
-            createWorkboardSqliteKernel(context.databasePath, (close) => {
-              connections.set(connection, { close });
-            });
+            createWorkboardSqliteKernel(
+              context.databasePath,
+              (close) => {
+                connections.set(connection, { close });
+              },
+              input,
+            );
           connections.set(connection, { kernel, close: kernel.close });
           return { ok: true, value: { connection } };
         } catch (error) {
@@ -150,7 +155,7 @@ export function createSqliteWorkerBackend(
         ].includes(command.type);
         const kernel = connections.get(command.input.connection)?.kernel;
         const value =
-          process.env.OPENCLAW_EXPERIMENTAL_POSTGRES_URL && !readOnly && kernel
+          input && !readOnly && kernel
             ? kernel.withWriteTransaction(() => execute(command))
             : execute(command);
         return { ok: true, value };

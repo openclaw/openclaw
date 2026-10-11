@@ -6,7 +6,7 @@ import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect } from "vitest";
 import { workboardSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
-import { createWorkboardSqliteStores } from "./sqlite-store.js";
+import { createWorkboardSqliteStores } from "./test/database-config.js";
 import { sqliteOnly as test } from "./test/sqlite-only.js";
 
 const workerModuleUrl = resolveRuntimeWorkerUrl(workboardSqliteBackendEntrypoint);

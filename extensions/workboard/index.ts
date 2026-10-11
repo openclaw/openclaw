@@ -34,6 +34,7 @@ export default definePluginEntry({
           withStore: async (action) => {
             const cliStore = WorkboardStore.openSqlite(
               resolveWorkboardSqliteWorkerModuleUrl(api.runtimeSource),
+              api.config,
             );
             try {
               return await action(cliStore);
@@ -58,6 +59,7 @@ export default definePluginEntry({
     }
     const store = WorkboardStore.openSqlite(
       resolveWorkboardSqliteWorkerModuleUrl(api.runtimeSource),
+      api.config,
     );
     const resourceServices: Array<{ stop(): void | Promise<void> }> = [];
     registerWorkboardStoreLifecycle(api, store, async () => {

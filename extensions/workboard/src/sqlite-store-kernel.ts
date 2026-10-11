@@ -15,6 +15,7 @@ import {
   runSqliteImmediateTransactionSync,
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import type { WorkboardDatabaseInput } from "./database-config.js";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -693,8 +694,9 @@ class WorkboardSqliteAttachmentStore implements SyncStore<
 export function createWorkboardSqliteKernel(
   dbPath: string,
   retainClose?: (close: () => void) => void,
+  postgresInput?: WorkboardDatabaseInput,
 ): WorkboardSqliteKernel {
-  const { db, close } = createWorkboardDatabase(dbPath, retainClose);
+  const { db, close } = createWorkboardDatabase(dbPath, retainClose, postgresInput);
   const boards = new WorkboardSqliteBoardStore(db);
   return {
     cards: new WorkboardSqliteCardStore(db),

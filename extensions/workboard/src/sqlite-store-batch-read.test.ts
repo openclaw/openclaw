@@ -12,8 +12,8 @@ import type {
   PersistedWorkboardNotificationSubscription,
 } from "./persistence-types.js";
 import { workboardSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
-import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { WorkboardStore } from "./store.js";
+import { createWorkboardSqliteStores } from "./test/database-config.js";
 import { createKernelStores } from "./test/sqlite-kernel.js";
 import { sqliteOnly as test } from "./test/sqlite-only.js";
 import { sqliteTestAuxStores } from "./test/sqlite-store.js";
