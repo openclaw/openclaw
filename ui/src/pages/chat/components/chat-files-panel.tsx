@@ -46,7 +46,10 @@ export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
       { requestUpdate: () => lifecycle.invalidate() },
       () =>
         new Promise<void>((resolve) => {
-          lifecycle.afterCommit(resolve, resolve);
+          lifecycle.afterCommit((complete) => {
+            resolve();
+            complete();
+          }, resolve);
         }),
     );
     const lifecycle = createSolidRenderLifecycle({
@@ -173,18 +176,22 @@ export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
                   data-app-tab-id={entry().content.kind === "mcp-app" ? entry().id : undefined}
                   hidden={rendered().activeId !== entry().id}
                 >
-                  {entry().content.kind === "loading" ? (
-                    <PanelLoadingSkeleton variant="files" label={t("common.loading")} />
-                  ) : entry().content.kind === "unavailable" ? (
-                    <div class="callout danger" role="alert">
-                      {(() => {
-                        const content = entry().content;
-                        return content.kind === "unavailable" ? content.message : "";
-                      })()}
-                    </div>
-                  ) : (
-                    <LitContent value={rendered().renderDetail?.(entry().content)} />
-                  )}
+                  {(() => {
+                    const content = entry().content;
+                    return (
+                      <>
+                        {content.kind === "loading" ? (
+                          <PanelLoadingSkeleton variant="files" label={t("common.loading")} />
+                        ) : content.kind === "unavailable" ? (
+                          <div class="callout danger" role="alert">
+                            {content.message}
+                          </div>
+                        ) : (
+                          <LitContent value={rendered().renderDetail?.(content)} />
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               );
             }}

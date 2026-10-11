@@ -1,15 +1,8 @@
 /* @vitest-environment jsdom */
 import { createComponent } from "solid-js";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
-import { disposeSidebarContextLifecycles } from "../../../test-helpers/app-sidebar-context-lifecycle.ts";
-import { createContext, createSessions } from "../../../test-helpers/app-sidebar.ts";
-import {
-  createApplicationContextProvider,
-  createApplicationGateway,
-} from "../../../test-helpers/application-context.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
@@ -23,16 +16,8 @@ async function mount(overrides: Partial<ChatDetailsProps> = {}) {
     selectedSession: { key: "agent:main:details", kind: "direct" },
     ...overrides,
   };
-  const context = createContext(createApplicationGateway().gateway, createSessions("main", []));
-  const provider = createApplicationContextProvider(context);
-  document.body.append(provider);
-  onTestFinished(() => {
-    provider.remove();
-    disposeSidebarContextLifecycles();
-  });
-  const view = mountSolid(
-    () => createComponent(ChatDetailsSession, { props: value, presented: true }),
-    { container: provider, wrapper: createSolidApplicationContextProvider(context).wrapper },
+  const view = mountSolid(() =>
+    createComponent(ChatDetailsSession, { props: value, presented: true }),
   );
   const element = view.container.querySelector("openclaw-chat-details-session")!;
   await element.updateComplete;

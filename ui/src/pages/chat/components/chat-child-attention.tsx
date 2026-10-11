@@ -46,7 +46,7 @@ export const ChatChildAttention = defineSolidBridge<Props>(
         ),
       );
       if (!Number.isFinite(expiry)) {
-        return;
+        return undefined;
       }
       // Canonical rows own clearing; this one-shot only repaints at their next TTL.
       const timer = setTimeout(

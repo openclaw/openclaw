@@ -1,5 +1,4 @@
 import WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
-import type { JSX as SolidJSX } from "@solidjs/web";
 import { createEffect, createSignal, For, Show } from "solid-js";
 import { isReactionEmoji } from "../../../../../packages/gateway-protocol/src/index.js";
 import { sessionEmojiPickerShortcut } from "../../../components/session-icon-picker.ts";
@@ -14,7 +13,7 @@ export type MessageReactionPlacement = "bottom-start" | "bottom-end";
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "wa-popover": SolidJSX.HTMLAttributes<WaPopover> & {
+      "wa-popover": HTMLAttributes<WaPopover> & {
         for?: string;
         placement?: MessageReactionPlacement;
         distance?: string;
@@ -178,7 +177,7 @@ export const MessageReactionPicker = defineSolidBridge<MessageReactionPickerProp
                       class="emoji"
                       type="button"
                       aria-label={emoji}
-                      aria-pressed={String(props.activeEmoji.has(emoji))}
+                      aria-pressed={props.activeEmoji.has(emoji) ? "true" : "false"}
                       onClick={() => select(emoji)}
                     >
                       {emoji}
@@ -211,7 +210,7 @@ export const MessageReactionPicker = defineSolidBridge<MessageReactionPickerProp
                 </button>
                 <input
                   aria-label={t("chat.reactions.emoji")}
-                  aria-invalid={String(invalid())}
+                  aria-invalid={invalid() ? "true" : "false"}
                   autocomplete="off"
                   placeholder={t("chat.reactions.placeholder")}
                   value={value()}

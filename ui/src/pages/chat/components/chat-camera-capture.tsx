@@ -76,7 +76,7 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
     state.photoUrl = "";
     photo = undefined;
   };
-  const close = () => {
+  const releaseCamera = () => {
     generation += 1;
     stopCamera();
     clearPhoto();
@@ -84,6 +84,9 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
     activeSignal = undefined;
     captureDestination = uploadDestination = nativeCaptureDestination = undefined;
     state.stage = "closed";
+  };
+  const close = () => {
+    releaseCamera();
     publish();
   };
   const fail = (message: string, nativeFallback = false) => {
@@ -279,7 +282,7 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
   window.addEventListener("pagehide", close);
   onCleanup(() => {
     active = false;
-    close();
+    releaseCamera();
     openCameras.delete(host);
     window.removeEventListener("pagehide", close);
   });
@@ -289,7 +292,7 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
     failed() && view().nativeFallback && Boolean(nativeCaptureDestination);
   return (
     <Show when={view().stage !== "closed"}>
-      <openclaw-modal-dialog prop:label={t("chat.camera.title")} onModal-cancel={close}>
+      <openclaw-modal-dialog label={t("chat.camera.title")} onModal-cancel={close}>
         <section class="camera">
           <header>
             <div>
@@ -361,7 +364,7 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
             <label class="camera-selector">
               {t("chat.composer.cameraInput")}
               <select
-                prop:value={view().cameraId}
+                value={view().cameraId}
                 disabled={view().stage !== "live"}
                 onChange={(event) => {
                   if (isCurrent(generation) && state.stage === "live") {

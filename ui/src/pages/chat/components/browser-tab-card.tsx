@@ -53,7 +53,7 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
   const context = () => projection.read();
   const [thumbnail, setThumbnail] = createSignal<string>();
   const [pagePreview, setPagePreview] = createSignal<ControlUiLinkPreview>();
-  const [failedImages, setFailedImages] = createSignal<ReadonlySet<string>>(new Set());
+  const [failedImages, setFailedImages] = createSignal<ReadonlySet<string>>(new Set<string>());
   let requestIdentity: { client: unknown; key: string } | undefined;
   let pageIdentity:
     | { client: unknown; url: string; generation: number; recoveryScope: string }
@@ -96,7 +96,7 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
         };
         pageIdentity = identity;
         setPagePreview(undefined);
-        setFailedImages(new Set());
+        setFailedImages(new Set<string>());
         void loadLinkPreview(client, url).then((loadedPreview) => {
           if (
             active &&

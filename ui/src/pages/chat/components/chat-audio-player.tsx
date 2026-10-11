@@ -154,26 +154,19 @@ function ChatAudioPlayerContent(
     sourceController.cancel();
   });
 
-  const setMedia = (element: Element | undefined) => {
-    mediaElement = element instanceof HTMLAudioElement ? element : null;
-    if (mediaElement) {
-      mediaElement.muted = state.muted;
-    }
+  const setMedia = (element: HTMLAudioElement) => {
+    mediaElement = element;
+    mediaElement.muted = state.muted;
     syncSource();
   };
 
-  const setWaveform = (element: Element | undefined) => {
-    const waveform = element instanceof HTMLElement ? element : null;
+  const setWaveform = (waveform: HTMLDivElement) => {
     if (waveformElement === waveform) {
       return;
     }
     waveformResizeObserver?.disconnect();
     waveformResizeObserver = null;
     waveformElement = waveform;
-    if (!waveform) {
-      updateState({ waveformWidth: 0 });
-      return;
-    }
     updateWaveformWidth(waveform.getBoundingClientRect().width);
     if (typeof ResizeObserver === "undefined") {
       return;
@@ -195,10 +188,7 @@ function ChatAudioPlayerContent(
 
   function syncSource(): void {
     const media = mediaElement;
-    if (!media || !(active && host.isConnected)) {
-      return;
-    }
-    if (releaseWaveformBlob) {
+    if (!media || !active || !host.isConnected || releaseWaveformBlob) {
       return;
     }
     // The source effect tracks changes; imperative ref/event calls sample current props.
@@ -450,7 +440,10 @@ function ChatAudioPlayerContent(
 
   function updateBuffered(): void {
     const media = mediaElement;
-    if (!media || !state.duration || media.buffered.length === 0) {
+    if (!media) {
+      return;
+    }
+    if (!state.duration || media.buffered.length === 0) {
       updateState({ buffered: 0 });
       return;
     }
@@ -489,7 +482,7 @@ function ChatAudioPlayerContent(
         min="0"
         max={String(view().duration || 0)}
         step="0.01"
-        prop:value={String(Math.min(view().currentTime, view().duration || view().currentTime))}
+        value={String(Math.min(view().currentTime, view().duration || view().currentTime))}
         aria-label={t("chat.mediaPlayer.seek")}
         aria-valuetext={timeLabel()}
         style={{
@@ -500,7 +493,11 @@ function ChatAudioPlayerContent(
       />
     );
     const Waveform = () => {
-      onCleanup(() => setWaveform(undefined));
+      onCleanup(() => {
+        waveformResizeObserver?.disconnect();
+        waveformResizeObserver = null;
+        waveformElement = null;
+      });
       return (
         <div class="chat-audio-player__waveform" ref={setWaveform}>
           <svg
@@ -544,12 +541,13 @@ function ChatAudioPlayerContent(
       waveformAttempted = false;
       releaseWaveformBlob?.();
       releaseWaveformBlob = undefined;
-      if (mediaElement) {
-        releaseChatAudioPlayback(mediaElement);
-        // Clear the departed node while retaining unavailable readiness until the source changes.
-        sourceController.reset(mediaElement);
-      }
+      const media = mediaElement;
       mediaElement = null;
+      if (media) {
+        releaseChatAudioPlayback(media);
+        // Clear the departed node while retaining unavailable readiness until the source changes.
+        sourceController.reset(media);
+      }
     });
     return (
       <div
@@ -642,19 +640,22 @@ function ChatAudioPlayerContent(
           onPlay={() => {
             if (mediaElement) {
               claimChatAudioPlayback(mediaElement, cancelPendingResume);
+              updateState({ playing: true });
             }
-            updateState({ playing: true });
           }}
-          onPause={() => updateState({ playing: false })}
+          onPause={() => mediaElement && updateState({ playing: false })}
           onEnded={() => {
             if (mediaElement) {
               releaseChatAudioPlayback(mediaElement);
               sourceController.handleEnded(mediaElement);
+              updateState({ playing: false });
             }
-            updateState({ playing: false });
           }}
           onError={() => {
-            if (mediaElement && !sourceController.handleError(mediaElement)) {
+            if (!mediaElement) {
+              return;
+            }
+            if (!sourceController.handleError(mediaElement)) {
               releaseChatAudioPlayback(mediaElement);
               updateState({ playing: false });
             }

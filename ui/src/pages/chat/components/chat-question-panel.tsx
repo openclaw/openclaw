@@ -347,7 +347,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
               class="chat-question-panel"
               role="group"
               aria-label={model().title}
-              tabIndex={0}
+              tabindex={0}
               onKeyDown={(event) => handleKeyDown(event, item())}
             >
               <div
@@ -394,7 +394,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
               <QuestionOptions
                 question={item()}
                 selected={draft()?.selected ?? new Set()}
-                disabled={Boolean(disabled())}
+                disabled={disabled()}
                 onSelect={(value) => toggleOption(item(), value)}
               />
               {item().secretStore && (
@@ -445,12 +445,12 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
                         type="text"
                         autocomplete="off"
                         placeholder={t("secretsStore.allowedHostsPlaceholder")}
-                        prop:value={
+                        value={
                           model().secretStoreAllowedHostsDraft ??
                           item().secretStore!.allowedHosts?.join(", ") ??
                           ""
                         }
-                        disabled={Boolean(disabled())}
+                        disabled={disabled()}
                         onInput={(event) =>
                           props.panel.onSecretStoreAllowedHostsChange?.(event.currentTarget.value)
                         }
@@ -467,7 +467,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
                     ? draft()?.freeText
                     : draft()?.freeText.trim(),
                 )}
-                disabled={Boolean(disabled())}
+                disabled={disabled()}
                 onInput={(value) => setFreeText(item(), value)}
               />
               {item().resource && (
@@ -477,7 +477,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
                   sessionKey={model().sessionKey ?? ""}
                   agentId={model().agentId}
                   selected={draft()?.selected ?? new Set()}
-                  disabled={Boolean(disabled())}
+                  disabled={disabled()}
                   onResource-selection={(event: CustomEvent<{ values: string[] }>) =>
                     updateDraft(item(), { selected: new Set(event.detail.values), freeText: "" })
                   }

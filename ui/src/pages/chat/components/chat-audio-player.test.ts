@@ -490,10 +490,10 @@ describe("ChatAudioPlayer", () => {
     const player = await createPlayer("unknown-duration");
     const media = player.querySelector("audio")!;
     Object.defineProperty(media, "paused", { configurable: true, value: true });
-    vi.spyOn(media, "play").mockResolvedValue(undefined);
+    const play = vi.spyOn(media, "play").mockResolvedValue(undefined);
 
     player.querySelector<HTMLButtonElement>(".chat-audio-player__toggle")!.click();
-    await vi.mocked(media.play).mock.results[0]!.value;
+    await play.mock.results[0]!.value;
     await Promise.resolve();
     flush();
 

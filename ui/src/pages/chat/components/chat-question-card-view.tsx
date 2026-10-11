@@ -29,14 +29,22 @@ export const ChatQuestionCard = defineSolidBridge<CardProps>(
   (props, host) => {
     host.style.display = "contents";
     const [revision, setRevision] = createSignal(0);
+    let live = true;
     const loader = new LazyCustomElementRequestController({
-      requestUpdate: () => setRevision((value) => value + 1),
+      requestUpdate: () => {
+        if (live) {
+          setRevision((value) => value + 1);
+        }
+      },
     });
     createEffect(
       () => Boolean(props.props),
       (active) => loader.requestWhileActive(questionPanelElement, active),
     );
-    onCleanup(() => loader.requestWhileActive(questionPanelElement, false));
+    onCleanup(() => {
+      live = false;
+      loader.requestWhileActive(questionPanelElement, false);
+    });
     const loaded = () => {
       revision();
       return isOptionalElementDefined(questionPanelElement);

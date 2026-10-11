@@ -50,7 +50,10 @@ export const ChatSummaryAutomations = defineSolidBridge<Props>(
     let presentationScope = 0;
     let focusAfterCommit: typeof cron | undefined;
     const visible = () =>
-      active && untrack(() => props.presented) && host.ownerDocument.visibilityState !== "hidden";
+      active &&
+      host.isConnected &&
+      host.presented &&
+      host.ownerDocument.visibilityState !== "hidden";
     const state = () => {
       revision();
       return cron;
@@ -61,12 +64,12 @@ export const ChatSummaryAutomations = defineSolidBridge<Props>(
     };
 
     function reset(retain = false) {
-      const source = gateway();
+      const source = host.gateway;
       const next = createInitialCronState<CronCompactJob>({
         client: source?.snapshot.client ?? null,
         connected: source?.snapshot.phase === "connected",
       });
-      const identity = resolveUiConversationIdentity(source?.snapshot ?? {}, sessionKey());
+      const identity = resolveUiConversationIdentity(source?.snapshot ?? {}, host.sessionKey);
       next.cronSessionFilter =
         identity.sessionKey && identity.agentId
           ? { sessionKey: identity.sessionKey, sessionAgentId: identity.agentId }
@@ -104,7 +107,7 @@ export const ChatSummaryAutomations = defineSolidBridge<Props>(
       const pending = loadCompactCronJobsPage(current, { append });
       publish();
       await pending;
-      if (cron !== current || !active) {
+      if (cron !== current || !active || !host.isConnected) {
         return;
       }
       showError = current.cronJobsError !== null;
@@ -120,13 +123,18 @@ export const ChatSummaryAutomations = defineSolidBridge<Props>(
       ([source]) => {
         reset();
         if (!source) {
-          return;
+          return undefined;
         }
         const lifecycle = createGatewayConnectionLifecycle(source.snapshot);
-        let identity = JSON.stringify(resolveUiConversationIdentity(source.snapshot, sessionKey()));
+        let identity = JSON.stringify(
+          resolveUiConversationIdentity(source.snapshot, host.sessionKey),
+        );
         const unsubscribe = source.subscribe((snapshot) => {
+          if (host.gateway !== source) {
+            return;
+          }
           const nextIdentity = JSON.stringify(
-            resolveUiConversationIdentity(snapshot, untrack(sessionKey)),
+            resolveUiConversationIdentity(snapshot, host.sessionKey),
           );
           const changed = lifecycle.transition(snapshot);
           if (changed || identity !== nextIdentity) {
@@ -138,7 +146,7 @@ export const ChatSummaryAutomations = defineSolidBridge<Props>(
           }
         });
         const unsubscribeEvents = source.subscribeEvents((event) => {
-          if (event.event === "cron") {
+          if (host.gateway === source && event.event === "cron") {
             dirty = true;
             void load();
           }
@@ -257,7 +265,7 @@ export const ChatSummaryAutomations = defineSolidBridge<Props>(
           </div>
         ) : (
           (!loaded() || !state().cronJobs.length) && (
-            <div class="chat-summary__automation-message" role="status" tabIndex={-1}>
+            <div class="chat-summary__automation-message" role="status" tabindex={-1}>
               {!state().cronSessionFilter
                 ? t("chat.sessionDetails.automationUnavailable")
                 : !state().connected

@@ -77,7 +77,7 @@ export const ChatProcessesPanel = defineSolidBridge<SessionPanelProps, Methods>(
       <Show
         when={selected()}
         fallback={
-          <div class="chat-processes__list" aria-busy={data().loading}>
+          <div class="chat-processes__list" aria-busy={data().loading ? "true" : "false"}>
             {error()}
             <Show
               when={data().rows.length}

@@ -53,13 +53,16 @@ export const ChatDetails = defineSolidBridge<Props>(
       panel.style.width = `${Math.max(0, Math.min(352, right - left))}px`;
       panel.style.maxHeight = `${Math.max(0, bottom - top)}px`;
     };
-    const close = (restoreFocus = false) => {
+    const hide = () => {
       for (const menu of host.querySelectorAll<WaDropdown>("wa-dropdown")) {
         menu.open = false;
       }
       if (panel?.isConnected) {
         panel.hidePopover?.();
       }
+    };
+    const close = (restoreFocus = false) => {
+      hide();
       setOpened(false);
       if (restoreFocus && host.isConnected) {
         trigger?.focus({ preventScroll: true });
@@ -133,7 +136,7 @@ export const ChatDetails = defineSolidBridge<Props>(
     document.addEventListener("pointerdown", outside);
     document.addEventListener("keydown", escape);
     onCleanup(() => {
-      close();
+      hide();
       window.removeEventListener("resize", position);
       window.visualViewport?.removeEventListener("resize", position);
       window.visualViewport?.removeEventListener("scroll", position);
@@ -150,7 +153,7 @@ export const ChatDetails = defineSolidBridge<Props>(
           type="button"
           aria-label={t("chat.sessionDetails.title")}
           aria-controls={panelId}
-          aria-expanded={String(opened())}
+          aria-expanded={opened() ? "true" : "false"}
           aria-haspopup="dialog"
           onClick={toggle}
         >

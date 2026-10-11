@@ -107,7 +107,7 @@ function DiscussionPanel(props: DiscussionProps, host: SolidBridgeElement<Discus
       canOpen === host.canOpen;
     if (!loader || !sessionKey) {
       setState({ status: "empty" });
-      return;
+      return undefined;
     }
     setState({ status: "loading" });
     void (async () => {

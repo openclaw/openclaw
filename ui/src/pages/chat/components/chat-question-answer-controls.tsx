@@ -59,7 +59,7 @@ export function QuestionOptions(props: QuestionOptionsProps) {
                         ? t("common.multiSelect.remove", { value: option.label })
                         : undefined
                     }
-                    tabIndex={
+                    tabindex={
                       props.question.multiSelect ||
                       selected() ||
                       (props.selected.size === 0 && index() === 0)
@@ -80,7 +80,7 @@ export function QuestionOptions(props: QuestionOptionsProps) {
                             src={option.thumbnail}
                             alt=""
                             loading="lazy"
-                            referrerPolicy="no-referrer"
+                            referrerpolicy="no-referrer"
                           />
                         ) : (
                           <span>◇</span>
@@ -129,7 +129,7 @@ function FreeTextControl(
           autocomplete="off"
           placeholder={props.placeholder}
           aria-label={props.label}
-          prop:value={props.value}
+          value={props.value}
           disabled={props.disabled}
           onInput={handleInput}
         />
@@ -140,7 +140,7 @@ function FreeTextControl(
           placeholder={props.placeholder}
           aria-label={props.label}
           aria-description={t("chat.questions.multilineHint", { shortcut: "Ctrl/⌘+Enter" })}
-          prop:value={props.value}
+          value={props.value}
           disabled={props.disabled}
           onInput={handleInput}
         />

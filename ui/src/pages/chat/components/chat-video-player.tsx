@@ -59,13 +59,14 @@ function ChatVideoPlayerContent(
     return sourceController;
   };
   const syncSource = () => {
-    if (!media || !host.isConnected || !mediaVisible) {
+    const currentMedia = media;
+    if (!currentMedia || !host.isConnected || !mediaVisible) {
       return;
     }
     // The source effect tracks changes; imperative ref/event calls sample current props.
     const pending = untrack(() =>
       sourceController.sync(
-        media,
+        currentMedia,
         props.src,
         props.sourceIdentity,
         props.playback,
@@ -149,11 +150,12 @@ function ChatVideoPlayerContent(
     onCleanup(() => {
       viewport.disconnect();
       mediaVisible = false;
-      if (media) {
-        // Clear the departed node while retaining unavailable readiness until the source changes.
-        sourceController.reset(media);
-      }
+      const previousMedia = media;
       media = undefined;
+      if (previousMedia) {
+        // Clear the departed node while retaining unavailable readiness until the source changes.
+        sourceController.reset(previousMedia);
+      }
     });
     return (
       <div
@@ -202,9 +204,9 @@ function ChatVideoPlayerContent(
             preload={props.preview ? "auto" : "metadata"}
             style={dimensions()}
             ref={setMedia}
-            onLoadedData={() => setFrameReady(true)}
-            onPlaying={() => setFrameReady(true)}
-            onEmptied={() => setFrameReady(false)}
+            onLoadedData={() => media && setFrameReady(true)}
+            onPlaying={() => media && setFrameReady(true)}
+            onEmptied={() => media && setFrameReady(false)}
             onLoadedMetadata={() => {
               if (media) {
                 sourceController.handleLoadedMetadata(media);

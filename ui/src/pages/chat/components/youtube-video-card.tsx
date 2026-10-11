@@ -25,11 +25,14 @@ function YouTubeVideoContent(
     url.searchParams.set("autoplay", "1");
     return url.href;
   });
-  const stopPlayback = () => {
-    setPlaying(false);
+  const releasePlayback = () => {
     if (activePlayers.get(host.ownerDocument) === stopPlayback) {
       activePlayers.delete(host.ownerDocument);
     }
+  };
+  const stopPlayback = () => {
+    releasePlayback();
+    setPlaying(false);
   };
   const startPlayback = () => {
     activePlayers.get(host.ownerDocument)?.();
@@ -58,7 +61,7 @@ function YouTubeVideoContent(
     observer.observe(host);
     return () => observer.disconnect();
   });
-  onCleanup(stopPlayback);
+  onCleanup(releasePlayback);
   const PreviewContents = () => (
     <>
       <Show when={!thumbnailFailed()}>

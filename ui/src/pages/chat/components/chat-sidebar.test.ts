@@ -9,12 +9,33 @@ import {
 } from "../../../test-helpers/native-gateways.ts";
 import "./chat-detail-panel.tsx";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
+import type { FileEditorViewHandle } from "./file-editor-view.ts";
+
+// mock-isolation: These sidebar contracts exclude CodeMirror's browser layout and language loading.
+vi.mock("./file-editor-view.ts", () => ({
+  createFileEditorView: async ({ content }: { content: string }) => {
+    let text = content;
+    return {
+      destroy() {},
+      setContent(next: string) {
+        text = next;
+      },
+      contentEquals: (next: string) => text === next,
+      getContent: () => text,
+      setEditable() {},
+      setLineWrapping() {},
+      setDecorations() {},
+      scrollToLine() {},
+      onDocChanged() {},
+      focus() {},
+    } satisfies FileEditorViewHandle;
+  },
+}));
 
 type DetailPanel = HTMLElement & {
   content: unknown;
   basePath?: string;
   execNode: string | null;
-  ensureFileEditor: () => Promise<void>;
   updateComplete: Promise<unknown>;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onOpenSessionLink?: (target: { sessionKey: string; agentId: string }) => void;
@@ -69,7 +90,6 @@ describe("file sidebar editor locality", () => {
       root: "/workspace",
       content: "const answer = 42;",
     };
-    vi.spyOn(panel, "ensureFileEditor").mockResolvedValue();
     document.body.append(panel);
     await panel.updateComplete;
 
@@ -88,7 +108,6 @@ describe("file sidebar editor locality", () => {
       root: "/workspace",
       content: "const answer = 42;",
     };
-    vi.spyOn(panel, "ensureFileEditor").mockResolvedValue();
     document.body.append(panel);
     await panel.updateComplete;
     expect(panel.querySelector('[aria-label="Open in editor"]')).not.toBeNull();
@@ -110,8 +129,6 @@ describe("markdown sidebar", () => {
       ["Intro", "", "```ts", "const x = 1;", "```", "", "**literal after**"].join("\n") +
       (testCase.trailingNewline ? "\n" : "");
     const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
-    const editorLoad =
-      testCase.kind === "file" ? vi.spyOn(panel, "ensureFileEditor").mockResolvedValue() : null;
     panel.content =
       testCase.kind === "markdown"
         ? { kind: "markdown", content: "Rendered summary", rawText: source }
@@ -164,7 +181,6 @@ describe("markdown sidebar", () => {
         }
       }
       schedule.mockRestore();
-      editorLoad?.mockRestore();
       panel.remove();
     }
   });
@@ -536,7 +552,6 @@ describe("file sidebar clipboard feedback", () => {
 
   type FilePanel = HTMLElement & {
     content: unknown;
-    ensureFileEditor: () => Promise<void>;
     updateComplete: Promise<unknown>;
   };
 
@@ -548,7 +563,6 @@ describe("file sidebar clipboard feedback", () => {
       name: "example.ts",
       content: "const answer = 42;",
     };
-    vi.spyOn(panel, "ensureFileEditor").mockResolvedValue();
     document.body.append(panel);
     await panel.updateComplete;
     return panel;
@@ -705,11 +719,12 @@ describe("file sidebar clipboard feedback", () => {
     await vi.waitFor(() => expect(button.getAttribute("aria-label")).toBe("Copied!"));
 
     panel.remove();
+    // Let the bridge retire the disconnected root before reconnecting this host.
+    await Promise.resolve();
     document.body.append(panel);
     await panel.updateComplete;
 
-    expect(findCopyButton(panel, label)).toBe(button);
-    expect(button.classList.contains("copied")).toBe(false);
+    expect(findCopyButton(panel, label).classList.contains("copied")).toBe(false);
     expect(panel.querySelector('[role="alert"]')).toBeNull();
   });
 
@@ -729,6 +744,7 @@ describe("file sidebar clipboard feedback", () => {
 
     button.click();
     panel.remove();
+    await Promise.resolve();
     document.body.append(panel);
     await panel.updateComplete;
     finishCopy();
@@ -736,7 +752,7 @@ describe("file sidebar clipboard feedback", () => {
     await Promise.resolve();
     await panel.updateComplete;
 
-    expect(button.getAttribute("aria-label")).toBe(label);
+    expect(findCopyButton(panel, label).getAttribute("aria-label")).toBe(label);
     expect(timers.schedule.mock.calls.some(([, delay]) => delay === 1_500)).toBe(false);
     expect(panel.querySelector('[role="alert"]')).toBeNull();
   });

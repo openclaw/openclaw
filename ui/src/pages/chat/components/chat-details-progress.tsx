@@ -48,6 +48,8 @@ export const ChatDetailsProgress = defineSolidBridge<Props>(
               current.onClearSavedProgressCard?.(current.progressCard);
             }
             break;
+          default:
+            break;
         }
       }}
     >

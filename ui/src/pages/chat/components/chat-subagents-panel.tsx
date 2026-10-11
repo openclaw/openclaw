@@ -102,7 +102,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props, Methods>(
         when={detailId()}
         keyed
         fallback={
-          <div class="chat-subagents__list" aria-busy={data().loading}>
+          <div class="chat-subagents__list" aria-busy={data().loading ? "true" : "false"}>
             {data().error && (
               <div class="chat-subagents__error" role="alert">
                 <span>{data().error}</span>
@@ -143,6 +143,10 @@ export const ChatSubagentsPanel = defineSolidBridge<Props, Methods>(
                     row().stopping
                       ? t("chat.subagentsPanel.stopping")
                       : t("chat.subagentsPanel.stop", { name: title() });
+                  const stopTitle = () => {
+                    const access = row().stopAccess;
+                    return access.allowed ? stopLabel() : access.reason;
+                  };
                   return (
                     <div
                       class="chat-subagents__item"
@@ -168,7 +172,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props, Methods>(
                             class="chat-subagents__stop"
                             type="button"
                             aria-label={stopLabel()}
-                            title={row().stopAccess.allowed ? stopLabel() : row().stopAccess.reason}
+                            title={stopTitle()}
                             disabled={row().stopping || !row().canStop}
                             onClick={() => void data().stop(row())}
                           >

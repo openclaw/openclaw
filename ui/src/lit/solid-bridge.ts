@@ -1,8 +1,9 @@
-import { render, spread, type JSX } from "@solidjs/web";
+import { insert, render, spread, type JSX } from "@solidjs/web";
 import { nothing, render as renderLit } from "lit";
 import {
   createComponent,
   createRenderEffect,
+  createRoot,
   createSignal,
   flush,
   onCleanup,
@@ -229,8 +230,9 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         source = [...this.#content.childNodes];
       }
       this.#mountedApplication = this.#application;
-      this.#dispose = render(() => {
-        const [revision, setRevision] = createSignal(0);
+      const view = () => {
+        // Solid-owned hosts publish property updates while their parent renders.
+        const [revision, setRevision] = createSignal(0, { ownedWrite: true });
         this.#notify = () => setRevision((value) => value + 1);
         const props = {
           ...defaults,
@@ -246,16 +248,23 @@ export function defineSolidBridge<Props extends object, Methods extends object =
             },
           });
         }
-        const view = () => content(props, this.#host);
+        const contentView = () => content(props, this.#host);
         return this.#application
           ? createComponent(ApplicationProvider, {
               value: this.#application,
               get children() {
-                return view();
+                return contentView();
               },
             })
-          : view();
-      }, this);
+          : contentView();
+      };
+      // A nested top-level render would flush child effects under the parent's render owner.
+      this.#dispose = this.#solidOwned
+        ? createRoot((dispose) => {
+            insert(this, view());
+            return dispose;
+          })
+        : render(view, this);
     }
 
     #disposeRoot() {

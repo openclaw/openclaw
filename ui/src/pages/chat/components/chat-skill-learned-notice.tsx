@@ -33,16 +33,16 @@ export const ChatSkillLearnedNotice = defineSolidBridge<{
           });
           const runUndo = () => {
             const snapshot = context?.gateway.snapshot;
+            const client = snapshot?.phase === "connected" ? snapshot.client : null;
             if (
               !context ||
-              snapshot?.phase !== "connected" ||
+              !client ||
               pending ||
               undo() === "done" ||
               !canCallGatewayMethod(snapshot, "skills.workshop.undo", "operator.admin")
             ) {
               return;
             }
-            const client = snapshot.client;
             pending = true;
             setUndo("pending");
             void (async () => {

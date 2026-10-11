@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { installDialogPolyfill } from "../../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { OpenClawChatCameraCapture } from "./chat-camera-capture.tsx";
 import "./chat-camera-capture.tsx";
 
@@ -49,6 +49,10 @@ describe("composer camera capture", () => {
       throw new Error(`Missing button: ${text}`);
     }
     return result;
+  }
+
+  async function waitForCapture() {
+    await waitForSolid(() => expect(button("Capture").disabled).toBe(false));
   }
 
   beforeEach(async () => {
@@ -124,7 +128,7 @@ describe("composer camera capture", () => {
       expect(video?.srcObject).toBe(capture.stream);
       expect(video?.hasAttribute("playsinline")).toBe(true);
       expect(video?.hasAttribute("muted")).toBe(true);
-      expect(button("Capture").disabled).toBe(false);
+      await waitForCapture();
       if (action === "modal-cancel") {
         component
           .querySelector("openclaw-modal-dialog")
@@ -291,6 +295,7 @@ describe("composer camera capture", () => {
     getUserMedia.mockResolvedValueOnce(first.stream).mockResolvedValueOnce(second.stream);
     component.show();
     await settle();
+    await waitForCapture();
     button("Capture").click();
     await settle();
     expect(first.track.stop).toHaveBeenCalledOnce();
@@ -299,6 +304,7 @@ describe("composer camera capture", () => {
     button("Retake").click();
     await settle();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:camera-test");
+    await waitForCapture();
     button("Capture").click();
     await settle();
     const onCapture = component.onCapture;
@@ -325,6 +331,7 @@ describe("composer camera capture", () => {
     getUserMedia.mockResolvedValue(capture.stream);
     component.show();
     await settle();
+    await waitForCapture();
     button("Capture").click();
     expect(capture.track.stop).toHaveBeenCalledOnce();
     component.readSignal = new AbortController().signal;

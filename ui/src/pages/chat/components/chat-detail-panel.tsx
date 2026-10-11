@@ -46,7 +46,10 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
   const invalidate = () => lifecycle.invalidate();
   const afterCommit = () =>
     new Promise<void>((resolve) => {
-      lifecycle.afterCommit(resolve, resolve);
+      lifecycle.afterCommit((complete) => {
+        resolve();
+        complete();
+      }, resolve);
     });
   const updatingHost = {
     get isConnected() {
@@ -597,13 +600,9 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     invalidate();
   };
 
-  const handlePanelClick = (event: MouseEvent) => {
-    handleSidebarClick(event, props);
-  };
+  const handlePanelClick = (event: MouseEvent) => handleSidebarClick(event, props);
 
-  const handlePanelKeyDown = (event: KeyboardEvent) => {
-    handleSidebarKeydown(event, props);
-  };
+  const handlePanelKeyDown = (event: KeyboardEvent) => handleSidebarKeydown(event, props);
 
   function renderPanel() {
     // The retained Lit render helpers do not subscribe to Solid's locale projection yet.

@@ -12,8 +12,16 @@ type Attributes<T extends HTMLElement> = JSX.HTMLAttributes<T> & JSX.Properties<
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-chat-pane": Attributes<ChatPane>;
-      "openclaw-chat-subagent-activity": Attributes<ChatSubagentActivityLive>;
+      "openclaw-chat-pane": Attributes<ChatPane> & {
+        "prop:agentId"?: ChatPane["agentId"];
+        "prop:onBackToSubagents"?: ChatPane["onBackToSubagents"];
+        "prop:onPaneSessionChange"?: ChatPane["onPaneSessionChange"];
+      };
+      "openclaw-chat-subagent-activity": Attributes<ChatSubagentActivityLive> & {
+        "prop:rows"?: ChatSubagentActivityLive["rows"];
+        "prop:onOpenSubagent"?: ChatSubagentActivityLive["onOpenSubagent"];
+        "prop:onOpenSession"?: ChatSubagentActivityLive["onOpenSession"];
+      };
       "mcp-app-view": Attributes<McpAppView>;
       "openclaw-elapsed-time": Attributes<HTMLElement> & {
         "prop:startMs"?: number | null;
