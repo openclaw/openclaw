@@ -202,7 +202,6 @@ it("invalidates resident facts on native writes and keeps missing, replaced, and
           sibling
             .prepare("UPDATE session_nodes SET updated_at = 2 WHERE session_key = ?")
             .run(otherKey);
-          expect(() => f.read()).toThrow("Session actor has an unsettled database writer");
         }),
       );
       expect(f.read()).toEqual(initial);

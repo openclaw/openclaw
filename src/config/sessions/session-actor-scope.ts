@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { runOpenClawAgentPathWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { prepareSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { SessionEntryReadScope } from "./session-accessor.types.js";
 import type {
@@ -29,8 +30,15 @@ export async function runSessionActorCommand<Value>(
   if (actor.target.database.kind === "memory") {
     return command(undefined);
   }
-  const outcome = await command(actor.snapshot(authority));
-  return outcome.kind === "stale-version" ? command(outcome.postimage) : outcome;
+  const run = async () => {
+    const outcome = await command(actor.snapshot(authority));
+    return outcome.kind === "stale-version" ? command(outcome.postimage) : outcome;
+  };
+  // Keep the read/command/rebase on one FIFO turn; a queued writer must not
+  // invalidate the refused postimage before its single retry can enter.
+  return actor.target.database.kind === "file"
+    ? runOpenClawAgentPathWriteAdmission(actor.target.database.nativeLocation, run, true)
+    : run();
 }
 
 /** Retain the captured physical writer, never reselect a target after an accepted command. */

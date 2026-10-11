@@ -21,7 +21,6 @@ import {
   readSessionTranscriptAnchorsAsync,
   readSessionTranscriptAnchorsFromSource,
 } from "./session-transcript-anchor-read.js";
-import { retainSessionTranscriptContextGeneration } from "./session-transcript-authority.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import {
   resolveSessionTranscriptReadFence,
@@ -134,27 +133,20 @@ export function readSessionTranscriptModelContextAsync<T>(
     assertCurrent: () => void,
     binding?: IncognitoSessionHistoryBinding,
     contextAdmission = capturedAdmission,
-    databaseIdentity?: string,
   ): Promise<T> => {
-    const generation = retainSessionTranscriptContextGeneration(
-      scope,
-      context.version,
-      databaseIdentity,
-    );
     const contextValidation = structuredClone({
       version: context.version,
       admission: contextAdmission,
       through: capturedThrough,
     });
-    const validate = async <Value>(publish: () => Value): Promise<{ value: Value }> => {
-      let accepted: { value: Value } | undefined;
+    let consumed: { value: Promise<Awaited<T>> } | undefined;
+    try {
       await readSessionTranscriptAnchorsAsync(
         scope,
         { entryIds: [], contextValidation },
         signal,
         (facts) => {
           assertCurrent();
-          generation.assertCurrent();
           if (
             !facts.contextValidated &&
             (contextValidation.version || contextAdmission || capturedThrough)
@@ -163,39 +155,24 @@ export function readSessionTranscriptModelContextAsync<T>(
               "Session transcript changed during context read",
             );
           }
-          accepted = { value: publish() };
+          const value = Promise.resolve(consume(context));
+          void value.catch(() => undefined);
+          consumed = { value };
         },
         binding,
       );
-      if (!accepted) {
-        throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
+    } catch (error) {
+      // Reader cleanup still joins any write-capable consumer it already started.
+      if (consumed) {
+        await consumed.value.catch(() => undefined);
       }
-      return accepted;
-    };
-    let consumerSettlement: Promise<Awaited<T>> | undefined;
-    let joined = false;
-    try {
-      const accepted = await validate(() => {
-        const value = consume(context);
-        if (isPromiseLike(value)) {
-          consumerSettlement = Promise.resolve(value);
-          void consumerSettlement.catch(() => undefined);
-        }
-        return value;
-      });
-      if (!consumerSettlement) {
-        return accepted.value;
-      }
-      const value = await consumerSettlement;
-      joined = true;
-      return (await validate(() => value)).value;
-    } finally {
-      generation.release();
-      // Initial acceptance can fail after starting a consumer; its owner still joins that work.
-      if (consumerSettlement && !joined) {
-        await consumerSettlement.catch(() => undefined);
-      }
+      throw error;
     }
+    if (!consumed) {
+      throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
+    }
+    // The consumer owns its effects. Transcript changes after this snapshot are best effort.
+    return await consumed.value;
   };
   const source = suppliedIncognito ? undefined : captureIncognitoSessionSource(target);
   if (source && "kind" in source) {
@@ -240,6 +217,11 @@ export function readSessionTranscriptModelContextAsync<T>(
       })
       .then((result) => {
         prepared.authority.assertCurrent();
+        if (prepared.actor.sessions.readSharing(prepared.target.sessionKey)?.entry) {
+          prepared.actor.sessions
+            .captureCurrent(prepared.target.sessionKey)
+            .authorize(prepared.authority, "commit");
+        }
         return result;
       });
   }
@@ -310,14 +292,7 @@ export function readSessionTranscriptModelContextAsync<T>(
         expectedIdentity,
       );
       assertCurrent();
-      return accept(
-        captured,
-        context,
-        assertCurrent,
-        undefined,
-        capturedAdmission,
-        expectedIdentity?.key.startsWith("file:") ? expectedIdentity.key.slice(5) : undefined,
-      );
+      return accept(captured, context, assertCurrent, undefined, capturedAdmission);
     },
     signal,
   );

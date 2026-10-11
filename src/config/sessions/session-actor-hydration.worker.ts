@@ -414,6 +414,7 @@ export function hydrateSessionActorState(
 /** Derives disclosure only from the actor's owned postimage, without touching SQLite. */
 export function projectSessionActorHotState(state: SessionActorStoredState): SessionActorHotState {
   const hot = structuredClone(state.hot);
+  hot.hasBoard = state.hasBoard;
   hot.dependencySessionIds = [
     ...new Set([
       ...[...state.entryRows.values()].flatMap((row) => (row ? [row.entry.sessionId] : [])),

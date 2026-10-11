@@ -26,7 +26,7 @@ import { showToast } from "../../../lib/toast.ts";
 import { installWidgetThemeObserver, postWidgetTheme } from "../../../lib/widget-theme.ts";
 import { canvasWidgetMount } from "./canvas-widget-mount.ts";
 import { exportWidget } from "./widget-export.ts";
-import "./browser-tab-card.ts";
+import "./browser-tab-card.tsx";
 
 registerMcpAppEnglish();
 
@@ -346,7 +346,7 @@ const loadMcpAppView = async () => {
 };
 
 const loadCanvasWidgetView = () => import("../../../components/canvas-widget-view.ts");
-const loadYouTubeVideo = () => import("./youtube-video-card.ts");
+const loadYouTubeVideo = () => import("./youtube-video-card.tsx");
 
 function renderWidgetContent(
   preview: CanvasToolPreview,

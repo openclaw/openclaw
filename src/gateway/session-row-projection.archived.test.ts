@@ -13,9 +13,9 @@ import {
   canRunSessionListBackgroundWork,
   retainSessionListForegroundWork,
 } from "./session-projection-work.js";
+import * as databaseFactsRead from "./session-row-database-facts.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import * as materialization from "./session-row-projection-materialize.js";
-import * as databaseFactsRead from "./session-row-projection-read.js";
 import * as records from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import * as transcriptBackfill from "./session-row-transcript-backfill.js";

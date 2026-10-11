@@ -345,6 +345,8 @@ src/agents/worktrees/repository-paths.ts
 src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
 src/agents/sandbox/registry-publication.ts
+src/config/sessions/session-actor-executor.ts
+src/config/sessions/session-actor-sqlite.ts
 src/config/sessions/session-actor-transaction.ts
 src/infra/sqlite-database-write-receipts.ts
 src/state/openclaw-agent-execution-incognito-session-actors.ts
@@ -613,8 +615,10 @@ src/config/sessions/session-cold-storage-state.ts
 src/config/sessions/session-entry-codec.ts
 src/config/sessions/session-entry-cohort.worker.ts
 src/config/sessions/session-entry-json.ts
+src/config/sessions/session-entry-snapshot-values.ts
 src/config/sessions/session-entry-snapshots.ts
 src/config/sessions/session-entry-state-format.ts
+src/config/sessions/transcript-append-parent.ts
 src/config/sessions/types.ts
 src/config/sessions/session-history-worker-errors.ts
 src/acp/runtime/session-meta-worker-mutation.ts
@@ -642,6 +646,8 @@ src/config/sessions/session-incognito-transcript-contract.ts
 src/state/artifact-preserving-state-reads.ts
 src/state/incognito-session-error.ts
 src/config/sessions/session-model-context-projection.ts
+src/config/sessions/session-model-context-navigation.ts
+src/config/sessions/session-model-context-read.ts
 src/config/sessions/session-model-context-window.ts
 src/config/sessions/session-mutation-conflict-error.ts
 src/config/sessions/session-pending-input-custody-error.ts
@@ -1033,6 +1039,7 @@ src/infra/sqlite-index-schema.ts
 src/infra/sqlite-integrity-worker-error.ts
 src/infra/sqlite-integrity-worker.ts
 src/infra/sqlite-integrity.ts
+src/infra/sqlite-jsonl-budget-error.ts
 src/infra/sqlite-jsonl-budget.ts
 src/infra/sqlite-live-snapshot.ts
 src/infra/sqlite-lifecycle-errors.ts
@@ -1180,7 +1187,6 @@ src/infra/windows-port-pids.ts
 src/infra/windows-private-directory.ts
 src/infra/windows-process-census.ts
 src/infra/windows-process-start.ts
-src/infra/worker-ancestry.ts
 src/infra/worker-cpu.ts
 src/infra/worker-diagnostic-script.ts
 src/infra/worker-idle-gc.ts
@@ -2004,6 +2010,7 @@ src/config/sessions/session-accessor.sqlite-identity.ts
 src/config/sessions/session-accessor.sqlite-worker-coordination.ts
 src/config/sessions/session-accessor.sqlite-worker-transport.ts
 src/config/sessions/session-actor-replica.ts
+src/config/sessions/activity-summary.ts
 src/config/sessions/session-actor.ts
 src/config/sessions/session-entry-cohort-scope.ts
 src/config/sessions/session-incognito-binding.ts

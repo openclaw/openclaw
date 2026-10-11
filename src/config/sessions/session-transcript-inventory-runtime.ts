@@ -36,7 +36,6 @@ export async function listSessionTranscriptArchivesInWorker(input: SessionArchiv
   };
   if (source) {
     // Actor transcripts never create durable archive artifacts.
-    await Promise.resolve();
     source.admissionSignal?.throwIfAborted();
     if ("kind" in source) {
       source.assertCurrent();
@@ -84,14 +83,7 @@ export async function readSessionTranscriptCorpusInWorker(
   }
   return withSessionStoreReaderInWorker(
     input,
-    async ({
-      reader,
-      database,
-      continuation,
-      assertCurrent,
-      onRegistryChange,
-      revalidateTarget,
-    }) => {
+    async ({ reader, database, continuation, assertCurrent, onRegistryChange }) => {
       const artifacts = await prepareArtifacts();
       assertCurrent();
       if (options.readOnly !== true && !continuation) {
@@ -106,8 +98,6 @@ export async function readSessionTranscriptCorpusInWorker(
           assertCurrent,
           onRegistryChange,
         );
-        await revalidateTarget?.();
-        assertCurrent();
       }
       const entries = await reader.readCorpusInventory({ scope, options, artifacts, continuation });
       assertCurrent();
@@ -146,7 +136,6 @@ export async function resolveMemorySessionTargetsInWorker(input: MemorySessionSe
   const binding = captureIncognitoSessionSource({ ...input, storePath });
   if (binding && "kind" in binding) {
     resolveMemorySessionSince(scope.since);
-    await Promise.resolve();
     binding.assertCurrent();
     return scope.sessionIds.map((sessionId) =>
       unresolvedMemorySessionTarget(scope.agentId, sessionId),
@@ -159,39 +148,18 @@ export async function resolveMemorySessionTargetsInWorker(input: MemorySessionSe
       sessionId,
       lifecycleRevision: actor.sessions.readSharing(sessionKey)?.entry?.lifecycleRevision,
     }));
-    const claims = new Map(
-      sessions.map(({ sessionKey }) => [sessionKey, actor.sessions.captureCurrent(sessionKey)]),
-    );
-    const snapshots = new Map<string, ReturnType<typeof actor.sessions.captureSnapshot>>();
     const assertCurrent = () => {
       binding.admissionSignal?.throwIfAborted();
       actor.assertReadable();
-      const current = actor.sessions.deadlines();
-      if (
-        current.length !== claims.size ||
-        current.some(({ sessionKey }) => !claims.has(sessionKey))
-      ) {
-        throw new Error("Incognito Memory selection changed during preparation");
-      }
-      for (const [key, claim] of claims) {
-        claim.assertCurrent();
-        snapshots.get(key)?.assertCurrent();
-      }
     };
-    const result = await actor.sessions.withSharedState(() =>
+    // Memory discovery uses one captured inventory; concurrent changes appear on its next read.
+    return actor.sessions.withSharedState(() =>
       actor.sessions.history(
         { assertCurrent },
         { type: "session.history.memory-targets", input: { selectors: scope, sessions } },
         binding.admissionSignal,
-        () => {
-          for (const key of claims.keys()) {
-            snapshots.set(key, actor.sessions.captureSnapshot(key));
-          }
-        },
       ),
     );
-    assertCurrent();
-    return result;
   }
   if (isIncognitoOpenClawAgentSqlitePath(storePath, scope)) {
     return readMemorySessionTargets({ ...scope, storePath });
