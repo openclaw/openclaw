@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, vi } from "vitest";
+import { afterEach, beforeEach, expect, onTestFinished, vi } from "vitest";
+import * as configFileSource from "../config/source-file.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { createWatcherMock } from "./config-reload.watcher.test-support.js";
 import {
   INSTANCE_BINDING_PROBE_METHOD,
   installInstanceBindingProbeCoordinator,
@@ -119,6 +121,28 @@ export async function patchInstanceBindingTestConfig(
     }),
     baseHash: current.payload?.hash,
   });
+}
+
+export function controlRpcOwnedConfigWatcher(configPath: string) {
+  const createConfigFileAdapter = configFileSource.createConfigFileAdapter;
+  const configWatcher = vi
+    .spyOn(configFileSource, "createConfigFileAdapter")
+    .mockImplementation((options) => {
+      if (options.path !== configPath) {
+        return createConfigFileAdapter(options);
+      }
+      // Explicit config writes own these cases; filesystem echoes can race the next RPC.
+      const watcher = createWatcherMock();
+      const adapter = watcher.attach(options);
+      return {
+        ...adapter,
+        start() {
+          adapter.start();
+          queueMicrotask(() => watcher.emit("ready"));
+        },
+      };
+    });
+  onTestFinished(() => configWatcher.mockRestore());
 }
 
 export function installInstanceBindingConfigIo() {

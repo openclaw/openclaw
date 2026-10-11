@@ -6,7 +6,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import * as configFileSource from "../config/source-file.js";
 import { markGatewayRestartHandled } from "../infra/restart.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
@@ -14,7 +13,6 @@ import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-l
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv } from "../test-utils/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
-import { createWatcherMock } from "./config-reload.watcher.test-support.js";
 import {
   CHANNEL_BINDING_IDS,
   clearInstanceBindingProbeCoordinators,
@@ -25,6 +23,7 @@ import {
   type InstanceBindingProbeResult,
 } from "./server-plugins.lifecycle.test-fixtures.js";
 import {
+  controlRpcOwnedConfigWatcher,
   prepareInstanceBindingFixture,
   installInstanceBindingConfigIo,
   patchInstanceBindingTestConfig,
@@ -684,27 +683,9 @@ describe("gateway plugin instance bindings", () => {
   it(
     "retains unchanged channel runtimes and renews them only when their plugin reloads",
     { timeout: 600_000 },
-    async ({ onTestFinished }) => {
+    async () => {
       const { coordinator, configPath } = await prepareInstanceBindingTest({ channels: true });
-      const createConfigFileAdapter = configFileSource.createConfigFileAdapter;
-      const configWatcher = vi
-        .spyOn(configFileSource, "createConfigFileAdapter")
-        .mockImplementation((options) => {
-          if (options.path !== configPath) {
-            return createConfigFileAdapter(options);
-          }
-          // Explicit config writes own this case; filesystem echoes can race the next RPC.
-          const watcher = createWatcherMock();
-          const adapter = watcher.attach(options);
-          return {
-            ...adapter,
-            start() {
-              adapter.start();
-              queueMicrotask(() => watcher.emit("ready"));
-            },
-          };
-        });
-      onTestFinished(() => configWatcher.mockRestore());
+      controlRpcOwnedConfigWatcher(configPath);
       const proof = coordinator.channelProof;
       if (!proof) {
         throw new Error("channel binding fixture was not installed");
@@ -919,7 +900,11 @@ describe("gateway plugin instance bindings", () => {
     "refuses replacement during %s cleanup while keeping the Gateway available",
     { timeout: 600_000 },
     async (serviceStopFailure) => {
-      const { coordinator, bundledRoot } = await prepareInstanceBindingTest({ serviceStopFailure });
+      const { coordinator, configPath, bundledRoot } = await prepareInstanceBindingTest({
+        serviceStopFailure,
+      });
+      coordinator.reportReloadSettlement = true;
+      controlRpcOwnedConfigWatcher(configPath);
       finishServiceStops.push(coordinator.serviceStopCompletion.resolve);
       const hotReloadRecovery = vi.fn(() => {
         // No run loop consumes this synthetic emission, so release its signal-admission lease.
@@ -960,7 +945,7 @@ describe("gateway plugin instance bindings", () => {
         coordinator.runtimes.slice(0, initialRegistrationCount),
         "initial",
       );
-      const initialProbe = await requestInstanceBindingProbe(initialRuntime);
+      const initialProbe = await requestSettledInstanceBindingProbe(initialRuntime);
 
       const socket = await connectWebchatClient({ port: claim.port, scopes: ["operator.admin"] });
       sockets.push(socket);
@@ -1002,7 +987,8 @@ describe("gateway plugin instance bindings", () => {
           ),
           "restored original",
         );
-        const restoredProbe = await requestInstanceBindingProbe(restored.runtime);
+        // Recovery returns its runtime receipt before background config settlement.
+        const restoredProbe = await requestSettledInstanceBindingProbe(restored.runtime);
         expect(restoredProbe.registryId).not.toBe(initialProbe.registryId);
         expect(restoredProbe).toMatchObject({
           sessionsId: initialProbe.sessionsId,
