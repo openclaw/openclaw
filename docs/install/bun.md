@@ -69,7 +69,33 @@ directly, as shown above.
 
 ## Bun-only global install
 
-With a supported [OpenClaw Bun fork](/install/bun-compatibility) executable:
+The recommended Bun-only installation on macOS and glibc Linux (arm64 or x64) is:
+
+```sh
+curl -fsSL https://openclaw.ai/install.sh | bash -s -- --runtime bun
+```
+
+Node remains the default when `--runtime` is omitted. The Bun path installs no
+Node runtime: it resolves the published OpenClaw version, downloads that release's
+pinned [OpenClaw Bun fork](/install/bun-compatibility), and verifies the archive,
+executable, revision, and installed package pin. On macOS it installs Homebrew
+SQLite if needed, or uses `OPENCLAW_SQLITE_LIBRARY`. Published releases that predate the packaged Bun pin, including `2026.10.1`,
+use the verified pin from their exact release tag and must report the requested
+version through the generated launcher. Custom packages must include their pin.
+
+Use `--version <version-or-dist-tag>` to select a release, `--dry-run` to inspect
+its runtime plan (only metadata is fetched), or `--no-onboard` to skip setup.
+The installer pins existing Gateway services to the selected Bun. Fresh
+onboarding installs the Gateway with Bun and records its exact runtime path.
+`--no-onboard` does not create a service on a fresh installation.
+
+With an existing fork executable, add `--bun-path /absolute/path/to/bun` or set
+`OPENCLAW_BUN_PATH`. Published versions require the exact pinned executable;
+custom package specs also require `--bun-path` and are checked against the
+installed package's pin before running the CLI. Stock Bun, git-checkout builds,
+Windows, and musl/Alpine are unsupported by this installer path.
+
+For a manual install with a supported fork executable:
 
 ```sh
 OPENCLAW_PACKAGE_BUN_LAUNCHER=/absolute/path/to/bun /absolute/path/to/bun add -g --trust openclaw

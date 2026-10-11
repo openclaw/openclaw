@@ -27,11 +27,11 @@ openclaw reset --scope full --yes --non-interactive
 
 ## Scopes
 
-| Scope                   | Removes                                                                                    | Stops gateway first |
-| ----------------------- | ------------------------------------------------------------------------------------------ | ------------------- |
-| `config`                | config file only                                                                           | no                  |
-| `config+creds+sessions` | config file, OAuth/credentials dir, canonical SQLite session history and its archive files | yes                 |
-| `full`                  | state dir (including the shared SQLite database) plus workspace directories                | yes                 |
+| Scope                   | Removes                                                                                 | Stops gateway first |
+| ----------------------- | --------------------------------------------------------------------------------------- | ------------------- |
+| `config`                | config file only                                                                        | no                  |
+| `config+creds+sessions` | config file, OAuth/credentials dir, stored SQLite session history and its archive files | yes                 |
+| `full`                  | state dir (including the shared SQLite database) plus workspace directories             | yes                 |
 
 `config+creds+sessions` and `full` stop a running managed gateway service before deleting state.
 
