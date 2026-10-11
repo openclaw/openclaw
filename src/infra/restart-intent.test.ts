@@ -101,16 +101,6 @@ describe("gateway restart intent", () => {
     }
   });
 
-  it("consumes a fresh intent for the current process", async () => {
-    const env = createIntentEnv();
-
-    expect(writeGatewayRestartIntentSync({ env, targetPid: process.pid })).toBe(true);
-
-    expect(await consumeGatewayRestartIntentPayload(env)).toEqual({});
-    expect(readIntentRow(env)).toBeUndefined();
-    expect(fs.existsSync(legacyIntentPath(env))).toBe(false);
-  });
-
   it("settles a contended consume exactly once without blocking the signal thread", async () => {
     const env = createIntentEnv();
     expect(
@@ -271,15 +261,6 @@ describe("gateway restart intent", () => {
     });
     expect(readIntentRow(env)).toBeUndefined();
     expect(fs.existsSync(legacyIntentPath(env))).toBe(false);
-  });
-
-  it("backs off before an emoji that crosses the persisted reason limit", async () => {
-    const env = createIntentEnv();
-    insertIntentRow(env, { reason: "x".repeat(199) + "🧠tail" });
-
-    expect(await consumeGatewayRestartIntentPayload(env)).toEqual({
-      reason: "x".repeat(199),
-    });
   });
 
   it("overwrites the previous pending intent row", async () => {

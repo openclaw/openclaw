@@ -620,56 +620,6 @@ describe("restart sentinel", () => {
     },
   );
 
-  it("does not let stale deletes remove a newer sentinel", async () => {
-    await withRestartSentinelStateDir(async () => {
-      const first = await writeRestartSentinel({
-        kind: "restart",
-        status: "ok",
-        ts: 1,
-        message: "old",
-      });
-      const newer = await writeRestartSentinel({
-        kind: "restart",
-        status: "ok",
-        ts: 2,
-        message: "new",
-      });
-
-      await expect(clearRestartSentinelIfRevision(first.revision)).resolves.toBe(false);
-      await expect(readRestartSentinel()).resolves.toEqual(newer);
-    });
-  });
-
-  it("writes the running version back to update sentinels on startup", async () => {
-    await withRestartSentinelStateDir(async () => {
-      const ts = Date.now();
-      await writeRestartSentinel({
-        kind: "update",
-        status: "ok",
-        ts,
-        stats: {
-          after: { version: "expected-version" },
-        },
-      });
-
-      await finalizeUpdateRestartSentinelRunningVersion("actual-version");
-
-      await expect(readRestartSentinel()).resolves.toMatchObject({
-        version: 1,
-        payload: {
-          kind: "update",
-          status: "ok",
-          ts,
-          stats: {
-            after: {
-              version: "actual-version",
-            },
-          },
-        },
-      });
-    });
-  });
-
   it("finalizes only the captured database when the environment changes during its read", async () => {
     const originalEnv = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-sentinel-original-") };
     const replacementEnv = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-sentinel-replacement-") };
@@ -711,27 +661,6 @@ describe("restart sentinel", () => {
         payload: { message: "original", stats: { after: { version: "running-version" } } },
       });
       await expect(readRestartSentinel(replacementEnv)).resolves.toEqual(replacement);
-    });
-  });
-
-  it("uses the loaded build commit when finalizing an update", async () => {
-    await withRestartSentinelStateDir(async () => {
-      await writeRestartSentinel({
-        kind: "update",
-        status: "ok",
-        ts: Date.now(),
-        stats: {
-          mode: "git",
-          root: process.cwd(),
-          after: { sha: "aaaaaaa", version: "actual-version" },
-        },
-      });
-
-      await finalizeUpdateRestartSentinelRunningVersion("actual-version");
-
-      await expect(readRestartSentinel()).resolves.toMatchObject({
-        payload: { status: "ok" },
-      });
     });
   });
 

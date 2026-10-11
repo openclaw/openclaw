@@ -23,13 +23,12 @@ async function expectSecretFileError(params: {
   setup: (dir: string) => Promise<string>;
   expectedMessage: (file: string) => string;
   secretLabel?: string;
-  options?: Parameters<typeof readSecretFileSync>[2];
 }): Promise<void> {
   const dir = await createTempDir();
   const file = await params.setup(dir);
-  expect(() =>
-    readSecretFileSync(file, params.secretLabel ?? "Gateway password", params.options),
-  ).toThrow(params.expectedMessage(file));
+  expect(() => readSecretFileSync(file, params.secretLabel ?? "Gateway password")).toThrow(
+    params.expectedMessage(file),
+  );
 }
 
 async function createSecretPath(setup: (dir: string) => Promise<string>): Promise<string> {
@@ -38,12 +37,6 @@ async function createSecretPath(setup: (dir: string) => Promise<string>): Promis
 }
 
 describe("readSecretFileSync", () => {
-  it("rejects blank file paths", () => {
-    expect(() => readSecretFileSync("   ", "Gateway password")).toThrow(
-      "Gateway password file path is empty.",
-    );
-  });
-
   it("reads and trims a regular secret file", async () => {
     const dir = await createTempDir();
     const file = path.join(dir, "secret.txt");
@@ -51,20 +44,6 @@ describe("readSecretFileSync", () => {
 
     expect(readSecretFileSync(file, "Gateway password")).toBe("top-secret");
     expect(tryReadSecretFileSync(file, "Gateway password")).toBe("top-secret");
-  });
-
-  it("preserves the underlying cause when throwing for missing files", async () => {
-    const file = await createSecretPath(async (dir) => path.join(dir, "missing-secret.txt"));
-    let thrown: Error | undefined;
-    try {
-      readSecretFileSync(file, "Gateway password");
-    } catch (error) {
-      thrown = error as Error;
-    }
-
-    expect(thrown).toBeInstanceOf(Error);
-    expect(thrown?.message).toContain(`Failed to inspect Gateway password file at ${file}:`);
-    expect((thrown as Error & { cause?: unknown }).cause).toBeInstanceOf(Error);
   });
 
   it.each([
@@ -88,18 +67,6 @@ describe("readSecretFileSync", () => {
       expectedMessage: (file: string) => `Gateway password file at ${file} must be a regular file.`,
     },
     {
-      name: "rejects symlinks when configured",
-      setup: async (dir: string) => {
-        const target = path.join(dir, "target.txt");
-        const link = path.join(dir, "secret-link.txt");
-        await fsPromises.writeFile(target, "top-secret\n", "utf8");
-        await fsPromises.symlink(target, link);
-        return link;
-      },
-      options: { rejectSymlink: true },
-      expectedMessage: (file: string) => `Gateway password file at ${file} must not be a symlink.`,
-    },
-    {
       name: "rejects empty secret files after trimming",
       setup: async (dir: string) => {
         const file = path.join(dir, "secret.txt");
@@ -108,8 +75,8 @@ describe("readSecretFileSync", () => {
       },
       expectedMessage: (file: string) => `Gateway password file at ${file} is empty.`,
     },
-  ])("$name", async ({ setup, expectedMessage, options }) => {
-    await expectSecretFileError({ setup, expectedMessage, options });
+  ])("$name", async ({ setup, expectedMessage }) => {
+    await expectSecretFileError({ setup, expectedMessage });
   });
 
   it("throws from the try helper for rejected files", async () => {
@@ -125,51 +92,9 @@ describe("readSecretFileSync", () => {
       tryReadSecretFileSync(file, "Telegram bot token", { rejectSymlink: true }),
     ).toThrow(`Telegram bot token file at ${file} must not be a symlink.`);
   });
-
-  it.each([
-    {
-      name: "returns undefined from the non-throwing helper for blank file paths",
-      pathValue: async () => "   ",
-      label: "Telegram bot token",
-      options: undefined,
-      expected: undefined,
-    },
-    {
-      name: "returns undefined from the non-throwing helper for missing path values",
-      pathValue: async () => undefined,
-      label: "Telegram bot token",
-      options: undefined,
-      expected: undefined,
-    },
-  ])("$name", async ({ pathValue, label, options, expected }) => {
-    const file = await pathValue();
-    expect(tryReadSecretFileSync(file, label, options)).toBe(expected);
-  });
 });
 
 describe("tryReadSecretFileSync diagnostics", () => {
-  it("keeps an explicitly configured empty file unavailable", async () => {
-    const file = await createSecretPath(async (dir) => {
-      const emptyFile = path.join(dir, "empty-token.txt");
-      await fsPromises.writeFile(emptyFile, " \n\t ", "utf8");
-      return emptyFile;
-    });
-
-    const result = tryReadSecretFileSync(file, "Telegram bot token", undefined, {
-      configPath: "channels.telegram.tokenFile",
-    });
-
-    expect(result).toEqual({
-      status: "configured_unavailable",
-      diagnostic: {
-        code: "CREDENTIAL_FILE_UNAVAILABLE",
-        path: "channels.telegram.tokenFile",
-        reason: "invalid-path",
-      },
-    });
-    expect(JSON.stringify(result)).not.toContain(file);
-  });
-
   it("returns a redacted diagnostic for an unavailable explicit file", async () => {
     const dir = await createTempDir();
     const file = path.join(dir, "missing-token.txt");

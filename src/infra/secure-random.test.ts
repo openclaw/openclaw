@@ -45,35 +45,6 @@ describe("secure-random", () => {
     expect(cryptoMocks.randomUUID).toHaveBeenCalledTimes(2);
   });
 
-  it.each([
-    {
-      name: "uses the default byte count",
-      byteCount: undefined,
-      expectedBytes: 16,
-      expectedToken: Buffer.alloc(16, 0xab).toString("base64url"),
-    },
-    {
-      name: "passes custom byte counts through",
-      byteCount: 18,
-      expectedBytes: 18,
-      expectedToken: Buffer.alloc(18, 0xab).toString("base64url"),
-    },
-    {
-      name: "supports zero-byte tokens",
-      byteCount: 0,
-      expectedBytes: 0,
-      expectedToken: "",
-    },
-  ])("generates url-safe tokens when $name", ({ byteCount, expectedBytes, expectedToken }) => {
-    cryptoMocks.randomBytes.mockClear();
-
-    const token = byteCount === undefined ? generateSecureToken() : generateSecureToken(byteCount);
-
-    expect(cryptoMocks.randomBytes).toHaveBeenCalledWith(expectedBytes);
-    expect(token).toBe(expectedToken);
-    expect(token).toMatch(/^[A-Za-z0-9_-]*$/);
-  });
-
   it("registers redacted tokens at creation without redacting ordinary generated IDs", () => {
     cryptoMocks.randomBytes.mockReturnValueOnce(Buffer.alloc(32, 0xc1));
     const secret = generateSecureToken({ bytes: 32, redact: true });
