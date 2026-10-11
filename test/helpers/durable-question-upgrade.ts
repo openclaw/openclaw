@@ -40,6 +40,9 @@ export async function createQuestionUpgradeFixture(stableRoot: string, signal: A
       name: "installed-stable-question-upgrade",
       entrypoint,
       signal,
+      // Offline Doctor must observe a stopped Gateway, not the fixture's idle TCP listener.
+      // The instance still retains its logical port claim through stop/restart and cleanup.
+      reserveIdlePort: false,
       config: {
         update: { checkOnStart: false },
         browser: { enabled: false },
