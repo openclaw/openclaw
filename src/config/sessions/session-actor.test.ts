@@ -331,6 +331,25 @@ it("serves installed state without a request and reconciles a retired worker gen
   });
 });
 
+it.each([1, 2])("bounds empty-replica recovery after %i superseding writes", async (writes) => {
+  await withActor(async ({ actor, commands, fault, nativePatch }) => {
+    let remaining = writes;
+    fault.onExecuted = () => {
+      if (remaining > 0) {
+        nativePatch(700 + remaining);
+        remaining -= 1;
+      }
+    };
+    const reading = actor.read(authority);
+    if (writes === 1) {
+      expect((await reading).entry?.updatedAt).toBe(701);
+    } else {
+      await expect(reading).rejects.toThrow("changed before its read could publish");
+    }
+    expect(commands).toEqual(["session.actor.read", "session.actor.read"]);
+  });
+});
+
 it("installs a cold command and stale preimage without a separate read request", async () => {
   await withActor(async ({ actor, commands, fault, retireGeneration }) => {
     const input = {
