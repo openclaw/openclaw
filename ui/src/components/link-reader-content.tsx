@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
@@ -64,8 +64,10 @@ function TruncationNote(props: { truncated: boolean | undefined; label: string }
 }
 
 function FileContent(props: { file: ControlUiLinkReaderFile; expanded: boolean }) {
+  // Preserve native toggles until the document changes its expansion preference.
+  const expanded = createMemo(() => props.expanded);
   return (
-    <details class="lr-file" open={props.expanded}>
+    <details class="lr-file" open={expanded()}>
       <summary>
         <span class="lr-filename">{props.file.path}</span>
         <span class="lr-stats">
