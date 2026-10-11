@@ -685,6 +685,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       retainGatewayWorkAdmission: retainedWork.retain,
       settleTerminal: retainedWork.settleTerminal,
       withInputCommitPublication: retainedWork.withInputCommitPublication,
+      acquireInputActor: () => retainedWork.acquireInputActor(),
       setPendingInputCleanup: retainedWork.setPendingInputCleanup,
       assertClientUploadAllowed: uploadAdmission.assertClientUploadAllowed,
       assertWorkAdmissionCurrent: () => {

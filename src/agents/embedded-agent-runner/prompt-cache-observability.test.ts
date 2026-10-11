@@ -538,16 +538,22 @@ describe("prompt cache observability", () => {
       cacheRead: undefined,
       cacheWrite: undefined,
     });
+    observe(missingUsage, true);
     expect(observe({ cacheRead: 2_000 }, true)).toMatchObject({
       broke: true,
       previousCacheRead: 8_000,
       cacheRead: 2_000,
-      changes: null,
+      changes: [
+        { code: "cacheRetention", detail: "long -> short" },
+        { code: "transport", detail: "sse -> websocket" },
+        { code: "systemPrompt", detail: "system prompt digest changed" },
+      ],
     });
     expect(observe({ input: 10_000, cacheRead: 0 }, true)).toMatchObject({
       broke: true,
       previousCacheRead: 2_000,
       cacheRead: 0,
+      changes: null,
     });
   });
 });

@@ -144,6 +144,19 @@ stays in the live tail until an identity-bearing commit can own it or the run
 terminates. Such a producer can temporarily show a duplicate durable row;
 the Gateway favors preserving unsaved text over guessing which occurrence to hide.
 
+### Channel delivery mirrors
+
+For a settled `channel-final` delivery, `appendAssistantMirrorMessageByIdentity`
+accepts an optional `sourceRunId` from the producing run. Pass it when a queued
+answer can settle after another assistant message has been committed. The helper
+correlates matching text with an uncorrelated assistant occurrence in that run,
+in transcript order, so repeated answers retain distinct identities.
+
+The delivery receipt remains stored, but `chat.history` presents the correlated
+answer once. This does not change provider replay. A run ID is provenance, not
+write authorization; the existing session checks still apply. If no source run
+is supplied, correlation retains the latest-message behavior.
+
 ## Bounded model context
 
 Use `await SessionManager.openModelContextAsync(...)` from

@@ -337,7 +337,12 @@ describe("qa multipass runtime", () => {
             'import { registerHooks } from "node:module";',
             'import { pathToFileURL } from "node:url";',
             'Object.defineProperty(process.versions, "node", { value: fs.readFileSync(process.env.QA_TEST_NODE_VERSION, "utf8").trim() });',
+            "let versionProbe = false;",
+            'process.once("beforeExit", (code) => {',
+            '  if (versionProbe) fs.appendFileSync(process.env.QA_TEST_NODE_PROBE_EXITS, JSON.stringify({ version: process.versions.node, code }) + "\\n");',
+            "});",
             "registerHooks({ resolve(specifier, context, next) {",
+            '  if (specifier === "file:///workspace/openclaw-host/node-version.mjs") versionProbe = true;',
             '  return next(specifier === "file:///workspace/openclaw-host/node-version.mjs"',
             '    ? pathToFileURL(process.env.QA_TEST_REPO_ROOT + "/node-version.mjs").href : specifier, context);',
             "} });",
@@ -395,6 +400,7 @@ describe("qa multipass runtime", () => {
         const pnpmSpecPath = workspace.path("pnpm-spec");
         const commandsPath = workspace.path("commands");
         const suiteArgsPath = workspace.path("suite-args");
+        const probeExitsPath = workspace.path("node-probe-exits.jsonl");
         const result = spawnSync("bash", [scriptPath], {
           encoding: "utf8",
           timeout: 10_000,
@@ -409,9 +415,19 @@ describe("qa multipass runtime", () => {
             QA_TEST_PNPM_SPEC: pnpmSpecPath,
             QA_TEST_COMMANDS: commandsPath,
             QA_TEST_SUITE_ARGS: suiteArgsPath,
+            QA_TEST_NODE_PROBE_EXITS: probeExitsPath,
           },
         });
         expect(result.status, result.stderr).toBe(0);
+        const probeExits = fs
+          .readFileSync(probeExitsPath, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(probeExits).toEqual([
+          ...(["22.99.0", "24.15.0"].includes(version) ? [{ version, code: 1 }] : []),
+          { version: expectedVersion, code: 0 },
+        ]);
         expect(fs.readFileSync(commandsPath, "utf8").trim().split("\n")).toEqual(
           ["install", "build", "openclaw"].map((command) => command + ":" + expectedVersion),
         );

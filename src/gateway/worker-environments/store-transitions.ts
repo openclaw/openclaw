@@ -260,15 +260,15 @@ export function createWorkerEnvironmentTransitionOps(db: DatabaseSync, now: () =
           : patch.attachedSessionIds === undefined
             ? current.attachedSessionIds
             : normalizeAttachedSessionIds(patch.attachedSessionIds);
-      assertShape(
-        to,
+      assertShape({
+        state: to,
         leaseId,
         nodeDeviceId,
         sshEndpoint,
         desktop,
         bootstrapReceipt,
         attachedSessionIds,
-      );
+      });
       const [attachedSessionId] = attachedSessionIds;
       if (to === "attached" && attachedSessionId) {
         // Destroy-requested attachments retain physical cleanup scope, not live ownership.

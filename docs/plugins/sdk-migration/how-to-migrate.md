@@ -9,6 +9,20 @@ sidebarTitle: "How to migrate"
 
 The ordered migration steps. Work through them in order; each step is self-contained. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
 
+## Use worker-owned approval requests
+
+Use host-bound `api.runtime.gateway.request` for approval requests, reads,
+history, grant operations, resolution, and waiting. Reads that expire rows are
+worker operations too. The host's method classification does not enlarge the
+internal principal's allowed methods. A released opaque approval commit guard
+selects its native compatibility adapter before execution, preserving its
+transaction-local visibility; worker failure never selects that adapter.
+The adapter remains deprecated until the next Plugin SDK major.
+
+The shared warning budget is per plugin and capability family, on legacy use.
+Current effect-time authority checks remain synchronous. Schemas, stored bytes,
+permissions, and update behavior are unchanged.
+
 ## Await plugin state and conversation bindings
 
 Use `api.runtime.state.openKeyedStoreV2<T>(options)` for a data-only store bound
@@ -76,6 +90,26 @@ When state-backed reads feed a channel, migrate its config and security adapters
 to the [async channel hooks](/plugins/sdk-channel-plugins). Forward these hooks
 through wrapper and setup adapters while keeping existing synchronous signatures
 for older hosts.
+
+## Migrate inspection, authorization, and approval factories
+
+Use these async replacements when inspection or channel eligibility reads
+worker-owned state:
+
+| SDK subpath                               | Synchronous API                                    | Replacement                                             |
+| ----------------------------------------- | -------------------------------------------------- | ------------------------------------------------------- |
+| `conversation-binding-inspection-runtime` | `inspectConversationBinding`                       | `inspectConversationBindingAsync`                       |
+| `command-auth-native`                     | `resolveCommandAuthorization`                      | `resolveCommandAuthorizationAsync`                      |
+| `approval-delivery-runtime`               | `createApproverRestrictedNativeApprovalCapability` | `createApproverRestrictedNativeApprovalCapabilityAsync` |
+| `approval-handler-runtime`                | `createChannelApprovalNativeRuntimeAdapter`        | `createChannelApprovalNativeRuntimeAdapterAsync`        |
+| `approval-handler-adapter-runtime`        | `createLazyChannelApprovalNativeRuntimeAdapter`    | `createLazyChannelApprovalNativeRuntimeAdapterAsync`    |
+
+Await inspection and command authorization before consuming their results. The
+approval factories still return adapters synchronously; their async eligibility
+callbacks are awaited by the host. The original APIs preserve their synchronous
+contracts through the next Plugin SDK major compatibility window. Use the narrow
+subpaths above for new imports; broad compatibility barrels retain existing APIs
+without duplicating the replacements.
 
 ## Await Gateway approval publication
 
@@ -185,6 +219,14 @@ Gateway contexts provide `workerSessionPlacementService.getManyAsync` and
 starting dependent work, or releasing request resources. Their synchronous
 counterparts shipped through the 2026.9.8 Gateway SDK and remain deprecated
 compatibility methods until the next Plugin SDK major.
+
+Startup also awaits `clearLocalTurnClaimsAfterRestartAsync` while holding the
+state-directory lock, before admitting turns. The placement worker clears stale
+local claims and publishes the returned records after success. An uncertain result
+fails startup; the next boot can safely repeat the cleanup. Legacy synchronous retirement and
+restart cleanup warn once per plugin and capability family. Bundled reset and
+deletion paths await retirement; released custom Gateway contexts retain a
+separately selected synchronous adapter through the compatibility window.
 
 Use `placementStandingGrants.resolveBindingAsync`, `validateAsync`, and
 `retainAsync` for node-grant preparation. `resolveAsync` combines binding and

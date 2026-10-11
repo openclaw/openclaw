@@ -18,7 +18,7 @@ import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { WORKER_ADMISSION_DEADLINE_MS } from "../../worker/worker-connection-contract.js";
 import { StaleWorkerBuildError } from "./admission.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
-import { sameWorkerSessionTurnClaim } from "./placement-record.js";
+import { isCurrentPlacementTurnClaim, sameWorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementRecord, WorkerSessionTurnClaim } from "./placement-store.js";
 import { matchesWorkerPlacementTarget } from "./placement-target.js";
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
@@ -405,15 +405,20 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 };
                 activeWorkerTurns.set(turnClaim.sessionId, activeWorkerTurn);
               }
+              using placementReadCleanup = new DisposableStack();
+              const placementRead = await options.placements.prepareSessionPlacement(
+                turnClaim.sessionId,
+              );
+              placementReadCleanup.defer(placementRead.release);
               const readPreparedPlacement = (assertAdmission: () => void) => {
                 turn.abortSignal?.throwIfAborted();
                 assertAdmission();
-                const preparedPlacement = options.placements.get(turnClaim.sessionId);
+                const preparedPlacement = placementRead.current();
                 if (
                   preparedPlacement?.state !== "active" ||
                   preparedPlacement.executionMode !== placement.executionMode ||
                   !matchesWorkerPlacementTarget(preparedPlacement, placement) ||
-                  !options.placements.validateTurnClaim(turnClaim)
+                  !isCurrentPlacementTurnClaim(preparedPlacement, turnClaim)
                 ) {
                   throw new Error("Worker placement changed while loading turn execution");
                 }

@@ -672,7 +672,7 @@ export function renderSessionListFrame(host: SidebarSessionListHost, body: unkno
     >
       ${host.sidebarAgentsMode === "roster" ? nothing : renderSessionListToolbar(host)}
       ${
-        host.sessionData.sessionsStartingUp
+        host.sessionData.sessionsStartingUp && !host.sidebarSnapshot
           ? html`<div
               class="sidebar-session-empty-hint sidebar-session-empty-hint--startup"
               role="status"

@@ -18,6 +18,10 @@ until you inspect or replace it.
 This page describes what survives a restart, how interrupted work is detected,
 and what the automatic resume looks like.
 
+During startup, a new reply waits for its agent's model and plugin runtime to
+finish loading. Agents that are already ready can serve replies while other
+agents continue loading. Startup preparation failures still report an error.
+
 ## What survives a restart
 
 | State                          | Storage                                            | Behavior across restart                                                 |
@@ -865,6 +869,9 @@ through their normal completion path as soon as startup restores requester owner
 without waiting for the periodic registry sweep. The sweep remains a retry backstop.
 The crash-loop breaker pauses this settlement too; the same sweep retries when
 the breaker's recovery window ends.
+Startup restores completed runs directly from the registry. Any retained delivery
+keeps its normal session and ownership checks. Unfinished runs still reconcile
+the current child session before resuming.
 They are not automatically relaunched.
 The parent receives the interruption outcome and owns finishing the user's task.
 Its recovery input lists current unfinished child session and run identities,

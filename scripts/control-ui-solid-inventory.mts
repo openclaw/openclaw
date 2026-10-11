@@ -432,7 +432,7 @@ export function countMigrationSources(root: string, sources: ReadonlyMap<string,
   return result;
 }
 
-function isTest(file: string) {
+export function isTest(file: string) {
   return /(?:\.(?:test|spec|fixture|test-support)\.|-test-(?:support|harness)\.)|(?:^|\/)(?:__tests__|test-helpers|fixtures|e2e)\//u.test(
     file,
   );

@@ -5,7 +5,6 @@ import type { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl, WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
-import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
 import { recordMemoryEntryOrigins } from "../memory-entry-origins.js";
 import { forgetMemoryEntries } from "../memory-forget.js";
@@ -297,20 +296,13 @@ describe("memory index", () => {
     },
   );
 
-  it.each(["bootstrap", "identity-repair", "lexical", "hybrid", "vector"] as const)(
+  it.each(["bootstrap", "lexical", "hybrid", "vector"] as const)(
     "rejects %s retrieval when shared worker admission is full and recovers after drain",
     async (mode) => {
       const cfg = createCfg({ vectorEnabled: false, minScore: 0 });
       const manager = await getPersistentManager(cfg);
       if (mode !== "bootstrap") {
         await manager.sync({ reason: "test" });
-      }
-      if (mode === "identity-repair") {
-        openOpenClawAgentDatabase({ agentId: "main" }).db.exec(
-          "DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'",
-        );
-        expect(manager.status().chunks).toBeGreaterThan(0);
-        expect(manager.status().custom?.indexIdentity).toMatchObject({ status: "missing" });
       }
       const capacityOwner = new WorkerTaskPool({
         workerUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.search),

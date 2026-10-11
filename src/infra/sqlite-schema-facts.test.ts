@@ -36,6 +36,23 @@ import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 describe("admitted SQLite schema facts", () => {
   const { tempDirs, openDatabase, databases } = useSqliteSchemaTestFixture();
 
+  it("keeps read receipts stable for mutation words while tracking callback writes", () => {
+    const database = openDatabase();
+    const before = readSqliteDatabaseWriteRevision(database);
+    database
+      .prepare("SELECT 'openclaw.system-update', 'it''s DELETE', 1 AS [INSERT] /* REPLACE */")
+      .get();
+    expect(readSqliteDatabaseWriteRevision(database)).toBe(before);
+
+    database.function("mutate", () => {
+      database.exec("INSERT INTO original VALUES (9)");
+      return 9;
+    });
+    database.prepare("SELECT mutate()").get();
+    expect(readSqliteDatabaseWriteRevision(database)).not.toBe(before);
+    expect(database.prepare("SELECT id FROM original").all()).toEqual([{ id: 9 }]);
+  });
+
   it("serves admitted runtime schema checks without executing SQL", () => {
     const database = openDatabase(
       `${OPENCLAW_AGENT_SCHEMA_SQL}\nPRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`,

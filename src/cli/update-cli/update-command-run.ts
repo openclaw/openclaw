@@ -1,17 +1,14 @@
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
 import {
   formatUnsupportedNodeVersionMessage,
   SUPPORTED_NODE_VERSION_RANGE,
 } from "../../../node-version.mjs";
 import { assertConfigWriteAllowedInCurrentMode } from "../../config/config.js";
-import { resolveConfigPath } from "../../config/paths.js";
 import { resolveGatewayNativeServiceIdentityConflict } from "../../daemon/constants.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
-import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   formatExternalSupervisorUpdateRequired,
@@ -45,7 +42,6 @@ import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
   adoptUpdateRun,
   createUpdateRun,
-  finishInterruptedUpdatePreview,
   finishUpdateRun,
   getUpdateRun,
   heartbeatUpdateRun,
@@ -75,32 +71,24 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { VERSION } from "../../version.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
-import { registerSignalExitBarrier, waitForSignalExitBarriers } from "../signal-exit-barrier.js";
 import type { UpdateDisplayProgress } from "./progress.js";
-import {
-  parseUpdateTimeoutMs,
-  resolveUpdateRoot,
-  usesCandidateUpdateAdmission,
-  type UpdateCommandOptions,
-} from "./shared.js";
+import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
 import { resolveForegroundUpdateAdmission } from "./update-command-handoff.js";
 import type { UpdateInitializationAdmission } from "./update-command-initialization-types.js";
 import { resolveMutableUpdateInstallKind } from "./update-command-install-kind.js";
-import { revalidateUpdateDatabaseContext } from "./update-command-managed-context.js";
 import {
   admitMutableUpdateSignalRun,
   retireMutableUpdateSignalRun,
-  withMutableUpdateSignals,
 } from "./update-command-mutable-signals.js";
 import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
+import { admitUpdatePreviewSignalRun } from "./update-command-preview-signals.js";
 import {
   resolveOwnedManagedUpdateEnv,
   withOwnedManagedUpdateEnv,
   resolveServiceRefreshEnv,
 } from "./update-command-service-env.js";
 import {
-  GatewayServiceUpdateOwnershipError,
   assertGatewayServiceManagementAllowedForUpdate,
   isGatewayServiceManagementAllowedForUpdate,
   readManagedGatewayServiceForUpdate,
@@ -108,36 +96,10 @@ import {
 } from "./update-command-service-plan.js";
 import { preflightWindowsUpdateTask } from "./update-command-windows-preflight.js";
 
-// Identity in this map is minted only for a new local preview, never reconstructed
-// from a run ID, process absence, or another invocation's diagnostic history.
-const previewAdmissions = new WeakMap<
-  object,
-  { record: UpdateRunRecord; env: NodeJS.ProcessEnv; active?: boolean }
->();
-
-/** Advance preview custody only across this owner's committed target writes. */
-export function recordUpdateCommandTarget(
-  run: UpdateCommandOptions["run"],
-  patch: { target?: UpdateRunRecord["target"]; step?: UpdateRunStep },
-): void {
-  if (!run) {
-    return;
-  }
-  let before: UpdateRunRecord | undefined;
-  const committed = recordUpdateRunPhase(
-    run.runId,
-    "requested",
-    patch,
-    { env: run.env },
-    (record) => {
-      before = record;
-    },
-  );
-  const admission = previewAdmissions.get(run);
-  if (admission && isDeepStrictEqual(before, admission.record)) {
-    admission.record = committed;
-  }
-}
+export {
+  recordUpdateCommandTarget,
+  withUpdatePreviewSignals,
+} from "./update-command-preview-signals.js";
 
 /** Admission follows the managed service root before a redirect or discovered install. */
 export function resolveUpdateCommandAdmissionRoot(
@@ -227,39 +189,6 @@ export async function admitUpdateCommandRun(params: {
     env,
     recoverOrphanedSidecars: false,
   });
-  if (params.initialization) {
-    const initialized = params.initialization;
-    if (
-      resolvePathViaExistingAncestorSync(resolveOpenClawStateSqlitePath(env)) !==
-        initialized.databasePath ||
-      resolvePathViaExistingAncestorSync(resolveConfigPath(env)) !== initialized.configPath
-    ) {
-      throw new GatewayServiceUpdateOwnershipError(
-        "Gateway state or configuration selectors changed during target initialization. Retry from the installation's current owning account.",
-        undefined,
-        undefined,
-        "service-context-changed",
-      );
-    }
-    if (initialized.target) {
-      const current = await revalidateUpdateDatabaseContext({
-        env,
-        readEnv: env,
-        config: initialized.target.configSnapshot.sourceConfig,
-        configSnapshot: initialized.target.configSnapshot,
-        ...(initialized.target.updateInstallKind === "package" &&
-        usesCandidateUpdateAdmission(params.opts, params.installKind ?? "unknown")
-          ? { configValidation: "candidate" as const }
-          : {}),
-        ...(initialized.target.legacyConfigPlan
-          ? { legacyConfigPlan: initialized.target.legacyConfigPlan }
-          : {}),
-      });
-      initialized.target.configSnapshot = current.configSnapshot;
-      initialized.target.legacyConfigPlan = current.legacyConfigPlan;
-      initialized.target.configReadFailure = undefined;
-    }
-  }
   const meta = await readControlPlaneUpdateSentinelMeta(env);
   await resolveForegroundUpdateAdmission({
     root: params.root,
@@ -328,66 +257,12 @@ export async function admitUpdateCommandRun(params: {
     env[POST_CORE_UPDATE_ENV] !== "1"
   ) {
     if (params.opts.dryRun === true) {
-      previewAdmissions.set(run, { record, env: { ...env } });
+      admitUpdatePreviewSignalRun(run, record, env);
     } else {
       admitMutableUpdateSignalRun(run, record);
     }
   }
   return run;
-}
-
-/** Own diagnostics only for this freshly admitted invocation's lexical lifetime. */
-export async function withUpdatePreviewSignals<T>(
-  opts: UpdateCommandOptions,
-  operation: () => Promise<T>,
-): Promise<T> {
-  const admission = opts.dryRun === true && opts.run ? previewAdmissions.get(opts.run) : undefined;
-  if (!admission || !opts.run || admission.active) {
-    return await withMutableUpdateSignals(opts, operation);
-  }
-  admission.active = true;
-  const { env } = admission;
-  let interrupted = false;
-  let shutdown: Promise<void> | undefined;
-  const unregister = registerSignalExitBarrier(async () => {
-    if (
-      !interrupted ||
-      process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" ||
-      process.env[POST_CORE_UPDATE_ENV] === "1"
-    ) {
-      return;
-    }
-    // Missing/displaced canonical state, pending recovery, or a changed row is
-    // not permission to open a writable runtime or dispose of another owner.
-    await assertUpdateRecoveryAdmission({ env });
-    if (!isDeepStrictEqual(getUpdateRun(admission.record.runId, { env }), admission.record)) {
-      return;
-    }
-    finishInterruptedUpdatePreview(admission.record, { env });
-  });
-  const onSignal = (code: number) => {
-    interrupted = true;
-    shutdown ??= waitForSignalExitBarriers()
-      .catch(() => {
-        defaultRuntime.error(
-          "Preview interruption could not be recorded; history remains pending.",
-        );
-      })
-      .finally(() => process.exit(code));
-  };
-  const onSigint = () => onSignal(130);
-  const onSigterm = () => onSignal(143);
-  process.on("SIGINT", onSigint);
-  process.on("SIGTERM", onSigterm);
-  try {
-    return await operation();
-  } finally {
-    await shutdown;
-    previewAdmissions.delete(opts.run);
-    process.off("SIGINT", onSigint);
-    process.off("SIGTERM", onSigterm);
-    unregister();
-  }
 }
 
 export function createUpdateRunProgress(

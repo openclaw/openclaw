@@ -129,15 +129,13 @@ export const testState = {} as {
   config: OpenClawConfig;
   nowMs: number;
   providersEnabled: boolean;
-  reuseReadWorkers: boolean;
   releaseTurnOwners: Array<() => void | Promise<void>>;
   prepareInstallation: WorkerEnvironmentServiceOptions["prepareInstallation"];
   bootstrapWorker: WorkerEnvironmentServiceOptions["bootstrapWorker"];
 };
 
-export function setupWorkerEnvironmentServiceSuite(options: { reuseReadWorkers?: boolean } = {}) {
+export function setupWorkerEnvironmentServiceSuite() {
   beforeEach(async () => {
-    testState.reuseReadWorkers = options.reuseReadWorkers === true;
     testState.releaseTurnOwners = [];
     testState.root = await fs.mkdtemp(
       path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-service-"),
@@ -186,21 +184,15 @@ export function setupWorkerEnvironmentServiceSuite(options: { reuseReadWorkers?:
     await fs.rm(testState.root, { recursive: true, force: true });
   });
 
-  if (options.reuseReadWorkers) {
-    afterAll(async () => {
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-    });
-  }
+  afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+  });
 }
 
 async function closeWorkerEnvironmentDatabase() {
-  if (testState.reuseReadWorkers) {
-    // Close native handles and admission for this case; retain only the reader worker code.
-    await closeOpenClawStateDatabaseByPathAsync(testState.stateDb.path);
-  } else {
-    await closeOpenClawStateDatabaseAsync();
-  }
+  // Close native handles and admission for this case; retain only the reader worker code.
+  await closeOpenClawStateDatabaseByPathAsync(testState.stateDb.path);
   closeOpenClawStateDatabaseForTest();
 }
 

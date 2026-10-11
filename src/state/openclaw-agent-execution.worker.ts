@@ -2,7 +2,7 @@ import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
-import type { IncognitoSessionOperations } from "../config/sessions/session-incognito-contract.js";
+import { isSessionActorCommand } from "../config/sessions/session-actor-command.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import {
@@ -59,6 +59,7 @@ import {
   requestRestrictedAgentDatabaseAdmission,
   type AgentDatabaseAdmissionRestriction,
 } from "./openclaw-agent-execution-domain.js";
+import type { IncognitoAgentDatabaseOperations } from "./openclaw-agent-execution-incognito-contract.js";
 import { createIncognitoAgentDatabaseBackend } from "./openclaw-agent-execution-incognito.worker.js";
 import { createAgentDatabaseMaintenanceOwner } from "./openclaw-agent-execution-maintenance.js";
 import {
@@ -104,7 +105,7 @@ export function createSqliteWorkerBackend(
   opening: { databasePath: string },
 ):
   | SqliteWorkerPreparedBackend<AgentDatabaseOperations>
-  | SqliteWorkerPreparedBackend<IncognitoSessionOperations> {
+  | SqliteWorkerPreparedBackend<IncognitoAgentDatabaseOperations> {
   if (input.kind === "ephemeral") {
     return createIncognitoAgentDatabaseBackend(input, opening);
   }
@@ -524,6 +525,11 @@ function openAgentDatabaseBackend(
     },
     admit: (stage, requestAdmission) => admit(stage, undefined, requestAdmission),
   });
+  let actor:
+    | ReturnType<
+        typeof import("../config/sessions/session-actor.worker.js").createSessionActorWorker
+      >
+    | undefined;
   let closed = false;
   const assertOpen = () => {
     if (closed) {
@@ -531,6 +537,9 @@ function openAgentDatabaseBackend(
     }
   };
   const executeCommand = (command: SqliteWorkerCommand<AgentDatabaseOperations>) => {
+    if (isSessionActorCommand(command)) {
+      return expectDefined(actor, "Session actor command was not prepared").execute(command);
+    }
     if (
       command.type === "database.domain.bind" ||
       command.type === "database.domain.publish" ||
@@ -560,6 +569,7 @@ function openAgentDatabaseBackend(
   return {
     ...createAgentDatabaseExecutionCloser(() => {
       closed = true;
+      actor?.close();
       return {
         database,
         identity,
@@ -570,6 +580,22 @@ function openAgentDatabaseBackend(
       };
     }),
     prepare(command) {
+      if (isSessionActorCommand(command)) {
+        return import("../config/sessions/session-actor.worker.js").then(
+          async ({ createSessionActorWorker }) => {
+            actor ??= createSessionActorWorker(context, () => {
+              const current = expectDefined(identity, "Session actor requires a physical owner");
+              return {
+                kind: "file",
+                physicalIdentity: current.physicalIdentity,
+                birthtime: current.birthtime,
+                nativeLocation: current.nativeLocation,
+              };
+            });
+            await actor.prepare(command);
+          },
+        );
+      }
       if (
         command.type === "database.domain.bind" ||
         command.type === "database.domain.publish" ||

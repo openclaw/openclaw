@@ -82,6 +82,7 @@ type PromptCacheTracker = {
   lastProviderPrompt?: ProviderPromptState["lastAttempt"];
   requestedAt: number;
   pendingChanges: PromptCacheChange[] | null;
+  unmeasuredChanges?: PromptCacheChange[] | null;
 };
 
 type PromptHistoryFingerprint = {
@@ -537,6 +538,7 @@ export function beginPromptCacheObservation(
   );
   const changes = previous
     ? [
+        ...(previous.unmeasuredChanges ?? []),
         ...(previous.pendingChanges?.filter(
           (change) => change.code === "aggregateToolResultTruncation",
         ) ?? []),
@@ -562,6 +564,7 @@ export function beginPromptCacheObservation(
   if (violation) {
     changes.push(violation);
   }
+  const pendingChanges = [...new Map(changes.map((change) => [change.code, change])).values()];
   const tracker: PromptCacheTracker = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey?.trim(),
@@ -571,7 +574,7 @@ export function beginPromptCacheObservation(
     lastCacheReadSnapshot: previous?.lastCacheReadSnapshot,
     lastProviderPrompt: previous?.lastProviderPrompt,
     requestedAt,
-    pendingChanges: changes.length > 0 ? changes : null,
+    pendingChanges: pendingChanges.length > 0 ? pendingChanges : null,
   };
   trackers.delete(key);
   pruneMapToMaxSize(trackers, MAX_TRACKERS - 1);
@@ -587,7 +590,7 @@ export function beginPromptCacheObservation(
   return {
     snapshot,
     prefixUnchanged: previous !== undefined && divergence < 0,
-    changes: changes.length > 0 ? changes : null,
+    changes: tracker.pendingChanges,
     previousCacheRead: previous?.lastCacheRead ?? null,
     requestGapMs: previous ? Math.max(0, requestedAt - previous.requestedAt) : undefined,
   };
@@ -640,8 +643,11 @@ export function completePromptCacheObservation(
     typeof cacheRead !== "number" ||
     !Number.isFinite(cacheRead)
   ) {
+    // Keep cause evidence paired with the last measured cache hit, not a usage-less request.
+    tracker.unmeasuredChanges = changes;
     return null;
   }
+  tracker.unmeasuredChanges = null;
   const previousCacheRead = tracker.lastCacheRead;
   const previousSnapshot = tracker.lastCacheReadSnapshot;
   const previousProviderPrompt = tracker.lastProviderPrompt;

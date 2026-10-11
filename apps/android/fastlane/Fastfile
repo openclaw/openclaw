@@ -611,7 +611,7 @@ platform :android do
     build_release_artifacts!
   end
 
-  desc "Generate deterministic Android screenshots for Google Play metadata"
+  desc "Generate repeatable Android screenshots for Google Play metadata"
   lane :screenshots do
     capture_android_screenshots!
   end

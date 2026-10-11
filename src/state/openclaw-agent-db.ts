@@ -745,5 +745,4 @@ export {
   readOpenIncognitoAgentDatabaseGeneration,
   recordOpenClawAgentDatabaseOpenFailure,
   settleOpenClawAgentDatabaseWorkerClose,
-  type OpenClawAgentDatabaseWorkerCloseResult,
 } from "./openclaw-agent-db-lifecycle.js";

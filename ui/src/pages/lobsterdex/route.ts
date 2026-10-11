@@ -5,7 +5,7 @@ import { routePageSpec } from "../../app-route-paths.ts";
 export const page = definePage({
   ...routePageSpec("lobsterdex"),
   component: () =>
-    import("./lobsterdex-page.ts").then(() => ({
+    import("./lobsterdex-page.tsx").then(() => ({
       header: true,
       render: () => html`<openclaw-lobsterdex-page></openclaw-lobsterdex-page>`,
     })),

@@ -28,8 +28,6 @@ import type {
 type Key = { pluginId: string; namespace: string; key: string };
 export type PluginStatePreparedComparison = Key & {
   comparison: string;
-  /** The Gateway's receipt-maintained snapshot; SQL still compares the exact stored image. */
-  current?: { row: PluginStateReadRow | undefined };
   conditions?: readonly PluginStateComparisonCondition[];
 } & (
     | { operation: "update"; action: "set"; valueJson: string; ttlMs?: number }
@@ -99,8 +97,7 @@ function applyComparedEntry(
     return { status: "applied" };
   }
   const kysely = getPluginStateKysely(store.db);
-  // Compare storage bytes and metadata, not caller JSON serialization. A synchronous
-  // writer may have changed the row after the Gateway prepared its cached snapshot.
+  // Compare storage bytes and metadata, not caller JSON serialization.
   if (params.action === "delete") {
     const result = executeSqliteQuerySync(
       store.db,
@@ -159,12 +156,9 @@ export function compareAndApplyPluginStateEntry(
 ): PluginStateCompareResult<unknown> {
   const scope = validateComparisonScope(store, params, storeIdentity);
   const now = Date.now();
-  const cached = params.current?.row;
-  // An absent row still needs insertion/expiry/quota admission inside this transaction.
-  const row =
-    cached && (cached.expires_at === null || cached.expires_at > now)
-      ? cached
-      : selectPluginStateEntry(store.db, { ...params, now });
+  // Native binding transactions can change rows without a plugin-state receipt.
+  // Compare against this transaction's row so conflicts always converge, including keep.
+  const row = selectPluginStateEntry(store.db, { ...params, now });
   const current = createPluginStateObservation(
     store.path,
     scope,

@@ -14,10 +14,10 @@ to fork the current transcript. Thread-bound spawns follow
 `threadBindings.defaultSpawnContext`, which defaults to `fork`. Pass
 `context: "isolated"` explicitly when the child must start with clean context.
 
-| Mode       | When to use it                                                                                                                         | Behavior                                                                                |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `isolated` | Fresh research, independent implementation, slow tool work, or anything that can be briefed in the task text                           | Creates a clean child transcript. Default for non-thread spawns; keeps token use lower. |
-| `fork`     | Work that depends on the current conversation, prior tool results, or nuanced instructions already present in the requester transcript | Branches the requester transcript into the child session before the child starts.       |
+| Mode       | When to use it                                                                                                                          | Behavior                                                                                |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `isolated` | Fresh research, independent implementation, slow tool work, or anything that can be briefed in the task text                            | Creates a clean child transcript. Default for non-thread spawns; keeps token use lower. |
+| `fork`     | Work that depends on the current conversation, prior tool results, or detailed instructions already present in the requester transcript | Branches the requester transcript into the child session before the child starts.       |
 
 Use `fork` sparingly. It is for context-sensitive delegation, not a
 replacement for writing a clear task prompt.

@@ -1,19 +1,21 @@
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import process from "node:process";
 import { expectDefined } from "@openclaw/normalization-core";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { loadPinnedRuntimeConfigAsync } from "../config/runtime-snapshot.js";
 import {
   runProxyValidation,
   type ProxyValidationResult,
 } from "../infra/net/proxy/proxy-validation.js";
+import { spawnCommand } from "../process/exec-spawn.js";
 import { ensureDebugProxyCa } from "../proxy-capture/ca.js";
 import { buildDebugProxyCoverageReport } from "../proxy-capture/coverage.js";
 import { resolveDebugProxySettings, applyDebugProxyEnv } from "../proxy-capture/env.js";
 import { startDebugProxyServer } from "../proxy-capture/proxy-server.js";
 import type { CaptureQueryPreset } from "../proxy-capture/types.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { withProxyCaptureOwner } from "./proxy-capture-owner.js";
 import { resolveSubprocessExitCode } from "./subprocess-exit-code.js";
 
@@ -34,48 +36,61 @@ async function finalizeProxyCommand(errors: unknown[], finalizers: Array<() => P
 }
 
 export async function runDebugProxyStartCommand(opts: { host?: string; port?: number }) {
-  await withProxyCaptureOwner(async (store, signal) => {
-    const settings = resolveDebugProxySettings();
-    const errors: unknown[] = [];
-    const finalizers: Array<() => Promise<void>> = [];
-    try {
-      finalizers.unshift(() => store.endSession(settings.sessionId));
-      await store.upsertSession({
-        id: settings.sessionId,
-        startedAt: Date.now(),
-        mode: "proxy-start",
-        sourceScope: "openclaw",
-        sourceProcess: "openclaw",
-        proxyUrl: settings.proxyUrl,
-      });
-      const ca = await ensureDebugProxyCa(settings.certDir);
-      signal.throwIfAborted();
-      const server = await startDebugProxyServer({
-        host: opts.host,
-        port: opts.port,
-        settings,
-        captureStore: store,
-      });
-      finalizers.unshift(() => server.stop());
-      signal.throwIfAborted();
-      process.stdout.write(`Debug proxy: ${server.proxyUrl}\n`);
-      process.stdout.write(`CA cert: ${ca.certPath}\n`);
-      process.stdout.write(`Capture DB: ${store.dbPath}\n`);
-      process.stdout.write("Press Ctrl+C to stop.\n");
-      await new Promise<void>((resolve) => {
-        const onSignal = () => {
-          process.off("SIGINT", onSignal);
-          process.off("SIGTERM", onSignal);
-          resolve();
-        };
-        process.on("SIGINT", onSignal);
-        process.on("SIGTERM", onSignal);
-      });
-    } catch (error) {
-      errors.push(error);
-    }
-    await finalizeProxyCommand(errors, finalizers);
-  });
+  let releaseSignals: (() => void) | undefined;
+  try {
+    await withProxyCaptureOwner(async (store, ownerSignal) => {
+      const workSignal = getAsyncWorkSignal();
+      const signal = workSignal ? AbortSignal.any([ownerSignal, workSignal]) : ownerSignal;
+      const settings = resolveDebugProxySettings();
+      const errors: unknown[] = [];
+      const finalizers: Array<() => Promise<void>> = [];
+      try {
+        finalizers.unshift(() => store.endSession(settings.sessionId));
+        await store.upsertSession({
+          id: settings.sessionId,
+          startedAt: Date.now(),
+          mode: "proxy-start",
+          sourceScope: "openclaw",
+          sourceProcess: "openclaw",
+          proxyUrl: settings.proxyUrl,
+        });
+        const ca = await ensureDebugProxyCa(settings.certDir);
+        signal.throwIfAborted();
+        const server = await startDebugProxyServer({
+          host: opts.host,
+          port: opts.port,
+          settings,
+          captureStore: store,
+        });
+        finalizers.unshift(() => server.stop());
+        signal.throwIfAborted();
+        process.stdout.write(`Debug proxy: ${server.proxyUrl}\n`);
+        process.stdout.write(`CA cert: ${ca.certPath}\n`);
+        process.stdout.write(`Capture DB: ${store.dbPath}\n`);
+        process.stdout.write("Press Ctrl+C to stop.\n");
+        await new Promise<void>((resolve) => {
+          const onSignal = () => resolve();
+          releaseSignals = () => {
+            process.off("SIGINT", onSignal);
+            process.off("SIGTERM", onSignal);
+            signal.removeEventListener("abort", onSignal);
+          };
+          process.on("SIGINT", onSignal);
+          process.on("SIGTERM", onSignal);
+          signal.addEventListener("abort", onSignal, { once: true });
+          if (signal.aborted) {
+            onSignal();
+          }
+        });
+      } catch (error) {
+        errors.push(error);
+      }
+      await finalizeProxyCommand(errors, finalizers);
+    });
+  } finally {
+    // Signal custody lasts through capture writes and native lease retirement.
+    releaseSignals?.();
+  }
 }
 
 export async function runDebugProxyRunCommand(opts: {
@@ -87,75 +102,90 @@ export async function runDebugProxyRunCommand(opts: {
   if (opts.commandArgs.length === 0) {
     throw new Error("proxy run requires a command after --");
   }
-  await withProxyCaptureOwner(async (store, signal) => {
-    const sessionId = randomUUID();
-    const baseSettings = resolveDebugProxySettings();
-    const settings = {
-      ...baseSettings,
-      sessionId,
-    };
-    const errors: unknown[] = [];
-    const finalizers = [() => store.endSession(sessionId)];
-    try {
-      await store.upsertSession({
-        id: sessionId,
-        startedAt: Date.now(),
-        mode: "proxy-run",
-        sourceScope: "openclaw",
-        sourceProcess: "openclaw",
-        proxyUrl: undefined,
-      });
-      signal.throwIfAborted();
-      const server = await startDebugProxyServer({
-        host: opts.host,
-        port: opts.port,
-        settings,
-        captureStore: store,
-      });
-      finalizers.unshift(() => server.stop());
-      signal.throwIfAborted();
-      const [command, ...args] = opts.commandArgs;
-      const childEnv = {
-        ...applyDebugProxyEnv(process.env, {
-          proxyUrl: server.proxyUrl,
-          sessionId,
-          certDir: settings.certDir,
-        }),
-        ...server.captureEnv,
+  let releaseSignals: (() => void) | undefined;
+  try {
+    await withProxyCaptureOwner(async (store, ownerSignal) => {
+      const workSignal = getAsyncWorkSignal();
+      const signal = workSignal ? AbortSignal.any([ownerSignal, workSignal]) : ownerSignal;
+      const sessionId = randomUUID();
+      const baseSettings = resolveDebugProxySettings();
+      const settings = {
+        ...baseSettings,
+        sessionId,
       };
-      await new Promise<void>((resolve, reject) => {
-        const child = spawn(expectDefined(command, "proxy cli.runtime command"), args, {
+      const errors: unknown[] = [];
+      const finalizers = [() => store.endSession(sessionId)];
+      try {
+        await store.upsertSession({
+          id: sessionId,
+          startedAt: Date.now(),
+          mode: "proxy-run",
+          sourceScope: "openclaw",
+          sourceProcess: "openclaw",
+          proxyUrl: undefined,
+        });
+        signal.throwIfAborted();
+        const server = await startDebugProxyServer({
+          host: opts.host,
+          port: opts.port,
+          settings,
+          captureStore: store,
+        });
+        finalizers.unshift(() => server.stop());
+        signal.throwIfAborted();
+        const [command, ...args] = opts.commandArgs;
+        const childEnv = {
+          ...applyDebugProxyEnv(process.env, {
+            proxyUrl: server.proxyUrl,
+            sessionId,
+            certDir: settings.certDir,
+          }),
+          ...server.captureEnv,
+        };
+        // The command owner cancels this child and joins its exit/stdio before
+        // the proxy and capture lease are retired. Keep inherited terminal I/O.
+        const child = spawnCommand([expectDefined(command, "proxy cli.runtime command"), ...args], {
           stdio: "inherit",
           env: childEnv,
           cwd: process.cwd(),
+          cancelSignal: signal,
+          reject: false,
         });
+        let childSettled = false;
         const onSigint = () => {
-          child.kill("SIGINT");
+          if (!childSettled) {
+            child.kill("SIGINT");
+          }
         };
         const onSigterm = () => {
-          child.kill("SIGTERM");
+          if (!childSettled) {
+            child.kill("SIGTERM");
+          }
         };
-        const cleanupSignals = () => {
+        releaseSignals = () => {
           process.off("SIGINT", onSigint);
           process.off("SIGTERM", onSigterm);
         };
         process.on("SIGINT", onSigint);
         process.on("SIGTERM", onSigterm);
-        child.once("error", (error) => {
-          cleanupSignals();
-          reject(error);
-        });
-        child.once("exit", (code, childSignal) => {
-          cleanupSignals();
-          process.exitCode = resolveSubprocessExitCode(code, childSignal);
-          resolve();
-        });
-      });
-    } catch (error) {
-      errors.push(error);
-    }
-    await finalizeProxyCommand(errors, finalizers);
-  });
+        try {
+          const result = await child;
+          if (result.failed && result.exitCode === undefined && result.signal === undefined) {
+            throw toErrorObject(result, "Proxy child failed during launch or output capture");
+          }
+          process.exitCode = resolveSubprocessExitCode(result.exitCode, result.signal);
+        } finally {
+          childSettled = true;
+        }
+      } catch (error) {
+        errors.push(error);
+      }
+      await finalizeProxyCommand(errors, finalizers);
+    });
+  } finally {
+    // Signal custody lasts through capture writes and native lease retirement.
+    releaseSignals?.();
+  }
 }
 
 function redactProxyUrl(value: string | undefined): string | undefined {

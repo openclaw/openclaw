@@ -67,6 +67,9 @@ describe("Crabbox profile warm images", () => {
     expect(identical.calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
     expect(identical.calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
     expect(identical.calls.some(({ argv }) => argv[2] === "create")).toBe(false);
+    expect(
+      identical.calls.some(({ options }) => String(options.input ?? "").includes("install-node")),
+    ).toBe(false);
 
     vi.stubEnv("WARM_A", "changed-secret");
     const changedValues = createWarmProvider(undefined, initial.stateDir);

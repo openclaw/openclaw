@@ -596,6 +596,10 @@ describe("worker connection endpoint failures", () => {
 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
+      const pendingReady = Promise.allSettled([
+        connection.waitForReady(),
+        connection.waitForReady(),
+      ]);
       if (boundary === "completed startup") {
         await connection.start();
         ready.mockClear();
@@ -603,13 +607,22 @@ describe("worker connection endpoint failures", () => {
       }
       const result = await connection.start().catch((error: unknown) => error);
       await Promise.all([clientClosed, peerClosed]);
-      expect.soft(result).toBeInstanceOf(
-        {
-          stopped: WorkerConnectionStoppedError,
-          fenced: WorkerFencedError,
-          failed: WorkerAdmissionError,
-        }[terminal],
-      );
+      const terminalError = {
+        stopped: WorkerConnectionStoppedError,
+        fenced: WorkerFencedError,
+        failed: WorkerAdmissionError,
+      }[terminal];
+      expect.soft(result).toBeInstanceOf(terminalError);
+      for (const outcome of await pendingReady) {
+        if (boundary === "ready observer" || boundary === "completed startup") {
+          expect.soft(outcome.status).toBe("fulfilled");
+        } else {
+          expect.soft(outcome).toMatchObject({
+            status: "rejected",
+            reason: expect.any(terminalError),
+          });
+        }
+      }
       expect.soft(connection.state.kind).toBe(terminal);
       expect.soft(ready).not.toHaveBeenCalled();
       expect.soft(vi.getTimerCount()).toBe(0);
