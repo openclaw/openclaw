@@ -40,6 +40,10 @@ import {
   readTelegramThreadId,
 } from "./action-params.js";
 import {
+  handleTelegramNativeMediaAction,
+  isTelegramNativeMediaAction,
+} from "./action-runtime.native-media.js";
+import {
   appendTelegramDroppedControlFallback,
   buildTelegramControlDegradation,
   resolveTelegramButtonsFromParams,
@@ -71,10 +75,8 @@ import {
   getTelegramAllowedReactions,
   reactMessageTelegram,
   sendPollTelegram,
-  sendStickerTelegram,
 } from "./send.js";
 import { TELEGRAM_SUPPORTED_REACTION_EMOJI_LIST } from "./status-reaction-variants.js";
-import { getCacheStats, searchStickers } from "./sticker-cache.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 import { resolveTelegramToken } from "./token.js";
 import { updateTopicName } from "./topic-name-cache.js";
@@ -92,6 +94,7 @@ const TELEGRAM_ACTION_ALIASES = {
   editForumTopic: "editForumTopic",
   editMessage: "editMessage",
   searchSticker: "searchSticker",
+  sendDice: "sendDice",
   sendMessage: "sendMessage",
   sendSticker: "sendSticker",
   stickerCacheStats: "stickerCacheStats",
@@ -698,58 +701,18 @@ export async function handleTelegramAction(
     });
   }
 
-  if (action === "sendSticker" || action === "searchSticker") {
-    if (!isActionEnabled("sticker", false)) {
-      throw new Error(
-        "Telegram sticker actions are disabled. Set channels.telegram.actions.sticker to true.",
-      );
-    }
-  }
-
-  if (action === "sendSticker") {
-    const to =
-      readStringParam(params, "to") ?? readStringParam(params, "target", { required: true });
-    const fileId =
-      readStringParam(params, "fileId") ?? readStringArrayParam(params, "stickerId")?.[0];
-    if (!fileId) {
-      throw new Error("fileId is required.");
-    }
-    const replyToMessageId = readTelegramReplyToMessageId(params);
-    const messageThreadId = readTelegramThreadId(params);
-    const token = requireToken();
-    const result = await sendStickerTelegram(to, fileId, {
-      ...apiOptions,
-      token,
-      replyToMessageId,
-      messageThreadId,
+  if (isTelegramNativeMediaAction(action)) {
+    return handleTelegramNativeMediaAction({
+      action,
+      params,
+      cfg,
+      accountId,
+      gatewayClientScopes: options?.gatewayClientScopes,
+      isActionEnabled,
+      notifyVisibleOutboundSuccess,
+      onPlatformSendDispatch: options?.onPlatformSendDispatch,
+      assertDirectAdapterHandoff: options?.assertDirectAdapterHandoff,
     });
-    notifyVisibleOutboundSuccess(to, messageThreadId);
-    return jsonResult({
-      ok: true,
-      messageId: result.messageId,
-      chatId: result.chatId,
-    });
-  }
-
-  if (action === "searchSticker") {
-    const query = readStringParam(params, "query", { required: true });
-    const limit = readTelegramPositiveIntegerParam(params, "limit") ?? 5;
-    const results = await searchStickers(query, limit);
-    return jsonResult({
-      ok: true,
-      count: results.length,
-      stickers: results.map((s) => ({
-        fileId: s.fileId,
-        emoji: s.emoji,
-        description: s.description,
-        setName: s.setName,
-      })),
-    });
-  }
-
-  if (action === "stickerCacheStats") {
-    const stats = await getCacheStats();
-    return jsonResult({ ok: true, ...stats });
   }
 
   if (action === "createForumTopic" || action === "editForumTopic") {

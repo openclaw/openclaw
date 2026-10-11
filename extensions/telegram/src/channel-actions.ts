@@ -134,7 +134,9 @@ function describeTelegramMessageTool({
   const reactionsEnabled = discovery.isEnabled("reactions");
   const actions: ChannelMessageActionName[] = [
     "read",
-    ...(sendEnabled ? ["send" as const] : []),
+    // A roll is an ordinary outbound message to a chat the bot may already post in, so dice
+    // rides the send gate instead of a dedicated toggle.
+    ...(sendEnabled ? (["send", "dice"] as const) : []),
     ...(discovery.pollEnabled ? ["poll" as const] : []),
     ...(reactionsEnabled ? (["react", "emoji-list"] as const) : []),
     ...(discovery.isEnabled("deleteMessage") ? ["delete" as const] : []),
