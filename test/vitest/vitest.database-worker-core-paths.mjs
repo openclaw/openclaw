@@ -949,6 +949,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/prepared-model-catalog-worker.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.mismatch.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.native.integration.test.ts",
+  "src/agents/prepared-model-catalog-worker.oauth-peers.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.reuse.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.scope.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.secrets.test.ts",
