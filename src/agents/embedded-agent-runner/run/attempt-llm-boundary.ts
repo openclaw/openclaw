@@ -470,9 +470,9 @@ export function installModelPromptProjection(params: {
             frozen === undefined &&
             firstText?.startsWith(INTER_SESSION_PROMPT_PREFIX_BASE) === true &&
             !text.includes(firstText);
-          if (frozen === undefined && captureProjection && !requestLocal) {
+          if (frozen === undefined && captureProjection) {
             const pendingText = text;
-            const capture = () => captureProjection(pendingText, assertCurrent);
+            const capture = () => captureProjection(pendingText, assertCurrent, { requestLocal });
             const captured = await (params.withTranscriptWrite
               ? params.withTranscriptWrite(capture)
               : capture());

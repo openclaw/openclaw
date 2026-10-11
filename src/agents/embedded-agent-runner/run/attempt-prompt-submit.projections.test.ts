@@ -594,11 +594,12 @@ describe("durable model prompt projection at provider dispatch", () => {
   });
 
   it.each([
-    { body: "plain", nested: false },
-    { body: "forwarded inter-session", nested: true },
+    { body: "plain", nested: false, hook: false },
+    { body: "forwarded inter-session", nested: true, hook: false },
+    { body: "redacted hook", nested: false, hook: true },
   ])(
     "replays an inter-session turn with its stored provenance envelope: $body body",
-    async ({ nested }) => {
+    async ({ nested, hook }) => {
       await withOpenClawTestState({ label: "inter-session-model-prompt" }, async (state) => {
         const target = {
           agentId: "main",
@@ -606,6 +607,7 @@ describe("durable model prompt projection at provider dispatch", () => {
           sessionKey: "agent:main:inter-session-model-prompt",
           storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
           sessionEntry: { sessionId, updatedAt: 1 },
+          ...(hook ? { config: { logging: { redactPatterns: ["hidden"] } } } : {}),
         };
         await upsertSessionEntryCore(target, target.sessionEntry);
         const provenance = {
@@ -651,7 +653,7 @@ describe("durable model prompt projection at provider dispatch", () => {
           activeSession: session,
           attempt: { sessionId, userTurnTranscriptRecorder: recorder },
           transcriptPrompt: annotated,
-          modelPrompt: body,
+          modelPrompt: hook ? `hook before hidden\n\n${body}` : body,
           prependContext: undefined,
           appendContext: undefined,
           getUserTranscriptContexts: () => [],
@@ -668,6 +670,9 @@ describe("durable model prompt projection at provider dispatch", () => {
         await session.agent.continue();
 
         expect(requests).toHaveLength(2);
+        // The request-local prompt keeps the capture-time redaction policy.
+        expect(JSON.stringify(requests[0])).toContain(task);
+        expect(JSON.stringify(requests[0])).not.toContain("hidden");
         // History keeps the stored safety envelope once the transient carrier is gone.
         expect(JSON.stringify(requests[1])).toContain("sourceSession=agent:main:parent");
         expect(JSON.stringify(loadTranscriptEventsSync(target))).not.toContain(
