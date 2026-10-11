@@ -12,7 +12,7 @@ read_when:
 
 TTS config lives under `tts` in `~/.openclaw/openclaw.json`. Pick a
 preset and adapt the provider block. The `speakerVoice`/`speakerVoiceId`
-fields shown below are canonical; each provider's own `voice`/`voiceId`/
+fields shown below are the current names; each provider's own `voice`/`voiceId`/
 `voiceName` field names still work as legacy aliases.
 
 OpenRouter and DeepInfra use the first nonblank value from `speakerVoice`,

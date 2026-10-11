@@ -1922,7 +1922,7 @@ ensure_default_node_active_shell() {
     ui_error "Active Node.js must be ${NODE_SUPPORTED_VERSION_LABEL} but this shell is using ${active_version} (${active_path})"
     print_active_node_paths || true
 
-    echo "Install/select Node.js ${NODE_DEFAULT_MAJOR} and ensure it is first on PATH, then rerun installer."
+    echo "Install/select Node.js ${NODE_DEFAULT_MAJOR} and check that it is first on PATH, then rerun installer."
     return 1
 }
 
