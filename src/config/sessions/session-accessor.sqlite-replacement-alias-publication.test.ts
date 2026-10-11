@@ -3,7 +3,10 @@ import { expect, it } from "vitest";
 import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
@@ -15,6 +18,7 @@ import {
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { listTranscriptInstancesFromDatabase } from "./session-accessor.sqlite-history.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
@@ -23,6 +27,110 @@ import { addSessionMember } from "./session-sharing-store.native.js";
 const { getReplacementPublicationDelivery } =
   await import("./session-accessor.sqlite-replacement-publication.test-support.js");
 const delivery = getReplacementPublicationDelivery();
+
+it("persists and publishes a snapshot restored by a later canonical replacement", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const sessionKey = "agent:main:replacement-restored-snapshot";
+    const entry = {
+      sessionId: "replacement-restored-snapshot",
+      updatedAt: 1,
+      skillsSnapshot: { prompt: "old", skills: [] },
+    };
+    replaceSessionEntrySync({ agentId: "main", storePath: database.path, sessionKey }, entry);
+    let published: ReturnType<typeof readPreparedSessionEntryChange>;
+    const stop = sessionChanges.subscribeFacts((change) => {
+      if ("sessionKey" in change && change.sessionKey === sessionKey) {
+        published = readPreparedSessionEntryChange(change, sessionKey);
+      }
+    });
+    try {
+      await applySessionEntryCanonicalReplacements({
+        storePath: database.path,
+        sessionKeys: [sessionKey],
+        update: () => ({
+          result: undefined,
+          replacements: [
+            {
+              sessionKey,
+              previousSessionKeys: [],
+              entry: { ...entry, updatedAt: 2, skillsSnapshot: { prompt: "new", skills: [] } },
+            },
+            {
+              sessionKey,
+              previousSessionKeys: [],
+              entry: { ...entry, updatedAt: 3, label: "final" },
+            },
+          ],
+        }),
+      });
+      expect(published?.fullEntry).toMatchObject({
+        label: "final",
+        skillsSnapshot: { prompt: "old" },
+      });
+      await closeOpenClawAgentDatabaseByPathAsync(database.path);
+      const reopened = openOpenClawAgentDatabase({ agentId: "main", path: database.path });
+      expect(readExactSessionEntryRow(reopened, sessionKey)?.entry).toMatchObject({
+        label: "final",
+        skillsSnapshot: { prompt: "old" },
+      });
+    } finally {
+      stop();
+    }
+  });
+});
+
+it("preserves shared-window exclusion provenance across canonical replacements", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const a = "agent:main:replacement-window-a";
+    const b = "agent:main:replacement-window-b";
+    const entry = { sessionId: "shared", updatedAt: 1 };
+    for (const sessionKey of [a, b]) {
+      replaceSessionEntrySync({ agentId: "main", storePath: database.path, sessionKey }, entry);
+    }
+    expect(
+      database.db
+        .prepare("SELECT session_key FROM session_windows WHERE session_id = ?")
+        .get("shared"),
+    ).toEqual({ session_key: b });
+    await applySessionEntryCanonicalReplacements({
+      storePath: database.path,
+      sessionKeys: [a, b],
+      update: () => ({
+        result: undefined,
+        replacements: [
+          {
+            sessionKey: a,
+            previousSessionKeys: [],
+            entry: { ...entry, updatedAt: 20, hookExternalContentSource: "gmail" },
+          },
+          { sessionKey: b, previousSessionKeys: [], entry: { ...entry, updatedAt: 21 } },
+        ],
+      }),
+    });
+    expect(
+      database.db
+        .prepare(
+          "SELECT session_key, hook_external_content_source FROM session_windows WHERE session_id = ?",
+        )
+        .get("shared"),
+    ).toEqual({ session_key: b, hook_external_content_source: "gmail" });
+    expect(
+      listTranscriptInstancesFromDatabase({
+        database,
+        options: { sessionIds: ["shared"], includeAllWindows: true },
+      }),
+    ).toMatchObject([
+      {
+        sessionKey: b,
+        provenanceKnown: true,
+        entry: { updatedAt: 21, hookExternalContentSource: "gmail" },
+        sourceMetadata: { hookExternalContentSource: "gmail" },
+      },
+    ]);
+  });
+});
 
 it.each([false, true])(
   "publishes rehomed membership while preserving newer native metadata (%s)",

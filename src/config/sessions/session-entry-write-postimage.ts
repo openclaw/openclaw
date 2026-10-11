@@ -1,3 +1,4 @@
+import type { ResolvedSessionEntryRow } from "./session-entry-storage.types.js";
 import type { SessionEntryWindowRow } from "./session-entry-window.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -5,6 +6,7 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 export type SessionEntryWritePostimage = {
   changed: boolean;
   entry: SessionEntry;
+  row: ResolvedSessionEntryRow["row"];
   window: SessionEntryWindowRow;
   sideTables: {
     memberIdsJson: string;

@@ -740,15 +740,17 @@ export function writeSessionEntry(
           persisted.snapshotsChanged ? persisted.snapshots : undefined,
         )
       : undefined;
-  if (actor && persistedEntry) {
-    const previousRow = actor.entryRows.get(sessionKey)?.row;
-    const row = {
-      ...previousRow,
-      ...sessionNode,
-      session_diff_baseline_json: JSON.stringify(canonicalEntry.sessionDiffBaseline) ?? null,
-      skills_snapshot_json: JSON.stringify(canonicalEntry.skillsSnapshot) ?? null,
-      system_prompt_report_json: JSON.stringify(canonicalEntry.systemPromptReport) ?? null,
-    };
+  const row = persistedEntry
+    ? {
+        ...canonicalPreviousRow,
+        ...sessionNode,
+        session_diff_baseline_json: JSON.stringify(canonicalEntry.sessionDiffBaseline) ?? null,
+        skills_snapshot_json: JSON.stringify(canonicalEntry.skillsSnapshot) ?? null,
+        system_prompt_report_json: JSON.stringify(canonicalEntry.systemPromptReport) ?? null,
+        window: written.window.postimage,
+      }
+    : undefined;
+  if (actor && persistedEntry && row) {
     actor.entryRows.set(sessionKey, {
       entry: structuredClone(persistedEntry),
       row,
@@ -756,10 +758,11 @@ export function writeSessionEntry(
     actor.hot.entry = structuredClone(persistedEntry);
     actor.window = written.window.postimage;
   }
-  if (options.postimages && persistedEntry && canonicalPreviousSideTables) {
+  if (options.postimages && persistedEntry && row && canonicalPreviousSideTables) {
     options.postimages.set(sessionKey, {
       changed,
       entry: persistedEntry,
+      row,
       window: written.window.postimage,
       sideTables: {
         ...canonicalPreviousSideTables,

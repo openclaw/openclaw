@@ -43,6 +43,7 @@ import {
   hasSessionEntryPublicationCapacity,
 } from "./session-entry-publication-source.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshots.js";
+import type { SessionEntryWindowRow } from "./session-entry-window.types.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import { readStagedSessionTranscriptAuthority } from "./session-transcript-authority.js";
 import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
@@ -226,6 +227,8 @@ export function commitSessionEntryReplacementsInDatabase(
     throw new Error("SQLite session label owners changed before replacement");
   }
   const transactionRows = new Map<string, ResolvedSessionEntryRow>();
+  const windows = new Map<string, SessionEntryWindowRow | null>();
+  const writtenPostimages: SessionEntryWritePostimages = postimages ?? new Map();
   for (const sessionKey of input.validationKeys) {
     const transactionRow = readExactSessionEntryRow(database, sessionKey, "full", undefined, true);
     const expectedRow = input.expectedRows.get(sessionKey);
@@ -237,6 +240,10 @@ export function commitSessionEntryReplacementsInDatabase(
     }
     if (transactionRow) {
       transactionRows.set(sessionKey, transactionRow);
+      const window = transactionRow.row.window;
+      if (window !== undefined) {
+        windows.set(transactionRow.entry.sessionId, window);
+      }
     }
   }
   beforeReplacements();
@@ -263,10 +270,13 @@ export function commitSessionEntryReplacementsInDatabase(
       (left, right) => (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0),
     )[0]?.entry;
     for (const { entry, sessionKey } of sourceEntries) {
-      previous.set(sessionKey, entry);
+      if (!previous.has(sessionKey)) {
+        previous.set(sessionKey, entry);
+      }
     }
     const canonical = transactionRows.get(replacement.sessionKey);
     const canonicalFacts = canonical && captureSessionEntrySnapshot(canonical);
+    const previousWindow = windows.get(replacement.entry.sessionId);
     const written = writeSessionEntry(
       database,
       replacement.sessionKey,
@@ -276,9 +286,12 @@ export function commitSessionEntryReplacementsInDatabase(
         previousEntry: selectedBefore ?? null,
         canonicalPreviousEntry: canonical?.entry ?? null,
         canonicalPreviousRow: canonical?.row,
-        canonicalPreviousWindow: canonicalFacts?.window,
+        canonicalPreviousWindow:
+          previousWindow !== undefined
+            ? { sessionId: replacement.entry.sessionId, row: previousWindow }
+            : canonicalFacts?.window,
         canonicalPreviousSideTables: canonicalFacts?.sideTables,
-        postimages,
+        postimages: writtenPostimages,
       },
     );
     deleteLegacySessionEntryRows(
@@ -290,9 +303,27 @@ export function commitSessionEntryReplacementsInDatabase(
         validatedEntries: new Map(
           [...transactionRows].map(([key, selected]) => [key, selected.entry]),
         ),
-        postimages,
+        postimages: writtenPostimages,
       },
     );
+    // Each later replacement starts from the preceding write, including shared physical windows.
+    const postimage = writtenPostimages.get(replacement.sessionKey);
+    if (postimage) {
+      transactionRows.set(replacement.sessionKey, {
+        entry: postimage.entry,
+        row: {
+          ...postimage.row,
+          member_ids_json: postimage.sideTables.memberIdsJson,
+          board_present: postimage.sideTables.hasBoard ? 1 : 0,
+        },
+      });
+      windows.set(postimage.entry.sessionId, postimage.window);
+    }
+    for (const previousKey of replacement.previousSessionKeys ?? []) {
+      if (previousKey !== replacement.sessionKey) {
+        transactionRows.delete(previousKey);
+      }
+    }
     if (replacement.previousSessionKeys?.some((key) => key !== replacement.sessionKey)) {
       membershipInvalidatedKeys.push(replacement.sessionKey);
     }
@@ -303,7 +334,7 @@ export function commitSessionEntryReplacementsInDatabase(
     const { sessionKey, owner } = input.ownerAssignment;
     if (
       !current.has(sessionKey) ||
-      !replaceSessionOwnerInTransaction(database, sessionKey, owner, postimages)
+      !replaceSessionOwnerInTransaction(database, sessionKey, owner, writtenPostimages)
     ) {
       throw new Error("Session owner assignment lost its creation target");
     }
@@ -323,17 +354,15 @@ export function commitSessionEntryReplacementsInDatabase(
             onArchived?.(sessionKey, previousEntry, currentEntry);
           },
           refreshCandidates,
-          postimages,
+          writtenPostimages,
         )
       : emptySessionEntryMaintenancePlan();
-  if (postimages) {
-    for (const sessionKey of current.keys()) {
-      const postimage = postimages.get(sessionKey);
-      if (postimage) {
-        current.set(sessionKey, postimage.entry);
-      } else {
-        current.delete(sessionKey);
-      }
+  for (const sessionKey of current.keys()) {
+    const postimage = writtenPostimages.get(sessionKey);
+    if (postimage) {
+      current.set(sessionKey, postimage.entry);
+    } else {
+      current.delete(sessionKey);
     }
   }
   return {
