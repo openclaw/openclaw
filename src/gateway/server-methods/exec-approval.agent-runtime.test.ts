@@ -369,6 +369,7 @@ describe("exec approval signed agent runtime", () => {
           commandText,
           cwd: "/tmp",
           agentId: "main",
+          sessionKey: null,
           policySnapshot: {
             security: "allowlist",
             ask: "always",

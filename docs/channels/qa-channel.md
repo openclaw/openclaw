@@ -1,5 +1,5 @@
 ---
-summary: "Synthetic Slack-class channel plugin for deterministic OpenClaw QA scenarios"
+summary: "Synthetic Slack-class channel plugin for repeatable OpenClaw QA scenarios"
 title: "QA channel"
 read_when:
   - You are wiring the synthetic QA transport into a local or CI test run
@@ -7,7 +7,7 @@ read_when:
   - You are iterating on end-to-end QA automation
 ---
 
-`qa-channel` is a repo-local synthetic message transport for automated OpenClaw QA (`extensions/qa-channel`, private package, excluded from packaged installs). It is not a production channel - it exists to exercise the same channel plugin boundary used by real transports while keeping state deterministic and fully inspectable.
+`qa-channel` is a repo-local synthetic message transport for automated OpenClaw QA (`extensions/qa-channel`, private package, excluded from packaged installs). It is not a production channel - it exists to exercise the same channel plugin boundary used by real transports while keeping state repeatable and fully inspectable.
 
 ## What it does
 
@@ -86,7 +86,7 @@ Host-side self-check (writes a Markdown report under `.artifacts/qa-e2e/`):
 pnpm qa:e2e
 ```
 
-This routes through `qa-lab`, starts the in-repo QA bus, boots the `qa-channel` runtime slice, and runs a deterministic self-check.
+This routes through `qa-lab`, starts the in-repo QA bus, boots the `qa-channel` runtime slice, and runs a repeatable self-check.
 
 Full repo-backed scenario suite:
 
@@ -141,7 +141,7 @@ done
 ```
 
 The builder writes only the copied packages' `dist` directories. The manifest
-owner restores their source metadata after packing and includes the canonical
+owner restores their source metadata after packing and includes the
 QA Channel config schema. Dependency bundling is required for this portable
 fixture recipe: the profile alone does not install or bundle `typebox` and `zod`.
 Do not copy checkout `node_modules` links or overwrite another run's generated

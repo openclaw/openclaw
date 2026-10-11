@@ -21,7 +21,7 @@ export const SqliteDatabaseGenerationSlot = {
   unscopedWriteRevision: 7,
   writeScopeCount: 8,
 } as const;
-export const SQLITE_DATABASE_GENERATION_LENGTH = Object.keys(SqliteDatabaseGenerationSlot).length;
+const SQLITE_DATABASE_GENERATION_LENGTH = Object.keys(SqliteDatabaseGenerationSlot).length;
 
 export type AdmissionFact = {
   value: unknown;
