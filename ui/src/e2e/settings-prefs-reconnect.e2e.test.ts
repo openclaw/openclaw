@@ -133,7 +133,7 @@ async function expectThemeActive(page: Page, theme: "claw" | "knot" | "dash"): P
 }
 
 function themeModeOption(page: Page, mode: "system" | "light" | "dark") {
-  return page.locator(`wa-radio.settings-segmented__btn[value="${mode}"]`);
+  return page.locator(`input.settings-segmented__input[value="${mode}"]`);
 }
 
 suite.define(() => {
