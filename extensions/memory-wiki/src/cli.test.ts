@@ -229,6 +229,53 @@ describe("memory-wiki cli", () => {
     );
   });
 
+  it("rejects blank and invalid UTF-8 --body-file before wiping synthesis", async () => {
+    const { rootDir, config } = await createCliVault();
+
+    await runRegisteredWikiCommand(config, [
+      "apply",
+      "synthesis",
+      "Good",
+      "--body",
+      "Real summary v1",
+      "--source-id",
+      "src.manual",
+    ]);
+    const pagePath = path.join(rootDir, "syntheses", "good.md");
+    const before = await fs.readFile(pagePath, "utf8");
+    expect(before).toContain("Real summary v1");
+
+    const blankPath = path.join(rootDir, "blank-body.txt");
+    await fs.writeFile(blankPath, "  \n\n");
+    await expect(
+      runRegisteredWikiCommand(config, [
+        "apply",
+        "synthesis",
+        "Good",
+        "--source-id",
+        "src.manual",
+        "--body-file",
+        blankPath,
+      ]),
+    ).rejects.toThrow(/body-file is empty/);
+    expect(await fs.readFile(pagePath, "utf8")).toBe(before);
+
+    const latin1Path = path.join(rootDir, "latin1-body.txt");
+    await fs.writeFile(latin1Path, Buffer.from([0x43, 0x61, 0x66, 0xe9, 0x20, 0x73, 0x75, 0x6d]));
+    await expect(
+      runRegisteredWikiCommand(config, [
+        "apply",
+        "synthesis",
+        "Good",
+        "--source-id",
+        "src.manual",
+        "--body-file",
+        latin1Path,
+      ]),
+    ).rejects.toThrow(/must be valid UTF-8/);
+    expect(await fs.readFile(pagePath, "utf8")).toBe(before);
+  });
+
   it("keeps the parent --agent spelling compatible", async () => {
     const { rootDir, config } = await createCliVault({
       config: { vault: { scope: "agent" } },
