@@ -1180,7 +1180,6 @@ src/infra/windows-port-pids.ts
 src/infra/windows-private-directory.ts
 src/infra/windows-process-census.ts
 src/infra/windows-process-start.ts
-src/infra/worker-ancestry.ts
 src/infra/worker-cpu.ts
 src/infra/worker-diagnostic-script.ts
 src/infra/worker-idle-gc.ts
@@ -2004,6 +2003,7 @@ src/config/sessions/session-accessor.sqlite-identity.ts
 src/config/sessions/session-accessor.sqlite-worker-coordination.ts
 src/config/sessions/session-accessor.sqlite-worker-transport.ts
 src/config/sessions/session-actor-replica.ts
+src/config/sessions/activity-summary.ts
 src/config/sessions/session-actor.ts
 src/config/sessions/session-entry-cohort-scope.ts
 src/config/sessions/session-incognito-binding.ts
