@@ -296,11 +296,12 @@ function createAsyncKeyedStore<T>(
     },
     lookupMany: async (keys) => {
       const normalizedKeys = prepareLookupKeys(keys);
-      // SAFETY: Successful slots carry this namespace's caller-selected JSON value type.
-      return (await worker.lookupManyPluginStateInWorker({
+      const results = await worker.lookupManyPluginStateInWorker({
         ...scope,
         keys: normalizedKeys,
-      })) as Array<Result<T | undefined, PluginStateStoreError>>;
+      });
+      // SAFETY: Successful slots carry this namespace's caller-selected JSON value type.
+      return results as Array<Result<T | undefined, PluginStateStoreError>>;
     },
     consume: async (key) => {
       const normalizedKey = validateKey(key, "consume");
