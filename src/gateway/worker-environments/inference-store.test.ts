@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { types } from "node:util";
 import { deserialize } from "node:v8";
 import { MessagePort, Worker } from "node:worker_threads";
@@ -143,6 +144,13 @@ describe("worker inference SQLite store", async () => {
     vi.unstubAllEnvs();
   });
 
+  async function reopenStore(): Promise<WorkerInferenceStore> {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    return createWorkerInferenceStore({ path: database.path, now: () => nowMs });
+  }
+
   function terminalRunIds(): string[] {
     const rows = database.db
       .prepare("SELECT run_id FROM worker_inference_turns WHERE state = 'terminal' ORDER BY run_id")
@@ -164,6 +172,38 @@ describe("worker inference SQLite store", async () => {
     return input;
   }
 
+  async function expectReplayWithoutExecution(managerStore: WorkerInferenceStore) {
+    const execute = vi.fn<WorkerInferenceExecutor>(async () => PROVIDER_ERROR);
+    const manager = createWorkerInferenceManager({
+      execute,
+      store: managerStore,
+    });
+    const { frames, sink } = createSink();
+    const result = await manager.start({
+      identity: IDENTITY,
+      sessionTarget: {
+        agentId: "main",
+        sessionId: REQUEST.sessionId,
+        sessionKey: "agent:main:inference-store",
+        storePath: path.join(root, "sessions.sqlite"),
+      },
+      request: REQUEST,
+      sink,
+    });
+    if (!result.ok) {
+      throw new Error(`start failed: ${result.reason}`);
+    }
+    expect(result.result).toEqual({ status: "replayed" });
+    result.launch();
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({
+      event: "worker.inference.terminal",
+      payload: { outcome: PROVIDER_ERROR },
+    });
+    expect(execute).not.toHaveBeenCalled();
+    return manager;
+  }
+
   it("retains process ownership checks when the captured environment permits writes", async () => {
     const options = {
       path: database.path,
@@ -174,6 +214,33 @@ describe("worker inference SQLite store", async () => {
     await expect(
       createWorkerInferenceStore(options).recoverPending(PROVIDER_ERROR),
     ).rejects.toThrow("is externally supervised by inference-owner");
+  });
+
+  it("rejects a terminal identity with a different request hash as a conflict", async () => {
+    expect(await store.begin(BASE_INPUT)).toEqual({ kind: "claimed" });
+    await store.complete({ ...BASE_INPUT, outcome: PROVIDER_ERROR });
+
+    expect(await store.begin({ ...BASE_INPUT, requestHash: "b".repeat(64) })).toEqual({
+      kind: "rejected",
+      reason: "conflict",
+    });
+  });
+
+  it("replays a cached terminal outcome without executing the provider again", async () => {
+    expect(await store.begin(BASE_INPUT)).toEqual({ kind: "claimed" });
+    await store.complete({ ...BASE_INPUT, outcome: PROVIDER_ERROR });
+
+    const manager = await expectReplayWithoutExecution(await reopenStore());
+    await manager.stop();
+  });
+
+  it("recovers a crashed pending turn as provider-error without executing the provider", async () => {
+    expect(await store.begin(BASE_INPUT)).toEqual({ kind: "claimed" });
+    const reopened = await reopenStore();
+    expect(await reopened.begin(BASE_INPUT)).toEqual({ kind: "recover" });
+
+    const manager = await expectReplayWithoutExecution(reopened);
+    await manager.stop();
   });
 
   it.each(["known-refusal", "lost-refusal-reply"] as const)(
@@ -611,6 +678,83 @@ describe("worker inference SQLite store", async () => {
     },
   );
 
+  it("rejects another pending turn for the same session epoch and run", async () => {
+    expect(await store.begin(BASE_INPUT)).toEqual({ kind: "claimed" });
+
+    expect(
+      await store.begin({
+        ...BASE_INPUT,
+        turnId: "turn-conflict",
+        requestHash: "b".repeat(64),
+      }),
+    ).toEqual({ kind: "rejected", reason: "conflict" });
+  });
+
+  it.each([
+    {
+      limit: "older than maxAge",
+      elapsedMs: 1_000,
+      retention: { maxAgeMs: 500, maxRows: 10, maxBytes: 1_000_000 },
+    },
+    {
+      limit: "beyond maxRows",
+      elapsedMs: 1,
+      retention: { maxAgeMs: 10_000, maxRows: 1, maxBytes: 1_000_000 },
+    },
+  ])("prunes terminal turns $limit", async ({ elapsedMs, retention }) => {
+    await completeTurn("run-first");
+    nowMs += elapsedMs;
+    store = createWorkerInferenceStore({
+      path: database.path,
+      now: () => nowMs,
+      retention,
+    });
+
+    await completeTurn("run-second");
+    expect(terminalRunIds()).toEqual(["run-second"]);
+  });
+
+  it.each(["UTF-8", "UTF-16le", "UTF-16be"])(
+    "prunes %s terminal turns by UTF-8 maxBytes and retains exact replay",
+    async (encoding) => {
+      if (encoding !== "UTF-8") {
+        await closeOpenClawStateDatabaseAsync();
+        closeOpenClawStateDatabaseForTest();
+        const databasePath = path.join(root, "encoded.sqlite");
+        const seed = new DatabaseSync(databasePath);
+        seed.exec(
+          `PRAGMA encoding = '${encoding}'; CREATE TABLE encoding_seed (id INTEGER); DROP TABLE encoding_seed;`,
+        );
+        seed.close();
+        database = openOpenClawStateDatabase({ path: databasePath });
+        await initializeStore();
+      }
+      expect(database.db.prepare("PRAGMA encoding").get()?.encoding).toBe(encoding);
+      const outcome: WorkerInferenceTerminalOutcome = {
+        ...PROVIDER_ERROR,
+        message: "問題🦞".repeat(64),
+      };
+      await completeTurn("run-first", outcome);
+      nowMs += 1;
+      const maxBytes = Buffer.byteLength(JSON.stringify(outcome), "utf8") * 2;
+      store = createWorkerInferenceStore({
+        path: database.path,
+        now: () => nowMs,
+        retention: { maxAgeMs: 10_000, maxRows: 10, maxBytes },
+      });
+
+      const second = await completeTurn("run-second", outcome);
+      expect(terminalRunIds()).toEqual(["run-first", "run-second"]);
+      store = createWorkerInferenceStore({
+        path: database.path,
+        now: () => nowMs,
+        retention: { maxAgeMs: 10_000, maxRows: 10, maxBytes: maxBytes - 1 },
+      });
+      expect(await store.begin(second)).toEqual({ kind: "replay", outcome });
+      expect(terminalRunIds()).toEqual(["run-second"]);
+    },
+  );
+
   it("prunes retention without hydrating cached terminal payloads", async () => {
     const outcome = { ...PROVIDER_ERROR, message: "🦞".repeat(128) };
     await completeTurn("run-first", outcome);
@@ -627,5 +771,16 @@ describe("worker inference SQLite store", async () => {
       counter.restore();
     }
     expect(terminalRunIds()).toEqual(["run-first", "run-second"]);
+  });
+
+  it("preserves the active identity while pruning after completion", async () => {
+    store = createWorkerInferenceStore({
+      path: database.path,
+      now: () => nowMs,
+      retention: { maxAgeMs: 0, maxRows: 0, maxBytes: 0 },
+    });
+
+    await completeTurn("run-active");
+    expect(terminalRunIds()).toEqual(["run-active"]);
   });
 });
