@@ -169,7 +169,7 @@ export type RunPluginUpdateCommandParams = {
   };
 };
 
-/** Run plugin/hook-pack updates, persist changed install records, and refresh runtime registry. */
+/** Run offline plugin/hook-pack updates and persist state for the next Gateway start. */
 export async function runPluginUpdateCommand(params: RunPluginUpdateCommandParams) {
   if (params.opts.all && params.ids.length > 0) {
     defaultRuntime.error("Use either plugin or hook-pack ids or --all, not both.");
@@ -558,7 +558,7 @@ async function runPluginUpdateCommandUnlocked(
         ...sourceSnapshot?.writeOptions,
         afterWrite: {
           mode: "none" as const,
-          reason: "plugin update applies runtime after releasing its lease",
+          reason: "plugin update owns registry refresh",
         },
       };
       const { preparePluginUpdateConfigMigration } =
