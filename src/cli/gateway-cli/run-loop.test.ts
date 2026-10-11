@@ -1121,7 +1121,13 @@ describe("runGatewayLoop", () => {
         .mockResolvedValueOnce({
           release: lockRelease,
         })
-        .mockRejectedValueOnce(new Error("lock timeout"));
+        .mockRejectedValueOnce(
+          new Error("failed to acquire gateway state ownership", {
+            cause: new Error("owner lease inspection failed", {
+              cause: new Error("fixture native read failed"),
+            }),
+          }),
+        );
 
       restartGatewayProcessWithFreshPid.mockReturnValueOnce({
         mode: "disabled",
@@ -1135,7 +1141,7 @@ describe("runGatewayLoop", () => {
       expect(acquireGatewayLock).toHaveBeenCalledTimes(2);
       expect(start).toHaveBeenCalledTimes(1);
       expect(gatewayLog.error).toHaveBeenCalledWith(
-        "failed to reacquire gateway lock for in-process restart: Error: lock timeout",
+        "failed to reacquire gateway lock for in-process restart: failed to acquire gateway state ownership | owner lease inspection failed | fixture native read failed",
       );
     });
   });

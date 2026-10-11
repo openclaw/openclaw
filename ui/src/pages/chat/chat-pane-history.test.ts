@@ -7,6 +7,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import "./chat-pane.ts";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
@@ -71,7 +72,7 @@ describe("chat pane native history pagination", () => {
       state.sessionKey = "agent:main:mention-hydration";
       state.chatRunId = "active-run";
       const send = vi.spyOn(state, "handleSendChat").mockResolvedValue(undefined);
-      const container = document.createElement("div");
+      const container = createComposerContainer();
       document.body.append(container);
       const renderCurrent = () => {
         pane.render();

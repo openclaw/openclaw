@@ -97,6 +97,10 @@ does not retract text already shown in a live surface or channel preview. With
 block streaming on, durable blocks follow the configured chunking and flush
 boundaries.
 
+If a successfully settled tool batch intentionally ends the turn, any unphased
+narration remains the reply. OpenClaw does not replace that narration with a
+missing-answer error or require another model response.
+
 Explicit provider phases still apply: OpenAI Responses `phase` and Harmony
 commentary/final channels distinguish narration from final answers. Reasoning
 visibility settings and private-tag filtering also continue to apply; preserving

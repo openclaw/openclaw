@@ -203,7 +203,9 @@ that owner and `cron_job_runtime_authorities`
 (`src/state/openclaw-state-schema.sql:1490`). No permission redesign or table drop
 is proposed.
 
-## Existing data and three landable PRs
+<a id="existing-data-and-three-landable-prs"></a>
+
+## Existing data and staged PRs
 
 Never rewrite existing receipt IDs or history joins. Use one canonical row codec;
 the new timed-key tag is only an encoding discriminator, never authority. Queued
@@ -229,10 +231,15 @@ are intentional accepted changes; all other observable contracts above stay gree
    an unrelated state writer and the update handoff must still complete. Exercise
    real mutation entry points, not a helper-only mock; trace all cron admission
    calls to prove none remain inside transactions.
-2. **Cut scheduling and launch over together.** Start the worker actor, retire host
-   timers/reservations, use idempotent request rows, and wire timer/manual/event
-   sources to the single launcher. Remove receipt custody/revocation consumers in
-   the same cutover. Proof: duplicate slot, capacity queue, disable/edit, manual
+2. **Remove receipt custody, then cut scheduling and launch over together.** Split
+   this step into two bounded PRs. **2a** removes receipt custody and its consumers
+   while the host remains the sole scheduler. Gateway, task, tool, permission,
+   and approval-row owners keep their existing checks; a revocation may race an
+   already-checked launch. Receipt storage, scheduling, and result recovery stay
+   in place. **2b** starts the worker actor, retires host
+   timers/reservations, uses idempotent request rows, and wires timer/manual/event
+   sources to the single launcher using the custody-free interfaces from 2a.
+   Proof: duplicate slot, capacity queue, disable/edit, manual
    force, consumed exit event, stream batch, catch-up, retry and clock-jump flows;
    crash at request/active boundaries and recover a copied old-format database.
 3. **Collapse result/recovery plumbing and finish deletion.** One terminal-result

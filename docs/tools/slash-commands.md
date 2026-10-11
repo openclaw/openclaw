@@ -25,8 +25,9 @@ command handling is enabled for the surface.
   </Card>
   <Card title="Directives" icon="sliders">
     `/think`, `/fast`, `/verbose`, `/trace`, `/reasoning`, `/elevated`,
-    `/exec`, `/model`, `/queue` — stripped from the message before the model
-    sees it. Most persist session settings when sent alone. `/exec` security
+    `/exec`, `/model`, `/queue` — interpreted before the model processes a
+    message. Most persist session settings when sent alone. The command and
+    delivered acknowledgement remain in conversation history. `/exec` security
     and approval options apply only to their message.
   </Card>
   <Card title="Inline shortcuts" icon="bolt">
@@ -37,14 +38,16 @@ command handling is enabled for the surface.
 
 <AccordionGroup>
   <Accordion title="Directive behavior details">
-    - Directives are stripped from the message before the model sees it.
+    - Inline directives are stripped from the task text before the model processes it.
       Removal leaves the remaining text's spacing and line endings intact,
       including code indentation. Only the recognized directive, its arguments,
       and an adjacent separator (or its own line ending when alone on a line)
       are removed. Text with no recognized directive is unchanged.
       Added prompt context is not scanned for text commands or stripped as directives.
     - In **directive-only** messages (the message is only directives), they
-      persist to the session and reply with an acknowledgement.
+      persist to the session and reply with an acknowledgement. Both the literal
+      command and its delivered acknowledgement are retained as user/assistant
+      messages for later turns.
       `/exec security=... ask=...` is the exception: these options apply only
       to the current message and never change later turns. Include them with
       the task. Use [session permission modes](/gateway/permission-modes) for
@@ -60,6 +63,18 @@ command handling is enabled for the surface.
       senders see directives treated as plain text.
   </Accordion>
 </AccordionGroup>
+
+Command replies delivered through the shared dispatcher are part of the conversation
+on every channel. Native command menus and button selections on Discord and
+Telegram, and Slack argument menus, are also retained after delivery.
+These exchanges appear in session history and later model context.
+Login codes, pairing codes,
+login URLs, and sensitive `/config set` or `/debug set` values are redacted in the
+recorded copy; delivered instructions and command execution are unchanged.
+`/new` and `/reset` record their command and confirmation in the new session,
+without changing the old transcript. `/stop` records the command with its abort
+notice. `/btw` and `/side` remain ephemeral; ordinary message edits and deletions
+do not rewrite transcript history.
 
 <a id="config" />
 

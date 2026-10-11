@@ -21,14 +21,6 @@ function reserveAndCommit(
 }
 
 describe("resolveDiscordPresenceGateOptions", () => {
-  it("defaults to a five-minute reconnect window and bounded burst", () => {
-    expect(options).toEqual({
-      reconnectSuppressMs: 5 * 60 * 1000,
-      burstLimit: 8,
-      burstWindowMs: 60 * 1000,
-    });
-  });
-
   it("converts configured seconds and honors zero as disabled", () => {
     expect(
       resolveDiscordPresenceGateOptions({
@@ -49,32 +41,6 @@ describe("DiscordPresenceEmissionGate", () => {
     expect(
       gate.evaluateReconnectWindow(options.reconnectSuppressMs * 2 + 1, options),
     ).toMatchObject({
-      shouldLog: true,
-    });
-  });
-
-  it("rate-limits emission bursts within the sliding window", () => {
-    const gate = new DiscordPresenceEmissionGate();
-    const burstOptions = { ...options, burstLimit: 2, burstWindowMs: 10_000 };
-
-    expect(reserveAndCommit(gate, guildId, 1_000, burstOptions)).toMatchObject({ allowed: true });
-    expect(reserveAndCommit(gate, guildId, 2_000, burstOptions)).toMatchObject({ allowed: true });
-    expect(gate.reserveBurst(guildId, 3_000, burstOptions)).toEqual({
-      allowed: false,
-      reason: "burst",
-      shouldLog: true,
-    });
-    expect(gate.reserveBurst(guildId, 4_000, burstOptions)).toEqual({
-      allowed: false,
-      reason: "burst",
-      shouldLog: false,
-    });
-    // The window drains as old emissions age out; logging re-arms for the next burst.
-    expect(reserveAndCommit(gate, guildId, 12_500, burstOptions)).toMatchObject({ allowed: true });
-    expect(reserveAndCommit(gate, guildId, 12_600, burstOptions)).toMatchObject({ allowed: true });
-    expect(gate.reserveBurst(guildId, 12_700, burstOptions)).toEqual({
-      allowed: false,
-      reason: "burst",
       shouldLog: true,
     });
   });

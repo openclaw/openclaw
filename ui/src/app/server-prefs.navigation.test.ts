@@ -12,7 +12,6 @@ import { applyServerUiPrefs, refreshProfileAppearancePrefs } from "./server-pref
 import {
   createServerPrefsWriter,
   createProfilePrefsServer as server,
-  pinnedPage,
 } from "./server-prefs.test-support.ts";
 import { flushServerUiPrefs, pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
 import { loadSettings, patchSettings, settingsKeyForGateway } from "./settings.ts";
@@ -20,7 +19,6 @@ import { invalidateUserPreferences } from "./user-prefs-cache.ts";
 
 const scope = "ws://navigation";
 const pinsKey = "ui.sidebarEntries";
-const scopeKey = "ui.navigationScope";
 const config = { ui: { prefs: { sidebarEntries: ["route:usage", "plugin:workboard/workboard"] } } };
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
@@ -127,7 +125,7 @@ describe("personal navigation preference boundary", () => {
     },
   );
 
-  it.each(["storage", "same-tab", "storage-before-scope-edit", "same-tab-independent"])(
+  it.each(["storage", "same-tab", "same-tab-independent"])(
     "advances only the locally composed successor base across an older ack (%s)",
     async (replacement) => {
       const backend = server({ a: { [pinsKey]: ["route:usage"] } });
@@ -167,19 +165,14 @@ describe("personal navigation preference boundary", () => {
         sidebarEntriesBase:
           replacement !== "same-tab" ? first.sidebarEntriesBase : first.sidebarEntries,
       };
-      if (replacement === "storage" || replacement === "storage-before-scope-edit") {
+      if (replacement === "storage") {
         localStorage.setItem(pendingKey, JSON.stringify(newer));
-        if (replacement === "storage-before-scope-edit") {
-          pushServerUiPrefs(a.writer, { navigationScope: "all" }, hooks);
-        }
       } else {
         pushServerUiPrefs(a.writer, newer, hooks);
       }
       firstAck.resolve({ status: "ok" });
       await vi.dynamicImportSettled();
-      expect(pendingAtFirstAck).toEqual(
-        replacement === "storage-before-scope-edit" ? { ...newer, navigationScope: "all" } : newer,
-      );
+      expect(pendingAtFirstAck).toEqual(newer);
       expect(backend.profiles.a?.[pinsKey]).toEqual(
         replacement !== "same-tab"
           ? ["route:usage", "route:plugins", "route:cron"]
@@ -191,8 +184,8 @@ describe("personal navigation preference boundary", () => {
 
   it("publishes default navigation when replacing a customized profile", async () => {
     const backend = server({
-      a: { [pinsKey]: ["route:usage"], [scopeKey]: "all" },
-      b: { [pinsKey]: [...DEFAULT_SIDEBAR_ENTRIES], [scopeKey]: "mine" },
+      a: { [pinsKey]: ["route:usage"] },
+      b: { [pinsKey]: [...DEFAULT_SIDEBAR_ENTRIES] },
     });
     let published = loadSettings();
     const onApplied = vi.fn(() => {
@@ -209,8 +202,8 @@ describe("personal navigation preference boundary", () => {
       });
       expect(published).toMatchObject(
         profileId === "a"
-          ? { sidebarEntries: ["route:usage"], navigationScope: "all" }
-          : { sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES], navigationScope: "mine" },
+          ? { sidebarEntries: ["route:usage"] }
+          : { sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES] },
       );
     }
     expect(onApplied).toHaveBeenCalledTimes(2);
@@ -245,212 +238,6 @@ describe("personal navigation preference boundary", () => {
     expect(a.request.mock.calls.filter(([method]) => method === "users.prefs.set")).toEqual([]);
     expect(backend.profiles.a?.[pinsKey]).toEqual(["route:usage"]);
     expect(afterCommit).not.toHaveBeenCalled();
-  });
-
-  it.each([false, true])(
-    "imports every authorized legacy pin page without changing the existing order (standalone=%s)",
-    async (standalone) => {
-      const backend = server();
-      const a = backend.connect("a");
-      const original = a.request.getMockImplementation()!;
-      a.request.mockImplementation(async (method, params) => {
-        if (method === "sessions.list") {
-          const { offset } = params as { offset: number };
-          return offset === 0
-            ? pinnedPage(["agent:main:a", "agent:main:b"], 0, 3)
-            : pinnedPage(["agent:other:c"], 2, 3);
-        }
-        return original(method, params);
-      });
-      const ordered = ["route:usage", "session:agent:main:b"];
-      const options = {
-        configObject: standalone ? {} : { ui: { prefs: { sidebarEntries: ordered } } },
-        canMigrate: true,
-        isCurrent: () => true,
-      };
-      await readProfileAppearancePrefs(a.writer.state.client!, "a", options);
-      const expected = standalone
-        ? [
-            ...DEFAULT_SIDEBAR_ENTRIES,
-            "session:agent:main:a",
-            "session:agent:main:b",
-            "session:agent:other:c",
-          ]
-        : [...ordered, "session:agent:main:a", "session:agent:other:c"];
-      expect(backend.profiles.a?.[pinsKey]).toEqual(expected);
-      const pages = a.request.mock.calls.filter(([method]) => method === "sessions.list");
-      expect(pages.map(([, params]) => params)).toEqual(
-        [0, 2].map((offset) => ({
-          source: "sidebar",
-          rowMode: "compact",
-          pinned: true,
-          archived: "all",
-          includeGlobal: true,
-          includeUnknown: true,
-          limit: 200,
-          offset,
-        })),
-      );
-      await writeProfileAppearancePrefs(
-        a.writer.state.client,
-        { sidebarEntries: [], sidebarEntriesBase: expected },
-        true,
-        "a",
-      );
-      await readProfileAppearancePrefs(a.writer.state.client!, "a", options);
-      expect(backend.profiles.a?.[pinsKey]).toEqual([]);
-      expect(a.request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(2);
-    },
-  );
-
-  it.each([
-    "missing-coverage",
-    "page-error",
-    "truncated-final",
-    "nonadvancing",
-    "changed-total",
-    "duplicate",
-  ])("does not seed navigation from %s legacy inventory", async (failure) => {
-    const a = server().connect("a");
-    const original = a.request.getMockImplementation()!;
-    a.request.mockImplementation(async (method, params) => {
-      if (method === "sessions.list") {
-        const { offset } = params as { offset: number };
-        if (failure === "missing-coverage") {
-          return { count: 0, sessions: [] };
-        }
-        if (offset === 0) {
-          return {
-            ...pinnedPage(["agent:main:a"], 0, 2),
-            ...(failure === "nonadvancing" ? { nextOffset: 0 } : {}),
-          };
-        }
-        if (failure === "page-error") {
-          throw new Error("inventory read failed");
-        }
-        if (failure === "truncated-final") {
-          return { ...pinnedPage([], 1, 2), hasMore: false, nextOffset: null };
-        }
-        return pinnedPage(
-          [failure === "duplicate" ? "agent:main:a" : "agent:main:b"],
-          1,
-          failure === "changed-total" ? 3 : 2,
-        );
-      }
-      return original(method, params);
-    });
-    const reportError = vi.fn();
-    await expect(
-      readProfileAppearancePrefs(a.writer.state.client!, "a", {
-        configObject: config,
-        canMigrate: true,
-        isCurrent: () => true,
-        onSidebarEntriesUnavailable: reportError,
-      }),
-    ).resolves.toEqual({});
-    expect(reportError).toHaveBeenCalledOnce();
-    expect(a.request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(0);
-  });
-
-  it.each(["identity", "permission"])(
-    "rechecks %s after awaited pin inventory before migration save",
-    async (revoked) => {
-      const a = server().connect("a");
-      const original = a.request.getMockImplementation()!;
-      const inventory = createDeferred<unknown>();
-      const requested = createDeferred();
-      a.request.mockImplementation(async (method, params) => {
-        if (method === "sessions.list") {
-          requested.resolve();
-          return inventory.promise;
-        }
-        return original(method, params);
-      });
-      let current = true;
-      let writable = true;
-      const pending = readProfileAppearancePrefs(a.writer.state.client!, "a", {
-        configObject: config,
-        canMigrate: () => writable,
-        isCurrent: () => current,
-      });
-      await requested.promise;
-      if (revoked === "identity") {
-        current = false;
-      } else {
-        writable = false;
-      }
-      inventory.resolve(pinnedPage(["agent:main:a"]));
-      expect(await pending).toEqual(revoked === "identity" ? null : {});
-      expect(a.request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(
-        0,
-      );
-    },
-  );
-
-  it("does not inventory or migrate for a read-only profile", async () => {
-    const a = server().connect("a");
-    await readProfileAppearancePrefs(a.writer.state.client!, "a", {
-      configObject: config,
-      canMigrate: () => false,
-      isCurrent: () => true,
-    });
-    expect(a.request.mock.calls.map(([method]) => method)).toEqual(["users.prefs.get"]);
-  });
-
-  it("refuses an oversized complete legacy inventory rather than truncating favorites", async () => {
-    const a = server().connect("a");
-    const original = a.request.getMockImplementation()!;
-    a.request.mockImplementation(async (method, params) =>
-      method === "sessions.list"
-        ? pinnedPage(
-            Array.from({ length: 50 }, (_, index) => "agent:main:" + index + "x".repeat(100)),
-          )
-        : original(method, params),
-    );
-    const reportError = vi.fn();
-    await expect(
-      readProfileAppearancePrefs(a.writer.state.client!, "a", {
-        configObject: config,
-        canMigrate: true,
-        isCurrent: () => true,
-        onSidebarEntriesUnavailable: reportError,
-      }),
-    ).resolves.toEqual({});
-    expect(reportError).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ message: expect.stringContaining("size limit") }),
-    );
-    expect(a.request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(0);
-  });
-
-  it("imports legacy shared pins even when the config has no session reference", async () => {
-    let entries: Record<string, unknown> = {};
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "users.prefs.get") {
-        return { status: "ok", entries: structuredClone(entries) };
-      }
-      if (method === "sessions.list") {
-        return {
-          count: 1,
-          totalCount: 1,
-          hasMore: false,
-          nextOffset: null,
-          sessions: [{ key: "agent:main:favorite", pinned: true }],
-        };
-      }
-      const update = params as { entries: Record<string, unknown> };
-      entries = update.entries;
-      return { status: "ok" };
-    });
-    const writer = createServerPrefsWriter(request, scope);
-    await readProfileAppearancePrefs(writer.state.client!, "a", {
-      configObject: config,
-      canMigrate: true,
-      isCurrent: () => true,
-    });
-    expect(entries[pinsKey]).toEqual([
-      ...config.ui.prefs.sidebarEntries,
-      "session:agent:main:favorite",
-    ]);
   });
 
   it.each([
@@ -502,7 +289,7 @@ describe("personal navigation preference boundary", () => {
   it("rebases a first edit against the displayed defaults when the profile key is absent", async () => {
     const backend = server();
     const a = backend.connect("a");
-    const desired = DEFAULT_SIDEBAR_ENTRIES.filter((entry) => entry !== "route:cron");
+    const desired = ["session:agent:main:added"];
     expect(
       await writeProfileAppearancePrefs(
         a.writer.state.client,
@@ -691,7 +478,7 @@ describe("personal navigation preference boundary", () => {
   });
 
   it("ignores another profile's shared browser mirror even before its storage event", async () => {
-    const a = server({ a: { [pinsKey]: ["route:usage"], [scopeKey]: "all" } }).connect("a");
+    const a = server({ a: { [pinsKey]: ["route:usage"] } }).connect("a");
     await a.refresh();
     const key = settingsKeyForGateway(scope);
     const stored = JSON.parse(localStorage.getItem(key)!);
@@ -700,19 +487,16 @@ describe("personal navigation preference boundary", () => {
       JSON.stringify({
         ...stored,
         sidebarEntries: ["session:private-b"],
-        navigationScope: "mine",
         navWidth: 360,
       }),
     );
     expect(loadSettings()).toMatchObject({
       sidebarEntries: ["route:usage"],
-      navigationScope: "all",
       navWidth: 360,
     });
     patchSettings({ sidebarEntries: ["route:cron"] });
     expect(loadSettings()).toMatchObject({
       sidebarEntries: ["route:cron"],
-      navigationScope: "all",
     });
   });
 
@@ -721,12 +505,11 @@ describe("personal navigation preference boundary", () => {
     await a.refresh();
     localStorage.setItem(
       "openclaw.control.serverPrefs.pending.v1:" + scope + ":profile:b",
-      JSON.stringify({ sidebarEntries: ["route:cron"], navigationScope: "all" }),
+      JSON.stringify({ sidebarEntries: ["route:cron"] }),
     );
     applyServerUiPrefs(config, { scope, profileId: "b", onApplied: vi.fn() });
     expect(loadSettings()).toMatchObject({
       sidebarEntries: ["route:cron"],
-      navigationScope: "all",
     });
     applyServerUiPrefs({ ...config }, { scope, profileId: "b", onApplied: vi.fn() });
     expect(loadSettings().sidebarEntries).toEqual(["route:cron"]);
@@ -755,18 +538,12 @@ describe("personal navigation preference boundary", () => {
     );
   });
 
-  it("does not seed migration or an explicit write after an incomplete first read", async () => {
+  it("does not write after an incomplete first read", async () => {
     const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(async () => ({
       status: "no_durable_identity",
     }));
     const writer = createServerPrefsWriter(request, scope);
-    expect(
-      await readProfileAppearancePrefs(writer.state.client!, "a", {
-        configObject: config,
-        canMigrate: true,
-        isCurrent: () => true,
-      }),
-    ).toBeNull();
+    expect(await readProfileAppearancePrefs(writer.state.client!, "a")).toBeNull();
     expect(
       await writeProfileAppearancePrefs(writer.state.client, { sidebarEntries: [] }, true, "a"),
     ).toMatchObject({ ok: false, reason: "unavailable" });
@@ -775,7 +552,7 @@ describe("personal navigation preference boundary", () => {
 
   it("isolates two profiles and synchronizes the same profile through fresh reads", async () => {
     const backend = server({
-      a: { [pinsKey]: ["route:usage"], [scopeKey]: "all" },
+      a: { [pinsKey]: ["route:usage"] },
       b: { [pinsKey]: [] },
     });
     const a = backend.connect("a");
@@ -784,16 +561,14 @@ describe("personal navigation preference boundary", () => {
     await a.refresh();
     expect(loadSettings()).toMatchObject({
       sidebarEntries: ["route:usage"],
-      navigationScope: "all",
     });
     await b.refresh();
-    expect(loadSettings()).toMatchObject({ sidebarEntries: [], navigationScope: "mine" });
+    expect(loadSettings()).toMatchObject({ sidebarEntries: [] });
     const result = await writeProfileAppearancePrefs(
       a.writer.state.client,
       {
         sidebarEntries: ["route:cron"],
         sidebarEntriesBase: ["route:usage"],
-        navigationScope: "mine",
       },
       true,
       "a",
@@ -802,80 +577,25 @@ describe("personal navigation preference boundary", () => {
     await otherA.refresh();
     expect(loadSettings()).toMatchObject({
       sidebarEntries: ["route:cron"],
-      navigationScope: "mine",
     });
     expect(backend.profiles.b).toEqual({ [pinsKey]: [] });
   });
 
-  it("imports legacy order only once and never overwrites an existing empty list", async () => {
-    const backend = server({ b: { [pinsKey]: [] } });
-    const a = backend.connect("a");
-    const b = backend.connect("b");
-    patchSettings({ sidebarEntries: ["session:some-other-person"] });
-    await a.refresh();
-    await a.refresh();
-    await b.refresh();
-    expect(backend.profiles.a?.[pinsKey]).toEqual(config.ui.prefs.sidebarEntries);
-    expect(backend.profiles.b?.[pinsKey]).toEqual([]);
-    expect(a.request.mock.calls.filter(([method]) => method === "users.prefs.set")).toEqual([
-      [
-        "users.prefs.set",
-        {
-          entries: { [pinsKey]: config.ui.prefs.sidebarEntries },
-          expectedEntries: { [pinsKey]: null },
-        },
-      ],
-    ]);
-    expect(b.request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(0);
-  });
-
-  it("adopts a concurrent profile winner instead of overwriting during migration", async () => {
-    let entries: Record<string, unknown> = {};
-    const request = vi.fn(async (method: string) => {
-      if (method === "users.prefs.get") {
-        return { status: "ok", entries: structuredClone(entries) };
-      }
-      if (method === "sessions.list") {
-        return pinnedPage();
-      }
-      entries = { [pinsKey]: ["route:cron"] };
-      return { status: "conflict" };
-    });
-    const writer = createServerPrefsWriter(request, scope);
-    const prefs = await readProfileAppearancePrefs(writer.state.client!, "a", {
-      configObject: config,
-      canMigrate: true,
-      isCurrent: () => true,
-    });
-    expect(prefs?.sidebarEntries).toEqual(["route:cron"]);
-    expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1);
-  });
-
-  it("never imports the singleton browser mirror for a profile without legacy config", async () => {
-    patchSettings({ sidebarEntries: ["session:private-other-user"], navigationScope: "all" });
-    const connection = server().connect("b");
-    await refreshProfileAppearancePrefs({
-      client: connection.writer.state.client!,
-      profileId: "b",
-      configObject: {},
-      scope,
-      canWrite: true,
-      onApplied: vi.fn(),
-    });
-    expect(loadSettings()).toMatchObject({
-      sidebarEntries: DEFAULT_SIDEBAR_ENTRIES,
-      navigationScope: "mine",
-    });
-    expect(connection.request.mock.calls.map(([method]) => method)).toEqual([
-      "users.prefs.get",
-      "sessions.list",
-      "users.prefs.set",
-      "users.prefs.get",
-    ]);
-  });
+  it.each([undefined, [], ["route:cron", "session:agent:main:saved"]])(
+    "reads saved shortcuts unchanged without importing shared navigation (%j)",
+    async (saved) => {
+      patchSettings({ sidebarEntries: ["session:private-other-user"] });
+      const backend = server({ a: saved === undefined ? {} : { [pinsKey]: saved } });
+      const connection = backend.connect("a");
+      await connection.refresh();
+      expect(loadSettings().sidebarEntries).toEqual(saved ?? []);
+      expect(backend.profiles.a).toEqual(saved === undefined ? {} : { [pinsKey]: saved });
+      expect(connection.request.mock.calls.map(([method]) => method)).toEqual(["users.prefs.get"]);
+    },
+  );
 
   it("preserves its confirmed mirror when a profile read is incomplete without saving defaults", async () => {
-    const backend = server({ a: { [pinsKey]: ["route:usage"], [scopeKey]: "all" } });
+    const backend = server({ a: { [pinsKey]: ["route:usage"] } });
     const a = backend.connect("a");
     await a.refresh();
     a.request.mockResolvedValue({ status: "no_durable_identity" });
@@ -884,12 +604,11 @@ describe("personal navigation preference boundary", () => {
     applyServerUiPrefs({ ...config }, { scope, profileId: "a", onApplied: vi.fn() });
     expect(loadSettings()).toMatchObject({
       sidebarEntries: ["route:usage"],
-      navigationScope: "all",
     });
     expect(a.request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(0);
   });
 
-  it("fences a late profile read and migration after identity or connection replacement", async () => {
+  it("fences a late profile read after identity or connection replacement", async () => {
     const deferred = createDeferred<unknown>();
     const request = vi.fn(() => deferred.promise);
     const writer = createServerPrefsWriter(request, scope);
@@ -899,7 +618,6 @@ describe("personal navigation preference boundary", () => {
       profileId: "a",
       configObject: config,
       scope,
-      canWrite: true,
       isCurrent: () => current,
       onApplied: vi.fn(),
     });
@@ -914,7 +632,7 @@ describe("personal navigation preference boundary", () => {
     async (offline) => {
       const request = vi.fn(async () => ({}));
       const writer = createServerPrefsWriter(request, scope, !offline);
-      pushServerUiPrefs(writer, { sidebarEntries: [], navigationScope: "all" });
+      pushServerUiPrefs(writer, { sidebarEntries: [] });
       Object.assign(writer.state, { connected: true });
       flushServerUiPrefs(writer);
       await Promise.resolve();

@@ -6,10 +6,7 @@ import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
 import { getPreparedModelRuntimeBorrowedSnapshot } from "./prepared-model-runtime-generation-scope.js";
 import { capturePreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";
-import {
-  isPreparedModelRuntimeMissingOwnerError,
-  isPreparedModelRuntimePluginLifecycleFailure,
-} from "./prepared-model-runtime.errors.js";
+import { isPreparedModelRuntimeMissingOwnerError } from "./prepared-model-runtime.errors.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
@@ -19,7 +16,6 @@ import {
   publishModelRuntimeSnapshot,
   rebindInputToCommittedConfiguredOwner,
   resolveConfiguredOwner,
-  resolveConfiguredOwnerPublication,
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimeLease,
   type PreparedModelRuntimeOwner,
@@ -30,10 +26,7 @@ import {
   preparedPluginGenerationReusesBase,
   preparedPluginGenerationSupportsSelections,
 } from "./prepared-model-runtime.plugin-generation.js";
-import {
-  configuredPreparedPluginGenerations,
-  retainPreparedPluginGeneration,
-} from "./prepared-model-runtime.plugin-lifetime.js";
+import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import {
   retirePreparedModelRuntimeOwnerIfUnused,
   type PreparedModelRuntimeOwnerRetention,
@@ -102,322 +95,199 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       });
     }
   };
-  // Re-admission on a superseded configured generation moves the run to its replacement.
-  let admittedGeneration = options.pluginGeneration;
-  const deriveSelections = options.deriveRuntimePluginSelections;
-  // Caller choices belong to this invocation; only config-derived choices may change after a wait.
-  const requestedSelections = deriveSelections
-    ? structuredClone(rawInput.runtimePluginSelections ?? [])
-    : [];
+  assertAdmission();
+  let replacement = context.getPendingReplacement();
+  // Drain, retirement, and failed-activation recovery each own one gate; further churn is best effort.
+  for (let waits = 0; replacement && waits < 3; waits += 1) {
+    assertPreparedModelRuntimeAdmissionCanWait();
+    await racePromiseWithAbortSignal(replacement.promise, options.abortSignal);
+    assertAdmission();
+    replacement = context.getPendingReplacement();
+  }
+  if (replacement) {
+    throw new PreparedModelRuntimeOwnerNotPublishedError(
+      `prepared model runtime lease admission made no publication progress for ${rawInput.agentDir}; retry the request`,
+    );
+  }
+
   let input = normalizePreparedModelRuntimeInput({
     ...rawInput,
     preserveWorkspaceDirOnRefresh:
       rawInput.preserveWorkspaceDirOnRefresh ?? rawInput.workspaceDir !== undefined,
   });
-  let key = ownerKey(input);
-  let owner: PreparedModelRuntimeOwner;
-  let snapshot: PreparedModelRuntimeSnapshot;
-  const admission = createPreparedModelRuntimeAdmissionClaim(context);
-  let lastExternalPublication: Promise<unknown> | undefined;
-  let previousAttempt: readonly unknown[] | undefined;
-  let supersededPublication: PreparedModelRuntimePublicationSupersededError | undefined;
-  for (;;) {
-    admission.release();
-    assertAdmission();
-    // Replacement owns publication from synchronous staling through atomic generation commit.
-    // Dynamic work arriving inside that window must retry after the new owners become visible.
-    const replacement = context.getPendingReplacement();
-    const currentOwner = context.owners.get(key);
-    const configuredCatalog = resolveConfiguredOwner(context.owners, input)?.pluginGeneration
-      ?.remoteCatalog;
-    const attempt = [
-      key,
-      replacement,
-      currentOwner,
-      currentOwner?.generation,
-      currentOwner?.snapshot,
-      currentOwner?.pending,
-      currentOwner?.needsRefresh,
-      configuredCatalog,
-      lastExternalPublication,
-      admittedGeneration,
-    ];
-    if (previousAttempt?.every((value, index) => value === attempt[index])) {
-      // Failed dynamic owners can disappear. A newly accepted catalog is still progress;
-      // rebuilding without either identity changing would spin.
-      throw (
-        supersededPublication ??
-        new PreparedModelRuntimeOwnerNotPublishedError(
-          `prepared model runtime lease admission made no publication progress for ${input.agentDir}; retry the request`,
-        )
-      );
-    }
-    previousAttempt = attempt;
-    supersededPublication = undefined;
-    if (replacement) {
-      lastExternalPublication = replacement.promise;
-      assertPreparedModelRuntimeAdmissionCanWait();
-      await racePromiseWithAbortSignal(replacement.promise, options.abortSignal);
-      if (context.getPendingReplacement()) {
-        continue;
-      }
+  if (provenance === "run" && context.getGatewayLifecycleActive()) {
+    const configured = resolveConfiguredOwner(context.owners, input);
+    if (configured?.pending) {
+      assertPreparedModelRuntimeAdmissionCanWait(configured);
+      await racePromiseWithAbortSignal(configured.pending, options.abortSignal);
       assertAdmission();
     }
+  }
+  if (provenance === "run" && !options.pluginGeneration && context.getGatewayLifecycleActive()) {
+    try {
+      input = rebindInputToCommittedConfiguredOwner(context.owners, input);
+    } catch (error) {
+      if (!isPreparedModelRuntimeMissingOwnerError(error)) {
+        throw error;
+      }
+      const existing = context.owners.get(ownerKey(input));
+      const reservedSetup = input.agentId !== undefined && isReservedSystemAgentId(input.agentId);
+      if (!existing && !reservedSetup) {
+        throw error;
+      }
+    }
+  }
+
+  let pluginMetadataSnapshot = options.pluginMetadataSnapshot;
+  if (options.deriveRuntimePluginSelections) {
+    pluginMetadataSnapshot =
+      options.pluginGeneration?.pluginMetadataSnapshot ??
+      pluginMetadataSnapshot ??
+      resolvePluginMetadataSnapshot({
+        config: input.config,
+        env: input.env,
+        workspaceDir: input.workspaceDir,
+        allowWorkspaceScopedCurrent: true,
+      });
+    const metadataSnapshot = pluginMetadataSnapshot;
+    const deriveSelections = options.deriveRuntimePluginSelections;
+    input = withPluginMetadataSnapshotScope(
+      pluginMetadataSnapshot,
+      () =>
+        normalizePreparedModelRuntimeInput({
+          ...input,
+          runtimePluginSelections: [
+            ...(rawInput.runtimePluginSelections ?? []),
+            ...deriveSelections({ config: input.config, metadataSnapshot }),
+          ],
+        }),
+      { trustConfigIdentity: true },
+    );
+  }
+
+  const key = ownerKey(input);
+  const admission = createPreparedModelRuntimeAdmissionClaim(context);
+  try {
+    let owner = context.owners.get(key);
+    const configuredOwner = resolveConfiguredOwner(context.owners, input);
     if (
       provenance === "run" &&
-      !admittedGeneration &&
-      (replacement || context.getGatewayLifecycleActive())
+      context.getGatewayLifecycleActive() &&
+      options.pluginGeneration &&
+      configuredOwner &&
+      (configuredOwner.needsRefresh ||
+        configuredOwner.pluginGeneration !== options.pluginGeneration)
     ) {
-      try {
-        input = rebindInputToCommittedConfiguredOwner(context.owners, input);
-      } catch (error) {
-        if (replacement || !isPreparedModelRuntimeMissingOwnerError(error)) {
-          throw error;
-        }
-        const existing = context.owners.get(ownerKey(input));
-        const staleDynamicOwner =
-          existing?.needsRefresh &&
-          !existing.pending &&
-          (existing.provenance === "run" || existing.provenance === "ephemeral");
-        if (!existing || staleDynamicOwner) {
-          const canActivateConfiglessSetup =
-            input.agentId !== undefined && isReservedSystemAgentId(input.agentId);
-          const configuredOwner = resolveConfiguredOwnerPublication(context.owners, input);
-          if (configuredOwner.matches || !canActivateConfiglessSetup) {
-            if (configuredOwner.pending) {
-              assertPreparedModelRuntimeAdmissionCanWait(
-                resolveConfiguredOwner(context.owners, input),
-              );
-              lastExternalPublication = configuredOwner.pending;
-              await racePromiseWithAbortSignal(configuredOwner.pending, options.abortSignal);
-              continue;
-            }
-            throw error;
-          }
-          // Reserved setup may borrow the configless Gateway before its first owner exists.
-        }
+      const borrowed = getPreparedModelRuntimeBorrowedSnapshot(options.pluginGeneration);
+      if (
+        !configuredOwner.needsRefresh &&
+        borrowed &&
+        borrowed.metadataSnapshot === options.pluginGeneration.pluginMetadataSnapshot &&
+        preparedModelRuntimeConfigsMatch(borrowed.config, input.config) &&
+        borrowed.agentId === input.agentId &&
+        borrowed.agentDir === input.agentDir &&
+        borrowed.inheritedAuthDir === input.inheritedAuthDir &&
+        borrowed.workspaceDir === input.workspaceDir &&
+        (!input.allowGatewaySubagentBinding || borrowed.allowGatewaySubagentBinding) &&
+        !input.readOnly &&
+        !input.loadRuntimePlugins &&
+        !input.skipCredentials &&
+        !input.env &&
+        preparedPluginGenerationSupportsSelections(options.pluginGeneration, input)
+      ) {
+        // Nested work borrows its still-open parent; it cannot publish or widen that authority.
+        assertAdmission();
+        return {
+          snapshot: borrowed,
+          pluginGeneration: options.pluginGeneration,
+          [Symbol.asyncDispose]: retainPreparedPluginGeneration(options.pluginGeneration),
+        };
       }
-    }
-    // Recipes run after config admission. Never carry a derived owner into a later rebind.
-    let pluginMetadataSnapshot = options.pluginMetadataSnapshot;
-    if (deriveSelections) {
-      pluginMetadataSnapshot =
-        admittedGeneration?.pluginMetadataSnapshot ??
-        pluginMetadataSnapshot ??
-        resolvePluginMetadataSnapshot({
-          config: input.config,
-          env: input.env,
-          workspaceDir: input.workspaceDir,
-          allowWorkspaceScopedCurrent: true,
-        });
-      const metadataSnapshot = pluginMetadataSnapshot;
-      input = withPluginMetadataSnapshotScope(
-        metadataSnapshot,
-        () => {
-          const derived = deriveSelections({
-            config: input.config,
-            metadataSnapshot,
-          });
-          return normalizePreparedModelRuntimeInput({
-            ...input,
-            runtimePluginSelections: [...requestedSelections, ...derived],
-          });
-        },
-        { trustConfigIdentity: true },
+      throw new PreparedModelRuntimePublicationSupersededError(
+        `prepared model runtime plugin generation was superseded for ${input.agentDir}`,
       );
     }
-    key = ownerKey(input);
-    if (provenance === "run" && context.getGatewayLifecycleActive() && admittedGeneration) {
-      const configuredOwner = resolveConfiguredOwner(context.owners, input);
-      if (configuredOwner?.pending) {
-        assertPreparedModelRuntimeAdmissionCanWait(configuredOwner);
-        lastExternalPublication = configuredOwner.pending;
-        await racePromiseWithAbortSignal(
-          configuredOwner.pending.catch(() => undefined),
-          options.abortSignal,
-        );
-        continue;
-      }
-      if (
-        configuredOwner &&
-        (configuredOwner.needsRefresh || configuredOwner.pluginGeneration !== admittedGeneration)
-      ) {
-        const borrowed = getPreparedModelRuntimeBorrowedSnapshot(admittedGeneration);
-        if (
-          !configuredOwner.needsRefresh &&
-          borrowed &&
-          borrowed.metadataSnapshot === admittedGeneration.pluginMetadataSnapshot &&
-          preparedModelRuntimeConfigsMatch(borrowed.config, input.config) &&
-          borrowed.agentId === input.agentId &&
-          borrowed.agentDir === input.agentDir &&
-          borrowed.inheritedAuthDir === input.inheritedAuthDir &&
-          borrowed.workspaceDir === input.workspaceDir &&
-          (!input.allowGatewaySubagentBinding || borrowed.allowGatewaySubagentBinding) &&
-          !input.readOnly &&
-          !input.loadRuntimePlugins &&
-          !input.skipCredentials &&
-          !input.env
-        ) {
-          // A turn may finish under its still-open parent lease after reload. Its historic
-          // generation must never publish over the configured owner for newly admitted work.
-          if (preparedPluginGenerationSupportsSelections(admittedGeneration, input)) {
-            assertAdmission();
-            return {
-              snapshot: borrowed,
-              pluginGeneration: admittedGeneration,
-              [Symbol.asyncDispose]: retainPreparedPluginGeneration(admittedGeneration),
-            };
-          }
-          // Acquisition precedes run side effects. A run admitted on a superseded configured
-          // generation is admitted afresh on its replacement; nested parents stay confined.
-          if (
-            configuredOwner.pluginGeneration &&
-            configuredPreparedPluginGenerations.has(admittedGeneration)
-          ) {
-            admittedGeneration = configuredOwner.pluginGeneration;
-            continue;
-          }
-        }
-        throw new PreparedModelRuntimePublicationSupersededError(
-          `prepared model runtime plugin generation was superseded for ${input.agentDir}`,
-        );
-      }
-    }
+
     if (
       provenance === "run" &&
       context.getGatewayLifecycleActive() &&
       options.catalogMode === "static" &&
-      !admittedGeneration &&
+      !options.pluginGeneration &&
       !options.pluginMetadataSnapshot &&
       !input.readOnly &&
       !input.loadRuntimePlugins &&
-      !input.skipCredentials
+      !input.skipCredentials &&
+      configuredOwner?.snapshot &&
+      configuredOwner.pluginGeneration &&
+      !configuredOwner.pending &&
+      !configuredOwner.needsRefresh &&
+      !configuredOwner.refreshError &&
+      configuredOwner.snapshot.config === input.config &&
+      ownerKey({ ...configuredOwner.input, runtimePluginSelections: undefined }) ===
+        ownerKey({ ...input, runtimePluginSelections: undefined }) &&
+      preparedPluginGenerationSupportsSelections(configuredOwner.pluginGeneration, input)
     ) {
-      const configuredOwner = resolveConfiguredOwner(context.owners, input);
-      const configuredSnapshot = configuredOwner?.snapshot;
-      const generation = configuredOwner?.pluginGeneration;
-      if (
-        configuredOwner &&
-        configuredSnapshot &&
-        generation &&
-        !configuredOwner.pending &&
-        !configuredOwner.needsRefresh &&
-        !configuredOwner.refreshError &&
-        configuredSnapshot.isCurrent() &&
-        configuredSnapshot.config === input.config &&
-        ownerKey({ ...configuredOwner.input, runtimePluginSelections: undefined }) ===
-          ownerKey({ ...input, runtimePluginSelections: undefined }) &&
-        (!pluginMetadataSnapshot || pluginMetadataSnapshot === generation.pluginMetadataSnapshot) &&
-        preparedPluginGenerationSupportsSelections(generation, input)
-      ) {
-        // Covered selections share the configured generation; the lease retains it before yielding.
-        owner = configuredOwner;
-        snapshot = configuredSnapshot;
-        break;
-      }
+      owner = configuredOwner;
     }
-    const existing = context.owners.get(key);
-    const staleDynamicOwner =
-      existing?.needsRefresh &&
-      !existing.pending &&
-      (existing.provenance === "run" || existing.provenance === "ephemeral");
-    // A static owner cannot satisfy explicit live discovery; publish a new exact generation.
-    const ownerGenerationChanged =
-      (admittedGeneration !== undefined &&
+
+    const ownerGenerationChanged = () =>
+      (options.pluginGeneration !== undefined &&
         !preparedPluginGenerationReusesBase(
-          existing?.pending ? existing.pendingPluginGeneration : existing?.pluginGeneration,
-          admittedGeneration,
+          owner?.pending ? owner.pendingPluginGeneration : owner?.pluginGeneration,
+          options.pluginGeneration,
         )) ||
-      (options.catalogMode === "live" && existing?.catalogMode === "static");
-    if (existing?.pending && ownerGenerationChanged) {
-      assertPreparedModelRuntimeAdmissionCanWait(existing);
-      // Do not supersede active discovery. Wait for its owner to settle, then retry against
-      // the published identity so same-generation callers still coalesce.
-      lastExternalPublication = existing.pending;
-      await racePromiseWithAbortSignal(
-        existing.pending.catch(() => undefined),
-        options.abortSignal,
+      (options.catalogMode === "live" && owner?.catalogMode === "static");
+    if (owner?.pending) {
+      assertPreparedModelRuntimeAdmissionCanWait(owner);
+      admission.claim(key, owner);
+      await racePromiseWithAbortSignal(owner.pending, options.abortSignal);
+      assertAdmission();
+    }
+
+    let snapshot: PreparedModelRuntimeSnapshot;
+    const staleDynamicOwner =
+      owner?.needsRefresh && (owner.provenance === "run" || owner.provenance === "ephemeral");
+    if (!owner || staleDynamicOwner || ownerGenerationChanged()) {
+      const publication = publishModelRuntimeSnapshot(
+        input,
+        context.owners,
+        context.agentBuildCompletions,
+        context.getBuildTimeoutMs(),
+        undefined,
+        provenance,
+        options.catalogMode,
+        options.pluginGeneration,
+        pluginMetadataSnapshot,
       );
-      continue;
-    }
-    try {
-      if (existing?.pending && !ownerGenerationChanged) {
-        assertPreparedModelRuntimeAdmissionCanWait(existing);
-        // Matching callers lease the immutable generation they joined even if a queued
-        // mismatched caller publishes the next owner immediately after this one settles.
-        admission.claim(key, existing);
-        lastExternalPublication = existing.pending;
-        snapshot = await racePromiseWithAbortSignal(existing.pending, options.abortSignal);
-        if (existing.snapshot !== snapshot || existing.needsRefresh) {
-          continue;
-        }
-        owner = existing;
-        break;
-      }
-      if (existing && !staleDynamicOwner && !ownerGenerationChanged) {
-        if (existing.needsRefresh) {
-          throw existing.refreshError ?? new Error("prepared model runtime refresh is pending");
-        }
-        if (
-          !existing.snapshot ||
-          (input.readOnly && !preparedModelRuntimeConfigsMatch(existing.input.config, input.config))
-        ) {
-          throw new PreparedModelRuntimeOwnerNotPublishedError(
-            `prepared model runtime owner was not published for ${input.agentDir}`,
-          );
-        }
-        // The exact keyed owner already carries the prepared selection and snapshot.
-        snapshot = existing.snapshot;
-      } else {
-        // Fresh keys publish a first generation; stale dynamic owners publish a distinct
-        // replacement owner because existing leases retain their immutable snapshot, so
-        // their release cannot delete the generation admitted for new work at this key.
-        const publication = publishModelRuntimeSnapshot(
-          input,
-          context.owners,
-          context.agentBuildCompletions,
-          context.getBuildTimeoutMs(),
-          undefined,
-          provenance,
-          options.catalogMode,
-          admittedGeneration,
-          pluginMetadataSnapshot,
+      owner = context.owners.get(key);
+      if (!owner) {
+        throw new PreparedModelRuntimeOwnerNotPublishedError(
+          `prepared model runtime owner was not published for ${input.agentDir}`,
         );
-        // Publication installs its exact owner synchronously before exposing the pending promise.
-        const publishingOwner = context.owners.get(key);
-        if (publishingOwner) {
-          admission.claim(key, publishingOwner);
-        }
-        snapshot = await racePromiseWithAbortSignal(publication, options.abortSignal);
       }
-    } catch (error) {
-      admission.release();
-      if (error instanceof PreparedModelRuntimePublicationSupersededError) {
-        supersededPublication = error;
-        continue;
+      admission.claim(key, owner);
+      snapshot = await racePromiseWithAbortSignal(publication, options.abortSignal);
+    } else {
+      if (owner.needsRefresh) {
+        throw owner.refreshError ?? new Error("prepared model runtime refresh is pending");
       }
-      if (context.getPendingReplacement() && isPreparedModelRuntimePluginLifecycleFailure(error)) {
-        continue;
+      if (
+        !owner.snapshot ||
+        (input.readOnly && !preparedModelRuntimeConfigsMatch(owner.input.config, input.config))
+      ) {
+        throw new PreparedModelRuntimeOwnerNotPublishedError(
+          `prepared model runtime owner was not published for ${input.agentDir}`,
+        );
       }
-      throw error;
+      snapshot = owner.snapshot;
     }
-    const published = context.owners.get(key);
-    if (
-      context.getPendingReplacement() ||
-      !published ||
-      published.snapshot !== snapshot ||
-      published.needsRefresh ||
-      published.pending
-    ) {
-      continue;
-    }
-    admission.claim(key, published);
-    owner = published;
-    break;
-  }
-  try {
     assertAdmission();
-    const configuredOwner = resolveConfiguredOwner(context.owners, input);
+    // Reload during acquisition is best-effort: fail this request instead of restarting preparation.
+    if (owner.needsRefresh || owner.snapshot !== snapshot) {
+      throw new PreparedModelRuntimePublicationSupersededError(
+        `prepared model runtime publication was superseded for ${input.agentDir}`,
+      );
+    }
     const catalogOwner =
       configuredOwner &&
       ownerKey({
@@ -436,7 +306,6 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
         [Symbol.asyncDispose]: retainPreparedPluginGeneration(pluginGeneration),
       };
     }
-    assertAdmission();
     if (provenance === "run" && options.retainIdleRunOwner) {
       context.retainedDirectRunOwners.retain(key, owner, context.owners);
     } else if (provenance === "run" && context.getGatewayLifecycleActive()) {
@@ -455,8 +324,6 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
         }
         released = true;
         owner.leaseCount = Math.max(0, (owner.leaseCount ?? 1) - 1);
-        // Direct runs retain one idle generation; gateways retain a bounded LRU so repeated selections
-        // reuse workspace facts. Identity checks keep old releases from deleting replacements.
         retirePreparedModelRuntimeOwnerIfUnused(
           context.owners,
           key,

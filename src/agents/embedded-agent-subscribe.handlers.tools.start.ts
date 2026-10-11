@@ -129,24 +129,28 @@ export function buildToolStartKey(runId: string, toolCallId: string): string {
   return `${runId}:${toolCallId}`;
 }
 
-export function countActiveToolExecutions(runId: string): number {
+function* iterateRunToolStarts(runId: string) {
   const prefix = `${runId}:`;
-  let count = 0;
-  for (const key of toolStartData.keys()) {
-    if (key.startsWith(prefix)) {
-      count += 1;
+  for (const entry of toolStartData) {
+    if (entry[0].startsWith(prefix)) {
+      yield entry;
     }
+  }
+}
+
+export function countActiveToolExecutions(runId: string): number {
+  const entries = iterateRunToolStarts(runId);
+  let count = 0;
+  while (!entries.next().done) {
+    count += 1;
   }
   return count;
 }
 
 /** Cleans up tool start data for a run that has been unsubscribed or aborted. */
 export function cleanupRunToolStartData(runId: string): void {
-  const prefix = `${runId}:`;
-  for (const key of toolStartData.keys()) {
-    if (key.startsWith(prefix)) {
-      toolStartData.delete(key);
-    }
+  for (const [key] of iterateRunToolStarts(runId)) {
+    toolStartData.delete(key);
   }
 }
 
@@ -195,19 +199,12 @@ export function emitTrackedItemEvent(
     ctx.state.itemActiveIds.delete(itemData.itemId);
     ctx.state.itemCompletedCount += 1;
   }
-  if (itemData.phase !== "update" || emitLiveUpdate) {
-    emitAgentActivityEvent({
-      runId: ctx.params.runId,
-      ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
-      stream: "item",
-      data: itemData,
-    });
-  }
   // Reply liveness and channel delivery still consume every original callback.
-  emitAgentEventCallbackBestEffort(ctx, {
-    stream: "item",
-    data: itemData,
-  });
+  if (itemData.phase !== "update" || emitLiveUpdate) {
+    emitToolActivityEvent(ctx, { stream: "item", data: itemData });
+  } else {
+    emitAgentEventCallbackBestEffort(ctx, { stream: "item", data: itemData });
+  }
 }
 
 export function emitAgentEventCallbackBestEffort(
@@ -235,19 +232,13 @@ export function emitToolActivityEvent(ctx: ToolHandlerContext, event: ActivityWi
 }
 
 export function finalizeToolActivity(ctx: ToolHandlerContext): void {
-  const prefix = `${ctx.params.runId}:`;
-  const active = [...toolStartData].flatMap(([key, start]) =>
-    key.startsWith(prefix)
-      ? [
-          {
-            runId: ctx.params.runId,
-            callId: key.slice(prefix.length),
-            parentToolCallId: start.parentToolCallId,
-            activity: undefined,
-          },
-        ]
-      : [],
-  );
+  const runId = ctx.params.runId;
+  const active = [...iterateRunToolStarts(runId)].map(([key, start]) => ({
+    runId: ctx.params.runId,
+    callId: key.slice(runId.length + 1),
+    parentToolCallId: start.parentToolCallId,
+    activity: undefined,
+  }));
   // Keyed active state cannot represent overlapping duplicate starts. Keep the
   // original summaries when lifecycle accounting cannot prove a complete graph.
   if (

@@ -1,5 +1,4 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { resolveAssistantMessagePhase } from "../shared/chat-message-content.js";
@@ -40,6 +39,7 @@ import type {
 } from "./embedded-agent-subscribe.handlers.types.js";
 import { appendRawStream } from "./embedded-agent-subscribe.raw-stream.js";
 import {
+  createAssistantStreamBlockState,
   createAssistantVisibleStreamText,
   createThinkingTagStreamState,
   extractAssistantCommentaryText,
@@ -370,11 +370,7 @@ export function handleMessageUpdate(
     const pendingTagFragment = ctx.state.partialBlockState.pendingTagFragment;
     const shouldRecomputeFullStream = Boolean(pendingTagFragment) || REASONING_TAG_RE.test(chunk);
     if (shouldRecomputeFullStream) {
-      const recomputeState: EmbeddedAgentSubscribeState["partialBlockState"] = {
-        thinking: false,
-        final: false,
-        inlineCode: createInlineCodeState(),
-      };
+      const recomputeState = createAssistantStreamBlockState();
       const recomputedRawText = ctx.stripBlockTags(ctx.state.deltaBuffer, recomputeState, {
         final: finalText,
       });
