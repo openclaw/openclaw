@@ -26,6 +26,7 @@ export function resolveModelFallbackOptions(
     sessionKey: run.sessionKey,
     hasSessionModelOverride: run.hasSessionModelOverride === true,
     modelOverrideSource: run.modelOverrideSource,
+    modelFallbackPolicy: run.modelFallbackPolicy,
     hasAutoFallbackProvenance: run.hasAutoFallbackProvenance === true,
     modelSelectionLocked: run.modelSelectionLocked,
     subagentSpawnLineage: run.subagentSpawnLineage,
@@ -40,6 +41,8 @@ export function resolveModelFallbackOptions(
     sessionKey: run.runtimePolicySessionKey ?? run.sessionKey,
     modelFallbackAvailability,
     fallbacksOverride: modelFallbackOverrideFromAvailability(modelFallbackAvailability),
+    fallbacksOverrideSource:
+      modelFallbackAvailability.kind === "active" ? ("configured" as const) : undefined,
   };
 }
 
@@ -54,6 +57,7 @@ export function buildRunEntrySelection(
     requestedRouteResolution: selection.requestedRouteResolution,
     agentDir: selection.agentDir,
     fallbacksOverride: selection.fallbacksOverride,
+    fallbacksOverrideSource: selection.fallbacksOverrideSource,
     userLockedAuthProfileId: run.authProfileIdSource === "user" ? run.authProfileId : undefined,
   };
 }

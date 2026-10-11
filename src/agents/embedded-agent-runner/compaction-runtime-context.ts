@@ -340,6 +340,7 @@ export function buildEmbeddedCompactionRuntimeContext(
     runtimeProvider: resolved.runtimeProvider,
     model: resolved.model,
     modelFallbacksOverride: afterTurn ? undefined : params.modelFallbacksOverride,
+    modelFallbacksOverrideSource: afterTurn ? undefined : params.modelFallbacksOverrideSource,
     thinkLevel: params.thinkLevel,
     reasoningLevel: params.reasoningLevel,
     execOverrides: afterTurn ? undefined : params.execOverrides,

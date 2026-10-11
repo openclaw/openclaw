@@ -82,6 +82,7 @@ export function buildEmbeddedForegroundPromptContext(
     scheduledToolPolicy: run.scheduledToolPolicy,
     modelThinkingCapability: run.modelThinkingCapability,
     modelFallbacksOverride: run.modelFallbacksOverride,
+    modelFallbacksOverrideSource: run.modelFallbacksOverrideSource,
     ...(callerOrigin && callerOrigin.kind !== "unknown"
       ? { cronCreatorCallerOrigin: callerOrigin }
       : {}),

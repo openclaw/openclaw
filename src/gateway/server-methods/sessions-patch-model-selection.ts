@@ -52,7 +52,9 @@ export function persistSessionPatchModelSelection(params: {
 }): void {
   // Combined execution-policy recovery is explicitly scoped to this chat, even
   // when ordinary model selections normally update agent/global defaults.
+  // A session preference with configured fallback never writes defaults.
   if (
+    params.entry.modelFallbackPolicy === "configured" ||
     isSessionStatusModelPatchOrigin() ||
     typeof params.patch.model !== "string" ||
     params.patch.sandboxMode !== undefined ||
@@ -90,7 +92,10 @@ export function refreshSessionPatchQueuedSelection(params: {
   agentId: string;
   catalog?: ModelCatalogEntry[];
 }): void {
-  const modelSelectionChanged = "agentRuntime" in params.patch || params.patch.model !== undefined;
+  const modelSelectionChanged =
+    "agentRuntime" in params.patch ||
+    "modelFallbackPolicy" in params.patch ||
+    params.patch.model !== undefined;
   if (!modelSelectionChanged && params.patch.thinkingLevel === undefined) {
     return;
   }
@@ -107,6 +112,7 @@ export function refreshSessionPatchQueuedSelection(params: {
           nextRouteResolution: entry.modelOverrideRouteResolution,
           nextModelOverrideSource:
             entry.modelOverrideSource === "default" ? undefined : entry.modelOverrideSource,
+          nextModelFallbackPolicy: entry.modelFallbackPolicy,
           nextAuthProfileId: entry.authProfileOverride,
           nextAuthProfileIdSource: resolveCollapsedSessionAuthPinSource(entry),
         }

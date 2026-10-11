@@ -154,6 +154,8 @@ export type RunEmbeddedAgentParams = {
   modelThinkingCapability?: PreparedModelThinkingCapability;
   /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */
   modelFallbacksOverride?: string[];
+  /** Internal provenance: a configured projection remains eligible for peer priority. */
+  modelFallbacksOverrideSource?: "configured";
   /** Prepared fallback availability fact shared by selection and failure reporting. */
   modelFallbackAvailability?: ModelFallbackAvailability;
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
@@ -338,6 +340,7 @@ export type EmbeddedForegroundPromptContext = Pick<
   | "scheduledToolPolicy"
   | "modelThinkingCapability"
   | "modelFallbacksOverride"
+  | "modelFallbacksOverrideSource"
 > &
   AgentRunMessageContext &
   AgentRunChannelContext & {

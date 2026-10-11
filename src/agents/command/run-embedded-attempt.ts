@@ -257,6 +257,9 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             hasSessionModelOverride:
               hasExplicitRunOverride || Boolean(storedProviderOverride || storedModelOverride),
             modelOverrideSource: hasExplicitRunOverride ? "user" : storedModelOverrideSource,
+            modelFallbackPolicy: hasExplicitRunOverride
+              ? undefined
+              : sessionEntry?.modelFallbackPolicy,
             subagentSpawnLineage: (sessionEntry?.spawnDepth ?? 0) > 0,
             hasAutoFallbackProvenance: hasExplicitRunOverride
               ? false
@@ -277,6 +280,8 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
           requestedRouteResolution: params.modelSelection.requestedRouteResolution,
           agentDir,
           fallbacksOverride: effectiveFallbacksOverride,
+          fallbacksOverrideSource:
+            params.opts.modelFallbacksOverride === undefined ? "configured" : undefined,
           userLockedAuthProfileId:
             resolveSessionAuthProfileOverrideSource(sessionEntryForAttempt) === "user"
               ? sessionEntryForAttempt?.authProfileOverride
@@ -461,6 +466,8 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
               ),
               configuredAuthProfileId,
               modelFallbacksOverride: effectiveFallbacksOverride,
+              modelFallbacksOverrideSource:
+                params.opts.modelFallbacksOverride === undefined ? "configured" : undefined,
               originalProvider: provider,
               cfg,
               sessionEntry: attemptSessionEntry,

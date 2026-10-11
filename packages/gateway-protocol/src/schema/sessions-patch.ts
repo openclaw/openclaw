@@ -84,6 +84,8 @@ const SessionsPatchMutationProperties = {
   sandboxMode: Type.Optional(Type.Union([Type.Literal("off"), Type.Null()])),
   nativeRuntimeConsent: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  /** Session-only preference with configured fallback; null restores a strict selection. */
+  modelFallbackPolicy: Type.Optional(Type.Union([Type.Literal("configured"), Type.Null()])),
   /** Explicit runtime for the selected model; null follows configured routing. */
   agentRuntime: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   completionOwnerSessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),

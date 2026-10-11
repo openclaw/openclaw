@@ -67,6 +67,7 @@ export function applyModelOverrideToSessionEntry(params: {
   profileOverrideSource?: "auto" | "user";
   preserveAuthProfileOverride?: boolean;
   selectionSource?: "auto" | "user";
+  modelFallbackPolicy?: "configured";
   explicitDefaultSelection?: boolean;
   markLiveSwitchPending?: boolean;
 }): { updated: boolean } {
@@ -111,6 +112,18 @@ export function applyModelOverrideToSessionEntry(params: {
       "modelOverrideFallbackOriginProvider",
       "modelOverrideFallbackOriginModel",
     ) || updated;
+
+  // The preference belongs to this selection, never to the configured default
+  // or to a later unmarked strict selection.
+  if (selection.isDefault || params.modelFallbackPolicy !== "configured") {
+    if (entry.modelFallbackPolicy !== undefined) {
+      delete entry.modelFallbackPolicy;
+      updated = true;
+    }
+  } else if (entry.modelFallbackPolicy !== "configured") {
+    entry.modelFallbackPolicy = "configured";
+    updated = true;
+  }
 
   // Model overrides supersede previously recorded runtime model identity.
   // If runtime fields are stale (or the override changed), clear them so status
@@ -197,6 +210,7 @@ export function repairProviderWrappedModelOverride(params: {
           runtimeProvider === params.defaultProvider && runtimeModel === params.defaultModel,
       },
       selectionSource: params.entry.modelOverrideSource === "auto" ? "auto" : "user",
+      modelFallbackPolicy: params.entry.modelFallbackPolicy,
     });
   }
 

@@ -59,6 +59,8 @@ type ModelCandidateChainParams = ModelManifestNormalizationContext & {
   model: string;
   /** An explicit list, including empty, replaces the configured model fallbacks. */
   fallbacksOverride?: string[];
+  /** Only config-derived overrides may use model-specific priority; caller lists are absolute. */
+  fallbacksOverrideSource?: "configured";
   requestedRouteResolution?: ModelFallbackRouteResolution;
   /** Pure admission planning may use manifest policy without entering provider runtime hooks. */
   allowPluginNormalization?: boolean;
@@ -223,6 +225,7 @@ function resolveFallbackCandidateContext(params: ModelCandidateChainParams) {
     requestedRouteResolution: params.requestedRouteResolution,
     allowPluginNormalization: params.allowPluginNormalization,
     fallbacksOverride: params.fallbacksOverride,
+    fallbacksOverrideSource: params.fallbacksOverrideSource,
     agentsDefaultsModel: params.cfg?.agents?.defaults?.model,
     agentsDefaultsModels: params.cfg?.agents?.defaults?.models,
     utilityModel: params.cfg ? readUtilityModelSetting(params.cfg, params.agentId) : undefined,
@@ -378,5 +381,54 @@ function resolveFallbackCandidatesUncached(
     }
     addCandidate({ ...primary, model }, "configured-primary", "resolved");
   }
-  return candidates;
+  if (
+    candidates.length < 2 ||
+    !params.cfg ||
+    (params.fallbacksOverride !== undefined && params.fallbacksOverrideSource !== "configured")
+  ) {
+    return candidates;
+  }
+  const resolvePriorityRef = (raw: string, resolveAliases = true) =>
+    resolveModelRefFromString({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      raw,
+      defaultProvider,
+      aliasIndex: resolveAliases ? aliasIndex : undefined,
+      allowPluginNormalization: allowPluginModelAliases,
+      manifestPlugins: params.manifestPlugins,
+    })?.ref;
+  const requestedKey = modelKey(requestedCandidate.provider, requestedCandidate.model);
+  const modelMaps = [
+    params.cfg.agents?.defaults?.models,
+    params.agentId ? resolveAgentConfig(params.cfg, params.agentId)?.models : undefined,
+  ];
+  let priority: string[] | undefined;
+  for (const models of modelMaps) {
+    for (const [raw, entry] of Object.entries(models ?? {})) {
+      if (entry.fallbackPriority === undefined) {
+        continue;
+      }
+      const ref = resolvePriorityRef(raw, false);
+      if (ref && modelKey(ref.provider, ref.model) === requestedKey) {
+        // Omitted agent metadata inherits; an explicit [] disables inherited priority.
+        priority = entry.fallbackPriority;
+      }
+    }
+  }
+  if (!priority?.length) {
+    return candidates;
+  }
+  const remaining = candidates.slice(1);
+  const preferred = priority.flatMap((raw) => {
+    const ref = resolvePriorityRef(raw);
+    const index = ref
+      ? remaining.findIndex(
+          (candidate) => candidate.provider === ref.provider && candidate.model === ref.model,
+        )
+      : -1;
+    return index < 0 ? [] : remaining.splice(index, 1);
+  });
+  // Reordering never admits a new route, changes the primary, or expands strict/empty lists.
+  return [...candidates.slice(0, 1), ...preferred, ...remaining];
 }

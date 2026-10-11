@@ -1,4 +1,6 @@
 export const AGENT_MODEL_FIELD_LABELS: Record<string, string> = {
+  "agents.entries.*.models.*.fallbackPriority": "Preferred Fallback Models",
+  "agents.defaults.models.*.fallbackPriority": "Preferred Fallback Models",
   "agents.entries.*.models": "Agent Model Overrides",
   "agents.entries.*.modelPolicy": "Agent Model Policy",
   "agents.entries.*.modelPolicy.allow": "Allowed Agent Models",

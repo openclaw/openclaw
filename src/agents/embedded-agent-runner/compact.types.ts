@@ -50,6 +50,7 @@ export type CompactEmbeddedAgentSessionParams = Pick<
   | "provider"
   | "model"
   | "modelFallbacksOverride"
+  | "modelFallbacksOverrideSource"
   | "contextTokenBudget"
   | "agentHarnessId"
   | "modelSelectionLocked"

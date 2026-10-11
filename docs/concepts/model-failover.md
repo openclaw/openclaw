@@ -45,7 +45,7 @@ policy. OpenClaw does not retry them with thinking disabled.
     Resolve the active session model and auth-profile preference.
   </Step>
   <Step title="Build candidate chain">
-    Build the model candidate chain from the current model selection and the fallback policy for that selection source. Configured defaults, cron job primaries, and auto-selected fallback models can use configured fallbacks. Explicit user session selections are strict.
+    Build the model candidate chain from the current model selection and the fallback policy for that selection source. Configured defaults, cron job primaries, and auto-selected fallback models can use configured fallbacks. Explicit user session selections are strict unless that session opts into configured fallback.
   </Step>
   <Step title="Try the current provider">
     Try the current provider with auth-profile rotation/cooldown rules. Runs apply bounded recovery to eligible transient failures before rotating profiles or advancing model fallback.
@@ -139,7 +139,7 @@ The selection source controls whether the fallback chain is allowed:
 - **Native agent primary**: `agents.entries.*.model` is strict unless that agent's model object includes its own `fallbacks`. Use `fallbacks: []` to make the strict behavior explicit, or a non-empty list to opt that agent into model fallback.
 - **ACP agent primary**: for `runtime.type: "acp"`, the agent primary selects its external harness model. Native OpenClaw calls inherit the primary and fallbacks from `agents.defaults.model`; an explicit agent `model.fallbacks` replaces the native fallback list, including `[]` to disable it. Explicit native session and subagent selections retain their normal precedence and strictness. This does not add fallback to commands such as `/btw` that run only their selected model.
 - **Runtime fallback**: the fallback candidate applies only to the current turn. The next turn starts from the selected primary again. OpenClaw still recognizes `modelOverrideSource: "auto"` entries stored by v2026.4.26 through v2026.6.0. It checks their configured origin every 5 minutes, and clears them once the origin recovers. Automatic clearing shipped in v2026.6.1. `/new`, `/reset`, and `sessions.reset` also clear those entries.
-- **User session override**: selecting a specific model with `/model`, the model picker, `session_status(model=...)`, or `sessions.patch` writes `modelOverrideSource: "user"`. This is an exact session selection. If the selected provider/model fails before producing a reply, OpenClaw reports the failure instead of answering from an unrelated configured fallback.
+- **User session override**: selecting a specific model with `/model`, the model picker, `session_status(model=...)`, or `sessions.patch` writes `modelOverrideSource: "user"`. This is an exact session selection by default. If the selected provider/model fails before producing a reply, OpenClaw reports the failure instead of answering from an unrelated configured fallback. A session can explicitly opt into the configured chain as described below.
 - **Explicit configured default**: choosing **Default** through the same surfaces writes `modelOverrideSource: "default"` without storing a provider/model override. This prevents a child session from inheriting a parent model pin while preserving the configured default's normal fallback policy.
 - **Legacy session override**: session entries written before v2026.4.26 may have `modelOverride` without `modelOverrideSource`. OpenClaw treats those as user overrides so an explicit old selection is not silently converted into fallback behavior.
 - **Cron payload model**: a cron job `payload.model` / `--model` is a job primary, not a user session override. It uses configured fallbacks unless the job provides `payload.fallbacks`. `payload.fallbacks: []` makes the cron run strict.
@@ -149,6 +149,87 @@ and keep inheriting the shared primary. Setting `fallbacks: []` explicitly disab
 fallbacks without pinning that primary. In **Settings → Agents → Overview**, editing
 fallback chips preserves primary inheritance. Removing every chip saves an empty
 chain instead of restoring the shared fallbacks.
+
+## Opt-in session preferences
+
+To prefer a model for one conversation while retaining its configured fallback
+chain, use `sessions.patch` with `modelFallbackPolicy: "configured"`:
+
+```bash
+openclaw gateway call sessions.patch --params '{"key":"agent:main:example","model":"provider-a/preferred","modelFallbackPolicy":"configured"}'
+```
+
+The model must pass the normal selection policy. This choice never updates agent
+or global model defaults, even when `modelSelectionScope` normally does so.
+Fallback remains turn-local: the preferred model stays selected after a successful
+backup or an authentication failure, and is tried again on later turns subject to
+normal auth cooldowns. Cross-provider fallback sends the conversation to another
+configured provider and may incur that provider's costs.
+
+Explicit opt-in also applies to agent-originated selections. It adopts the
+currently selected model as the session preference and clears any pending
+first-failure rollback to the previous model.
+
+The preference survives restart, rollover, `/new`, `/reset`, and forks that inherit
+the model selection. An ordinary subsequent model selection without the flag is
+strict again. Clear only the fallback opt-in with:
+
+```bash
+openclaw gateway call sessions.patch --params '{"key":"agent:main:example","modelFallbackPolicy":null}'
+```
+
+Setting `model: null` returns to the configured default and clears the preference.
+A policy-only opt-in requires an existing explicit user model selection. A locked
+model selection cannot opt in, and an explicit caller fallback list (including
+`[]`) continues to own that run's behavior. No model picker or `/model` default
+behavior changes.
+
+## Preferred fallback peers
+
+Set `fallbackPriority` on an exact `provider/model` metadata entry to prefer
+particular members of an already configured fallback chain:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: {
+        primary: "provider-a/preferred",
+        fallbacks: ["provider-a/other", "provider-b/peer"],
+      },
+      modelPolicy: { allow: [] },
+      models: {
+        "provider-a/preferred": { fallbackPriority: ["provider-b/peer"] },
+      },
+    },
+  },
+}
+```
+
+Here the order is preferred → peer → other. The selected model always remains
+first. Priority entries may use model aliases, are deduplicated, and are ignored
+when not already in the effective candidate chain. They never add a new route or
+relax existing model/operator policy. The remaining candidates retain their order.
+
+Agent `models` metadata can override the same setting: omitted `fallbackPriority`
+inherits the default metadata; `fallbackPriority: []` clears inherited priority.
+Wildcard and unqualified metadata keys cannot declare it. Priority applies to
+configured fallback chains, including session preferences, cron preflight, and
+eligible compaction fallbacks. Caller-owned explicit lists keep their exact order;
+strict or empty lists never gain a fallback.
+
+### Upgrade and downgrade
+
+Existing configurations and strict selections keep their behavior without a
+migration. This feature adds optional metadata to the existing session row, not a
+new database or schema version. Updating to a version without this feature does
+not retain its behavior: the older runtime treats the selected model as strict
+and rejects `fallbackPriority` as an unknown config field.
+
+Before downgrading, clear the policy on opted-in sessions and remove
+`fallbackPriority` from model metadata, or restore the pre-feature config/state
+backup. Do not bypass update validation. The selected model and configured
+fallback lists do not otherwise need rewriting.
 
 ## Auth storage (keys + OAuth)
 
@@ -221,7 +302,7 @@ across compaction; auth failures and unavailable profiles still use the normal f
 Manual selection via `/model …@<profileId> -s` sets a **user override**. A valid user pin survives `/new`, `/reset`, session rollover, compaction, and cooldown windows. It remains the first preference when eligible. While that exact profile is in cooldown or disabled, OpenClaw tries the next eligible same-provider profile without replacing the stored pin. Explicitly removing a saved credential clears its affected agent model and conversation account selections while retaining the selected models. Other accounts, including independent credentials owned by another agent, keep their selections. A temporarily missing or expired credential does not clear a user pin; refresh can restore access. If an older configuration still names a deleted account, choose an available account in Models. OpenClaw also clears an incompatible pin when the selected provider changes, or replaces it when the user selects another account. `/model default -s` clears the model override while retaining a compatible auth pin and clearing an incompatible one.
 
 <Note>
-Auto-pinned and user-pinned auth profiles are both retry preferences. OpenClaw tries the selected profile first while it is eligible. It may then rotate to another same-provider profile on auth failures, rate limits, billing limits, or timeouts. A user pin stays persisted during that temporary rotation. New runs prefer it again after its cooldown expires, without changing the selected model or runtime. This auth rotation does not loosen model selection: an explicit user provider/model selection remains strict and reports failure after its same-provider auth profiles are exhausted.
+Auto-pinned and user-pinned auth profiles are both retry preferences. OpenClaw tries the selected profile first while it is eligible. It may then rotate to another same-provider profile on auth failures, rate limits, billing limits, or timeouts. A user pin stays persisted during that temporary rotation. New runs prefer it again after its cooldown expires, without changing the selected model or runtime. This auth rotation does not loosen model selection: an explicit user provider/model selection remains strict unless the session opts into configured fallback, and otherwise reports failure after its same-provider auth profiles are exhausted.
 </Note>
 
 ### OpenAI Codex subscription plus API-key backup

@@ -224,6 +224,7 @@ export function refreshQueuedFollowupSession(params: {
   nextModel?: string;
   nextRouteResolution?: ModelFallbackRouteResolution;
   nextModelOverrideSource?: "auto" | "user";
+  nextModelFallbackPolicy?: "configured";
   nextAuthProfileId?: string;
   nextAuthProfileIdSource?: "auto" | "user";
   nextThinking?: {
@@ -243,7 +244,9 @@ export function refreshQueuedFollowupSession(params: {
   const hasNextModelRoute =
     typeof params.nextProvider === "string" || typeof params.nextModel === "string";
   const shouldRewriteModelSelection =
-    hasNextModelRoute || Object.hasOwn(params, "nextModelOverrideSource");
+    hasNextModelRoute ||
+    Object.hasOwn(params, "nextModelOverrideSource") ||
+    Object.hasOwn(params, "nextModelFallbackPolicy");
   const shouldRewriteSelection =
     shouldRewriteModelSelection ||
     Object.hasOwn(params, "nextAuthProfileId") ||
@@ -279,6 +282,9 @@ export function refreshQueuedFollowupSession(params: {
         run.hasSessionModelOverride =
           params.nextModelOverrideSource !== undefined && Boolean(run.provider || run.model);
         run.modelOverrideSource = params.nextModelOverrideSource;
+      }
+      if (Object.hasOwn(params, "nextModelFallbackPolicy")) {
+        run.modelFallbackPolicy = params.nextModelFallbackPolicy;
       }
       if (Object.hasOwn(params, "nextAuthProfileId")) {
         run.authProfileId = normalizeOptionalString(params.nextAuthProfileId);

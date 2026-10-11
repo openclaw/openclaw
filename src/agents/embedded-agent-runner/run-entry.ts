@@ -127,6 +127,8 @@ type EmbeddedAgentRunEntryParams<T extends EmbeddedAgentRunResult> = {
     model: string;
     requestedRouteResolution?: ModelFallbackRouteResolution;
     fallbacksOverride?: string[];
+    /** Provenance for configured lists projected into an override. Omitted means absolute caller order. */
+    fallbacksOverrideSource?: "configured";
     agentDir?: string;
     userLockedAuthProfileId?: string;
   } & ModelManifestNormalizationContext;
