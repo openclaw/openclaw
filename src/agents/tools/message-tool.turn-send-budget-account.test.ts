@@ -79,10 +79,10 @@ function createConfig(extra: Record<string, unknown> = {}) {
 
 // Source-less (cron/CLI shaped): no current channel and no agent account, so only the
 // routing owner's precedence can name the delivering account.
-function createSourcelessMessageTool(config: Record<string, unknown>) {
+function createSourcelessMessageTool(config: Record<string, unknown>, sessionKey = SESSION_KEY) {
   return createMessageTool({
     agentId: "test",
-    agentSessionKey: SESSION_KEY,
+    agentSessionKey: sessionKey,
     runId: RUN_ID,
     config: config as never,
     resolveCommandSecretRefsViaGateway: (async ({ config: cfg }: { config: unknown }) => ({
@@ -103,9 +103,9 @@ function sendArgs(message: string, accountId?: string) {
   };
 }
 
-function ledgerCount(accountId: string): number {
+function ledgerCount(accountId: string, sessionKey = LEDGER_SESSION_KEY): number {
   return peekTurnSendCount({
-    sessionKey: LEDGER_SESSION_KEY,
+    sessionKey,
     runId: RUN_ID,
     targetKey: buildTurnSendTargetKey({ channel: "imessage", accountId, target: PEER }),
   });
@@ -203,5 +203,48 @@ describe("per-turn send budget effective account", () => {
     });
     expect(blocked.details).toMatchObject({ status: "suppressed" });
     expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("keys main-session aliases on the canonical slot the CLI loopback grant uses", async () => {
+    // A native candidate may run under the raw "main" alias while a CLI candidate of the
+    // same turn writes under the canonical agent:<id>:main grant scope.
+    const config = createConfig();
+    const canonicalLedgerKey = buildTurnSendLedgerSessionKey("test", "agent:test:main")!;
+    const callGateway = vi.fn();
+    const aliasConversationTool = createConversationsSendTool(
+      { agentId: "test", agentSessionKey: "main", runId: RUN_ID, config: config as never },
+      {
+        callGateway: callGateway as never,
+        readConversation: (async () => ({
+          conversationRef: "conv_0123456789abcdef0123456789abcdef",
+          channel: "imessage",
+          accountId: "work",
+          kind: "direct",
+          peerId: PEER,
+          target: PEER,
+          firstSeenAt: 100,
+          lastSeenAt: 200,
+        })) as never,
+      },
+    );
+
+    await createSourcelessMessageTool(config, "agent:test:main").execute(
+      "alias-1",
+      sendArgs("first"),
+    );
+    expect(ledgerCount("work", canonicalLedgerKey)).toBe(1);
+
+    const aliasMessage = await createSourcelessMessageTool(config, "main").execute(
+      "alias-2",
+      sendArgs("second"),
+    );
+    expect(aliasMessage.details).toMatchObject(EXHAUSTED);
+    const aliasConversation = await aliasConversationTool.execute("alias-3", {
+      conversationRef: "conv_0123456789abcdef0123456789abcdef",
+      message: "third",
+    });
+    expect(aliasConversation.details).toMatchObject({ status: "suppressed" });
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(deliveries).toHaveLength(1);
   });
 });
