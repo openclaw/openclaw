@@ -1,4 +1,5 @@
 import { assertRequiredWorkerSelection } from "../../config/required-worker-profile.js";
+import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
@@ -632,7 +633,8 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       // candidate's tool work has settled (runWithModelFallback awaited the run() calls),
       // so no reservation is in flight. Two slot scopes can exist under this runId: a
       // native attempt's message/conversations_send tools key by agentSessionKey =
-      // `sessionKey?.trim() || sessionId` (attempt-setup.ts), rebuilt here; a dispatched CLI
+      // `sessionKey?.trim() || sessionId` (attempt-setup.ts) with main-session aliases folded,
+      // rebuilt here; a dispatched CLI
       // candidate's loopback grant instead writes under a canonicalized, possibly
       // agent-shifted scope this raw identity cannot reproduce, so that candidate's
       // settlement hands its exact prepared scope to this owner-held collection. A caller
@@ -642,7 +644,11 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
         params.retainTurnSendLedgerScope ?? clearTurnSendLedgerForRun;
       releaseTurnSendLedgerScope({
         agentId: params.identity.agentId,
-        sessionKey: params.identity.sessionKey?.trim() || params.identity.sessionId,
+        sessionKey: canonicalizeMainSessionAlias({
+          cfg: params.selection.cfg,
+          agentId: params.identity.agentId,
+          sessionKey: params.identity.sessionKey?.trim() || params.identity.sessionId,
+        }),
         runId: params.identity.runId,
       });
       for (const scope of deferredTurnSendLedgerScopes) {

@@ -278,6 +278,43 @@ describe("runEmbeddedAgentEntry", () => {
       expect(peekTurnSendCount(key)).toBe(0);
     });
 
+    it("clears a main-alias session's slot under the canonical key the tools write", async () => {
+      // The send tools fold a raw "main" alias to agent:<id>:main so native and CLI
+      // candidates share one slot; the terminal must clear that same canonical slot.
+      const runId = "ledger-cleanup-main-alias";
+      const key = {
+        sessionKey: buildTurnSendLedgerSessionKey("main", "agent:main:main")!,
+        runId,
+        targetKey,
+      };
+      const { runEmbeddedAgentEntry } = await import("./run-entry.js");
+
+      await runEmbeddedAgentEntry({
+        selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
+        identity: { runId, agentId: "main", sessionId: "session-1", sessionKey: "main" },
+        harness: {
+          workspaceDir: "/tmp/workspace",
+          preparation: { kind: "direct" },
+          resolveRuntimeOverride: () => undefined,
+        },
+        behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
+        sessionOverride: { kind: "preserve" },
+        runCandidate: async (provider, model, options) => {
+          const reserved = reserveTurnSend(key, {});
+          if (reserved.status === "reserved") {
+            commitTurnSend(reserved.reservation);
+          }
+          return makeResult({
+            provider,
+            model,
+            classification: options.isFinalFallbackAttempt ? undefined : "empty",
+          });
+        },
+      });
+
+      expect(peekTurnSendCount(key)).toBe(0);
+    });
+
     it("drains a dispatched CLI candidate's canonical scope the raw identity cannot rebuild", async () => {
       // A CLI candidate dispatched inside this embedded run commits under the loopback grant's
       // canonical scope — a possibly agent-shifted, main-alias-folded key — and defers cleanup

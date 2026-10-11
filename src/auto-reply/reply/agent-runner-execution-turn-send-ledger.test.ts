@@ -7,6 +7,7 @@ import {
   reserveTurnSend,
   resetTurnSendLedgerForTest,
 } from "../../agents/tools/turn-send-ledger.js";
+import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import type { TemplateContext } from "../templating.js";
 import {
   createFollowupRun,
@@ -161,11 +162,15 @@ describe("executeAgentTurn: per-turn send ledger deferred-scope propagation", ()
       sessionKey?: string;
       onDeferredTurnSendLedgerScope?: (scope: unknown) => void;
     };
-    // The tools' native scope for this run (attempt-setup.ts agentSessionKey).
+    // The tools' native scope for this run (attempt-setup.ts agentSessionKey), with the
+    // fixture's "main" alias folded as the send tools fold it.
     const nativeKey = (params: EmbeddedParams) => ({
       sessionKey: buildTurnSendLedgerSessionKey(
         params.agentId,
-        params.sessionKey?.trim() || params.sessionId,
+        canonicalizeMainSessionAlias({
+          agentId: params.agentId,
+          sessionKey: params.sessionKey?.trim() || params.sessionId,
+        }),
       )!,
       runId: params.runId,
       targetKey: TARGET_KEY,
