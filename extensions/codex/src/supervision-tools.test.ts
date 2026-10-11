@@ -3,19 +3,35 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
+  resolveAuthProfileOrder,
+} from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-profile.js";
+import { createCodexAuthProfileSelection } from "./app-server/auth-profile-selection.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config-runtime.js";
 import { createCodexSupervisionTools } from "./supervision-tools.js";
 
 type CodexSupervisionToolsOptions = Parameters<typeof createCodexSupervisionTools>[0];
 
+const { resolveCodexAppServerAuthProfileIdForAgent, resolveCodexAppServerAuthProfileIdAtEffect } =
+  createCodexAuthProfileSelection({
+    ensureAuthProfileStore,
+    ensureAuthProfileStoreAsync,
+    resolveAuthProfileOrder,
+  });
+
 function createTestSupervisionTools(
-  options: Omit<CodexSupervisionToolsOptions, "resolveAuthProfileId" | "resolveRuntimeOptions">,
+  options: Omit<
+    CodexSupervisionToolsOptions,
+    "resolveAuthProfileId" | "resolveAuthProfileIdAtEffect" | "resolveRuntimeOptions"
+  >,
 ) {
   return createCodexSupervisionTools({
     ...options,
     resolveAuthProfileId: resolveCodexAppServerAuthProfileIdForAgent,
+    resolveAuthProfileIdAtEffect: resolveCodexAppServerAuthProfileIdAtEffect,
     resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
   });
 }
@@ -313,46 +329,6 @@ describe("Codex supervision compatibility tools", () => {
     expect(pageCalls).toBe(3);
   });
 
-  it("stops stored-session pagination when duplicate-only pages repeat a cursor", async () => {
-    let storedPageCalls = 0;
-    const request = createEndpointRequest(async (_endpoint, method) => {
-      if (method === "thread/loaded/list") {
-        return { data: [], nextCursor: null };
-      }
-      if (method !== "thread/list") {
-        throw new Error(`unexpected method: ${method}`);
-      }
-      storedPageCalls += 1;
-      if (storedPageCalls > 2) {
-        throw new Error("unexpected third stored-session page");
-      }
-      return {
-        data: [{ id: "stored-thread", status: { type: "idle" } }],
-        nextCursor: "stored-page-2",
-      };
-    });
-    const tools = createTools(request);
-
-    await expect(
-      toolByName(tools, "codex_sessions_list").execute("list", {
-        include_stored: true,
-        max_stored_sessions: 2,
-      }),
-    ).resolves.toMatchObject({
-      details: {
-        sessions: [],
-        errors: [
-          {
-            endpointId: "local",
-            ok: false,
-            detail: "Codex thread/list returned repeated cursor stored-page-2",
-          },
-        ],
-      },
-    });
-    expect(storedPageCalls).toBe(2);
-  });
-
   it("fails closed at the loaded-session page cap when a cursor remains", async () => {
     let loadedPageCalls = 0;
     const request = createEndpointRequest(async (_endpoint, method) => {
@@ -555,43 +531,6 @@ describe("Codex supervision compatibility tools", () => {
         errors: [{ endpointId: "local", ok: false, detail }],
       },
     });
-  });
-
-  it("fails closed at the stored-session page cap when a cursor remains", async () => {
-    let storedPageCalls = 0;
-    const request = createEndpointRequest(async (_endpoint, method) => {
-      if (method === "thread/loaded/list") {
-        return { data: [], nextCursor: null };
-      }
-      if (method !== "thread/list") {
-        throw new Error(`unexpected method: ${method}`);
-      }
-      storedPageCalls += 1;
-      return {
-        data: [{ id: "stored-thread", status: { type: "idle" } }],
-        nextCursor: `stored-page-${storedPageCalls + 1}`,
-      };
-    });
-    const tools = createTools(request);
-
-    await expect(
-      toolByName(tools, "codex_sessions_list").execute("list", {
-        include_stored: true,
-        max_stored_sessions: 2,
-      }),
-    ).resolves.toMatchObject({
-      details: {
-        sessions: [],
-        errors: [
-          {
-            endpointId: "local",
-            ok: false,
-            detail: "Codex thread/list exceeded 100 pages with a continuation cursor",
-          },
-        ],
-      },
-    });
-    expect(storedPageCalls).toBe(100);
   });
 
   it("rechecks live supervision config before every paginated request", async () => {

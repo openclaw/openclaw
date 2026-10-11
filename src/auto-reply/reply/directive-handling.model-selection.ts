@@ -3,7 +3,7 @@ import {
   createOperatorModelSelectionAssertion,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
-import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
+import { ensureAuthProfileStoreAsync } from "../../agents/auth-profiles.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import {
   createModelVisibilityPolicy,
@@ -33,14 +33,14 @@ function validateOperatorSelection(
   }
 }
 
-function resolveStoredNumericProfileModelDirective(
+async function resolveStoredNumericProfileModelDirective(
   raw: string,
   agentDir: string,
-): {
+): Promise<{
   modelRaw: string;
   profileId: string;
   profileProvider: string;
-} | null {
+} | null> {
   const lastSlash = raw.lastIndexOf("/");
   const profileDelimiter = raw.indexOf("@", lastSlash + 1);
   if (profileDelimiter <= 0) {
@@ -53,7 +53,7 @@ function resolveStoredNumericProfileModelDirective(
   }
 
   const modelRaw = raw.slice(0, profileDelimiter).trim();
-  const store = ensureAuthProfileStore(agentDir, {
+  const store = await ensureAuthProfileStoreAsync(agentDir, {
     allowKeychainPrompt: false,
   });
   const profile = store.profiles[profileId];
@@ -128,7 +128,7 @@ export async function resolveModelSelectionFromDirective(params: {
   }
   const storedNumericProfile =
     params.directives.rawModelProfile === undefined
-      ? resolveStoredNumericProfileModelDirective(raw, params.agentDir)
+      ? await resolveStoredNumericProfileModelDirective(raw, params.agentDir)
       : null;
   const resolveSelection = (directive: string) =>
     resolveModelDirectiveSelection({

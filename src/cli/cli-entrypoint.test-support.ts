@@ -130,6 +130,12 @@ export const windowsProcessOwnershipEntrypoint = {
   distWorkerPath: "cli/runtime-cleanup-scope.windows.test-support.js",
 } as const;
 
+export const windowsProcessJobRetentionEntrypoint = {
+  currentModuleUrl: import.meta.url,
+  sourceWorkerName: "../process/supervisor/service-child-windows-job-native",
+  distWorkerPath: "process/supervisor/service-child-windows-job-native.js",
+} as const;
+
 // Failure reporting and exit finalization must share their compiled error classes.
 export const updateCandidateExitEntrypoints = {
   oneShotExit: {

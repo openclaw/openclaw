@@ -151,8 +151,11 @@ export async function prepareWatchedSessionsPromptAsync(
   };
   const watches = prepareAmbientGroupWatchTargetsRead(access.sessionKey, { env });
   try {
-    // The exact reader captures the physical store before its first yield. Keep
-    // that owner through both the title read and the final disclosure check.
+    const targets = [...new Set(await watches.read())].toSorted();
+    assertCurrent();
+    if (targets.length === 0) {
+      return undefined;
+    }
     const prepared = await withSessionStoreReaderInWorker(
       {
         agentId: access.agentId,
@@ -160,11 +163,6 @@ export async function prepareWatchedSessionsPromptAsync(
         env,
       },
       async ({ reader, database, continuation, assertCurrent: assertStoreCurrent }) => {
-        const targets = [...new Set(await watches.read())].toSorted();
-        assertCurrent();
-        if (targets.length === 0) {
-          return undefined;
-        }
         const keys = targets.slice(0, WATCHED_SESSIONS_PROMPT_LIMIT);
         const result = await reader.readExactEntries({
           sessionKeys: keys,

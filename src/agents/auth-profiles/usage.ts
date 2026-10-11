@@ -31,10 +31,11 @@ import {
   logDroppedAuthProfileBookkeeping,
 } from "./state-observation.js";
 import {
-  loadAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreWithoutExternalProfilesAsync,
+  resolvePersistedAuthProfileOwnerAgentDirAsync,
   updateAuthProfileStoreWithLock,
 } from "./store-runtime.js";
-import { applyScopedAuthReadThrough, resolvePersistedAuthProfileOwnerAgentDir } from "./store.js";
+import { applyScopedAuthReadThrough } from "./store.js";
 import type {
   AuthProfileBlockedSource,
   AuthProfileCredential,
@@ -93,7 +94,7 @@ async function updateOwnedAuthProfileUsage(
   const updated = await updateAuthProfileStoreWithLock({
     ...update,
     profileId,
-    agentDir: resolvePersistedAuthProfileOwnerAgentDir({
+    agentDir: await resolvePersistedAuthProfileOwnerAgentDirAsync({
       agentDir: update.agentDir,
       profileId,
     }),
@@ -437,7 +438,7 @@ export async function maybeReprobeWhamBlockedProfiles(params: {
       if (!isWhamOAuthProfile(profile)) {
         return undefined;
       }
-      const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
+      const ownerAgentDir = await resolvePersistedAuthProfileOwnerAgentDirAsync({
         agentDir: params.agentDir,
         profileId,
       });
@@ -481,7 +482,9 @@ export async function maybeReprobeWhamBlockedProfiles(params: {
         outcome = { requiresAuthPreparation: true };
       }
       // Refresh can rotate a token, and a child can gain its own credential while waiting.
-      const settled = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir, { profileId });
+      const settled = await loadAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir, {
+        profileId,
+      });
       const credential = settled.profiles[profileId];
       if (credential) {
         params.store.profiles[profileId] = credential;

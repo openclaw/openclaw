@@ -52,7 +52,7 @@ describe("web search configuration presence", () => {
     const sourceProbe = vi
       .spyOn(authProfileSource, "hasAnyAuthProfileStoreSourceAsync")
       .mockRejectedValue(new Error("Unexpected standalone auth admission"));
-    const prepareAuthSource = vi.fn(async () => false);
+    const prepareAuthSource = vi.fn(async () => ({ version: 1, profiles: {} }));
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([
       createCustomSearchProvider({ authProviderId: "xai" }),
     ]);
