@@ -116,7 +116,10 @@ export function createPortalOperations(
   };
   return {
     list,
-    async close(id: string) {
+    async close(rawId: string) {
+      // Portal ids are exact Map keys and close is idempotent, so a padded id
+      // (clipboard/RPC whitespace) would report closed:true while the listener stays up.
+      const id = rawId.trim();
       if (owner && !list().portals.some((portal) => portal.id === id)) {
         throw new Error(owner.ownershipError);
       }
