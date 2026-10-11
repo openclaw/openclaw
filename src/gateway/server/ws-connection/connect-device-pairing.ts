@@ -192,6 +192,8 @@ export async function authorizeGatewayConnectDevice(
         devicePublicKey,
         scopes,
         hasRequestedScopes,
+        remoteIngressScopeCeiling: getRemoteControlUiIngressContext(context.handler.upgradeReq)
+          ?.operatorScopeCeiling,
         connectionScopeCap: (capped: string[]) =>
           applyConnectionScopeCap({ scopes: capped, upgradeReq: context.handler.upgradeReq }),
       };
@@ -200,8 +202,8 @@ export async function authorizeGatewayConnectDevice(
       // Same-key reconnects reuse paired grants without pairing or false upgrade audits.
       if (
         reason === "scope-upgrade" &&
-        plan.isTrustedProxySameKeyUpgrade &&
-        plan.trustedProxyAutoApproveScopes !== null
+        plan.isSameKeyScopeUpgrade &&
+        plan.autoApproveOperatorScopes !== null
       ) {
         // Authority is the live row, not the pre-plan snapshot: a revoke, key
         // replacement, or grant reduction landing during the plan await must
@@ -210,11 +212,11 @@ export async function authorizeGatewayConnectDevice(
         const livePaired = await getPairedDevice(device.id);
         if (
           livePaired &&
-          pairingStateAllowsRequestedAccess(livePaired, plan.trustedProxyAutoApproveScopes)
+          pairingStateAllowsRequestedAccess(livePaired, plan.autoApproveOperatorScopes)
         ) {
           const livePairedScopes = resolvePairedAccessScopes(livePaired);
           scopes = normalizeSortedUniqueTrimmedStringList(
-            [...scopes, ...plan.trustedProxyAutoApproveScopes].filter((scope) =>
+            [...scopes, ...plan.autoApproveOperatorScopes].filter((scope) =>
               roleScopesAllow({ role, requestedScopes: [scope], allowedScopes: livePairedScopes }),
             ),
           );
@@ -263,9 +265,9 @@ export async function authorizeGatewayConnectDevice(
         assertIngressCurrent,
       );
       assertIngressCurrent();
-      const trustedProxyApprovalScopes =
-        pairing.request.isRepair !== true || plan.isTrustedProxySameKeyUpgrade
-          ? plan.trustedProxyAutoApproveScopes
+      const operatorApprovalScopes =
+        pairing.request.isRepair !== true || plan.isSameKeyScopeUpgrade
+          ? plan.autoApproveOperatorScopes
           : null;
       const requestContext = buildRequestContext();
       // A replacement request obsoletes older pending requestIds; tell approval
@@ -285,17 +287,17 @@ export async function authorizeGatewayConnectDevice(
       }
       let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
       const inlineApprovalAttempted =
-        trustedProxyApprovalScopes !== null ||
+        operatorApprovalScopes !== null ||
         pairing.request.silent === true ||
         // A previously interactive first-node request may now qualify locally.
         (role === "node" && reason === "role-upgrade" && plan.localApproval === "silent");
       if (inlineApprovalAttempted) {
-        if (trustedProxyApprovalScopes !== null) {
+        if (operatorApprovalScopes !== null && plan.operatorApprovalKind) {
           approved = await approveDevicePairing(pairing.request.requestId, {
-            callerScopes: trustedProxyApprovalScopes,
+            callerScopes: operatorApprovalScopes,
             accessMetadata: clientAccessMetadata,
-            approvedVia: "trusted-proxy",
-            autoApproveNewDeviceScopes: trustedProxyApprovalScopes,
+            approvedVia: plan.operatorApprovalKind,
+            autoApproveNewDeviceScopes: operatorApprovalScopes,
             isApprovalCurrent: isConnectAuthorizationCurrent,
           });
         } else if (plan.bootstrapApprovalProfile) {
@@ -351,14 +353,14 @@ export async function authorizeGatewayConnectDevice(
           });
         }
         if (approved?.status === "approved") {
-          if (trustedProxyApprovalScopes !== null) {
-            scopes = trustedProxyApprovalScopes;
+          if (operatorApprovalScopes !== null) {
+            scopes = operatorApprovalScopes;
             connectParams.scopes = scopes;
           }
           if (plan.bootstrapApprovalProfile) {
             handoffBootstrapProfile = plan.bootstrapApprovalProfile;
           }
-          if (trustedProxyApprovalScopes !== null && plan.trustedProxyUser) {
+          if (operatorApprovalScopes !== null && plan.trustedProxyUser) {
             logGateway.warn(
               `security audit: trusted-proxy operator device auto-approved user=${formatForLog(plan.trustedProxyUser)} device=${formatForLog(approved.device.deviceId.slice(0, 12))} scopes=${formatAuditList(scopes)}`,
             );
@@ -528,6 +530,13 @@ export async function authorizeGatewayConnectDevice(
     const paired = await getPairedDevice(device.id);
     assertIngressCurrent();
     const isPaired = paired?.publicKey === devicePublicKey;
+    if (paired && !isPaired && getRemoteControlUiIngressContext(context.handler.upgradeReq)) {
+      failPairingHandshake({
+        message:
+          "Remote Control UI device key does not match the paired device; remove the stale device in Devices and reconnect with a fresh browser identity.",
+      });
+      return undefined;
+    }
     if (
       state.startupPending &&
       !isStartupNodeBootstrapConnect(connectParams) &&
@@ -600,6 +609,10 @@ export async function authorizeGatewayConnectDevice(
           state: { ...state, scopes, handoffBootstrapProfile },
           scopes,
           hasApprovedDeviceBaseline: hasServerApprovedDeviceTokenBaseline,
+          tokenScopeCeiling:
+            authMethod === "remote-ingress"
+              ? getRemoteControlUiIngressContext(context.handler.upgradeReq)?.operatorScopeCeiling
+              : undefined,
           isIssuanceCurrent: isConnectAuthorizationCurrent,
         });
   assertIngressCurrent();

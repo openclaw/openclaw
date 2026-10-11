@@ -134,6 +134,7 @@ export function ensureDeviceTokenInWorker(params: {
   deviceId: string;
   role: string;
   scopes: string[];
+  scopeCeiling?: readonly string[];
   issuer?: DeviceAuthToken["issuer"];
   nowMs: number;
 }): DeviceAuthToken | null {
@@ -151,6 +152,8 @@ export function ensureDeviceTokenInWorker(params: {
     const previousNodeGeneration = resolveNodePairingGeneration(device);
     const approvedScopes = resolveApprovedDeviceScopeBaseline(device);
     if (
+      (params.scopeCeiling !== undefined &&
+        !roleScopesAllow({ role, requestedScopes, allowedScopes: params.scopeCeiling })) ||
       !scopesWithinApprovedDeviceBaseline({
         role,
         scopes: requestedScopes,
@@ -169,6 +172,12 @@ export function ensureDeviceTokenInWorker(params: {
       if (
         existingWithinApproved &&
         issuerAllowsReuse &&
+        (params.scopeCeiling === undefined ||
+          roleScopesAllow({
+            role,
+            requestedScopes: existing.scopes,
+            allowedScopes: params.scopeCeiling,
+          })) &&
         roleScopesAllow({ role, requestedScopes, allowedScopes: existing.scopes })
       ) {
         return { value: existing };

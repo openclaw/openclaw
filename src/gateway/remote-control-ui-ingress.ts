@@ -322,22 +322,6 @@ export function createGatewayControlUiIngressFactory(params: {
           sandboxOrigin: presentation.sandboxOrigin,
           operatorScopeCeiling: presentation.operatorScopeCeiling,
         }),
-        async issuePairingBootstrap(input) {
-          assertCurrent();
-          input.signal.throwIfAborted();
-          const { issueRemoteControlUiPairingBootstrap } =
-            await import("../infra/device-bootstrap.js");
-          return issueRemoteControlUiPairingBootstrap(input, {
-            operatorScopeCeiling: context.operatorScopeCeiling,
-            assertCurrent,
-          });
-        },
-        async cancelPairingBootstrap(enrollmentId) {
-          assertCurrent();
-          const { cancelRemoteControlUiPairingBootstrap } =
-            await import("../infra/device-bootstrap.js");
-          return cancelRemoteControlUiPairingBootstrap(enrollmentId, assertCurrent);
-        },
         async request(input) {
           assertCurrent();
           validatePath(input.pathAndQuery);

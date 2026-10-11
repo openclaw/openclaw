@@ -49,15 +49,21 @@ explicit `codex-sandbox:` ancestor when needed, and applies it only to responses
 served by this handle.
 
 `audienceId` identifies the plugin-owned grant; it is not an OAuth token or a
-browser authentication credential. `assertCurrent` must check that grant's live
-authority. The host composes it with service, plugin, and Gateway lifetime
-checks, including checks after asynchronous admission and before publication.
-The assertion must be synchronous and throw when its grant is stale.
+browser authentication credential or a device-token audience binding. Before
+forwarding any HTTP request or opening any socket through the handle, the plugin
+must authenticate the browser as the holder of that grant. The owner approves
+the plugin grant locally with a pairing code; that live grant is the approval
+boundary for browsers entering through the handle.
+
+`assertCurrent` must check that grant's live authority. The host composes it with
+service, plugin, and Gateway lifetime checks, including checks after asynchronous
+admission and before publication. The assertion must be synchronous and throw
+when its grant is stale.
 
 Initially supported Gateway authentication is token or password mode without
 `gateway.roles`. `open()` rejects no-auth, trusted-proxy, and role-configured
-Gateways with an `unsupported-auth` error and configuration guidance. The
-browser still authenticates with its paired device; it cannot present the
+Gateways with an `unsupported-auth` error and configuration guidance. Browsers
+use signed device identity and ordinary device tokens; they cannot present the
 Gateway's configured shared token or password through this surface.
 
 ## HTTP and sockets
@@ -103,45 +109,43 @@ The error `code` is one of `invalid-options`, `unsupported-auth`, `unavailable`,
 `closed`, `limit-exceeded`, or `forbidden`. Treat `closed` as terminal for that
 handle; do not retry through another authentication path.
 
-## Enrollment contract (unavailable)
+## Browser device approval
 
-The handle declares two enrollment operations:
+Core treats a live ingress handle like an authenticated trusted-proxy front door.
+A fresh browser connects as `operator`, signs the normal device challenge, and
+omits credentials. Core auto-approves it as an ordinary paired device and returns
+the ordinary device token in `hello`. There is no separate enrollment API,
+bootstrap credential, storage format, or audience-bound token.
 
-- `issuePairingBootstrap({ deviceId, publicKey, displayName, scopes, signal })`
-  validates a canonical raw Ed25519 public key in unpadded base64url, its matching
-  device ID, a bounded display name, and the exact requested scopes. Scopes must
-  be `operator.read` or `operator.read` plus `operator.write`, within the handle's
-  ceiling. Core rejects extra scopes instead of silently widening or stripping them.
-- `cancelPairingBootstrap(enrollmentId)` addresses one enrollment. It does not
-  mean device or audience revocation.
+The approved scopes are the requested scopes within `operatorScopeCeiling`;
+omitting scopes grants the full ceiling. The ceiling contains `operator.read`
+and optionally `operator.write`. Requests above that ceiling are refused,
+including scope upgrades. A returning browser may use its device token, or
+recover a lost token by proving the same paired key under the live grant, using
+the trusted-proxy same-key rules. An existing device ID with a different public
+key is refused, never auto-approved.
 
-Both operations currently reject with `GatewayControlUiIngressError` code
-`unavailable` for valid requests. They issue no credential, create no pending
-pairing request, and do not report successful cancellation. Closed handles and
-unsupported configurations retain their lifecycle errors. Method presence alone
-does not mean enrollment is usable; keep enrollment disabled on `unavailable`.
+These browsers appear in the normal **Devices** list, `openclaw devices list`,
+and device pairing RPCs. Use the existing device revoke operation to revoke an
+individual device token. Closing the handle or revoking the plugin grant closes
+the ingress path and its owned work; it does not delete paired-device rows or
+revoke their ordinary device tokens.
 
-The in-memory policy specifies manual owner approval, a maximum five-minute
-bootstrap lifetime, one pending enrollment per call site, and three per audience.
-Those issuance and quota rules await the durable storage implementation. The
-bootstrap owner stops at `requireRemoteControlUiEnrollmentStorage` before any
-write. It never falls back to the existing auto-approved `purpose: "control-ui"`
-profile or a generic bootstrap token.
-
-Durable device/key/audience/scope binding, trusted owner approval with grant
-context and fingerprint, shared-auth issuer generation, cancellation, and
-audience revocation require the accepted storage migration and downgrade
-contract. No storage or credential representation changes are included here.
-The existing transport still accepts ordinary pre-paired devices; it does not
-yet enforce durable audience restrictions and is not ready for remote UI deployment.
+The token is deliberately not pinned to the ingress. It also works on the
+Gateway's direct listener at its issued read or read/write scopes, without admin
+access. If it leaks, those scopes remain usable directly until device revocation.
+This is an accepted tradeoff: a compromised relay can already exercise those
+capabilities through the plugin grant. Protect the grant and use **Devices** to
+revoke individual tokens when needed.
 
 ## Security boundary
 
 Core marks every virtual request and connection `remote-forwarded` before
 policy runs. Local-client trust, silent local pairing, browser owner recovery,
-Tailscale identity, trusted-proxy identity, device-less access, and non-operator
-roles are unavailable. Normal device challenge, signature, token, scope, and
-revocation checks remain authoritative. The scope ceiling permits only
+bootstrap credentials, Tailscale identity, trusted-proxy headers, device-less
+access, and non-operator roles are unavailable. The live handle supplies the
+remote authentication and approval boundary. Normal device challenge, signature,
+token, scope, and revocation checks remain authoritative. The scope ceiling permits only
 `operator.read` and optionally `operator.write`; admin, approvals, questions,
 pairing, and Talk secrets remain outside this capability.
 
@@ -157,5 +161,5 @@ network proxy. A relay can read and modify the active content it forwards and
 can exercise a compromised browser device's permitted capabilities; the
 connection is not end-to-end encrypted against that relay.
 
-Audience-bound enrollment and the embedded browser presentation remain
-follow-up work; this transport alone is not a complete remote UI deployment.
+Relay hosting and the embedded browser presentation remain follow-up work;
+this transport alone is not a complete remote UI deployment.

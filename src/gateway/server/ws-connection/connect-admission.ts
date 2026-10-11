@@ -303,11 +303,13 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
         (role !== "operator"
           ? "Remote Control UI ingress only admits the operator role."
           : !connectParams.device
-            ? "Remote Control UI ingress requires a paired device identity."
+            ? "Remote Control UI ingress requires a signed device identity."
             : connectParams.auth?.token !== undefined ||
                 connectParams.auth?.password !== undefined ||
-                connectParams.auth?.bootstrapToken !== undefined
-              ? "Remote Control UI ingress accepts only a paired device token; shared Gateway credentials and bootstrap tokens are not accepted."
+                connectParams.auth?.bootstrapToken !== undefined ||
+                connectParams.auth?.approvalRuntimeToken !== undefined ||
+                connectParams.auth?.agentRuntimeIdentityToken !== undefined
+              ? "Remote Control UI ingress accepts a signed device with no credential or a paired device token; shared Gateway credentials and other tokens are not accepted."
               : scopes.some(
                     (scope) =>
                       !remoteIngress.operatorScopeCeiling.some((allowed) => allowed === scope),

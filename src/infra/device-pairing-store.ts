@@ -141,6 +141,7 @@ const APPROVAL_KIND_MEMBERS = {
   silent: true,
   "trusted-cidr": true,
   "trusted-proxy": true,
+  "remote-ingress": true,
   "ssh-verified": true,
   bootstrap: true,
 } satisfies Record<PairedDeviceApprovalKind, true>;

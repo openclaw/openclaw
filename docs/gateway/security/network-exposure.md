@@ -160,6 +160,26 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 
 Trusted proxy headers do not make node device pairing automatically trusted - `gateway.nodes.pairing.autoApproveCidrs` is a separate, disabled-by-default operator policy, and loopback-source trusted-proxy header paths stay excluded from node auto-approval even when loopback trusted-proxy auth is enabled (because local callers can forge those headers).
 
+### Plugin remote Control UI ingress
+
+A trusted plugin can expose the [remote Control UI ingress](/plugins/sdk-gateway-ingress)
+on a Gateway using token or password auth without `gateway.roles`. The plugin
+must authenticate the browser as its locally approved grant holder before
+forwarding any request or socket. Core treats the live handle like a trusted
+proxy: a fresh browser with a signed device identity is automatically paired as
+an operator, with `operator.read` or read/write scopes bounded by the handle's
+ceiling. Shared Gateway secrets, bootstrap credentials, device-less connections,
+non-operator roles, and scopes above the ceiling are refused.
+
+The browser receives an ordinary device token and appears in **Devices** and
+`openclaw devices list`. The token also works on the Gateway's direct listener,
+limited to its issued scopes. This accepted tradeoff means a leaked token can
+exercise the same read or read/write capabilities directly that a compromised
+relay can already exercise through its grant. Revoke individual tokens through
+the existing device revoke operation in **Devices**. Closing or revoking the
+plugin grant closes the ingress path but does not delete paired-device rows or
+revoke their tokens.
+
 ### HSTS and origin notes
 
 - OpenClaw's gateway is local/loopback first. If you terminate TLS at a reverse proxy, set HSTS there.

@@ -177,23 +177,23 @@ describe("remote Control UI ingress security", () => {
     {
       name: "device-less",
       change: { device: undefined },
-      message: "requires a paired device identity",
+      message: "requires a signed device identity",
     },
     { name: "node role", change: { role: "node" }, message: "only admits the operator role" },
     {
       name: "shared token",
       change: { auth: { token: "shared-test-token" } },
-      message: "only a paired device token",
+      message: "a signed device with no credential or a paired device token",
     },
     {
       name: "shared password",
       change: { auth: { password: "shared-test-password" } },
-      message: "only a paired device token",
+      message: "a signed device with no credential or a paired device token",
     },
     {
       name: "bootstrap token",
       change: { auth: { bootstrapToken: "bootstrap-test" } },
-      message: "only a paired device token",
+      message: "a signed device with no credential or a paired device token",
     },
     ...[
       "operator.admin",

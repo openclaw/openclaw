@@ -1,7 +1,8 @@
+import { on, once } from "node:events";
 import { createServer } from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { WebSocketServer } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -13,21 +14,17 @@ import {
   signDevicePayload,
   type DeviceIdentity,
 } from "../infra/device-identity.js";
-import { approveDevicePairing } from "../infra/device-pairing-approval.js";
-import { loadDeviceBootstrapTokenRecords } from "../infra/device-pairing-store.js";
-import { ensureDeviceToken } from "../infra/device-pairing-tokens.js";
-import { listDevicePairing, requestDevicePairing } from "../infra/device-pairing.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   GatewayControlUiIngressError,
   type GatewayControlUiIngressFactoryV1,
   type GatewayControlUiIngressV1,
-  type GatewayIngressMessage,
 } from "../plugins/gateway-ingress.types.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createSandboxHostHttpRequestHandler } from "./mcp-app-sandbox-http.js";
 import { createGatewayControlUiIngressFactory } from "./remote-control-ui-ingress.js";
@@ -39,7 +36,6 @@ import { GatewayClientRegistry } from "./server/client-registry.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import { attachGatewayWsConnectionHandler } from "./server/ws-connection.js";
 import { createGatewayWsTestRequestContext } from "./server/ws-connection.test-helpers.js";
-import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
 const PUBLIC_ORIGIN = "https://ui.example.test";
 const SHARED_TOKEN = "remote-control-ui-integration-shared-token";
@@ -59,26 +55,132 @@ type IngressFrame = {
   payload?: {
     nonce?: string;
     type?: string;
-    auth?: { method: string; role: string; scopes: string[] };
+    auth?: { method: string; role: string; scopes: string[]; deviceToken?: string };
+    pending?: unknown[];
+    paired?: Array<{
+      deviceId: string;
+      scopes: string[];
+      approvedVia: string;
+      tokens: Array<{ role: string; scopes: string[]; revokedAtMs?: number }>;
+    }>;
+    triggers?: string[];
   };
   error?: { code: string; message: string };
 };
 
-async function readFrame(messages: AsyncIterator<GatewayIngressMessage>): Promise<IngressFrame> {
-  const frame = await messages.next();
-  if (frame.done || frame.value.kind !== "text") {
-    throw new Error("Expected a Gateway JSON frame");
+type Peer = {
+  send(frame: unknown): Promise<void>;
+  read(): Promise<IngressFrame>;
+  close(): Promise<void>;
+};
+
+type ConnectOptions = {
+  identity?: DeviceIdentity;
+  auth?: { token?: string; password?: string; deviceToken?: string; bootstrapToken?: string };
+  scopes?: string[];
+  role?: string;
+  owner?: boolean;
+  tamperSignature?: boolean;
+};
+
+async function request(peer: Peer, method: string, params: unknown): Promise<IngressFrame> {
+  await peer.send({ type: "req", id: method, method, params });
+  for (;;) {
+    const frame = await peer.read();
+    if (frame.type === "res" && frame.id === method) {
+      return frame;
+    }
   }
-  return JSON.parse(frame.value.text) as IngressFrame;
+}
+
+async function connect(peer: Peer, options: ConnectOptions): Promise<IngressFrame> {
+  const challenge = await peer.read();
+  expect(challenge.event).toBe("connect.challenge");
+  const nonce = challenge.payload?.nonce;
+  if (!nonce) {
+    throw new Error("Missing device challenge nonce");
+  }
+  const client = options.owner ? { ...CLIENT, id: "cli", mode: "cli" } : CLIENT;
+  const role = options.role ?? "operator";
+  const signedAt = Date.now();
+  const identity = options.identity;
+  const payload = identity
+    ? buildDeviceAuthPayloadV3({
+        deviceId: identity.deviceId,
+        clientId: client.id,
+        clientMode: client.mode,
+        platform: client.platform,
+        role,
+        scopes: options.scopes ?? [],
+        signedAtMs: signedAt,
+        token:
+          options.auth?.deviceToken ?? options.auth?.bootstrapToken ?? options.auth?.token ?? null,
+        nonce,
+      })
+    : undefined;
+  return await request(peer, "connect", {
+    minProtocol: PROTOCOL_VERSION,
+    maxProtocol: PROTOCOL_VERSION,
+    client,
+    role,
+    scopes: options.scopes,
+    auth: options.auth,
+    ...(identity && payload
+      ? {
+          device: {
+            id: identity.deviceId,
+            publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+            signature: signDevicePayload(
+              identity.privateKeyPem,
+              options.tamperSignature ? `${payload}-tampered` : payload,
+            ),
+            signedAt,
+            nonce,
+          },
+        }
+      : {}),
+  });
+}
+
+function expectHello(frame: IngressFrame, method: string, scopes: readonly string[]): string {
+  expect(frame).toMatchObject({
+    ok: true,
+    payload: { type: "hello-ok", auth: { method, role: "operator", scopes } },
+  });
+  const token = frame.payload?.auth?.deviceToken;
+  if (!token) {
+    throw new Error("Hello did not issue an ordinary device token");
+  }
+  return token;
+}
+
+async function usePeer<T>(peer: Peer, run: (peer: Peer) => Promise<T>): Promise<T> {
+  try {
+    return await run(peer);
+  } finally {
+    await peer.close();
+  }
+}
+
+async function expectReadWriteWithoutAdmin(peer: Peer, trigger: string) {
+  expect(await request(peer, "voicewake.set", { triggers: [trigger] })).toMatchObject({
+    ok: true,
+    payload: { triggers: [trigger] },
+  });
+  expect(await request(peer, "voicewake.get", {})).toMatchObject({
+    ok: true,
+    payload: { triggers: [trigger] },
+  });
+  expect(await request(peer, "config.set", { raw: "{}" })).toMatchObject({
+    ok: false,
+    error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
+  });
 }
 
 describe("remote Control UI ingress production composition", () => {
   let state: OpenClawTestState;
   let ingress: GatewayControlUiIngressV1 | undefined;
   let factory: GatewayControlUiIngressFactoryV1;
-  let identity: DeviceIdentity;
-  let freshIdentity: DeviceIdentity;
-  let deviceToken: string;
   let config: OpenClawConfig;
   let auth: ResolvedGatewayAuth;
   let http: ReturnType<typeof createGatewayHttpRequestHandler> | undefined;
@@ -86,7 +188,9 @@ describe("remote Control UI ingress production composition", () => {
   const serviceLifetime = new AbortController();
   const grantLifetime = new AbortController();
   const clients = new GatewayClientRegistry();
-  const upgradeServer = createServer();
+  let listener: Awaited<
+    ReturnType<typeof reserveTestPortListener<ReturnType<typeof createServer>>>
+  >;
   const connectionWork = new GatewayConnectionWork();
   const wss = new WebSocketServer({
     noServer: true,
@@ -125,35 +229,13 @@ describe("remote Control UI ingress production composition", () => {
     await state.writeConfig(config);
     setRuntimeConfigSnapshot(config, config);
     auth = { mode: "token", token: SHARED_TOKEN, allowTailscale: false };
-    identity = loadOrCreateDeviceIdentity();
-    freshIdentity = loadOrCreateDeviceIdentity({ identityKey: "synthetic-fresh-remote-browser" });
-    const pending = await requestDevicePairing({
-      deviceId: identity.deviceId,
-      publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-      platform: CLIENT.platform,
-      clientId: CLIENT.id,
-      clientMode: CLIENT.mode,
-      role: "operator",
-      scopes: [...SCOPES],
-    });
-    await approveDevicePairing(pending.request.requestId, { callerScopes: [...SCOPES] });
-    const generation = resolveSharedGatewaySessionGeneration(auth, []);
-    if (!generation) {
-      throw new Error("Missing shared-auth issuer generation");
-    }
-    const issued = await ensureDeviceToken({
-      deviceId: identity.deviceId,
-      role: "operator",
-      scopes: [...SCOPES],
-      issuer: { kind: "shared-gateway-auth", generation },
-    });
-    if (!issued) {
-      throw new Error("Fixture device token was not issued");
-    }
-    deviceToken = issued.token;
-
     const logger = createSubsystemLogger("test/remote-control-ui-ingress");
-    const requestContext = createGatewayWsTestRequestContext();
+    const requestContext = {
+      ...createGatewayWsTestRequestContext(),
+      getRuntimeConfig: () => config,
+      logGateway: logger,
+      broadcastVoiceWakeChanged: () => {},
+    };
     const preauthConnectionBudget = createPreauthConnectionBudget(8);
     attachGatewayWsConnectionHandler({
       wss,
@@ -193,6 +275,19 @@ describe("remote Control UI ingress production composition", () => {
       getRuntimeConfig: () => config,
       handleHooksRequest: async () => false,
     });
+    listener = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () => createServer(),
+    });
+    const handleUpgrade = attachGatewayUpgradeHandler({
+      httpServer: listener.listener,
+      wss,
+      clients,
+      preauthConnectionBudget,
+      resolvedAuth: auth,
+      getResolvedAuth: () => auth,
+      controlUiBasePath: "/claw",
+    });
     factory = createGatewayControlUiIngressFactory({
       pluginId: "synthetic-bundled-plugin",
       signal: serviceLifetime.signal,
@@ -202,19 +297,12 @@ describe("remote Control UI ingress production composition", () => {
         getResolvedAuth: () => auth,
         getRuntimeConfig: () => config,
         handleRequest: http,
-        handleUpgrade: attachGatewayUpgradeHandler({
-          httpServer: upgradeServer,
-          wss,
-          clients,
-          preauthConnectionBudget,
-          resolvedAuth: auth,
-          getResolvedAuth: () => auth,
-          controlUiBasePath: "/claw",
-        }),
+        handleUpgrade,
         handleSandboxRequest: createSandboxHostHttpRequestHandler(),
         signal: hostLifetime.signal,
       },
     });
+    ingress = await factory.open(openOptions);
   });
 
   afterAll(async () => {
@@ -226,33 +314,77 @@ describe("remote Control UI ingress production composition", () => {
       wss.close(() => resolve());
     });
     http?.dispose();
-    upgradeServer.removeAllListeners();
+    await listener?.releaseListener();
+    await listener?.claim.release();
     await state?.cleanup();
   });
 
-  it("loads the UI and admits a signed paired device while refusing browser shared credentials and unauthenticated hosts", async () => {
-    ingress = await factory.open(openOptions);
-    const pairingBefore = await listDevicePairing();
-    const bootstrapBefore = loadDeviceBootstrapTokenRecords();
-    await expect(
-      ingress.issuePairingBootstrap({
-        deviceId: freshIdentity.deviceId,
-        publicKey: publicKeyRawBase64UrlFromPem(freshIdentity.publicKeyPem),
-        displayName: "Fresh synthetic browser",
-        scopes: ["operator.read"],
-        signal: grantLifetime.signal,
-      }),
-    ).rejects.toMatchObject({ code: "unavailable" });
-    await expect(ingress.cancelPairingBootstrap("synthetic-enrollment")).rejects.toMatchObject({
-      code: "unavailable",
+  async function openRemote(handle = ingress): Promise<Peer> {
+    if (!handle) {
+      throw new Error("Missing ingress fixture");
+    }
+    const { socket } = await handle.openWebSocket({
+      pathAndQuery: "/claw",
+      origin: PUBLIC_ORIGIN,
+      protocols: [],
+      signal: grantLifetime.signal,
     });
-    expect(await listDevicePairing()).toEqual(pairingBefore);
-    expect(loadDeviceBootstrapTokenRecords()).toEqual(bootstrapBefore);
+    const messages = socket.messages[Symbol.asyncIterator]();
+    return {
+      send: async (frame) => socket.send({ kind: "text", text: JSON.stringify(frame) }),
+      read: async () => {
+        const frame = await messages.next();
+        if (frame.done || frame.value.kind !== "text") {
+          throw new Error("Expected a Gateway JSON frame");
+        }
+        return JSON.parse(frame.value.text) as IngressFrame;
+      },
+      close: async () => {
+        socket.close();
+        await socket.closed;
+        await messages.return?.();
+      },
+    };
+  }
+
+  async function openDirect(owner = false): Promise<Peer> {
+    const url = `ws://127.0.0.1:${listener.claim.port}/claw`;
+    const socket = new WebSocket(
+      url,
+      owner ? {} : { origin: `http://127.0.0.1:${listener.claim.port}` },
+    );
+    const messages = on(socket, "message");
+    await once(socket, "open");
+    return {
+      send: async (frame) => {
+        await new Promise<void>((resolve, reject) => {
+          socket.send(JSON.stringify(frame), (error) => (error ? reject(error) : resolve()));
+        });
+      },
+      read: async () => {
+        const frame = await messages.next();
+        if (frame.done) {
+          throw new Error("Direct Gateway socket closed before its response");
+        }
+        return JSON.parse(String(frame.value[0])) as IngressFrame;
+      },
+      close: async () => {
+        if (socket.readyState !== WebSocket.CLOSED) {
+          const closed = once(socket, "close");
+          socket.close();
+          await closed;
+        }
+        await messages.return?.();
+      },
+    };
+  }
+
+  it("auto-approves a fresh browser and uses its ordinary capped token remotely and directly", async () => {
     for (const [pathname, expected] of [
       ["/claw/", "Remote UI fixture"],
       ["/claw/assets/app.js", 'document.body.dataset.ready = "remote-ui";'],
     ]) {
-      const { response } = await ingress.request({
+      const { response } = await ingress!.request({
         surface: "control-ui",
         method: "GET",
         pathAndQuery: pathname!,
@@ -262,102 +394,197 @@ describe("remote Control UI ingress production composition", () => {
       expect(response.status).toBe(200);
       expect(await response.text()).toContain(expected);
     }
+    const identity = loadOrCreateDeviceIdentity({ identityKey: "synthetic-remote-browser" });
+    const deviceToken = await usePeer(await openRemote(), async (peer) => {
+      const token = expectHello(
+        await connect(peer, { identity, scopes: [...SCOPES] }),
+        "remote-ingress",
+        SCOPES,
+      );
+      await expectReadWriteWithoutAdmin(peer, "fresh browser");
+      return token;
+    });
+    await usePeer(await openRemote(), async (peer) => {
+      expectHello(
+        await connect(peer, { identity, auth: { deviceToken }, scopes: [...SCOPES] }),
+        "device-token",
+        SCOPES,
+      );
+      await expectReadWriteWithoutAdmin(peer, "returning browser");
+    });
+    await usePeer(await openRemote(), async (peer) => {
+      expectHello(await connect(peer, { identity }), "remote-ingress", SCOPES);
+    });
+    await usePeer(await openDirect(), async (peer) => {
+      expectHello(
+        await connect(peer, { identity, auth: { deviceToken }, scopes: [...SCOPES] }),
+        "device-token",
+        SCOPES,
+      );
+      await expectReadWriteWithoutAdmin(peer, "direct browser");
+    });
+    await usePeer(await openDirect(), async (peer) => {
+      expect(
+        await connect(peer, { identity, auth: { deviceToken }, scopes: ["operator.admin"] }),
+      ).toMatchObject({ ok: false, error: { message: expect.stringContaining("device token") } });
+    });
+    await usePeer(await openDirect(true), async (owner) => {
+      expect(
+        await connect(owner, {
+          owner: true,
+          auth: { token: SHARED_TOKEN },
+          scopes: ["operator.admin"],
+        }),
+      ).toMatchObject({ ok: true });
+      const list = await request(owner, "device.pair.list", {});
+      expect(list.ok).toBe(true);
+      expect(list.payload?.pending).toEqual([]);
+      expect(list.payload?.paired).toEqual([
+        expect.objectContaining({
+          deviceId: identity.deviceId,
+          role: "operator",
+          roles: ["operator"],
+          scopes: [...SCOPES],
+          approvedVia: "remote-ingress",
+          tokens: [expect.objectContaining({ role: "operator", scopes: [...SCOPES] })],
+        }),
+      ]);
+      expect(
+        await request(owner, "device.token.revoke", {
+          deviceId: identity.deviceId,
+          role: "operator",
+        }),
+      ).toMatchObject({ ok: true });
+    });
+    for (const direct of [false, true]) {
+      await usePeer(await (direct ? openDirect() : openRemote()), async (connection) => {
+        const denied = await connect(connection, {
+          identity,
+          auth: { deviceToken },
+          scopes: [...SCOPES],
+        });
+        expect(denied.ok).toBe(false);
+        expect(denied.error?.message).toContain("device token");
+      });
+    }
+  });
 
-    // A real existing auto-approval bootstrap must not become a remote enrollment fallback.
-    const genericBootstrap = await issueDeviceBootstrapToken({
+  it("refuses shared credentials, bootstrap tokens, invalid tokens, unbound devices, roles, and excess scopes", async () => {
+    const identity = loadOrCreateDeviceIdentity({ identityKey: "synthetic-rejected-browser" });
+    const bootstrap = await issueDeviceBootstrapToken({
       profile: { purpose: "control-ui", roles: ["operator"], scopes: [...SCOPES] },
     });
-    for (const credential of ["paired-device", "shared-token", "generic-bootstrap"] as const) {
-      const { socket } = await ingress.openWebSocket({
-        pathAndQuery: "/claw",
-        origin: PUBLIC_ORIGIN,
-        protocols: [],
-        signal: grantLifetime.signal,
+    for (const credential of [
+      { token: SHARED_TOKEN },
+      { password: "synthetic-password" },
+      { bootstrapToken: bootstrap.token },
+    ]) {
+      await usePeer(await openRemote(), async (peer) => {
+        expect(
+          await connect(peer, { identity, auth: credential, scopes: [...SCOPES] }),
+        ).toMatchObject({
+          ok: false,
+          error: {
+            code: "FORBIDDEN",
+            message: expect.stringContaining("shared Gateway credentials"),
+          },
+        });
       });
-      const messages = socket.messages[Symbol.asyncIterator]();
-      try {
-        const challenge = await readFrame(messages);
-        expect(challenge.event).toBe("connect.challenge");
-        const nonce = challenge.payload?.nonce;
-        if (!nonce) {
-          throw new Error("Missing device challenge nonce");
-        }
-        const signedAt = Date.now();
-        const signingIdentity = credential === "generic-bootstrap" ? freshIdentity : identity;
-        const token =
-          credential === "paired-device"
-            ? deviceToken
-            : credential === "generic-bootstrap"
-              ? genericBootstrap.token
-              : SHARED_TOKEN;
-        const payload = buildDeviceAuthPayloadV3({
-          deviceId: signingIdentity.deviceId,
-          clientId: CLIENT.id,
-          clientMode: CLIENT.mode,
-          platform: CLIENT.platform,
-          role: "operator",
-          scopes: [...SCOPES],
-          signedAtMs: signedAt,
-          token,
-          nonce,
-        });
-        await socket.send({
-          kind: "text",
-          text: JSON.stringify({
-            type: "req",
-            id: "connect",
-            method: "connect",
-            params: {
-              minProtocol: PROTOCOL_VERSION,
-              maxProtocol: PROTOCOL_VERSION,
-              client: CLIENT,
-              role: "operator",
-              scopes: [...SCOPES],
-              auth:
-                credential === "paired-device"
-                  ? { deviceToken: token }
-                  : credential === "generic-bootstrap"
-                    ? { bootstrapToken: token }
-                    : { token },
-              device: {
-                id: signingIdentity.deviceId,
-                publicKey: publicKeyRawBase64UrlFromPem(signingIdentity.publicKeyPem),
-                signature: signDevicePayload(signingIdentity.privateKeyPem, payload),
-                signedAt,
-                nonce,
-              },
-            },
-          }),
-        });
-        const response = await readFrame(messages);
-        expect(response.id).toBe("connect");
-        if (credential === "paired-device") {
-          expect(response.ok).toBe(true);
-          expect(response.payload).toMatchObject({
-            type: "hello-ok",
-            auth: {
-              method: "device-token",
-              role: "operator",
-              scopes: [...SCOPES],
-            },
-          });
-        } else {
-          expect(response.ok).toBe(false);
-          expect(response.error).toMatchObject({ code: "FORBIDDEN" });
-          expect(response.error?.message).toContain("shared Gateway credentials");
-        }
-      } finally {
-        socket.close();
-        await socket.closed;
-        await messages.return?.();
-      }
     }
-    const pairingAfter = await listDevicePairing();
-    expect(pairingAfter.pending).toEqual([]);
-    expect(pairingAfter.paired.some((device) => device.deviceId === freshIdentity.deviceId)).toBe(
-      false,
+    const deniedCases: Array<[ConnectOptions, string]> = [
+      [
+        { identity, auth: { deviceToken: "invalid-device-token" }, scopes: [...SCOPES] },
+        "device token",
+      ],
+      [{ identity, scopes: [...SCOPES], tamperSignature: true }, "signature"],
+      [{ scopes: [...SCOPES] }, "signed device identity"],
+      [{ identity, role: "node", scopes: [] }, "operator role"],
+      [{ identity, scopes: ["operator.admin"] }, "ceiling"],
+    ];
+    for (const [options, message] of deniedCases) {
+      await usePeer(await openRemote(), async (peer) => {
+        expect(await connect(peer, options)).toMatchObject({
+          ok: false,
+          error: { message: expect.stringContaining(message) },
+        });
+      });
+    }
+  });
+
+  it("caps empty-scope enrollment and same-key lost-token recovery to a read-only handle", async () => {
+    const identity = loadOrCreateDeviceIdentity({ identityKey: "synthetic-narrowed-browser" });
+    const originalToken = await usePeer(await openRemote(), async (peer) =>
+      expectHello(await connect(peer, { identity, scopes: [] }), "remote-ingress", SCOPES),
     );
-    await ingress.close();
+    const readOnly = await factory.open({
+      ...openOptions,
+      audienceId: "synthetic-read-only-grant",
+      operatorScopeCeiling: ["operator.read"],
+    });
+    try {
+      const readOnlyIdentity = loadOrCreateDeviceIdentity({
+        identityKey: "synthetic-read-only-browser",
+      });
+      await usePeer(await openRemote(readOnly), async (peer) => {
+        expectHello(await connect(peer, { identity: readOnlyIdentity }), "remote-ingress", [
+          "operator.read",
+        ]);
+      });
+      await usePeer(await openRemote(), async (peer) => {
+        expectHello(
+          await connect(peer, { identity: readOnlyIdentity, scopes: [...SCOPES] }),
+          "remote-ingress",
+          SCOPES,
+        );
+        await expectReadWriteWithoutAdmin(peer, "same-key scope upgrade");
+      });
+      const deviceToken = await usePeer(await openRemote(readOnly), async (peer) => {
+        const token = expectHello(await connect(peer, { identity }), "remote-ingress", [
+          "operator.read",
+        ]);
+        expect(await request(peer, "voicewake.get", {})).toMatchObject({ ok: true });
+        expect(await request(peer, "voicewake.set", { triggers: ["denied write"] })).toMatchObject({
+          ok: false,
+          error: { code: "FORBIDDEN", message: "missing scope: operator.write" },
+        });
+        return token;
+      });
+      expect(deviceToken).not.toBe(originalToken);
+      await usePeer(await openDirect(), async (peer) => {
+        expectHello(
+          await connect(peer, { identity, auth: { deviceToken }, scopes: ["operator.read"] }),
+          "device-token",
+          ["operator.read"],
+        );
+        expect(
+          await request(peer, "voicewake.set", { triggers: ["denied direct write"] }),
+        ).toMatchObject({
+          ok: false,
+          error: { code: "FORBIDDEN", message: "missing scope: operator.write" },
+        });
+      });
+      await usePeer(await openDirect(), async (peer) => {
+        expect(
+          await connect(peer, { identity, auth: { deviceToken }, scopes: [...SCOPES] }),
+        ).toMatchObject({ ok: false, error: { message: expect.stringContaining("device token") } });
+      });
+      for (const credential of [undefined, { deviceToken }]) {
+        await usePeer(await openRemote(readOnly), async (peer) => {
+          expect(
+            await connect(peer, { identity, auth: credential, scopes: [...SCOPES] }),
+          ).toMatchObject({
+            ok: false,
+            error: { code: "FORBIDDEN", message: expect.stringContaining("ceiling") },
+          });
+        });
+      }
+    } finally {
+      await readOnly.close();
+    }
+  });
+
+  it("refuses an unauthenticated host", async () => {
+    await ingress!.close();
     auth = { mode: "none", allowTailscale: false };
     config = { ...config, gateway: { ...config.gateway, auth: { mode: "none" } } };
     setRuntimeConfigSnapshot(config, config);

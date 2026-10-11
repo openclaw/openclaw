@@ -42,7 +42,8 @@ export type GatewayAuthResult = {
     | "tailscale"
     | "device-token"
     | "bootstrap-token"
-    | "trusted-proxy";
+    | "trusted-proxy"
+    | "remote-ingress";
   user?: string;
   /** Full verified Tailscale identity; present only after header + WhoIs agreement. */
   tailscaleIdentity?: VerifiedTailscaleIngressIdentity;
