@@ -5,6 +5,7 @@ import {
   createSqliteWorkerOperationAdmission,
   requestSqliteWorkerOperationAdmission,
   withSqliteWorkerOperationAdmission,
+  type SqliteWorkerAdmissionRequest,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import {
   settleSqliteWorkerOperationContext,
@@ -130,6 +131,7 @@ async function withActor(
   run: (fixture: {
     actor: ReturnType<typeof createSessionActor>;
     commands: string[];
+    admissions: SqliteWorkerAdmissionRequest[];
     fault: {
       reply: "normal" | "lost" | "unknown";
       workerPublicationFailure?: boolean;
@@ -160,6 +162,7 @@ async function withActor(
     };
     const options = { agentId: "main", path: database.path };
     const commands: string[] = [];
+    const admissions: SqliteWorkerAdmissionRequest[] = [];
     const fault: Parameters<typeof run>[0]["fault"] = { reply: "normal" };
     let epoch = 0;
     const lifetime = {
@@ -210,9 +213,10 @@ async function withActor(
             commands.push(command.type);
             const completion = Promise.withResolvers<SqliteWorkerOperationSettlement>();
             const retained = { settled: completion.promise };
-            const admission = createSqliteWorkerOperationAdmission((request, grant) =>
-              authorize(request, { admission, retained }, grant),
-            );
+            const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+              admissions.push(request);
+              authorize(request, { admission, retained }, grant);
+            });
             const dropped = fault.reply === "unknown";
             const postMessage = admission.port.postMessage.bind(admission.port);
             const wire = vi
@@ -291,6 +295,7 @@ async function withActor(
     try {
       await run({
         actor,
+        admissions,
         commands,
         fault,
         retireGeneration() {
@@ -549,7 +554,7 @@ it("isolates mutable policy callbacks from admitted snapshots and committed stat
             snapshot.entry.sessionId = "policy-mutated";
           }
           snapshot.version = { epoch: "policy-mutated", sequence: -1 };
-          snapshot.transcript.anchors.length = 0;
+          snapshot.dependencySessionIds.length = 0;
         },
       },
     );
@@ -563,6 +568,76 @@ it("isolates mutable policy callbacks from admitted snapshots and committed stat
     expect(stages).toContain("transaction");
     expect(stages).toContain("commit");
     expect(actor.snapshot(authority)?.entry?.sessionId).toBe(initial.entry?.sessionId);
+  });
+});
+
+it("admits tool appends once per transaction boundary without transferring transcript indexes", async () => {
+  await withActor(async ({ actor, admissions }) => {
+    const initial = await actor.read(authority);
+    const append = {
+      kind: "message" as const,
+      input: {
+        scope: {
+          agentId: "main",
+          storePath:
+            actor.target.database.kind === "file" ? actor.target.database.nativeLocation : "unused",
+          sessionKey: actor.target.sessionKey,
+          sessionId: initial.entry!.sessionId,
+        },
+        cwd: "/synthetic",
+        messageJson: JSON.stringify({
+          role: "toolResult",
+          toolCallId: "call",
+          toolName: "synthetic",
+          content: [{ type: "text", text: "tool output" }],
+          isError: false,
+          timestamp: 1,
+        }),
+      },
+    };
+    admissions.length = 0;
+    const result = await actor.appendToolResult(
+      { commandId: "tool", phaseId: "turn", append },
+      authority,
+    );
+    expect(result.kind).toBe("committed");
+    expect(admissions.map(({ stage }) => stage)).toEqual(["transaction", "commit"]);
+    for (const request of admissions) {
+      expect(request.facts).toMatchObject({
+        publication: {
+          snapshot: { target: actor.target, entry: { sessionId: initial.entry!.sessionId } },
+        },
+      });
+      const facts = isRecord(request.facts) ? request.facts.publication : undefined;
+      expect(
+        isRecord(facts) && isRecord(facts.snapshot) && Object.hasOwn(facts.snapshot, "transcript"),
+      ).toBe(false);
+    }
+    const committed = actor.snapshot(authority)!;
+    expect(committed.transcript.anchors.length).toBeGreaterThan(initial.transcript.anchors.length);
+    const refused = await actor.appendToolResult(
+      {
+        commandId: "refused-tool",
+        phaseId: "turn",
+        append: { ...append, input: { ...append.input, freshMessageCheck: true } },
+      },
+      {
+        assertCurrent() {},
+        authorize(stage, _facts, publication) {
+          if (isRecord(publication) && publication.check === "fresh") {
+            throw new Error("Fresh-message authority revoked");
+          }
+          if (stage === "commit") {
+            throw new Error("Commit authority revoked");
+          }
+        },
+      },
+    );
+    expect(refused).toMatchObject({
+      kind: "rolled-back",
+      error: { message: "Fresh-message authority revoked" },
+    });
+    expect((await actor.read(authority)).transcript).toEqual(committed.transcript);
   });
 });
 

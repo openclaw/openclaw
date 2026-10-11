@@ -92,7 +92,6 @@ export function createNavigationPreferencesFixture(): ApplicationContext["naviga
     navCollapsed: false,
     navWidth: 258,
     sidebarEntries: [],
-    navigationScope: "mine",
     pinnedAgentIds: [],
   };
   const listeners = new Set<(next: typeof snapshot) => void>();

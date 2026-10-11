@@ -60,7 +60,9 @@ describe("AppSidebar session ownership", () => {
     expect(sidebar.sessionData.sessionsResult?.owners).toHaveLength(2);
     expect(sidebar.querySelector('[data-session-key="agent:main:ada"]')).not.toBeNull();
     expect(sidebar.querySelectorAll("openclaw-session-owner-chip")).toHaveLength(1);
-    const menu = await openSessionMenu(sidebar);
+    sidebar.querySelector<HTMLButtonElement>("#sidebar-session-owner-title")!.click();
+    await sidebar.updateComplete;
+    const menu = sidebar.querySelector(".sidebar-session-owner-filter")!;
     expect(menu.querySelector('[data-value="owner:profile-ada"]')).not.toBeNull();
     expect(menu.querySelector('[data-value="owner:profile-bob"]')).not.toBeNull();
     await selectSessionMenuValue(sidebar, "owner:profile-bob");
@@ -78,9 +80,8 @@ describe("AppSidebar session ownership", () => {
     await sidebar.updateComplete;
     expect(sidebar.sessionOwnerFilterId).toBe("profile-bob");
     expect(sidebar.querySelector('[data-session-key="agent:main:ada"]')).toBeNull();
-    const unresolvedMenu = await openSessionMenu(sidebar);
     await waitForFast(() =>
-      expect(unresolvedMenu.querySelector("#sidebar-sessions-owner")?.textContent).toContain(
+      expect(sidebar.querySelector("#sidebar-session-owner-title")?.textContent).toContain(
         "profile-bob",
       ),
     );
@@ -117,7 +118,9 @@ describe("AppSidebar session ownership", () => {
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
 
-    const menu = await openSessionMenu(sidebar);
+    sidebar.querySelector<HTMLButtonElement>("#sidebar-session-owner-title")!.click();
+    await sidebar.updateComplete;
+    const menu = sidebar.querySelector(".sidebar-session-owner-filter")!;
     const ownerRows = [
       ...menu.querySelectorAll<HTMLElement>('[role="option"][data-value^="owner:"]'),
     ].filter((row) => row.getAttribute("data-value") !== "owner:");
@@ -126,7 +129,7 @@ describe("AppSidebar session ownership", () => {
       "owner:profile-ayaan",
       "owner:profile-colin",
     ]);
-    expect(ownerRows[0]?.querySelector(".picker-select__label")?.textContent).toBe("Patrick (You)");
+    expect(ownerRows[0]?.querySelector(".picker-select__label")?.textContent).toBe("My sessions");
   });
 
   it.each([

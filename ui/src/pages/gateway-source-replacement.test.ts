@@ -28,12 +28,12 @@ import {
 } from "./sessions/sessions-page.test-support.ts";
 import { SkillsPage, type SkillsRouteData } from "./skills/skills-page.tsx";
 import { createSkill } from "./skills/view.test-support.ts";
+import type { UsageRouteData } from "./usage/types.ts";
 import {
   cacheSnapshot,
   cleanupUsagePageTest,
   createPage as createUsagePage,
 } from "./usage/usage-page.test-support.ts";
-import type { UsageRouteData } from "./usage/usage-page.tsx";
 import "./model-providers/model-providers-page.tsx";
 
 // Mirrors the module-private default usage TTL asserted below.
