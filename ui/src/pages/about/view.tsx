@@ -2,11 +2,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { For, createMemo } from "solid-js";
 import { currentThemeBranding, subscribeThemeBranding } from "../../app/theme-branding.ts";
 import type { ControlUiBuildInfo } from "../../build-info.ts";
-import {
-  canonicalLobsterLook,
-  lobsterLookStyle,
-  renderLobsterSvg,
-} from "../../components/lobster-pet-look.ts";
+import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
+import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-identity.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import {
   BrandIcon,
@@ -16,7 +13,7 @@ import {
 } from "../../components/solid/icon.tsx";
 import { SettingsPage, SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import "../../components/tooltip.ts";
-import { renderThemeBrandIcon } from "../../components/theme-brand-icon.ts";
+import "../../components/theme-brand-icon.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
 import {
@@ -28,7 +25,16 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import "../../styles/about.css";
 import "../../styles/settings.css";
-import { LitContent } from "../../lit/lit-content.tsx";
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-theme-brand-icon": HTMLAttributes<HTMLElement> & {
+        "prop:branding": ReturnType<typeof currentThemeBranding>;
+      };
+    }
+  }
+}
 
 export type AboutCommitCopyState = "idle" | "copying" | "copied" | "error";
 type AboutProps = {
@@ -158,7 +164,7 @@ export function AboutView(props: AboutProps) {
       <section class="about-hero">
         {branding.read().brandIcon !== "claw" ? (
           <span class="about-hero__mark--neutral" aria-hidden="true">
-            <LitContent content={renderThemeBrandIcon(undefined, branding.read())} />
+            <openclaw-theme-brand-icon prop:branding={branding.read()} aria-hidden="true" />
           </span>
         ) : (
           <button
@@ -168,7 +174,7 @@ export function AboutView(props: AboutProps) {
             aria-label={t("aboutPage.waveHello")}
             onClick={() => props.onPokeClawd()}
           >
-            <LitContent content={renderLobsterSvg(look)} />
+            <LobsterSvg look={look} />
           </button>
         )}
         <h2 class="about-hero__name">{branding.read().brandName}</h2>

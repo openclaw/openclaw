@@ -1,16 +1,12 @@
 import { For, createMemo } from "solid-js";
 import type { getLobsterdexEntries } from "../../components/lobster-dex.ts";
+import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
 import type { LobsterPetPaletteId } from "../../components/lobster-pet-contract.ts";
-import {
-  canonicalLobsterLook,
-  lobsterLookStyle,
-  renderLobsterSvg,
-} from "../../components/lobster-pet-look.ts";
+import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-identity.ts";
 import { LOBSTER_PALETTE_LORE, lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { getLocale, t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/lit-content.tsx";
 // Page stars must override the shared mini-star rules loaded by lobster-pet-look.
 import "../../styles/lobsterdex.css";
 
@@ -107,7 +103,7 @@ export function LobsterdexView(props: LobsterdexViewProps) {
                   ]}
                   style={lobsterLookStyle(look)}
                 >
-                  <LitContent content={renderLobsterSvg(look, { standalone: true })} />
+                  <LobsterSvg look={look} standalone />
                   {entry()?.shinySeenAt != null && (
                     <span class="lobsterdex__mini-star lobsterdex-page__star" aria-hidden="true">
                       ✦

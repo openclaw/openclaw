@@ -43,14 +43,14 @@ function LobsterdexPageContent(props: { host: HTMLElement }) {
   onSettled(() => {
     const prefix = "#lobsterdex-";
     if (!location.hash.startsWith(prefix)) {
-      return;
+      return undefined;
     }
     const palette = LOBSTER_PET_PALETTES.find(
       (entry) => entry.id === location.hash.slice(prefix.length),
     );
     const card = palette ? host.querySelector<HTMLElement>(`#lobsterdex-${palette.id}`) : null;
     if (!card) {
-      return;
+      return undefined;
     }
     const clearHighlight = (event: AnimationEvent) => {
       if (event.target !== card || event.animationName !== "lobsterdex-card-highlight") {

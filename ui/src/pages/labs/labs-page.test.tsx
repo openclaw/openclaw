@@ -75,7 +75,7 @@ function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
 
 async function mountPage(sourceConfig: Record<string, unknown>): Promise<{
   page: LabsPageElement;
-  unmount(): void;
+  unmount: () => void;
   runtimeConfig: ReturnType<typeof createRuntimeConfig>;
   gateway: ReturnType<typeof createGateway>;
 }> {
