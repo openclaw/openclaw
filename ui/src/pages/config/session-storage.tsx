@@ -142,7 +142,7 @@ export function SessionStorageSettingsContent(props: SettingsProps) {
       if (previous) {
         setRequestStatus("idle");
       }
-      return;
+      return undefined;
     }
     const controller = new AbortController();
     request = controller;
@@ -176,7 +176,7 @@ export function SessionStorageSettingsContent(props: SettingsProps) {
           setRequestStatus("complete");
           observeMaintenance(status);
         },
-        (error) => {
+        (error: unknown) => {
           if (!isCurrent()) {
             return;
           }
@@ -448,7 +448,7 @@ export function SessionStorageSettingsContent(props: SettingsProps) {
               <button
                 class="btn"
                 disabled={!client() || requestStatus() === "pending"}
-                onClick={() => void refreshStatus()}
+                onClick={() => refreshStatus()}
               >
                 {t("common.refresh")}
               </button>

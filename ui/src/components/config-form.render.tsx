@@ -22,17 +22,6 @@ import {
 } from "./solid/settings-ui.tsx";
 import { syncPopoverLabel } from "./web-awesome-popover.ts";
 
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "wa-popover": SolidJSX.HTMLAttributes<HTMLElement> & {
-        for?: string;
-        placement?: string;
-      };
-    }
-  }
-}
-
 export function ConfigTierGroups(props: ConfigTierGroupsProps): SolidJSX.Element {
   const split = createMemo(() =>
     splitConfigSchemaByTier({

@@ -515,9 +515,7 @@ describe("curated meeting capture", () => {
     flush();
     click(page, "Edit source 1");
     flush();
-    const account = page.querySelector<HTMLInputElement>('input[name="accountId"]')!;
-    account.value = "unsaved-account";
-    account.dispatchEvent(new Event("input"));
+    input(page, "accountId", "unsaved-account");
     click(page, "Edit source 2");
     flush();
     page.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
@@ -899,9 +897,7 @@ describe("curated meeting capture", () => {
     select.value = "test-voice";
     select.dispatchEvent(new Event("change"));
     flush();
-    const account = page.querySelector<HTMLInputElement>('input[name="accountId"]')!;
-    account.value = "new-account";
-    account.dispatchEvent(new Event("input"));
+    input(page, "accountId", "new-account");
     input(page, "guildId", "new-guild");
     input(page, "channelId", "new-channel");
     const { promise: pending, resolve: finish } = createDeferred();

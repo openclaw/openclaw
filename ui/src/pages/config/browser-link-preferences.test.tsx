@@ -18,14 +18,15 @@ describe("Control UI browser link preferences row", () => {
 
   it("renders an accessible default-off toggle and publishes changes", () => {
     const onChange = vi.fn();
-    const { container, getByRole } = mountSolid(() => (
+    const view = mountSolid(() => (
       <BrowserLinkPreferencesRow enabled={false} onChange={onChange} />
     ));
+    const { container } = view;
 
     expect(container.querySelector(".settings-row__title")?.textContent?.trim()).toBe(
       "Open links in Control UI browser",
     );
-    const toggle = getByRole("switch", { name: "Open links in Control UI browser" });
+    const toggle = view.getByRole("switch", { name: "Open links in Control UI browser" });
     if (!(toggle instanceof HTMLInputElement)) {
       throw new Error("missing Control UI browser link preference toggle");
     }

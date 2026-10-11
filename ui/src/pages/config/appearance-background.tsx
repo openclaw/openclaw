@@ -1,6 +1,7 @@
 import { createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import "../../components/session-background.ts";
+import type { SessionBackground } from "../../components/session-background.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { AppearanceBackgroundController } from "./appearance-background-controller.ts";
@@ -15,6 +16,7 @@ export function AppearanceBackgroundContent(
   // Plain controllers can notify while a descendant or bridge owns the current scope.
   const [revision, publish] = createSignal(0, { ownedWrite: true });
   const controller = new AppearanceBackgroundController(() => publish((value) => value + 1));
+  let preview!: SessionBackground;
   const viewProps = createMemo(() => {
     revision();
     return controller.viewProps;
@@ -23,17 +25,23 @@ export function AppearanceBackgroundContent(
     controller.attach(props.host, context());
   });
   createEffect(context, (current) => controller.connect(current));
-  createEffect(revision, () => controller.afterUpdate());
+  createEffect(revision, () => {
+    controller.afterUpdate();
+    // Reapply after a same-turn dismiss/reopen, as the former Lit live() binding did.
+    preview.presented = controller.canvasPreview;
+  });
   onCleanup(() => controller.dispose());
   return (
     <>
       <openclaw-session-background
         class="settings-background-preview"
         data-background-preview-canvas
+        ref={(element: SessionBackground) => {
+          preview = element;
+        }}
         prop:context={context()}
         prop:surface="preview"
         prop:preferenceOverride={(revision(), controller.previewPreference)}
-        prop:presented={(revision(), controller.canvasPreview)}
       />
       <AppearanceBackgroundView {...viewProps()} />
     </>

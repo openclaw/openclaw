@@ -82,7 +82,7 @@ describe("Web Push preference saves", () => {
   it("lets recipients opt in to mentions and override them for one browser", () => {
     const onUserPreferences = vi.fn();
     const onDevicePreferences = vi.fn();
-    const { container, getByRole } = mountSolid(() =>
+    const view = mountSolid(() =>
       renderNotificationsSection({
         connected: true,
         webPush: {
@@ -101,8 +101,9 @@ describe("Web Push preference saves", () => {
         onWebPushSetDevicePreferences: onDevicePreferences,
       }),
     );
+    const { container } = view;
 
-    const accountToggle = getByRole("switch", { name: "Someone mentions me" });
+    const accountToggle = view.getByRole("switch", { name: "Someone mentions me" });
     if (!(accountToggle instanceof HTMLInputElement)) {
       throw new Error("Expected the mention account preference switch");
     }

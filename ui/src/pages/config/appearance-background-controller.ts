@@ -77,7 +77,7 @@ export class AppearanceBackgroundController {
 
   constructor(private readonly publish: () => void) {}
   private get isConnected() {
-    return this.connected && this.host?.isConnected === true;
+    return this.connected && this.host.isConnected;
   }
   private get busy() {
     return this.busyValue;

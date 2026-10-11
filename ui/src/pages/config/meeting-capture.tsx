@@ -117,7 +117,7 @@ export function MeetingCaptureSettingsContent(props: SettingsProps) {
       if (previous) {
         setRequestStatus("idle");
       }
-      return;
+      return undefined;
     }
     const controller = new AbortController();
     request = controller;
@@ -148,10 +148,12 @@ export function MeetingCaptureSettingsContent(props: SettingsProps) {
             setRequestStatus("complete");
             retainLocatorRequirements(status, editing(), editedProviderId(), locatorRequirements());
           }),
-        (error) => {
+        (error: unknown) => {
           if (!isCurrent()) {
             return;
           }
+          // Failed health must not seed a later editor with stale provider requirements.
+          setResult(undefined);
           setRequestError(error);
           setRequestStatus("error");
         },
@@ -587,7 +589,7 @@ export function MeetingCaptureSettingsContent(props: SettingsProps) {
                   <button
                     class="btn"
                     disabled={!client() || requestStatus() === "pending"}
-                    onClick={() => void refreshStatus()}
+                    onClick={() => refreshStatus()}
                   >
                     <Icon name="refresh" />
                     {t("common.refresh")}

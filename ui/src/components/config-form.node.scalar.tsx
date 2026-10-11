@@ -162,11 +162,10 @@ function ScalarInput(props: {
     const isStructuredSecretRef = !props.stepped && isSecretRefObject(value);
     const rawAvailable = params.rawAvailable ?? true;
     const masked = sensitiveState?.isMasked;
-    const effectiveRedacted = Boolean(
+    const effectiveRedacted =
       (sensitiveState?.isRedacted && !masked) ||
       sensitiveState?.sentinelRedacted ||
-      isStructuredSecretRef,
-    );
+      isStructuredSecretRef;
     const placeholder = effectiveRedacted
       ? isStructuredSecretRef
         ? rawAvailable

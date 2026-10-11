@@ -79,7 +79,9 @@ export function completeConfigContext(context: ApplicationContext): ApplicationC
   ]) {
     observeFixture(source);
   }
-  Object.assign(context.agentIdentity, { get: context.agentIdentity.get ?? (() => null) });
+  if (!context.agentIdentity.get) {
+    Object.assign(context.agentIdentity, { get: () => null });
+  }
   Object.assign(context.config, {
     current: context.config.current ?? { assistantIdentity: { name: "OpenClaw" } },
   });
