@@ -44,8 +44,24 @@ import { resolveTelegramRichMessages, resolveTelegramTableMode } from "./rich-me
 const loadTelegramNativeCommandDeliveryRuntime = createLazyRuntimeModule(
   () => import("./bot/delivery.js"),
 );
-const loadTelegramNativeCommandRuntime = createLazyRuntimeModule(
-  () => import("./bot-native-commands.runtime.js"),
+const loadTelegramNativeCommandRuntime = createLazyRuntimeModule(() =>
+  import("./bot-native-commands.runtime.js").then(
+    ({
+      ensureConfiguredBindingRouteReady,
+      getAgentScopedMediaLocalRoots,
+      resolveChunkMode,
+      getSessionEntryAsync,
+      resolveStorePath,
+      recordDeliveredCommandExchange,
+    }) => ({
+      ensureConfiguredBindingRouteReady,
+      getAgentScopedMediaLocalRoots,
+      resolveChunkMode,
+      getSessionEntryAsync,
+      resolveStorePath,
+      recordDeliveredCommandExchange,
+    }),
+  ),
 );
 
 type TelegramNativeCommandRuntime = Awaited<ReturnType<typeof loadTelegramNativeCommandRuntime>>;
