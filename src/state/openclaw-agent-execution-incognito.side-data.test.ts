@@ -19,10 +19,7 @@ import type { SqliteWorkerOperations, SqliteWorkerStore } from "../infra/sqlite-
 import * as workerStore from "../infra/sqlite-worker-store.js";
 import { settleIncognitoTrajectoryRuntimeRetention } from "../trajectory/runtime-retention.js";
 import { createSqliteTrajectoryRuntimeSink } from "../trajectory/runtime-store-writer.js";
-import {
-  loadSqliteTrajectoryRuntimeEvents,
-  loadSqliteTrajectoryRuntimeEventRowsSync,
-} from "../trajectory/runtime-store.sqlite.js";
+import { loadSqliteTrajectoryRuntimeEventRowsSync } from "../trajectory/runtime-store.sqlite.js";
 import {
   appendSqliteTrajectoryRuntimeEvents,
   createTrajectoryEvent,
