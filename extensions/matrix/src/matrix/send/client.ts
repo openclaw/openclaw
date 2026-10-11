@@ -2,6 +2,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { CoreConfig } from "../../types.js";
 import { resolveMatrixAccountConfig } from "../account-config.js";
 import type { MatrixRuntimeClientOptions } from "../client-bootstrap.js";
+import { getMatrixMonitorTaskSignal } from "../monitor/task-runner.js";
 import type { MatrixClient } from "../sdk.js";
 import { withMatrixSendCurrentness } from "../sdk/send-currentness.js";
 
@@ -41,13 +42,19 @@ export async function withResolvedMatrixSendClient<T>(
       readiness: "started",
     },
     (client, abortSignal) => {
-      if (!opts.signal && !opts.assertDirectAdapterHandoff) {
+      // A pre-resolved client used to skip this guard. Retirement aborts the
+      // monitor signal while that client can still belong to another monitor.
+      const monitorSignal = getMatrixMonitorTaskSignal();
+      if (!opts.signal && !opts.assertDirectAdapterHandoff && !monitorSignal) {
         return run(client, abortSignal);
       }
       return withMatrixSendCurrentness(
         client,
         () => {
           opts.assertDirectAdapterHandoff?.();
+          // The SDK scheduler can drain this send in another monitor's context.
+          // Keep the signal captured at entry so retirement follows this send.
+          monitorSignal?.throwIfAborted();
           opts.signal?.throwIfAborted();
           abortSignal?.throwIfAborted();
         },

@@ -1,8 +1,10 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime, RuntimeEnv } from "../../../runtime-api.js";
 import { setMatrixRuntime } from "../../runtime.js";
 import type { MatrixConfig } from "../../types.js";
 import { registerMatrixAutoJoin } from "./auto-join.js";
+import { createMatrixMonitorTaskRunner } from "./task-runner.js";
 
 type InviteHandler = (roomId: string, inviteEvent: unknown) => void;
 
@@ -117,6 +119,64 @@ describe("registerMatrixAutoJoin", () => {
 
     expect(resolveRoom).toHaveBeenCalledTimes(2);
     expect(joinRoom).toHaveBeenCalledWith("!room:example.org");
+  });
+
+  it("does not join when the originating monitor retires during alias lookup", async () => {
+    vi.useFakeTimers();
+    const harness = createClientStub();
+    const releaseLookup = createDeferred<void>();
+    harness.resolveRoom.mockReturnValue(releaseLookup.promise.then(() => "!room:example.org"));
+    const retired = createMatrixMonitorTaskRunner({
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      logVerboseMessage: vi.fn(),
+    });
+    const active = createMatrixMonitorTaskRunner({
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      logVerboseMessage: vi.fn(),
+    });
+    registerMatrixAutoJoin({
+      client: harness.client,
+      accountConfig: {
+        autoJoin: "allowlist",
+        autoJoinAllowlist: ["#allowed:example.org"],
+      },
+      runtime: { log: vi.fn(), error: vi.fn() } as unknown as RuntimeEnv,
+      runDetachedTask: retired.runDetachedTask,
+    });
+    const retiredInvite = harness.getInviteHandler();
+    if (!retiredInvite) {
+      throw new Error("expected Matrix invite handler");
+    }
+    retiredInvite("!room:example.org", {});
+    await flushInviteTasks();
+    expect(harness.resolveRoom).toHaveBeenCalled();
+    const idle = retired.waitForIdle();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await idle;
+    releaseLookup.resolve();
+    await flushInviteTasks();
+    expect(harness.joinRoom).not.toHaveBeenCalled();
+
+    harness.resolveRoom.mockResolvedValue("!room:example.org");
+    registerMatrixAutoJoin({
+      client: harness.client,
+      accountConfig: {
+        autoJoin: "allowlist",
+        autoJoinAllowlist: ["#allowed:example.org"],
+      },
+      runtime: { log: vi.fn(), error: vi.fn() } as unknown as RuntimeEnv,
+      runDetachedTask: active.runDetachedTask,
+    });
+    const activeInvite = harness.getInviteHandler();
+    if (!activeInvite) {
+      throw new Error("expected active Matrix invite handler");
+    }
+    activeInvite("!room:example.org", {});
+    await flushInviteTasks();
+    expect(harness.joinRoom).toHaveBeenCalledWith("!room:example.org");
+    retired.close();
+    active.close();
+    vi.useRealTimers();
   });
 
   it("logs and skips allowlist alias resolution failures", async () => {
