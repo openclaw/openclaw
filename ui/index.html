@@ -15,6 +15,168 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
+    <script data-cfasync="false" data-openclaw-legacy-polyfills>
+      // Older embedded Chromium WebViews (for example Chromium 114 in Android Mini App
+      // hosts) lack built-ins the app calls without guards; the first missing call
+      // aborts rendering. Classic inline scripts run before deferred module scripts,
+      // so these fallbacks are in place before any app code. Each installs only when
+      // the native function is missing.
+      (function () {
+        function define(target, name, value) {
+          if (typeof target[name] === "function") return;
+          Object.defineProperty(target, name, {
+            value: value,
+            writable: true,
+            configurable: true,
+            enumerable: false,
+          });
+        }
+        // for...of over the receiver itself, so early exits still close the source.
+        function iterate(iterator) {
+          var iterable = {};
+          iterable[Symbol.iterator] = function () {
+            return iterator;
+          };
+          return iterable;
+        }
+
+        define(Promise, "withResolvers", function () {
+          var out = {};
+          out.promise = new (typeof this === "function" ? this : Promise)(function (res, rej) {
+            out.resolve = res;
+            out.reject = rej;
+          });
+          return out;
+        });
+
+        if (typeof AbortSignal !== "undefined" && typeof AbortController !== "undefined") {
+          define(AbortSignal, "any", function (signals) {
+            var controller = new AbortController();
+            var sources = Array.from(signals);
+            function onAbort(event) {
+              controller.abort(event.target.reason);
+              sources.forEach(function (signal) {
+                signal.removeEventListener("abort", onAbort);
+              });
+            }
+            for (var i = 0; i < sources.length; i++) {
+              if (sources[i].aborted) {
+                controller.abort(sources[i].reason);
+                return controller.signal;
+              }
+            }
+            sources.forEach(function (signal) {
+              signal.addEventListener("abort", onAbort);
+            });
+            return controller.signal;
+          });
+        }
+
+        if (typeof URL !== "undefined") {
+          var construct = function (url, base) {
+            return base === undefined ? new URL(url) : new URL(url, base);
+          };
+          define(URL, "parse", function (url, base) {
+            try {
+              return construct(url, base);
+            } catch (e) {
+              return null;
+            }
+          });
+          define(URL, "canParse", function (url, base) {
+            try {
+              construct(url, base);
+              return true;
+            } catch (e) {
+              return false;
+            }
+          });
+        }
+
+        var proto = Object.getPrototypeOf(Object.getPrototypeOf([][Symbol.iterator]()));
+        if (!proto) return;
+        var helpers = {
+          map: function* (fn) {
+            var i = 0;
+            for (var value of iterate(this)) yield fn(value, i++);
+          },
+          filter: function* (fn) {
+            var i = 0;
+            for (var value of iterate(this)) if (fn(value, i++)) yield value;
+          },
+          take: function* (limit) {
+            var count = Number(limit);
+            if (!(count > 0)) return;
+            var i = 0;
+            for (var value of iterate(this)) {
+              yield value;
+              if (++i >= count) return;
+            }
+          },
+          drop: function* (limit) {
+            var count = Number(limit) || 0;
+            var i = 0;
+            for (var value of iterate(this)) if (i++ >= count) yield value;
+          },
+          flatMap: function* (fn) {
+            var i = 0;
+            for (var value of iterate(this)) {
+              var inner = fn(value, i++);
+              yield* Symbol.iterator in inner ? inner : iterate(inner);
+            }
+          },
+          reduce: function (fn) {
+            var has = arguments.length > 1;
+            var acc = arguments[1];
+            var i = 0;
+            for (var value of iterate(this)) {
+              acc = has ? fn(acc, value, i) : value;
+              has = true;
+              i++;
+            }
+            if (!has) throw new TypeError("Reduce of empty iterator with no initial value");
+            return acc;
+          },
+          toArray: function () {
+            return Array.from(iterate(this));
+          },
+          forEach: function (fn) {
+            var i = 0;
+            for (var value of iterate(this)) fn(value, i++);
+          },
+          some: function (fn) {
+            var i = 0;
+            for (var value of iterate(this)) if (fn(value, i++)) return true;
+            return false;
+          },
+          every: function (fn) {
+            var i = 0;
+            for (var value of iterate(this)) if (!fn(value, i++)) return false;
+            return true;
+          },
+          find: function (fn) {
+            var i = 0;
+            for (var value of iterate(this)) if (fn(value, i++)) return value;
+          },
+        };
+        Object.keys(helpers).forEach(function (name) {
+          define(proto, name, helpers[name]);
+        });
+        if (typeof globalThis.Iterator === "function") return;
+        // Abstract constructor sharing the prototype, so `instanceof Iterator` holds.
+        var IteratorConstructor = function Iterator() {};
+        IteratorConstructor.prototype = proto;
+        define(IteratorConstructor, "from", function (source) {
+          var iterator = Symbol.iterator in Object(source) ? source[Symbol.iterator]() : source;
+          return Object.prototype.isPrototypeOf.call(proto, iterator)
+            ? iterator
+            : (function* () {
+                yield* iterate(iterator);
+              })();
+        });
+        define(globalThis, "Iterator", IteratorConstructor);
+      })();
+    </script>
     <script data-cfasync="false">
       // Configure Zod before module evaluation so its JIT probe cannot violate strict CSP.
       globalThis.__zod_globalConfig ??= {};
@@ -434,11 +596,42 @@
         </div>
       </div>
     </section>
+    <script data-cfasync="false" data-openclaw-unsupported-browser>
+      // Module scripts cannot be polyfilled; without them the app never loads, so
+      // explain that up front instead of waiting for the startup timeout. Keep this
+      // script ES5: engines without module scripts cannot parse the recovery script below.
+      (function () {
+        if ("noModule" in HTMLScriptElement.prototype) return;
+        var fallback = document.getElementById("openclaw-mount-fallback");
+        if (!fallback) return;
+
+        var title = document.getElementById("openclaw-mount-fallback-title");
+        var summary = document.getElementById("openclaw-mount-fallback-summary");
+        var retry = document.getElementById("openclaw-mount-retry");
+        var wait = document.getElementById("openclaw-mount-wait");
+        if (title) title.textContent = "This browser is not supported";
+        if (summary) {
+          summary.textContent =
+            "The Control UI needs a newer browser engine. Open this page in an up-to-date browser, or update the app's system WebView.";
+        }
+        if (wait) wait.hidden = true;
+        if (retry) retry.hidden = true;
+        // Retry hints do not apply; keep only the troubleshooting link.
+        var hints = fallback.getElementsByTagName("li");
+        for (var i = 0; i < hints.length; i++) {
+          if (!hints[i].getElementsByTagName("a").length) hints[i].hidden = true;
+        }
+        fallback.hidden = false;
+        document.body.classList.add("openclaw-mount-fallback-active");
+      })();
+    </script>
     <script data-cfasync="false">
       (function () {
         var app = document.querySelector("openclaw-app");
         var fallback = document.getElementById("openclaw-mount-fallback");
         if (!app || !fallback) return;
+        // The unsupported-browser notice above owns engines without module scripts.
+        if (!("noModule" in HTMLScriptElement.prototype)) return;
 
         var panel = fallback.querySelector(".mount-fallback__panel");
         var title = document.getElementById("openclaw-mount-fallback-title");

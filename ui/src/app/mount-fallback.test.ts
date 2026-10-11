@@ -1,6 +1,7 @@
 // Control UI tests cover mount fallback behavior.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { parse } from "acorn";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const indexHtmlPath = path.resolve(
@@ -38,18 +39,32 @@ function installStartupPaintShell(window: TestWindow, html: string): void {
   window.eval(startupScript.textContent);
 }
 
-function installFallbackShell(window: TestWindow, html: string): void {
+function installFallbackShell(
+  window: TestWindow,
+  html: string,
+  { moduleScripts = true }: { moduleScripts?: boolean } = {},
+): void {
+  // JSDOM lacks `noModule`; browsers expose it exactly when module scripts run.
+  const scriptPrototype = window.HTMLScriptElement.prototype as { noModule?: boolean };
+  if (moduleScripts) {
+    Object.defineProperty(scriptPrototype, "noModule", { value: false, configurable: true });
+  } else {
+    delete scriptPrototype.noModule;
+  }
   const parsed = new window.DOMParser().parseFromString(html, "text/html");
   window.document.head.innerHTML = parsed.head.innerHTML;
   window.document.body.innerHTML = parsed.body.innerHTML;
 
-  const sentinel = Array.from(parsed.querySelectorAll<HTMLScriptElement>("script:not([src])")).find(
-    (script) => script.textContent?.includes("openclaw-mount-fallback"),
-  );
-  if (!sentinel?.textContent) {
+  const fallbackScripts = Array.from(
+    parsed.querySelectorAll<HTMLScriptElement>("script:not([src])"),
+  ).filter((script) => script.textContent?.includes("openclaw-mount-fallback"));
+  if (fallbackScripts.length === 0) {
     throw new Error("Expected inline mount fallback script in index.html");
   }
-  window.eval(sentinel.textContent);
+  // Run every fallback script in document order, as the browser does.
+  for (const script of fallbackScripts) {
+    window.eval(script.textContent ?? "");
+  }
 }
 
 function requireElementById<T extends HTMLElement>(
@@ -137,6 +152,39 @@ describe("Control UI mount fallback", () => {
 
     await vi.advanceTimersByTimeAsync(mountTimeoutMs);
     expect(fallback.hidden).toBe(false);
+  });
+
+  it("explains an unsupported browser at once when module scripts are unavailable", async () => {
+    const frameWindow = createIsolatedWindow();
+    installFallbackShell(frameWindow, await readIndexHtml(), { moduleScripts: false });
+
+    const fallback = requireElementById(
+      frameWindow,
+      "openclaw-mount-fallback",
+      frameWindow.HTMLElement,
+    );
+    expect(fallback.hidden).toBe(false);
+    expect([...frameWindow.document.body.classList]).toEqual(["openclaw-mount-fallback-active"]);
+    expect(fallback.querySelector("h1")?.textContent?.trim()).toBe("This browser is not supported");
+    expect(
+      requireElementById(frameWindow, "openclaw-mount-retry", frameWindow.HTMLButtonElement).hidden,
+    ).toBe(true);
+    expect(
+      requireElementById(frameWindow, "openclaw-mount-wait", frameWindow.HTMLButtonElement).hidden,
+    ).toBe(true);
+    const visibleHints = Array.from(fallback.querySelectorAll("li")).filter((item) => !item.hidden);
+    expect(visibleHints.map((item) => item.querySelector("a")?.textContent?.trim())).toEqual([
+      "Control UI troubleshooting",
+    ]);
+  });
+
+  it("keeps the unsupported-browser notice parseable by engines without module scripts", async () => {
+    const notice = new DOMParser()
+      .parseFromString(await readIndexHtml(), "text/html")
+      .querySelector("script[data-openclaw-unsupported-browser]");
+    expect(notice?.textContent).toContain("This browser is not supported");
+    // Removing noModule here cannot expose a parse failure, so check the syntax itself.
+    expect(() => parse(notice?.textContent ?? "", { ecmaVersion: 5 })).not.toThrow();
   });
 
   it("keeps the fallback visible until the app completes its first render", async () => {
