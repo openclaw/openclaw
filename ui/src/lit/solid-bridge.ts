@@ -6,6 +6,7 @@ import {
   createRoot,
   createSignal,
   flush,
+  getOwner,
   onCleanup,
   runWithOwner,
   untrack,
@@ -330,6 +331,7 @@ export function LitContent(props: {
   tag?: "span" | "div" | "code";
   class?: string;
 }) {
+  const owner = getOwner();
   // Host shape stays fixed while the template updates.
   const tag = untrack(() => props.tag ?? "span");
   const host = document.createElement(tag);
@@ -341,11 +343,11 @@ export function LitContent(props: {
     host.className = className;
   }
   let part: ReturnType<typeof renderLit> | undefined;
-  // Commit Lit descendants before post-render observers inspect the host.
+  // Lit directives may create Solid resources; retain the adapter's owner during commit.
   createRenderEffect(
     () => props.render(),
     (template) => {
-      part = renderLit(template, host, { host });
+      part = runWithOwner(owner, () => renderLit(template, host, { host }));
     },
   );
   onCleanup(() => {
