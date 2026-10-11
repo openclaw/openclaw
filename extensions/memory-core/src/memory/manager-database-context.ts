@@ -130,10 +130,7 @@ export class MemoryIndexDatabase {
           memoryDatabaseTableExists(database.db, "main", MEMORY_INDEX_FTS_TABLE);
         if (database.hasIndex) {
           database.installFacts(
-            await runMemoryDatabaseFacts({
-              agentId: params.agentId,
-              databasePath: params.writeOptions.path,
-            }),
+            await runMemoryDatabaseFacts(params.writeOptions.path, params.agentId),
           );
         }
       } else {
