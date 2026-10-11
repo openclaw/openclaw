@@ -283,6 +283,10 @@ Logging:
 
 ## App-hosted lifecycle and updates
 
+During local startup, readiness probes own the retry cadence and deadline.
+Connection refusals while the Gateway boots do not leave an exponential
+connection delay that holds up a ready Gateway.
+
 The app restarts a crashed child with a delay that doubles from one second to
 30 seconds, resetting after 60 healthy seconds. Five rapid failures stop the
 restart loop and show the failure with the Gateway log tail. Pausing or quitting
