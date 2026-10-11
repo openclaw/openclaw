@@ -310,8 +310,8 @@ describe("bounded memory publication transfer", () => {
     }
   });
 
-  it.each(["success", "begin", "write", "transaction", "commit"] as const)(
-    "restores publication timeout once through %s settlement",
+  it.each(["success", "stale", "begin", "write", "transaction", "commit"] as const)(
+    "settles a single-statement source refresh through %s",
     async (fault) => {
       const owner = await createOwner();
       const db = fixtureWriter(owner);
@@ -336,23 +336,30 @@ describe("bounded memory publication transfer", () => {
       try {
         const outcome = backend.execute({
           type: "source.refresh",
-          input: { path: "sessions/current", hash: "new", mtime: 2, size: 2, expectedHash: "old" },
+          input: {
+            path: "sessions/current",
+            hash: "new",
+            mtime: 2,
+            size: 2,
+            expectedHash: fault === "stale" ? "superseded" : "old",
+          },
         });
         expect(outcome).toMatchObject(
-          fault === "success"
-            ? { ok: true, value: true }
+          fault === "success" || fault === "stale"
+            ? { ok: true, value: fault === "success" }
             : { ok: false, entered: fault !== "begin", committed: false },
         );
         expect(stages).toEqual(
-          fault === "begin"
-            ? []
-            : fault === "write" || fault === "transaction"
-              ? ["transaction"]
-              : ["transaction", "commit"],
+          fault === "transaction" ? ["transaction"] : ["transaction", "commit"],
         );
         expect(
           exec.mock.calls.filter(([sql]) => sql === "PRAGMA busy_timeout = 5000"),
-        ).toHaveLength(1);
+        ).toHaveLength(fault === "transaction" || fault === "commit" ? 0 : 1);
+        expect(
+          exec.mock.calls.filter(([sql]) =>
+            /^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/u.test(sql),
+          ),
+        ).toEqual([]);
         expect(db.isTransaction).toBe(false);
         expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
         expect(db.prepare("SELECT hash FROM memory_index_sources").get()).toEqual({
@@ -366,46 +373,93 @@ describe("bounded memory publication transfer", () => {
     },
   );
 
-  it.each([1, 2])("retains publication restoration failures (%i attempts)", async (failures) => {
-    const owner = await createOwner();
-    const db = fixtureWriter(owner);
-    db.exec(`INSERT INTO memory_index_sources(path, source, hash, mtime, size)
+  it.each([1, 2])(
+    "retains a single-statement commit on restoration failure (%i attempts)",
+    async (failures) => {
+      const owner = await createOwner();
+      const db = fixtureWriter(owner);
+      db.exec(`INSERT INTO memory_index_sources(path, source, hash, mtime, size)
       VALUES ('sessions/current', 'sessions', 'old', 1, 1)`);
-    const admit = vi.fn();
-    const backend = await createBackend(owner, admit);
-    const nativeExec = db.exec.bind(db);
-    let attempts = 0;
-    const failure = new Error("timeout restoration refused");
-    const exec = vi.spyOn(db, "exec").mockImplementation((sql) => {
-      if (sql === "PRAGMA busy_timeout = 5000" && ++attempts <= failures) {
-        throw failure;
+      const admit = vi.fn();
+      const backend = await createBackend(owner, admit);
+      const nativeExec = db.exec.bind(db);
+      let attempts = 0;
+      const failure = new Error("timeout restoration refused");
+      const exec = vi.spyOn(db, "exec").mockImplementation((sql) => {
+        if (sql === "PRAGMA busy_timeout = 5000" && ++attempts <= failures) {
+          throw failure;
+        }
+        return nativeExec(sql);
+      });
+      const refresh = () =>
+        backend.execute({
+          type: "source.refresh",
+          input: { path: "sessions/current", hash: "new", mtime: 2, size: 2, expectedHash: "old" },
+        });
+      try {
+        if (failures === 1) {
+          expect(refresh()).toMatchObject({
+            ok: false,
+            entered: true,
+            committed: true,
+            error: { message: failure.message },
+          });
+          expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
+        } else {
+          expect(refresh).toThrow(failure);
+        }
+        expect(attempts).toBe(2);
+        expect(admit.mock.calls).toEqual([["transaction"], ["commit"]]);
+        expect(db.isTransaction).toBe(false);
+        expect(db.prepare("SELECT hash FROM memory_index_sources").get()).toEqual({ hash: "new" });
+      } finally {
+        exec.mockRestore();
+        db.exec("PRAGMA busy_timeout = 5000");
       }
-      return nativeExec(sql);
-    });
-    const refresh = () =>
-      backend.execute({
+    },
+  );
+
+  it("publishes settled write tokens and fresh facts for scalar autocommits", () => {
+    const filename = path.join(tempDirs.make("memory-publication-scalar-"), "index.sqlite");
+    const db = sqliteRuntime.openNodeSqliteDatabase(filename);
+    const backend = bindSqliteWorkerBackend(
+      { kind: "agent" },
+      { databasePath: filename, database: db, admit: () => undefined },
+    );
+    try {
+      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
+      db.exec(`INSERT INTO memory_index_sources(path, source, hash, mtime, size)
+        VALUES ('sessions/current', 'sessions', 'old', 1, 1)`);
+      let before = sqliteRuntime.readSqliteDatabaseWriteTokenForPath(filename);
+      expect(before).toEqual(expect.any(String));
+      for (const model of ["initial-model", "replacement-model"]) {
+        const metadata = { provider: "test", model, chunkTokens: 400, chunkOverlap: 80 };
+        const outcome = backend.execute({ type: "index.writeMetadata", input: metadata });
+        const current = sqliteRuntime.readSqliteDatabaseWriteTokenForPath(filename);
+        expect(current).not.toBe(before);
+        expect(outcome).toMatchObject({ ok: true, writeToken: current, facts: { meta: metadata } });
+        expect(
+          db
+            .prepare("SELECT value FROM memory_index_meta WHERE key = ?")
+            .get("memory_index_meta_v1"),
+        ).toEqual({ value: JSON.stringify(metadata) });
+        before = current;
+      }
+      const outcome = backend.execute({
         type: "source.refresh",
         input: { path: "sessions/current", hash: "new", mtime: 2, size: 2, expectedHash: "old" },
       });
-    try {
-      if (failures === 1) {
-        expect(refresh()).toMatchObject({
-          ok: false,
-          entered: true,
-          committed: false,
-          error: { message: failure.message },
-        });
-        expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
-      } else {
-        expect(refresh).toThrow(failure);
-      }
-      expect(attempts).toBe(2);
-      expect(admit).not.toHaveBeenCalled();
-      expect(db.isTransaction).toBe(false);
-      expect(db.prepare("SELECT hash FROM memory_index_sources").get()).toEqual({ hash: "old" });
+      const current = sqliteRuntime.readSqliteDatabaseWriteTokenForPath(filename);
+      expect(current).not.toBe(before);
+      expect(outcome).toMatchObject({ ok: true, value: true, writeToken: current });
+      expect(db.prepare("SELECT hash, mtime, size FROM memory_index_sources").get()).toEqual({
+        hash: "new",
+        mtime: 2,
+        size: 2,
+      });
     } finally {
-      exec.mockRestore();
-      db.exec("PRAGMA busy_timeout = 5000");
+      backend.close();
+      db.close();
     }
   });
 

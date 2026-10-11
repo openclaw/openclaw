@@ -361,6 +361,16 @@ Failed fact installation retires the affected scope before notification. If its
 owner cannot fence that failure, the batch suppresses public notification and
 reports the failure without replaying the mutation.
 
+Worker backends can use `runSqliteSingleStatementSync` from
+`openclaw/plugin-sdk/sqlite-worker-runtime` for one complete synchronous statement.
+It uses SQLite autocommit while retaining the post-commit publication scope;
+inside an existing transaction it retains the savepoint and outer publication
+owner. Prepare inputs before calling and do no fallible work after the native
+statement in its callback. The native write observer advances the managed write
+token on settlement, without an extra SQL query. Memory source refresh and index
+metadata writes use this path; compound writes retain their transactions.
+Schemas, stored bytes, retention, permissions, and update behavior are unchanged.
+
 Private receipt envelopes identify the operation, physical source and connection
 incarnation, domain, and exact affected keys. Each key contains a postimage,
 explicit absence, unchanged facts, or unknown coverage. Missing coverage is never
