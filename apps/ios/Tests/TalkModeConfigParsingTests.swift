@@ -736,6 +736,8 @@ struct TalkModeManagerTests {
             #expect(!TalkAudioRoute.shouldForceSpeaker(
                 preferenceEnabled: true,
                 outputPortTypes: [output]))
+            // A mixed route (for example speaker plus AirPlay) keeps headset-style separate engines.
+            #expect(!TalkAudioRoute.isBuiltInOutput([.builtInSpeaker, output]))
         }
     }
 

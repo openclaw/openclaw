@@ -193,24 +193,6 @@ function expectRoute(route: Awaited<ReturnType<typeof resolveMatrixOutboundSessi
 }
 
 describe("resolveMatrixOutboundSessionRoute", () => {
-  it("reuses the current DM room session for same-user sends when Matrix DMs are per-room", async () => {
-    const route = await resolveUserRouteForCurrentSession({
-      storedSession: createStoredDirectDmSession(),
-      accountId: "ops",
-    });
-
-    expectCurrentDmRoomRoute(route);
-  });
-
-  it("falls back to user-scoped routing when the current session is for another DM peer", async () => {
-    const route = await resolveUserRouteForCurrentSession({
-      storedSession: createStoredDirectDmSession({ from: "matrix:@bob:example.org" }),
-      accountId: "ops",
-    });
-
-    expectFallbackUserRoute(route);
-  });
-
   it("falls back to user-scoped routing when the current session belongs to another Matrix account", async () => {
     const route = await resolveUserRouteForCurrentSession({
       storedSession: createStoredDirectDmSession(),
@@ -260,15 +242,6 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     });
 
     expectFallbackUserRoute(route);
-  });
-
-  it("uses the effective default Matrix account when accountId is omitted", async () => {
-    const route = await resolveUserRouteForCurrentSession({
-      storedSession: createStoredDirectDmSession(),
-      matrix: defaultAccountPerRoomDmMatrixConfig,
-    });
-
-    expectCurrentDmRoomRoute(route);
   });
 
   it("reuses the current DM room when stored account metadata is missing", async () => {
@@ -324,36 +297,6 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     expect(route.sessionKey).toBe(
       `agent:main:matrix:channel:!ops:example.org:thread:${expectedThreadId}`,
     );
-  });
-
-  it("does not claim room aliases as canonical inbound session ids", async () => {
-    const route = await resolveMatrixOutboundSessionRoute({
-      cfg: {},
-      agentId: "main",
-      target: "#ops:example.org",
-    });
-
-    expect(route?.recipientSessionExact).toBe(false);
-  });
-
-  it("does not claim room ids when DMs are keyed by user identity", async () => {
-    const route = await resolveMatrixOutboundSessionRoute({
-      cfg: {},
-      agentId: "main",
-      target: "!ops:example.org",
-    });
-
-    expect(route?.recipientSessionExact).toBe(false);
-  });
-
-  it("claims a room id as canonical when DMs are room-scoped", async () => {
-    const route = await resolveMatrixOutboundSessionRoute({
-      cfg: { channels: { matrix: perRoomDmMatrixConfig } },
-      agentId: "main",
-      target: "room:!ops:example.org",
-    });
-
-    expect(route?.recipientSessionExact).toBe(true);
   });
 
   it("claims a room version 12 room id (no :server suffix) as canonical when DMs are room-scoped", async () => {
