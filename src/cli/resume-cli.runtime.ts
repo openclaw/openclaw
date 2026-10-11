@@ -39,7 +39,7 @@ async function formatResumeConnectionError(error: unknown): Promise<Error> {
     [
       state.connectionStatus,
       state.remediation ??
-        "Ensure the Gateway is running and your --url/--token/--password are correct.",
+        "Check that the Gateway is running and your --url/--token/--password are correct.",
     ].join("\n"),
     { cause: error },
   );

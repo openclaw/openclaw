@@ -430,7 +430,7 @@ const reviewedOperations = new Map([
           "clearWorkerWorkspacePendingResult",
           "hasAcceptedWorkerWorkspacePendingResult",
           "insertWorkerWorkspacePendingResult",
-          "markWorkerWorkspacePendingResultAccepted",
+          "createPlacementWorkspaceResultOps.acceptWorkspaceResult",
           "assertPendingClaim",
           "createPlacementWorkspaceResultOps.handoffWorkspaceResultRecovery",
           "createPlacementWorkspaceResultOps.abandonWorkspaceResult",
@@ -490,7 +490,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["ensureLocal"],
         evidence:
-          "placement-dispatch-store.worker.ts:38 and placement-turn-claims.ts:112 claim path; claims only invoked at placement-turn-claims.worker.ts:160,175,345. Native placement-store.ts:75,76 selects clear/wait/validate methods that do not claim.",
+          "Dispatch in placement-lifecycle.worker.ts and the placement-turn-claims.ts claim path run in workers. Native placement-store.ts selects clear/wait/validate methods that do not claim.",
       },
     ],
   ],
@@ -1034,7 +1034,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["readWorkerPlacementMovesReadOnly"],
         evidence:
-          "Only placement-dispatch-store.worker.ts:69, placement-turn-claims.worker.ts:72 and placement-read-projection.ts:85 call the batch reader; projection itself is only called by state/openclaw-state-read.worker.ts:670. Native getPlacementMove uses another reader.",
+          "placement-lifecycle.worker.ts, placement-turn-claims.worker.ts and placement-read-projection.ts call the batch reader in workers. Native getPlacementMove uses another reader.",
       },
       {
         tier: "W",
@@ -1074,7 +1074,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["assertSessionWorkspaceUnreserved"],
         evidence:
-          "placement-dispatch-store.worker.ts:39 and placement-turn-claims.ts:93 claim path; claims only invoked at placement-turn-claims.worker.ts:160,175,345. Native placement-store.ts:75,76 selects clear/wait/validate methods.",
+          "Dispatch in placement-lifecycle.worker.ts and the placement-turn-claims.ts claim path run in workers. Native placement-store.ts selects clear/wait/validate methods.",
       },
     ],
   ],

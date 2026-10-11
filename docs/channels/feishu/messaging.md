@@ -162,7 +162,7 @@ by the result limit or output budget. Narrow the query to find other matches.
 
 Limits: 32 bot sets, 256 stickers per set, and 1–8 keywords per sticker.
 Store keywords without leading or trailing whitespace; each must be nonempty
-and at most 64 Unicode characters. File keys must be canonical received keys,
+and at most 64 Unicode characters. File keys must be the exact keys received from Feishu,
 at most 512 Unicode characters. Each key appears only once in its bot's map.
 Queries are nonempty and at most 128 Unicode characters. `limit` defaults to 5
 and accepts integers from 1 through 10; search results are also capped at

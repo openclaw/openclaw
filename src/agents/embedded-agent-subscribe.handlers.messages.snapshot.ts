@@ -103,7 +103,11 @@ export function extractAssistantStreamSnapshot(
             options?.final === false,
           ).transform(stripDowngradedToolCallText(text, { preserveTrailingWhitespace: true })),
     }))
-    .filter(({ text }) => text.trim())
+    // An empty observed tail still marks a native boundary for prefix reconciliation.
+    .filter(
+      ({ text }, index) =>
+        text.trim() || (options?.observedText === "" && index === blockSources.length - 1),
+    )
     .map(({ text, separator }, index) => `${index > 0 ? separator : ""}${text}`)
     .join("");
   const blockReply = parseReplyDirectives(
