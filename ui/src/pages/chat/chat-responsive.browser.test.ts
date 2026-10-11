@@ -900,7 +900,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                 </div>
               </div>
               <div class="chat-pane__actions">
-                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close-pane" type="button">X</button>
+                <button class="btn btn--ghost chat-pane__layout-trigger" type="button" aria-label="Layout">Layout</button>
               </div>
             </div>
           </div>

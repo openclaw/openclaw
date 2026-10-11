@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -259,7 +260,7 @@ suite.define(() => {
         await geometry();
         await capture("with-browser.png");
         await page.keyboard.press("Escape");
-        await page.locator(".chat-side-panel-toggle").click();
+        await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
         await trigger.click();
         await page.setViewportSize({ width: 430, height: 900 });
         await geometry();

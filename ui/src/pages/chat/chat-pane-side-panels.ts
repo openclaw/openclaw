@@ -110,11 +110,10 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
       this.subagentBatch = { session: identity, active: false };
     }
     const batch = this.subagentBatch;
-    const active =
-      projectSubagentStatus(
-        { ...roster, selectedSession: session, messages: state.chatMessages },
-        false,
-      ).running > 0;
+    const active = projectSubagentStatus(
+      { ...roster, selectedSession: session, messages: state.chatMessages },
+      false,
+    ).activity.some((child) => child.listed);
     if (active && !batch.active) {
       // Open once per batch. A later close remains the user's choice until all
       // children settle; the automatic reveal is not a saved session preference.

@@ -186,7 +186,9 @@ describe("composer run status", () => {
 
   it("shows Working only during the current run and leaves idle and approval states empty", () => {
     const container = document.createElement("div");
-    onTestFinished(() => render(nothing, container));
+    onTestFinished(() => {
+      render(nothing, container);
+    });
     const props = createComposerProps();
     const draw = () => render(renderChatComposer(props), container);
     draw();
@@ -200,7 +202,7 @@ describe("composer run status", () => {
     draw();
     expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
     props.waitingApproval = false;
-    props.runStatus = { phase: "done" };
+    props.runStatus = { phase: "done", runId: "work", sessionKey: props.sessionKey, occurredAt: 1 };
     draw();
     expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
   });

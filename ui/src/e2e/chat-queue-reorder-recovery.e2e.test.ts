@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -18,7 +19,7 @@ suite.define(() => {
     const gateway = await installMockGateway(page);
     try {
       await page.goto(`${suite.server.baseUrl}chat?session=main`);
-      await page.getByRole("button", { name: "Open split view", exact: true }).click();
+      await selectChatLayoutAction(page, "Open split view");
       const cells = page.locator(".chat-split-view__cell");
       await expect.poll(() => cells.count()).toBe(2);
       const left = cells.first();

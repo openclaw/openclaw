@@ -512,7 +512,14 @@ function renderChatPaneLayoutMenu(props: ChatPaneHeaderProps) {
       onActivate: () => props.onLayoutChange?.(promoteSidebarPanel(layout, side.id)),
     });
   }
-  if (layout && side && sideDefinition && !props.narrow && props.onLayoutChange) {
+  if (
+    layout &&
+    side &&
+    sideDefinition &&
+    !layout.expanded &&
+    !props.narrow &&
+    props.onLayoutChange
+  ) {
     actions.push({
       id: "expand-side-panel",
       className: "side-panel__expand",

@@ -3,6 +3,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { UiSettings } from "../app/settings.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -328,7 +329,7 @@ suite.define(() => {
           });
           await reader.locator(".chat-header-session-menu__trigger").click();
           await waitForLayoutMenuClosed(reader);
-          await reader.getByRole("button", { name: "Restore split", exact: true }).click();
+          await selectChatLayoutAction(reader, "Restore split");
           await readerChat.waitFor({ state: "visible" });
           expect(await presentationOverride(reader)).toBe("split");
           expect(await reader.locator(defaultAction).count()).toBe(0);
@@ -346,12 +347,9 @@ suite.define(() => {
         },
       );
 
-      await page.getByRole("button", { name: "Restore split", exact: true }).click();
+      await selectChatLayoutAction(page, "Restore split");
       await chat.waitFor({ state: "visible" });
-      await page
-        .locator(".chat-pane__header")
-        .getByRole("button", { name: "Focus", exact: true })
-        .click();
+      await selectChatLayoutAction(page, "Focus");
       await chat.waitFor({ state: "hidden" });
       expect(await presentationOverride(page)).toBeNull();
       // The server changes while this browser still has the old roster cached.

@@ -31,6 +31,7 @@ function createPane() {
   fixture.state.sessionKey = parent.key;
   fixture.state.sessionsResult = {
     ts: 1,
+    path: "",
     count: 1,
     defaults: { modelProvider: null, model: null, contextTokens: null },
     sessions: [parent],
@@ -74,6 +75,7 @@ it("reveals a batch once, honors its dismissal, and keeps settled results open",
   next.state.sessionKey = "agent:main:next";
   next.state.sessionsResult = {
     ts: 1,
+    path: "",
     count: 1,
     defaults: { modelProvider: null, model: null, contextTokens: null },
     sessions: [{ key: next.state.sessionKey, kind: "direct" }],
@@ -103,6 +105,7 @@ it("does not mistake an overlapping roster read for settlement after a pane clos
 
 it.each([
   { label: "an ordinary visible child session", key: "agent:main:dashboard:child" },
+  { label: "an unlisted ACP child", key: "agent:main:acp:coder" },
   {
     label: "another conversation's subagent",
     key: "agent:main:subagent:other",
@@ -114,6 +117,14 @@ it.each([
   roster.rows = [{ ...child, key, spawnedBy: spawnedBy ?? parent.key }];
   pane.render();
   expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(false);
+});
+
+it("reveals listed subagents even when an ACP sibling cannot be shown in the panel", () => {
+  const { pane, state, parent, child, roster } = createPane();
+  parent.hasActiveSubagentRun = true;
+  roster.rows = [{ ...child, key: "agent:main:acp:coder" }, child];
+  pane.render();
+  expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(true);
 });
 
 it("preserves a manually opened empty panel for its session", () => {

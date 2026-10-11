@@ -89,9 +89,9 @@ describe("chat pane session menu boundary", () => {
     await menu.updateComplete;
     expect(updates).not.toHaveBeenCalled();
     expect(itemUpdates.every((spy) => spy.mock.calls.length === 0)).toBe(true);
-    menu.querySelector("wa-dropdown")!.dispatchEvent(
+    container.querySelector(".chat-pane__layout-menu")!.dispatchEvent(
       new CustomEvent("wa-select", {
-        detail: { item: { value: "quick:panels:session-files" } },
+        detail: { item: { value: "session-files" } },
       }),
     );
     expect(workspace.onToggleCollapsed).toHaveBeenCalledOnce();

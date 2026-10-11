@@ -323,6 +323,14 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           group: panel.id,
           draggable: false,
           reorderId: panel.id,
+          onActivate:
+            this.layout.expanded &&
+            this.layout.expandedSide &&
+            !this.sideFocusLocked &&
+            column.activePanelId === panel.id &&
+            tab.id === hosted.element.activeHostedTabId
+              ? () => this.callbacks?.togglePanelExpanded(panel.id)
+              : undefined,
         }));
       }
       const type = panelType(this.panelDefinitions, panel.slot);
@@ -336,7 +344,11 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           contentId,
           label: tab.label,
           labelTooltip:
-            panel.slot === "dashboard"
+            panel.slot === "dashboard" ||
+            (this.layout.expanded &&
+              !this.sideFocusLocked &&
+              this.layout.expandedSide &&
+              column.activePanelId === panel.id)
               ? t(
                   this.layout.expanded &&
                     this.layout.expandedSide &&
@@ -347,7 +359,11 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
                 )
               : tab.label,
           onActivate:
-            panel.slot === "dashboard"
+            panel.slot === "dashboard" ||
+            (this.layout.expanded &&
+              !this.sideFocusLocked &&
+              this.layout.expandedSide &&
+              column.activePanelId === panel.id)
               ? () => this.callbacks?.togglePanelExpanded(panel.id)
               : undefined,
           icon: tab.icon,

@@ -4,11 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installTitleTooltips } from "../../../components/tooltip-title.ts";
 import { i18n } from "../../../i18n/index.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../../lib/keyboard-shortcut-contract.ts";
+import { selectChatLayoutAction } from "../../../test-helpers/chat-layout-menu.ts";
 import { openSlot } from "../sidebar-layout.ts";
 import "../../../styles.css";
 import "../../../styles/chat/startup-layout.css";
 import "../../../styles/chat/layout.css";
 import "../../../styles/chat/split-view.css";
+import type { ChatDetails } from "./chat-details.ts";
 import { mountChatPaneHeader } from "./chat-pane-header.test-support.ts";
 import "./chat-details.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
@@ -70,22 +72,19 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           },
         ],
       });
-      const trigger = container.querySelector<HTMLButtonElement>(".chat-pane__layout-trigger")!;
       for (const label of [
         "Focus",
         "Swap Chat and Subagents",
         "Move side panel below",
         "Toggle browser panel",
       ]) {
-        await page.elementLocator(trigger).click();
-        const item = page.elementLocator(
-          container.querySelector<HTMLElement>(`wa-dropdown-item[aria-label="${label}"]`)!,
-        );
-        await expect.element(item).toBeVisible();
         if (label === "Toggle browser panel") {
           expect(container.querySelector('[value="browser"] kbd')?.textContent).toContain("U");
         }
-        await item.click();
+        await selectChatLayoutAction(
+          { container, click: (element: HTMLElement) => page.elementLocator(element).click() },
+          label,
+        );
       }
       expect(onLayoutChange.mock.calls[0]?.[0].expanded).toBe(true);
       expect(onLayoutChange.mock.calls[1]?.[0].mainPanelId).toBe("subagents");
@@ -118,9 +117,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         });
         container.style.width = `${width}px`;
         const header = container.querySelector<HTMLElement>(".chat-pane__header")!;
-        await container.querySelector<HTMLElementTagNameMap["openclaw-chat-details"]>(
-          "openclaw-chat-details",
-        )?.updateComplete;
+        await container.querySelector<ChatDetails>("openclaw-chat-details")?.updateComplete;
         await expect.element(page.elementLocator(header)).toBeVisible();
         expect(header.scrollWidth).toBeLessThanOrEqual(header.clientWidth);
         const bounds = header.getBoundingClientRect();
@@ -225,8 +222,10 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
             await page.getByRole("menuitem", { name: /Earlier idea/ }).click();
             expect(props.onBranchSelect).toHaveBeenCalledExactlyOnceWith("other");
           }
-          await page.elementLocator(layout).click();
-          await page.getByRole("menuitem", { name: "Close pane", exact: true }).click();
+          await selectChatLayoutAction(
+            { container, click: (element: HTMLElement) => page.elementLocator(element).click() },
+            "Close pane",
+          );
           expect(props.onClosePane).toHaveBeenCalledExactlyOnceWith("pane-1");
         }
       },

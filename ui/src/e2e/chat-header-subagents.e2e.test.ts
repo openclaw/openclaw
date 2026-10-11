@@ -1,5 +1,6 @@
 import { assert, expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -189,6 +190,19 @@ suite.define(() => {
         await expect
           .poll(async () => (await waitLine.textContent())?.replace(/\s+/g, " ").trim())
           .toBe("Waiting on 1 subagent · Backend review · running 1m 5s View");
+        const mountedPanel = await panel.elementHandle();
+        await selectChatLayoutAction(activePane, "Expand Subagents");
+        await activePane.locator(".sidebar-region--expanded-side").waitFor();
+        await selectChatLayoutAction(activePane, "Restore split");
+        await activePane.locator(".sidebar-region--expanded-side").waitFor({ state: "hidden" });
+        expect(await mountedPanel?.evaluate((element) => element.isConnected)).toBe(true);
+        await selectChatLayoutAction(activePane, "Expand Subagents");
+        const activeSubagentsTab = activePane.locator('[data-region-header="side"] wa-tab[active]');
+        await activeSubagentsTab.focus();
+        await page.keyboard.press("Enter");
+        await activePane.locator(".sidebar-region--expanded-side").waitFor({ state: "hidden" });
+        expect(await mountedPanel?.evaluate((element) => element.isConnected)).toBe(true);
+        await mountedPanel?.dispose();
         await activePane.getByRole("button", { name: "Close Subagents", exact: true }).click();
         await panel.waitFor({ state: "hidden" });
         await waitLine.getByRole("button", { name: "View", exact: true }).click();

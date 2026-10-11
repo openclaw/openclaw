@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -62,7 +63,7 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
         await page.locator(".board-session-surface").waitFor();
         if (main === "Dashboard") {
-          await page.locator(".chat-panel-swap").click();
+          await selectChatLayoutAction(page, /^Swap /);
         }
         const mainPanel = page.locator(
           main === "Dashboard"
@@ -80,19 +81,19 @@ suite.define(() => {
           await answer.waitFor();
         }
         if (view === "closed side") {
-          await page.locator(".chat-side-panel-toggle").click();
+          await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
         } else if (view === "focused Chat") {
-          await page.locator(".chat-panel-focus").click();
+          await selectChatLayoutAction(page, "Focus");
         }
 
         await page.reload();
         await mainPanel.waitFor();
         if (view === "closed side") {
           await expect.poll(() => page.locator(".sidebar-region--open").count()).toBe(0);
-          await page.locator(".chat-side-panel-toggle").click();
+          await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
         } else if (view === "focused Chat") {
           await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
-          await page.locator(".chat-panel-focus").click();
+          await selectChatLayoutAction(page, "Restore split");
         }
         await selectedTab.waitFor();
         await expect.poll(() => selectedTab.getAttribute("aria-selected")).toBe("true");

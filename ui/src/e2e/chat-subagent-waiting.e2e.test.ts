@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -207,10 +208,7 @@ suite.define(() => {
         await panelRow.waitFor();
         // Closing returns to the conversation and focus to the count, whether the
         // side panel is closed or its last tab is.
-        await activePane
-          .locator('[data-region-header="side"]')
-          .getByRole("button", { name: "Close", exact: true })
-          .click();
+        await selectChatLayoutAction(activePane, "Minimize side panel");
         await indicator.waitFor();
         await expect.poll(countHasFocus).toBe(true);
         await runningCount.click();

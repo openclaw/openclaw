@@ -2,6 +2,7 @@ import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledGatewayUrl,
@@ -370,10 +371,7 @@ suite.define(() => {
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="rail"]').count())
           .toBe(0);
-        await page
-          .locator(".chat-pane__header")
-          .getByRole("button", { name: "Restore split", exact: true })
-          .click();
+        await selectChatLayoutAction(page, "Restore split");
         await restoreChatAsMain(page);
         await openChatDetails(visiblePane);
 
@@ -385,7 +383,7 @@ suite.define(() => {
           .poll(() => visiblePane.locator('[data-progress-card-placement="rail"]').count())
           .toBe(0);
         const sideHeader = sidePanel.locator('[data-region-header="side"]');
-        await sideHeader.getByRole("button", { name: "Close", exact: true }).click();
+        await selectChatLayoutAction(page, "Minimize side panel");
         await sideHeader.waitFor({ state: "hidden" });
         await openChatDetails(visiblePane);
         await expect.poll(() => visiblePane.locator(".session-progress-card").count()).toBe(1);

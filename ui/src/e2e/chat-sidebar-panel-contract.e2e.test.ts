@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
@@ -444,17 +445,12 @@ suite.define(() => {
 
       const panel = page.locator(".sidebar-region__right-runtime .side-panel");
       const selector = panel.locator(".side-panel-empty--selector");
-      const toggle = page.locator(".chat-side-panel-toggle");
-      await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("false");
-
-      await toggle.click();
+      await selectChatLayoutAction(page, "Side panel");
       await selector.waitFor();
       expect(await panel.locator("wa-tab").count()).toBe(0);
-      expect(await page.locator(".chat-panel-swap").isVisible()).toBe(false);
 
-      await toggle.click();
+      await selectChatLayoutAction(page, "Minimize side panel");
       await selector.waitFor({ state: "hidden" });
-      expect(await toggle.getAttribute("aria-expanded")).toBe("false");
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -795,7 +791,7 @@ suite.define(() => {
         await expect.poll(() => rfb.events()).toEqual(["authenticated:1"]);
         await desktop.locator("canvas").waitFor({ state: "visible" });
 
-        await page.getByRole("button", { name: "Open split view", exact: true }).click();
+        await selectChatLayoutAction(page, "Open split view");
         const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
         await expect.poll(() => panes.count()).toBe(2);
         await panes.last().locator(".agent-chat__composer-combobox textarea").click();
@@ -819,7 +815,7 @@ suite.define(() => {
         expect(await rfb.events()).not.toContain("closed:1");
 
         const firstCanvas = panes.first().locator("openclaw-desktop-panel canvas");
-        await panes.first().locator(".side-panel__minimize").click();
+        await selectChatLayoutAction(panes.first(), "Minimize side panel");
         await firstCanvas.waitFor({ state: "hidden" });
         expect(await firstCanvas.count()).toBe(1);
         expect(await rfb.events()).not.toContain("closed:1");
@@ -909,15 +905,6 @@ suite.define(() => {
     await clearAction.waitFor();
     expect(await clearAction.locator('path[d^="M3 6h18M19 6v14"]').count()).toBe(1);
     expect(await contentActions.locator("wa-dropdown").count()).toBe(0);
-    const restingColor = await clearAction.evaluate((button) => getComputedStyle(button).color);
-    for (const action of [
-      page.locator(".chat-pane__header").getByRole("button", { name: "Focus", exact: true }),
-      page
-        .locator('[data-region-header="side"]')
-        .getByRole("button", { name: "Close", exact: true }),
-    ]) {
-      expect(await action.evaluate((button) => getComputedStyle(button).color)).toBe(restingColor);
-    }
     const clearTooltip = clearAction.locator("..");
     await clearAction.hover();
     await expect
@@ -1006,8 +993,7 @@ suite.define(() => {
       }
     });
 
-    await page.locator(".side-panel-type-menu__trigger").click();
-    await page.locator(".side-panel-type-menu__item").filter({ hasText: "Discussion" }).click();
+    await selectChatLayoutAction(page, "Show discussion");
     const discussionAction = contentActions.locator(
       ':scope > a.rail-header__action[target="_blank"]',
     );

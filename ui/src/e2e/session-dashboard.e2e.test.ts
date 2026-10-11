@@ -8,6 +8,7 @@ import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/inde
 import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -397,7 +398,7 @@ suite.define(() => {
     await restoreChatAsMain(page);
     await focusChatSidePanel(page);
     await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
-    await page.getByRole("button", { name: "Restore split", exact: true }).click();
+    await selectChatLayoutAction(page, "Restore split");
     await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
     await expect.poll(() => page.locator(".sidebar-region--bottom").count()).toBe(1);
     await expect
@@ -411,7 +412,7 @@ suite.define(() => {
       });
     }
     await restoreChatAsMain(page);
-    await page.locator('[data-region-header="side"] .side-panel__minimize').click();
+    await selectChatLayoutAction(page, "Minimize side panel");
     await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
     await page.locator(".chat-thread").waitFor();
     if (recordProof) {
@@ -709,10 +710,10 @@ suite.define(() => {
       };
       await focusChatSidePanel(page);
       await expectRetainedCardView(true);
-      await page.getByRole("button", { name: "Restore split", exact: true }).click();
+      await selectChatLayoutAction(page, "Restore split");
       await restoreChatAsMain(page);
       const listCountBeforeHide = (await gateway.getRequests("workboard.cards.list")).length;
-      await page.locator('[data-region-header="side"] .side-panel__minimize').click();
+      await selectChatLayoutAction(page, "Minimize side panel");
       await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
       await expectRetainedCardView(false);
       await gateway.setMethodResponse(
