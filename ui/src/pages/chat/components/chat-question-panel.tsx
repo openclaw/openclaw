@@ -16,11 +16,13 @@ import {
   questionPreservesWhitespace,
 } from "./chat-question-answer-controls.ts";
 import { QuestionFreeText, QuestionOptions } from "./chat-question-answer-controls.tsx";
-import type { QuestionPanelProps } from "./chat-question-card.ts";
 import { ChatQuestionResource } from "./chat-question-resource.tsx";
+import type {
+  QuestionPanelProps,
+  QuestionPanelQuestion,
+  QuestionPanelViewModel,
+} from "./chat-question-types.ts";
 
-type QuestionPanelViewModel = QuestionPanelProps["model"];
-type QuestionPanelQuestion = QuestionPanelViewModel["questions"][number];
 type PanelBridgeProps = { props?: QuestionPanelProps };
 export type ChatQuestionPanel = SolidBridgeElement<PanelBridgeProps>;
 

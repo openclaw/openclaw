@@ -1,47 +1,18 @@
 import { html, nothing } from "lit";
-import type { QuestionDraft, QuestionPrompt } from "../../../app/question-prompt.ts";
+import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { t } from "../../../i18n/index.ts";
-
-type QuestionPanelQuestion = QuestionPrompt["questions"][number];
-
-type QuestionPanelViewModel = {
-  requestKey: string;
-  title: string;
-  questions: QuestionPanelQuestion[];
-  agentId?: string;
-  sessionKey?: string;
-  secretStoreAllowedHostsDraft?: string;
-  collapsed: boolean;
-  autoFocus?: boolean;
-  nonBlocking?: boolean;
-  collapsedLabel?: string;
-  disabled: boolean;
-  submitting?: boolean;
-  drafts: Map<string, QuestionDraft>;
-  error?: string | null;
-  notice?: string;
-  requestPosition?: { current: number; total: number };
-};
-
-export type QuestionPanelProps = {
-  model: QuestionPanelViewModel;
-  onSubmit?: (answersById: Record<string, string[]>) => void | Promise<void>;
-  onSkip?: () => void | Promise<void>;
-  onChange?: () => void;
-  onSecretStoreAllowedHostsChange?: (allowedHosts: string) => void;
-  onDismissError?: () => void;
-  onCollapsedChange?: (collapsed: boolean) => void;
-  onPreviousRequest?: () => void;
-  onNextRequest?: () => void;
-};
-
-export type QuestionPanelOptions = Pick<
+import type {
+  QuestionPanelOptions,
   QuestionPanelProps,
-  "onChange" | "onSubmit" | "onSkip" | "onCollapsedChange" | "onPreviousRequest" | "onNextRequest"
-> & {
-  collapsed?: boolean;
-  requestPosition?: QuestionPanelViewModel["requestPosition"];
-};
+  QuestionPanelQuestion,
+} from "./chat-question-types.ts";
+
+export type {
+  QuestionPanelOptions,
+  QuestionPanelProps,
+  QuestionPanelQuestion,
+  QuestionPanelViewModel,
+} from "./chat-question-types.ts";
 
 export function createGatewayQuestionPanelProps(
   prompt: QuestionPrompt,

@@ -7,8 +7,9 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { syncPopoverLabel } from "../../../components/web-awesome-popover.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
-import type { MessageReactionPlacement } from "./chat-message-reactions.ts";
 import "./chat-message-reactions.css";
+
+export type MessageReactionPlacement = "bottom-start" | "bottom-end";
 
 declare module "@solidjs/web" {
   namespace JSX {
