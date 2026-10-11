@@ -1,10 +1,13 @@
-import { nothing as litNothing } from "lit";
 import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { personActivityLink, renderPersonName } from "../../../components/person-activity-link.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { messageClientSourcesLabel } from "../../../lib/chat/message-client-source.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
-import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
+import {
+  emptyLegacyContent as litNothing,
+  LitContent,
+  solidContent,
+} from "../../../lit/solid-content.tsx";
 import { renderChatAvatar, renderForwardedAvatar } from "../chat-avatar.ts";
 import { persistedMessageEntryId } from "../chat-thread.ts";
 import { hasForwardedSource, isSessionActivityGroup } from "../chat-turn-boundary.ts";

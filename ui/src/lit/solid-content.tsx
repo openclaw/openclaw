@@ -17,22 +17,36 @@ import {
   type Component,
 } from "solid-js";
 
+export type { TemplateResult as LegacyTemplateResult } from "lit";
+
 /** Retained content keeps its DOM while foreground directive work is disconnected. */
 export const SolidContentPresentation = createContext<Accessor<boolean>>(() => true);
 
-/** A marker range preserves the direct-child selectors of unported templates. */
-export function LitContent(props: { value: unknown }): JSX.Element {
-  const presented = useContext(SolidContentPresentation);
-  const fragment = document.createDocumentFragment();
+export const emptyLegacyContent = nothing;
+
+type LitContentMount = {
+  update: (value: unknown) => void;
+  setConnected: (connected: boolean) => void;
+  dispose: () => void;
+};
+
+const litContentMounts = new WeakMap<HTMLElement | DocumentFragment, LitContentMount>();
+
+/** One retained Lit range owns each legacy content container. */
+export function mountLitContent(
+  value: unknown,
+  container: HTMLElement | DocumentFragment,
+  options: { isConnected?: boolean } = {},
+): LitContentMount {
+  const existing = litContentMounts.get(container);
+  if (existing) {
+    existing.update(value);
+    return existing;
+  }
   const end = document.createComment("lit-content");
-  fragment.append(end);
-  const options = { renderBefore: end, isConnected: untrack(presented) };
-  // Initial nodes can be handed through a legacy template before Solid commits.
-  const part = renderLit(
-    untrack(() => props.value),
-    fragment,
-    options,
-  );
+  container.append(end);
+  const renderOptions = { ...options, renderBefore: end };
+  const part = renderLit(value, container, renderOptions);
   let ownedNodes: Node[] = [];
   const readOwnedNodes = (): Node[] => {
     const start = part.startNode;
@@ -46,29 +60,60 @@ export function LitContent(props: { value: unknown }): JSX.Element {
     return nodes;
   };
   ownedNodes = readOwnedNodes();
+  let disposed = false;
+  const mount: LitContentMount = {
+    update(next) {
+      renderLit(next, container, renderOptions);
+      ownedNodes = readOwnedNodes();
+    },
+    setConnected: (connected) => part.setConnected(connected),
+    dispose() {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
+      const nodes = readOwnedNodes();
+      part.setConnected(false);
+      // Solid can remove the markers first. Retire remaining template roots
+      // directly instead of rendering into an already-detached ChildPart.
+      for (const node of nodes) {
+        node.parentNode?.removeChild(node);
+      }
+      part.startNode?.parentNode?.removeChild(part.startNode);
+      end.remove();
+      litContentMounts.delete(container);
+    },
+  };
+  litContentMounts.set(container, mount);
+  return mount;
+}
+
+/** A marker range preserves the direct-child selectors of unported templates. */
+export function LitContent(props: { value: unknown }): JSX.Element {
+  const presented = useContext(SolidContentPresentation);
+  const fragment = document.createDocumentFragment();
+  // Initial nodes can be handed through a legacy template before Solid commits.
+  const mount = mountLitContent(
+    untrack(() => props.value),
+    fragment,
+    {
+      isConnected: untrack(presented),
+    },
+  );
   createEffect(
     () => ({ value: props.value, active: presented() }),
     ({ value, active }) => {
       if (!active) {
-        part.setConnected(false);
+        mount.setConnected(false);
       }
-      renderLit(value, fragment, options);
-      ownedNodes = readOwnedNodes();
+      mount.update(value);
       // Catch up props while disconnected before restarting retained directives.
       if (active) {
-        part.setConnected(true);
+        mount.setConnected(true);
       }
     },
   );
-  onCleanup(() => {
-    const nodes = readOwnedNodes();
-    part.setConnected(false);
-    // Solid can remove the markers first. Retire remaining template roots
-    // directly instead of rendering into an already-detached ChildPart.
-    for (const node of nodes) {
-      node.parentNode?.removeChild(node);
-    }
-  });
+  onCleanup(mount.dispose);
   return Array.from(fragment.childNodes);
 }
 

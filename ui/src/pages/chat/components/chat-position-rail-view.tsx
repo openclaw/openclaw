@@ -1,5 +1,4 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { For, Show, createMemo, onCleanup, untrack } from "solid-js";
 import { renderAgentIdentityAvatar } from "../../../components/identity-avatar-view.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
@@ -8,6 +7,7 @@ import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { LitContent } from "../../../lit/solid-content.tsx";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
+import { MarkdownContent } from "./chat-message-text-view.tsx";
 import type { ChatPositionIndex } from "./chat-position-projection.ts";
 import { POSITION_RAIL_MARKER_HEIGHT } from "./chat-transcript-geometry.ts";
 
@@ -131,6 +131,21 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
     return text ? toSanitizedMarkdownHtml(text, { codeBlockChrome: "none" }) : "";
   });
   const stopScrollInput = (event: Event) => props.stopScrollInput.handleEvent(event);
+  const inputEvents = ["wheel", "touchstart", "touchmove"] as const;
+  let scroller: HTMLDivElement | undefined;
+  const bindInputScroller = (element: HTMLDivElement) => {
+    scroller = element;
+    bindScroller(element);
+    // Stop touch input here, before the transcript's native history listeners.
+    for (const event of inputEvents) {
+      element.addEventListener(event, stopScrollInput, { passive: true });
+    }
+  };
+  onCleanup(() => {
+    for (const event of inputEvents) {
+      scroller?.removeEventListener(event, stopScrollInput);
+    }
+  });
   const Preview = () => {
     onCleanup(() => bindPreview());
     return (
@@ -148,11 +163,9 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
         </div>
         {/* Preview links stay inert; the marker owns keyboard navigation. */}
         <div class="chat-position-rail__preview-copy" inert>
-          <LitContent
-            value={
-              previewHtml() ? unsafeHTML(previewHtml()) : t("chat.attachments.previewUnavailable")
-            }
-          />
+          <Show when={Boolean(previewHtml())} fallback={t("chat.attachments.previewUnavailable")}>
+            <MarkdownContent content={previewHtml()} />
+          </Show>
         </div>
       </div>
     );
@@ -166,14 +179,11 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
     >
       <div class="chat-position-rail__track">
         <div
-          ref={bindScroller}
+          ref={bindInputScroller}
           class="chat-position-rail__marks"
           role="list"
           aria-label={t("chat.thread.positionRail")}
           onScroll={() => props.onScroll()}
-          onWheel={stopScrollInput}
-          onTouchStart={stopScrollInput}
-          onTouchMove={stopScrollInput}
         >
           <div class="chat-position-rail__virtual-space">
             <For each={entries()} keyed={(entry) => entry.marker.id}>

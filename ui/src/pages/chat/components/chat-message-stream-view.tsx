@@ -1,5 +1,4 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { type TemplateResult, nothing as litNothing } from "lit";
 import { createEffect, createMemo, For, Show, onCleanup } from "solid-js";
 import type { ThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
@@ -19,7 +18,11 @@ import { formatDurationLong } from "../../../lib/format-duration.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import "../../../components/tooltip.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
+import {
+  emptyLegacyContent as litNothing,
+  LitContent,
+  type LegacyTemplateResult,
+} from "../../../lit/solid-content.tsx";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
 import { renderSolidGroupedMessage } from "./chat-message-bubble-view.tsx";
@@ -89,7 +92,7 @@ export type StreamGroupOptions = StreamMessageOptions & {
   waitingApproval?: boolean;
   waitingSubagents?: ChatSubagentWait;
   runningSubagents?: number;
-  subagentActivity?: TemplateResult;
+  subagentActivity?: LegacyTemplateResult;
   onOpenSubagent?: (key: string) => void;
   onOpenSubagents?: () => void;
   runOutputTokens?: number | null;

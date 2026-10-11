@@ -1,5 +1,4 @@
 import type { JSX } from "@solidjs/web";
-import { nothing as litNothing } from "lit";
 import { createMemo, For, Show } from "solid-js";
 import { type ToolCallGroup, groupToolCalls } from "../../../../../src/chat/tool-call-grouping.js";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -16,7 +15,11 @@ import {
 } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
-import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
+import {
+  emptyLegacyContent as litNothing,
+  LitContent,
+  solidContent,
+} from "../../../lit/solid-content.tsx";
 import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { activityHeadline, selectActivityHeadline } from "./chat-activity-headline.ts";

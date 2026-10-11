@@ -37,6 +37,19 @@ function fixture(source = "export {};\n") {
 }
 
 describe("Control UI Lit ratchet", () => {
+  it("allows the named interop owner but rejects a new sibling Lit implementation", () => {
+    const root = fixture();
+    const content =
+      'import { render } from "lit"; export const mount = (value, target) => render(value, target);';
+    fs.mkdirSync(path.join(root, "ui/src/lit"), { recursive: true });
+    fs.writeFileSync(path.join(root, "ui/src/lit/solid-content.tsx"), content);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    fs.writeFileSync(path.join(root, "ui/src/lit/another-content.tsx"), content);
+    expect(main(root, ["--base", "HEAD"])).toBe(1);
+  });
+
   it.each(["new.ts", "new.tsx", "new.js", "new.cts"])(
     "rejects a new Lit production file: %s",
     (file) => {

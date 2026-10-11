@@ -1,5 +1,4 @@
 import type { JSX } from "@solidjs/web";
-import { nothing, render as renderLit } from "lit";
 import { createEffect, createMemo, onCleanup, Show } from "solid-js";
 import type { MarkdownJson } from "../../../components/markdown-json.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
@@ -12,6 +11,7 @@ import {
 } from "../../../lib/markdown-dom-reconciler.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
+import { mountLitContent } from "../../../lit/solid-content.tsx";
 import type { MarkdownMedia } from "./chat-message-media-markdown.ts";
 import { messageOverflowRef, shouldCollapseUserMessage } from "./chat-message-overflow.ts";
 import {
@@ -246,13 +246,7 @@ export function MarkdownContent(props: MarkdownContentProps) {
           if (!item) {
             return undefined;
           }
-          const part = renderLit(media.render(item, index), container);
-          return {
-            setConnected: (connected) => part.setConnected(connected),
-            dispose: () => {
-              renderLit(nothing, container);
-            },
-          };
+          return mountLitContent(media.render(item, index), container);
         },
       };
       if (typeof content === "string") {

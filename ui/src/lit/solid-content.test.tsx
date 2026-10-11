@@ -6,9 +6,48 @@ import { Show, createMemo, createSignal, onCleanup } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
-import { LitContent, solidContent } from "./solid-content.tsx";
+import { LitContent, mountLitContent, solidContent } from "./solid-content.tsx";
 
 describe("Lit and Solid content boundaries", () => {
+  it("updates a retained media mount and clears its range before remounting", () => {
+    const disconnected = vi.fn();
+    class MediaContent extends AsyncDirective {
+      render(value: string) {
+        return value;
+      }
+
+      protected override disconnected() {
+        disconnected();
+      }
+    }
+    const media = directive(MediaContent);
+    const content = (label: string) => html`<button>${media(label)}</button>`;
+    const container = document.body.appendChild(document.createElement("div"));
+    let mounted = mountLitContent(content("First"), container);
+    try {
+      const button = container.querySelector("button")!;
+      mounted = mountLitContent(content("Second"), container);
+      expect(container.querySelector("button")).toBe(button);
+      expect(button.textContent).toBe("Second");
+      expect(disconnected).not.toHaveBeenCalled();
+
+      mounted.dispose();
+      mounted.dispose();
+      expect(container.childNodes).toHaveLength(0);
+      expect(disconnected).toHaveBeenCalledOnce();
+
+      mounted = mountLitContent(content("Third"), container);
+      expect(container.querySelector("button")?.textContent).toBe("Third");
+      expect(container.querySelector("button")).not.toBe(button);
+      mounted.dispose();
+      expect(container.childNodes).toHaveLength(0);
+      expect(disconnected).toHaveBeenCalledTimes(2);
+    } finally {
+      mounted.dispose();
+      container.remove();
+    }
+  });
+
   it("keeps Lit markup as direct children, updates it, and disconnects nested directives", () => {
     const disconnected = vi.fn();
     class TrackedContent extends AsyncDirective {

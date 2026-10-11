@@ -15,7 +15,10 @@ import {
 } from "./chat-message-media.ts";
 import { MessageVideoPreview } from "./chat-message-video-preview-solid.tsx";
 
-vi.mock("../../../lib/media/video-poster.ts", () => ({ requestVideoPoster: vi.fn() }));
+vi.mock("../../../lib/media/video-poster.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../lib/media/video-poster.ts")>()),
+  requestVideoPoster: vi.fn(),
+}));
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
