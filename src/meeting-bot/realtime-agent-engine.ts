@@ -31,7 +31,7 @@ export async function startMeetingAgentRealtimeEngine(
   let realtimeReady = false;
   let ttsQueue = Promise.resolve();
   const agentLogScope = params.logPrefix ? `${params.logPrefix} agent` : "agent";
-  const resolved = resolveMeetingRealtimeTranscriptionProvider({
+  const resolved = await resolveMeetingRealtimeTranscriptionProvider({
     config: params.config,
     fullConfig: params.fullConfig,
     providers: params.providers,

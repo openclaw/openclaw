@@ -27,7 +27,7 @@ import { buildRuntimeContextCustomMessage } from "./run/runtime-context-prompt.j
 import {
   clearEmbeddedSessionPromptStates,
   createToolResultPromptProjectionState,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
   type ToolResultPromptProjectionState,
 } from "./session-prompt-state.js";
 
@@ -59,16 +59,6 @@ async function loadFreshToolResultTruncationModuleForTest() {
 
 let testTimestamp = 1;
 const nextTimestamp = () => testTimestamp++;
-
-function createPromptProjectionStateForTest(): ToolResultPromptProjectionState {
-  return {
-    replacements: new Map(),
-    frozen: new Set(),
-    ambiguousBaseKeys: new Set(),
-    restoredCacheTtl: new Map(),
-    sourceHashByKey: new Map(),
-  };
-}
 
 beforeEach(async () => {
   testTimestamp = 1;
@@ -563,7 +553,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
       makeToolResult("y".repeat(15_000), "current_2"),
     ];
     const messages = [...prefix, ...suffix];
-    const projectionState = createPromptProjectionStateForTest();
+    const projectionState = createToolResultPromptProjectionState();
 
     const first = truncateOversizedToolResultsInMessages(
       messages,
@@ -587,7 +577,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
     );
     expect(messages).toEqual([...prefix, ...suffix]);
 
-    const stableState = createPromptProjectionStateForTest();
+    const stableState = createToolResultPromptProjectionState();
     const stableHistory = [
       makeToolResult("a".repeat(4_000), "stable_1"),
       makeToolResult("b".repeat(4_000), "stable_2"),
@@ -637,13 +627,15 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("keeps #99495 historical bytes stable across attempts sharing session state", () => {
-    const state = getEmbeddedSessionPromptState("session-99495").toolResults;
+    using firstLease = retainEmbeddedSessionPromptState("session-99495");
+    const state = firstLease.state.toolResults;
     const history = [
       makeToolResult("a".repeat(4_000), "history_1"),
       makeToolResult("b".repeat(4_000), "history_2"),
     ];
     const first = truncateOversizedToolResultsInMessages(history, 128_000, 5_000, 20_000, state);
-    const secondAttemptState = getEmbeddedSessionPromptState("session-99495").toolResults;
+    using secondLease = retainEmbeddedSessionPromptState("session-99495");
+    const secondAttemptState = secondLease.state.toolResults;
     const second = truncateOversizedToolResultsInMessages(
       [...history, makeToolResult("c".repeat(12_000), "current")],
       128_000,
@@ -658,7 +650,8 @@ describe("truncateOversizedToolResultsInMessages", () => {
 
   it("reclaims #99495 state from canonical compaction, not filtered projections", async () => {
     const sessionId = "session-99495-reclamation";
-    const state = getEmbeddedSessionPromptState(sessionId).toolResults;
+    using promptStateLease = retainEmbeddedSessionPromptState(sessionId);
+    const state = promptStateLease.state.toolResults;
     const removed = makeToolResult("removed".repeat(100_000), "removed_after_compaction");
     const retained = makeToolResult("retained".repeat(100_000), "retained_after_compaction");
     const projected = truncateOversizedToolResultsInMessages(
@@ -687,7 +680,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("keeps frozen aggregate projections byte-identical when a later turn exceeds the budget", () => {
-    const projectionState = createPromptProjectionStateForTest();
+    const projectionState = createToolResultPromptProjectionState();
     const history = [
       makeToolResult("a".repeat(4_000), "history_1"),
       makeToolResult("b".repeat(4_000), "history_2"),
@@ -732,7 +725,8 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("shrinks #99495 frozen bytes monotonically only under a tighter hard cap", () => {
-    const state = getEmbeddedSessionPromptState("session-99495-shrink").toolResults;
+    using promptStateLease = retainEmbeddedSessionPromptState("session-99495-shrink");
+    const state = promptStateLease.state.toolResults;
     const history = [
       makeToolResult("a".repeat(8_000), "history_1"),
       makeToolResult("b".repeat(8_000), "history_2"),
@@ -767,7 +761,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
   ])(
     "preserves fresh $kind output without rewriting frozen history",
     ({ kind, outputs, totalCap }) => {
-      const projectionState = createPromptProjectionStateForTest();
+      const projectionState = createToolResultPromptProjectionState();
       const history: AgentMessage[] = [];
       for (let index = 0; index < 50; index++) {
         history.push(
@@ -843,7 +837,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
   );
 
   it("allows aggregate overflow rather than rewriting frozen history", () => {
-    const projectionState = createPromptProjectionStateForTest();
+    const projectionState = createToolResultPromptProjectionState();
     const history: AgentMessage[] = [
       makeToolResult("a".repeat(4_000), "history_a"),
       makeToolResult("b".repeat(4_000), "history_b"),
@@ -899,7 +893,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("leaves fresh trailing batches intact when only they exceed the aggregate budget", () => {
-    const projectionState = createPromptProjectionStateForTest();
+    const projectionState = createToolResultPromptProjectionState();
     const messages: AgentMessage[] = [makeUserMessage("run several tools")];
     for (let index = 0; index < 5; index++) {
       messages.push(makeToolResult(String(index).repeat(8_000), `fresh_${index}`));
@@ -1057,7 +1051,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
   );
 
   it("does not restore filtered image blocks when reusing a projection", () => {
-    const projectionState = createPromptProjectionStateForTest();
+    const projectionState = createToolResultPromptProjectionState();
     const source = makeToolResult("x".repeat(15_000), "image_call");
     source.content = [
       { type: "image", data: "filtered-after-conversion" },
@@ -1090,7 +1084,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("retains bounded projection data while replaying current canonical metadata", () => {
-    const state = createPromptProjectionStateForTest();
+    const state = createToolResultPromptProjectionState();
     const text = "x".repeat(100_000);
     const source = makeToolResult(text, "retained-read", { content: text });
     source.content.push({ type: "image", data: "a".repeat(100_000), mimeType: "image/png" });
@@ -1118,7 +1112,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
     ],
     [["\ud800"], ["\ud801"]],
   ])("invalidates rewritten canonical text with preserved framing: %j", async (before, after) => {
-    const state = createPromptProjectionStateForTest();
+    const state = createToolResultPromptProjectionState();
     const source = makeToolResult("", "rewritten-source");
     const blocks = (parts: string[]) => parts.map((text) => ({ type: "text" as const, text }));
     source.content = blocks(["x".repeat(15_000), ...before]);
@@ -1134,7 +1128,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("freezes #99495 ambiguous-key projections across filtered history", async () => {
-    const projectionState = createPromptProjectionStateForTest();
+    const projectionState = createToolResultPromptProjectionState();
     const duplicate = (text: string) => ({
       role: "toolResult" as const,
       toolCallId: "duplicate-call",
@@ -1187,7 +1181,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("drops an unselected identical-occurrence key without changing projected bytes", async () => {
-    const projectionState = createPromptProjectionStateForTest();
+    const projectionState = createToolResultPromptProjectionState();
     const duplicate = (): ToolResultMessage => ({
       role: "toolResult",
       toolCallId: "identical-call",
@@ -1383,7 +1377,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     await appendTranscriptMessage(scope, { message: makeUserMessage("run tool") });
     const original = makeToolResult("frozen output ".repeat(2_000), "frozen_call");
     const persisted = await appendTranscriptMessage(scope, { message: original });
-    const projectionState = createPromptProjectionStateForTest();
+    const projectionState = createToolResultPromptProjectionState();
     const projected = truncateOversizedToolResultsInMessages(
       [original],
       128_000,
@@ -1456,7 +1450,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     for (const message of frozenResults) {
       await appendTranscriptMessage(scope, { message });
     }
-    const projectionState = createPromptProjectionStateForTest();
+    const projectionState = createToolResultPromptProjectionState();
     // Dispatch under a loose budget freezes every result at full text.
     truncateOversizedToolResultsInMessages(frozenResults, 128_000, 8_000, 48_000, projectionState);
     expect(projectionState.frozen.size).toBe(3);

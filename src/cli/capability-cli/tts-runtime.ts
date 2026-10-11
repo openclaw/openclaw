@@ -16,10 +16,10 @@ import { canonicalizeSpeechProviderId, listSpeechProviders } from "../../tts/pro
 import type { TtsResult } from "../../tts/tts-runtime-types.js";
 import { isTtsConfigReservedKey, resolveTtsPersonaList } from "../../tts/tts-settings.js";
 import {
-  getTtsProvider,
+  getTtsProviderAsync,
   listTtsPersonas,
   listSpeechVoices,
-  resolveExplicitTtsOverrides,
+  resolveExplicitTtsOverridesAsync,
   resolveTtsConfig,
   resolveTtsPrefsPath,
   setTtsEnabled,
@@ -77,7 +77,7 @@ export async function runTtsConvert(params: {
       params.provider ?? resolveModelRefOverride(normalizeOptionalString(params.modelId)).provider;
     if (!ttsProvider) {
       const ttsConfig = resolveTtsConfig(cfg, { channelId: params.channel });
-      ttsProvider = getTtsProvider(ttsConfig, resolveTtsPrefsPath(ttsConfig));
+      ttsProvider = await getTtsProviderAsync(ttsConfig, resolveTtsPrefsPath(ttsConfig));
     }
     const effectiveCfg = await injectTtsAuthProfileApiKey({
       cfg,
@@ -87,7 +87,7 @@ export async function runTtsConvert(params: {
     if (effectiveCfg !== cfg) {
       pinRuntimeConfigSnapshot(effectiveCfg);
     }
-    const overrides = resolveExplicitTtsOverrides({
+    const overrides = await resolveExplicitTtsOverridesAsync({
       cfg: effectiveCfg,
       provider: params.provider,
       modelId: params.modelId,
@@ -279,7 +279,7 @@ export async function runTtsProviders(transport: CapabilityTransport, rawAgentId
   const agentId = resolveCapabilityProviderAgentId(cfg, rawAgentId);
   const config = resolveTtsConfig(cfg);
   const prefsPath = resolveTtsPrefsPath(config);
-  const active = getTtsProvider(config, prefsPath);
+  const active = await getTtsProviderAsync(config, prefsPath);
   return {
     providers: listSpeechProviders(cfg).map((provider) => ({
       available: true,
@@ -314,7 +314,8 @@ export async function runTtsVoices(providerRaw?: string) {
   });
   const config = resolveTtsConfig(cfg);
   const prefsPath = resolveTtsPrefsPath(config);
-  const provider = normalizeOptionalString(providerRaw) || getTtsProvider(config, prefsPath);
+  const provider =
+    normalizeOptionalString(providerRaw) || (await getTtsProviderAsync(config, prefsPath));
   return await listSpeechVoices({
     provider,
     cfg,

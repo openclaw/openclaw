@@ -35,7 +35,7 @@ it.each(["matching", "other-state", "other-path"])(
       source: "startup",
     });
     const failure = new AuthProfileStoreUnreadableError(databasePath);
-    const loadAuthStore = vi.fn((agentDir?: string) => {
+    const loadAuthStore = vi.fn(async (agentDir?: string) => {
       if (agentDir === workerDir) {
         throw failure;
       }

@@ -27,6 +27,7 @@ import {
 } from "./session-transcript-index.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { transcriptEventJsonSql, type TranscriptPayloadRecord } from "./transcript-payload.js";
+import { deriveTranscriptPredicateFields } from "./transcript-predicate-fields.js";
 
 export function readSqliteSessionGenerationWindows(
   database: Pick<OpenClawAgentDatabase, "db">,
@@ -287,6 +288,13 @@ export function copySqliteSessionGenerationRows(params: {
       event_zstd: parameter((row) => row.event_zstd),
       event_utf8_bytes: parameter((row) => row.event_utf8_bytes),
       navigation_json: parameter((row) => row.navigation_json),
+      navigation_type: parameter((row) => row.navigation_type),
+      navigation_custom_type: parameter((row) => row.navigation_custom_type),
+      navigation_display: parameter((row) => row.navigation_display),
+      message_role: parameter((row) => row.message_role),
+      navigation_last_type: parameter((row) => row.navigation_last_type),
+      navigation_last_custom_type: parameter((row) => row.navigation_last_custom_type),
+      navigation_valid: parameter((row) => row.navigation_valid),
     }),
   );
   // UTF-16 destinations retain native TEXT byte accounting and JSON semantics.
@@ -301,6 +309,7 @@ export function copySqliteSessionGenerationRows(params: {
     )) {
       insertEvent({
         ...row,
+        ...deriveTranscriptPredicateFields(row.event_json),
         event_zstd: null,
         event_utf8_bytes: null,
         navigation_json: null,

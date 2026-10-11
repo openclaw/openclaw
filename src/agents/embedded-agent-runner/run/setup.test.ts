@@ -630,3 +630,28 @@ describe("native model-owned harness policy", () => {
     expect(result).toEqual({ effectiveModel: runtimeModel });
   });
 });
+
+describe("actual setup native prompt coherence", () => {
+  it.each([
+    [undefined, 777_000, 128_000],
+    ["synthetic", 777_000, 777_000],
+    ["synthetic", undefined, 128_000],
+  ] as const)(
+    "budgets native source %s with reported prompt %s",
+    (contextWindowSource, contextTokens, expected) => {
+      const result = resolveEmbeddedRuntimeModelPolicy({
+        cfg: {},
+        provider: "openai",
+        modelId: "gpt-5.5",
+        nativeModelOwned: false,
+        runtimeModel: {
+          ...createRuntimeModel(),
+          contextWindow: 128_000,
+          contextTokens,
+          contextWindowSource,
+        },
+      });
+      expect(result.contextTokenBudget).toBe(expected);
+    },
+  );
+});

@@ -9,7 +9,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import {
   clearEmbeddedSessionPromptStates,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
 } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -102,8 +102,7 @@ type ForkSessionParamsForTest = {
 
 vi.mock("./session-fork.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-fork.js")>()),
-  forkSessionFromParent: (...args: [ForkSessionParamsForTest]) =>
-    sessionForkMocks.forkSessionFromParent(...args),
+  forkSessionFromParent: sessionForkMocks.forkSessionFromParent,
 }));
 
 vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
@@ -902,8 +901,8 @@ describe("initSessionState thread forking", () => {
       },
     });
     sessionForkMocks.forkSessionFromParent.mockResolvedValueOnce(undefined);
-    const promptState = getEmbeddedSessionPromptState(threadSessionKey);
-    promptState.toolResults.frozen.add("retained-tool-result");
+    using original = retainEmbeddedSessionPromptState(threadSessionKey);
+    original.state.toolResults.frozen.add("retained-tool-result");
     enqueueFollowupRun(
       threadSessionKey,
       createQueueTestRun({ prompt: "retained followup" }),
@@ -940,8 +939,9 @@ describe("initSessionState thread forking", () => {
         sessionId: "tombstoned-thread-session",
         mainRestartRecovery: { tombstone: { reason: "old transcript exhausted" } },
       });
-      expect(getEmbeddedSessionPromptState(threadSessionKey)).toBe(promptState);
-      expect(promptState.toolResults.frozen).toContain("retained-tool-result");
+      using retained = retainEmbeddedSessionPromptState(threadSessionKey);
+      expect(retained.state).toBe(original.state);
+      expect(original.state.toolResults.frozen).toContain("retained-tool-result");
       expect(getFollowupQueueDepth(threadSessionKey)).toBe(1);
       expect(peekSystemEvents(threadSessionKey)).toEqual(["retained event"]);
       expect(replyRunRegistry.get(threadSessionKey)).toBe(activeReply);

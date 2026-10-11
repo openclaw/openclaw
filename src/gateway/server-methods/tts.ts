@@ -1,4 +1,3 @@
-import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -18,9 +17,9 @@ import {
 import { resolvePreparedTtsProvider } from "../../tts/tts-provider-resolution.js";
 import { resolveTtsPersonaList, resolveTtsSettingsSnapshot } from "../../tts/tts-settings.js";
 import {
-  isTtsProviderConfigured,
+  isTtsProviderConfiguredAsync,
   listTtsPersonas,
-  resolveExplicitTtsOverrides,
+  resolveExplicitTtsOverridesAsync,
   resolveTtsConfig,
   resolveTtsPrefsPath,
   resolveTtsProviderOrder,
@@ -36,12 +35,18 @@ import { inferSpeechMimeType } from "./speech-mime.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-function resolveTtsGatewayStatusFacts(cfg: OpenClawConfig) {
+async function resolveTtsGatewayStatusFacts(cfg: OpenClawConfig) {
   const settings = resolveTtsSettingsSnapshot({ cfg });
   const speechProviders = listSpeechProviders(cfg);
   const configuredByProvider = new Map(
-    speechProviders.map(
-      (provider) => [provider.id, isTtsProviderConfigured(settings.config, provider, cfg)] as const,
+    await Promise.all(
+      speechProviders.map(
+        async (provider) =>
+          [
+            provider.id,
+            await isTtsProviderConfiguredAsync(settings.config, provider, cfg),
+          ] as const,
+      ),
     ),
   );
   const provider = resolvePreparedTtsProvider({
@@ -66,18 +71,23 @@ function setTtsEnabledHandler(enabled: boolean): GatewayRequestHandler {
 export const ttsHandlers: GatewayRequestHandlers = {
   "tts.status": async ({ respond, context }) => {
     await respondUnavailableOnThrow(respond, async () => {
-      await yieldToEventLoop();
       const cfg = context.getRuntimeConfig();
       const { configuredByProvider, provider, settings, speechProviders } =
-        resolveTtsGatewayStatusFacts(cfg);
-      const fallbackProviders = resolveTtsProviderOrder(provider, cfg, speechProviders)
-        .slice(1)
-        .filter((candidate) => {
-          if (configuredByProvider.has(candidate)) {
-            return configuredByProvider.get(candidate) === true;
+        await resolveTtsGatewayStatusFacts(cfg);
+      const fallbackCandidates = resolveTtsProviderOrder(provider, cfg, speechProviders).slice(1);
+      await Promise.all(
+        fallbackCandidates.map(async (candidate) => {
+          if (!configuredByProvider.has(candidate)) {
+            configuredByProvider.set(
+              candidate,
+              await isTtsProviderConfiguredAsync(settings.config, candidate, cfg),
+            );
           }
-          return isTtsProviderConfigured(settings.config, candidate, cfg);
-        });
+        }),
+      );
+      const fallbackProviders = fallbackCandidates.filter(
+        (candidate) => configuredByProvider.get(candidate) === true,
+      );
       // Report configured state per provider so the UI can explain why fallback
       // order differs from the complete provider registry.
       const providerStates = speechProviders.map((candidate) => ({
@@ -125,7 +135,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
       try {
         // Explicit provider/model/voice requests are validated before synthesis
         // and disable fallback so preview calls fail against the requested target.
-        overrides = resolveExplicitTtsOverrides({
+        overrides = await resolveExplicitTtsOverridesAsync({
           cfg,
           provider: providerRaw,
           modelId,
@@ -287,7 +297,8 @@ export const ttsHandlers: GatewayRequestHandlers = {
   "tts.providers": async ({ respond, context }) => {
     await respondUnavailableOnThrow(respond, async () => {
       const cfg = context.getRuntimeConfig();
-      const { configuredByProvider, provider, speechProviders } = resolveTtsGatewayStatusFacts(cfg);
+      const { configuredByProvider, provider, speechProviders } =
+        await resolveTtsGatewayStatusFacts(cfg);
       respond(true, {
         providers: speechProviders.map((candidate) => ({
           id: candidate.id,

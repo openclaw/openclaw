@@ -423,7 +423,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/chat-comment-lifecycle.e2e.test.ts",
     ["chat"],
-    ["ui/src/lib/toast.ts", "ui/src/plugins/control-ui-view.runtime.ts"],
+    ["ui/src/lib/toast.ts", "ui/src/plugins/control-ui-view.solid.tsx"],
   ),
   pageWatch(
     "ui/src/e2e/chat-comment-pane-retirement.e2e.test.ts",
@@ -610,7 +610,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/chat-mermaid-load-errors.e2e.test.ts",
     ["chat"],
-    ["ui/src/components/markdown-mermaid.ts"],
+    ["ui/src/components/markdown-mermaid.tsx"],
   ),
   pageWatch(
     "ui/src/e2e/chat-metadata-observation.e2e.test.ts",
@@ -1614,7 +1614,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
       "ui/src/components/desktop/desktop-client.ts",
       "ui/src/components/desktop/desktop-panel.ts",
       "ui/src/components/panel-loading-skeleton.ts",
-      "ui/src/pages/portals/portals-page.ts",
+      "ui/src/pages/portals/portals-page.tsx",
     ],
     ["ui/src/pages/portals/portals.css"],
   ),
