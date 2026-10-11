@@ -30,6 +30,10 @@ import type {
   SessionCleanupReadInput,
   SessionCleanupReadResult,
 } from "./cleanup-service-read.types.js";
+import type {
+  CombinedSessionStoreTopologyRequest,
+  CombinedSessionStoreTopologyResult,
+} from "./combined-store-topology.worker.js";
 import type { ConversationDeliveryRecord } from "./conversation-delivery-store.types.js";
 import type {
   ConversationRowsWorkerInput,
@@ -280,6 +284,11 @@ type SessionTargetInventoryWorkerInput = {
   request: SessionStoreTargetInventoryRequest;
 };
 
+type CombinedSessionStoreTopologyWorkerInput = {
+  kind: "combined-store-topology";
+  request: CombinedSessionStoreTopologyRequest;
+};
+
 type SessionIdentityEvidenceWorkerInput = {
   kind: "session-identity-evidence";
   database: { agentId: string; path: string };
@@ -359,6 +368,7 @@ export type SessionHistoryWorkerInput =
   | SessionMaintenanceReadWorkerInput
   | SessionStoreTargetWorkerInput
   | SessionTargetInventoryWorkerInput
+  | CombinedSessionStoreTopologyWorkerInput
   | SessionIdentityEvidenceWorkerInput
   | VoiceSessionsWorkerInput
   | SessionUsageCacheWorkerInput
@@ -506,6 +516,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
           readError: import("./session-transcript-worker-error.types.js").SessionTranscriptWorkerReadError;
         };
     "session-target-inventory": SessionStoreTargetInventoryResult;
+    "combined-store-topology": CombinedSessionStoreTopologyResult;
     "session-identity-evidence": {
       kind: "session-identity-evidence";
       evidence: SessionIdentityEvidenceResult[];

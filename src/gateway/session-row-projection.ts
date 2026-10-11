@@ -250,7 +250,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       const discovery = { env, snapshot: prepared.snapshot };
       const revision = epoch;
       const storeRead = createStoreRead({ stores, rows, byStore, env });
-      await storeRead.loadCombinedStore(nextConfig, discovery, (load) => {
+      await storeRead.loadCombinedStore(nextConfig, discovery, (load, scopeTargets) => {
         prepared.assertCurrent();
         if (disposed || epoch !== revision) {
           return;
@@ -275,7 +275,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
           cfg,
           byAgent.keys(),
           new Map([...stores].map(([locator, source]) => [source.filename, locator])),
-          discovery,
+          scopeTargets,
         );
         revisions.publishSelection();
         // Config changes during this read are picked up by a subsequent topology publication.

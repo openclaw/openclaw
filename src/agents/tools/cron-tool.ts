@@ -526,7 +526,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
                 (mode === "" || mode === "announce") &&
                 !hasTarget;
               if (shouldInfer) {
-                const inferred = resolveCronCreationDelivery({
+                const inferred = await resolveCronCreationDelivery({
                   cfg: runtimeConfig,
                   currentDeliveryContext: opts.currentDeliveryContext,
                   agentSessionKey: opts.agentSessionKey,

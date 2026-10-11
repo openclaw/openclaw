@@ -2,11 +2,11 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
-  resolveAllAgentSessionStoreTargetsSync,
   resolveConfiguredAgentDatabaseTargets,
   runSessionRegistryMaintenanceForStore,
 } from "../config/sessions.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { resolveAllAgentSessionStoreTargetsAsync } from "../config/sessions/targets-runtime.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createRetainedAgentDatabaseMatcherFromSnapshot } from "../state/agent-deletion-discovery.js";
@@ -124,7 +124,7 @@ export async function runSessionRegistryMaintenance(params: {
       const deletedAgents = new Map(
         snapshot?.deletedAgents.map(({ agentId, status }) => [agentId, status]),
       );
-      for (const target of resolveAllAgentSessionStoreTargetsSync(cfg, {
+      for (const target of await resolveAllAgentSessionStoreTargetsAsync(cfg, {
         env,
         registeredDatabases,
       })) {

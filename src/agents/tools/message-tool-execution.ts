@@ -41,6 +41,7 @@ import {
   type MessageToolDiscoveryParams,
   resolveAgentAccountId,
   resolveEffectiveCurrentChannelContext,
+  resolveEffectiveCurrentChannelContextForRequest,
   resolveMessageToolActionSchemaActions,
   resolveMessageToolDiscoveryAsync,
 } from "./message-tool-discovery.js";
@@ -239,13 +240,16 @@ function* createMessageToolSteps(
       } = turnAuthority.beginInvocation(action);
       const messageActionAuthorization: MessageActionAuthorization = trustedTurnContext ?? {};
       const requestedAccountId = readToolStringParam(params, "accountId");
-      const effectiveCurrentChannel = resolveEffectiveCurrentChannelContext(options, {
-        config: rawConfig,
-        action,
-        params,
-        accountId: requestedAccountId ?? agentAccountId,
-        preparedMessageToolCatalog,
-      });
+      const effectiveCurrentChannel = await resolveEffectiveCurrentChannelContextForRequest(
+        options,
+        {
+          config: rawConfig,
+          action,
+          params,
+          accountId: requestedAccountId ?? agentAccountId,
+          preparedMessageToolCatalog,
+        },
+      );
       const decisions = createMessageToolDecisionRecorder({
         actionId: toolCallId,
         action,

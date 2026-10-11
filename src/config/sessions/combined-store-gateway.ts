@@ -93,7 +93,7 @@ export type GatewaySessionStoreOptions = {
   ) => void;
 };
 
-type ResolvedGatewaySessionStoreTargets = {
+export type ResolvedGatewaySessionStoreTargets = {
   groupDiscovery?: ReadonlyMap<string, { agentId: string; order: number }>;
   configuredAgentIds?: ReadonlySet<string>;
   defaultAgentId: string;
@@ -477,10 +477,35 @@ export function resolveGatewaySessionStoreTargets(
     );
     resolved = { ...resolved, durableTargets, physicalTargets, groupDiscovery };
   }
-  const diagnostics = [...resolved.diagnostics];
-  const env = readOptions.env ?? process.env;
   const deleted = createGatewayRetainedStoreMatcher(cfg, opts.discovery);
-  const admitted = (target: SessionStoreTarget, durable = false): boolean => {
+  const durableTargets = resolved.durableTargets.filter((target) => {
+    const physical = resolved.physicalTargets.get(storeTargetKey(target));
+    return !deleted(physical?.storePath ?? target.storePath, target.agentId);
+  });
+  resolved = {
+    ...resolved,
+    durableTargets,
+    ...(resolved.durableStorePath === undefined
+      ? {}
+      : {
+          durableStorePath: resolveCombinedDatabasePath(durableTargets, resolved.physicalTargets),
+        }),
+  };
+  return applyGatewaySessionStoreAdmission(cfg, opts, resolved);
+}
+
+/** Admission remains with the Gateway that owns the startup refusal state. */
+export function applyGatewaySessionStoreAdmission(
+  cfg: OpenClawConfig,
+  opts: GatewaySessionStoreOptions,
+  resolved: ResolvedGatewaySessionStoreTargets,
+): ResolvedGatewaySessionStoreTargets {
+  const diagnostics = [...resolved.diagnostics];
+  const env = opts.discovery?.env ?? process.env;
+  if (opts.agentId?.trim()) {
+    assertAgentDatabaseAdmitted(opts.agentId, { env });
+  }
+  const admitted = (target: SessionStoreTarget): boolean => {
     const physical = resolved.physicalTargets.get(storeTargetKey(target));
     if (
       opts.preserveSentinelOwners === "physical" &&
@@ -488,9 +513,6 @@ export function resolveGatewaySessionStoreTargets(
       physical &&
       !isConfiguredAgentDatabaseTarget(cfg, physical.agentId, physical.storePath, env)
     ) {
-      return false;
-    }
-    if (durable && deleted(physical?.storePath ?? target.storePath, target.agentId)) {
       return false;
     }
     const refusal =
@@ -506,7 +528,7 @@ export function resolveGatewaySessionStoreTargets(
     return false;
   };
   // Cached topology stays complete; each boot's admission is applied when consumed.
-  const durableTargets = resolved.durableTargets.filter((target) => admitted(target, true));
+  const durableTargets = resolved.durableTargets.filter(admitted);
   const incognitoTargets = resolved.incognitoTargets.filter((target) => admitted(target));
   if (
     durableTargets.length === resolved.durableTargets.length &&

@@ -54,6 +54,7 @@ import {
 import {
   isPerAgentSessionStoreConfig,
   listConfiguredSessionStoreAgentIds,
+  listKnownSessionStoreAgentIds,
   resolveAllAgentSessionStoreTargetsSync,
   resolveConfiguredSessionStoreTargets,
 } from "./targets.js";
@@ -185,7 +186,7 @@ export function captureSessionStoreWriteCandidates(storePath: string) {
 }
 
 export type SessionStoreTargetInventoryRequest = {
-  selection?: "configured" | "recovery";
+  selection?: "configured" | "recovery" | "known-owners";
   config: OpenClawConfig;
   agentIds: string[];
   env: NodeJS.ProcessEnv;
@@ -429,6 +430,15 @@ export function readSessionStoreTargetInventory(
   const cache: SessionStoreTargetsReadCache = new Map();
   let readFailed = false;
   try {
+    if (request.selection === "known-owners") {
+      return {
+        kind: "session-target-inventory",
+        agents: listKnownSessionStoreAgentIds(config, {
+          env,
+          registeredDatabases: request.registeredDatabases,
+        }).map((agentId) => ({ agentId, result: { available: true, targets: [] }, reads: [] })),
+      };
+    }
     if (request.selection === "configured" || request.selection === "recovery") {
       const agents: Extract<
         SessionStoreTargetInventoryResult,

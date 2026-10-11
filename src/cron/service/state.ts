@@ -132,7 +132,7 @@ export type CronServiceDeps = {
   /** Resolve the current default when runtime config can change after startup. */
   resolveDefaultAgentId?: () => string | undefined;
   /** Resolve configured or persisted owners whose session stores need periodic cleanup. */
-  resolveSessionStoreAgentIds?: () => string[];
+  resolveSessionStoreAgentIds?: () => string[] | Promise<string[]>;
   /** Revalidate resident policy using the supplied transaction or worker deletion facts. */
   isAgentAvailable?: CronAgentAvailability;
   resolveSessionStorePath?: (agentId?: string) => string;

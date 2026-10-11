@@ -1,17 +1,14 @@
-import {
-  mergeCombinedSessionStore,
-  prepareCombinedSessionStore,
-} from "../config/sessions/combined-store-gateway.js";
+import { listAgentIds } from "../agents/agent-scope-config.js";
+import { prepareCombinedSessionStoreForGatewayAsync } from "../config/sessions/combined-store-gateway-read.js";
+import { mergeCombinedSessionStore } from "../config/sessions/combined-store-gateway.js";
 import type { GatewaySessionStoreDiscovery } from "../config/sessions/combined-store-paths.js";
+import type { CombinedSessionStoreScopeTargets } from "../config/sessions/combined-store-topology.worker.js";
 import type { SessionEntrySummary } from "../config/sessions/session-accessor.types.js";
 import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  assertExistingDatabaseIdentity,
-  readDatabasePathIdentitySync,
-} from "../infra/sqlite-worker-identity.js";
+import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import type { createSessionMembershipProjection } from "./session-membership-projection.js";
@@ -299,14 +296,20 @@ export function createSessionRowEntryReadAccess(
         async loadCombinedStore<T>(
           cfg: OpenClawConfig,
           discovery: GatewaySessionStoreDiscovery,
-          consume: (load: () => ReturnType<typeof mergeCombinedSessionStore>) => T,
+          consume: (
+            load: () => ReturnType<typeof mergeCombinedSessionStore>,
+            scopes: CombinedSessionStoreScopeTargets,
+          ) => T,
         ): Promise<T> {
           const options = {
             discovery,
             includeIncognito: false,
             preserveSentinelOwners: "physical" as const,
           };
-          const preparedStore = prepareCombinedSessionStore(cfg, options);
+          const { prepared: preparedStore, scopes } =
+            await prepareCombinedSessionStoreForGatewayAsync(cfg, options, [
+              ...new Set([...listAgentIds(cfg), ...[...rows.values()].map((row) => row.agentId)]),
+            ]);
           // Pin every physical source before the first worker request yields.
           const captures = preparedStore.reads.flatMap(({ storeTarget: physical }) => {
             const file = readDatabasePathIdentitySync(physical.storePath);
@@ -358,39 +361,37 @@ export function createSessionRowEntryReadAccess(
                   entries.set(target.storePath, prepared.entries);
                 }
               }
-              for (const [index, { target, file }] of captures.entries()) {
-                owners[index]!.assertCurrent();
-                assertExistingDatabaseIdentity(target.storePath, file.key, file.birthtime);
-              }
-              return consume(() =>
-                mergeCombinedSessionStore(
-                  cfg,
-                  {
-                    ...options,
-                    onStoreLoaded(target, agentId, owner) {
-                      const source = sources.get(target.storePath);
-                      if (source) {
-                        source.agentId = agentId;
-                        source.discoveryAgentId = owner?.agentId ?? null;
-                        source.discoveryOrder = owner?.order;
-                      }
+              return consume(
+                () =>
+                  mergeCombinedSessionStore(
+                    cfg,
+                    {
+                      ...options,
+                      onStoreLoaded(target, agentId, owner) {
+                        const source = sources.get(target.storePath);
+                        if (source) {
+                          source.agentId = agentId;
+                          source.discoveryAgentId = owner?.agentId ?? null;
+                          source.discoveryOrder = owner?.order;
+                        }
+                      },
                     },
-                  },
-                  preparedStore,
-                  (target) => {
-                    const previous = captures.find(
-                      (capture) => capture.target.storePath === target.storePath,
-                    )?.previous;
-                    if (previous) {
-                      return [...(byStore.get(previous.target.storePath) ?? [])].flatMap((id) => {
-                        const row = rows.get(id);
-                        const entry = row && (row.storedEntry ?? readSessionRowEntry(row));
-                        return row && entry ? [{ sessionKey: row.key, entry }] : [];
-                      });
-                    }
-                    return entries.get(target.storePath) ?? [];
-                  },
-                ),
+                    preparedStore,
+                    (target) => {
+                      const previous = captures.find(
+                        (capture) => capture.target.storePath === target.storePath,
+                      )?.previous;
+                      if (previous) {
+                        return [...(byStore.get(previous.target.storePath) ?? [])].flatMap((id) => {
+                          const row = rows.get(id);
+                          const entry = row && (row.storedEntry ?? readSessionRowEntry(row));
+                          return row && entry ? [{ sessionKey: row.key, entry }] : [];
+                        });
+                      }
+                      return entries.get(target.storePath) ?? [];
+                    },
+                  ),
+                scopes!,
               );
             },
             projectionLane,

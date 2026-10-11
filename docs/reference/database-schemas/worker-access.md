@@ -205,6 +205,24 @@ once while retaining the final caller authorization check. These changes preserv
 schemas, stored bytes, permissions, and update behavior. Released synchronous SDK
 approval and placement contracts retain their native effect guards.
 
+## Session target discovery
+
+Gateway combined listings, search preparation, cron owner discovery, delivery
+context recovery, and ordered runtime candidate selection await the existing
+session history/discovery worker. Target selection returns logical and physical
+store facts together; the Gateway consumes them without native SQLite reads.
+Combined topology and row reads share the federation policy used by the native
+maintenance entrypoint. Incognito rows remain with their process-held actor.
+
+Ordinary discovery keeps one captured roster and listing through completion.
+Later registry, path, or row changes are observed on the next owner preparation;
+there is no post-read registry retry or repeated listing-identity capture.
+Write receipts invalidate reusable target facts. Current authorization at
+search disclosure, project removal, and other real effects remains required.
+The released synchronous transcript-hit SDK and native mutation callbacks retain
+their existing kernels until those owning contracts are migrated; this is not a
+claim that all shared discovery kernels are worker-only.
+
 ## Config CLI ownership
 
 ### Non-session bookkeeping

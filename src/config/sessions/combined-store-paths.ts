@@ -9,6 +9,7 @@ import { resolveSessionStoreCompatibilityAgentId } from "../legacy.default-agent
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import { resolvePersistedSessionStoreOwner } from "./session-store-owner.js";
+import type { SessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import { resolveConfiguredAgentDatabaseTargets, type SessionStoreTarget } from "./targets.js";
 
 export function storeTargetKey(target: SessionStoreTarget): string {
@@ -46,12 +47,14 @@ export function resolveCombinedDatabasePath(
 export type GatewaySessionStoreDiscovery = {
   env: NodeJS.ProcessEnv;
   snapshot: AgentDatabaseDeletionSnapshot | undefined;
+  readCandidates?: readonly SessionStoreReadCandidate[];
 };
 
 export function discoveryReadOptions(discovery?: GatewaySessionStoreDiscovery) {
   return discovery
     ? {
         env: discovery.env,
+        readCandidates: discovery.readCandidates,
         registeredDatabases: (discovery.snapshot?.registeredAgentDatabases ?? []).filter(
           (entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION,
         ),

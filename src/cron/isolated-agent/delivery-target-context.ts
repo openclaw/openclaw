@@ -2,7 +2,7 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { extractDeliveryInfoBatch } from "../../config/sessions/delivery-info.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { loadExactSessionEntryCandidatesReadOnlyBatch } from "../../config/sessions/session-accessor.js";
+import { readSessionEntriesFromStoreInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { foldedSessionKeyAliasCandidates } from "../../config/sessions/store-entry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -24,11 +24,11 @@ type CronDeliveryReadPlan = Omit<CronDeliveryTargetContext, "main" | "usedShared
   storePath: string;
 };
 
-/** Prepare owned delivery facts synchronously; no database or borrowed view survives the read. */
-export function readCronDeliveryTargetContexts(
+/** Prepare owned delivery facts through the session worker; no borrowed view survives the read. */
+export async function readCronDeliveryTargetContexts(
   cfg: OpenClawConfig,
   requests: readonly CronDeliveryContextRequest[],
-): Array<Result<CronDeliveryTargetContext, unknown>> {
+): Promise<Array<Result<CronDeliveryTargetContext, unknown>>> {
   const planned = requests.map(({ agentId, sessionKey }): Result<CronDeliveryReadPlan, unknown> => {
     try {
       const rawSessionKey = sessionKey?.trim();
@@ -50,27 +50,33 @@ export function readCronDeliveryTargetContexts(
       return err(error);
     }
   });
-  const recovered = extractDeliveryInfoBatch(
+  const recovered = await extractDeliveryInfoBatch(
     planned.map((item) => (item.ok ? item.value.threadSessionKey : undefined)),
     { cfg },
   );
-  const targets = planned.flatMap((item, index) =>
-    item.ok && !recovered[index]?.deliveryContext ? [{ index, ...item.value }] : [],
-  );
-  const rows = loadExactSessionEntryCandidatesReadOnlyBatch(
-    targets.map(({ agentId, storePath, threadSessionKey, mainSessionKey }) => ({
-      agentId,
-      storePath,
-      projection: "delivery",
-      // The metadata owner groups physical reads while each job retains its own outcome.
-      sessionKeys: [threadSessionKey, mainSessionKey].flatMap((key) =>
-        key
-          ? [key, ...foldedSessionKeyAliasCandidates(key)].toSorted((left, right) =>
-              Buffer.compare(Buffer.from(left), Buffer.from(right)),
-            )
-          : [],
-      ),
-    })),
+  const targets: Array<{ index: number; plan: CronDeliveryReadPlan }> = [];
+  for (const [index, item] of planned.entries()) {
+    if (item.ok && !recovered[index]?.deliveryContext) {
+      targets.push({ index, plan: item.value });
+    }
+  }
+  const rows = await Promise.all(
+    targets.map(async ({ plan: { agentId, storePath, threadSessionKey, mainSessionKey } }) => {
+      try {
+        const result = await readSessionEntriesFromStoreInWorker({
+          agentId,
+          storePath,
+          projection: "list",
+          snapshotFields: [],
+          sessionKeys: [threadSessionKey, mainSessionKey].flatMap((key) =>
+            key ? [key].concat(foldedSessionKeyAliasCandidates(key)) : [],
+          ),
+        });
+        return ok(result.entries);
+      } catch (error) {
+        return err(error);
+      }
+    }),
   );
   const entries = new Map(targets.map(({ index }, offset) => [index, rows[offset]!]));
   return planned.map((item, index) => {

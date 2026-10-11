@@ -186,15 +186,15 @@ export async function resolveDeliveryTarget(
 
   const sessionContext =
     options?.sessionContext ??
-    (() => {
-      const result = readCronDeliveryTargetContexts(cfg, [
-        { agentId, sessionKey: jobPayload.sessionKey },
-      ])[0]!;
+    (await (async () => {
+      const result = (
+        await readCronDeliveryTargetContexts(cfg, [{ agentId, sessionKey: jobPayload.sessionKey }])
+      )[0]!;
       if (!result.ok) {
         throw result.error;
       }
       return result.value;
-    })();
+    })());
   const { mainSessionKey, rawSessionKey, threadSessionKey, usedSharedMainFallback } =
     sessionContext;
   const hasConversationCompletion =

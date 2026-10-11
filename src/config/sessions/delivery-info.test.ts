@@ -22,41 +22,26 @@ const storeState = vi.hoisted(() => {
   const state = {
     store: {} as Record<string, SessionEntryFixture>,
     stores: {} as Record<string, Record<string, SessionEntryFixture>>,
-    loadExactSessionEntryCandidatesReadOnlyBatch: vi.fn(
-      (
-        scopes: Parameters<
-          typeof import("./session-accessor.js").loadExactSessionEntryCandidatesReadOnlyBatch
-        >[0],
-      ) =>
-        scopes.map((scope) => {
-          const store = state.stores[scope.storePath ?? ""] ?? state.store;
-          try {
-            const value = scope.sessionKeys.flatMap((sessionKey) =>
-              Object.hasOwn(store, sessionKey)
-                ? [{ sessionKey, entry: normalizeLegacySessionEntryDelivery(store[sessionKey]!) }]
-                : [],
-            );
-            scope.onReadSource?.({ agentId: "main", path: scope.storePath! });
-            return { ok: true as const, value };
-          } catch (error) {
-            return { ok: false as const, error };
-          }
-        }),
+    readSessionEntriesFromStoreInWorker: vi.fn(
+      async (scope: { storePath: string; sessionKeys: readonly string[] }) => {
+        const store = state.stores[scope.storePath] ?? state.store;
+        return {
+          kind: "session-exact-entries" as const,
+          entries: scope.sessionKeys.flatMap((sessionKey) =>
+            Object.hasOwn(store, sessionKey)
+              ? [{ sessionKey, entry: normalizeLegacySessionEntryDelivery(store[sessionKey]!) }]
+              : [],
+          ),
+          source: { agentId: "main", path: scope.storePath },
+        };
+      },
     ),
-    // Mirrors the accessor view contract: raw exact-key get, enumeration only via entries().
-    openSessionEntryReadView: vi.fn((scope: { storePath?: string }) => {
+    readSessionEntrySummariesInWorker: vi.fn(async (scope: { storePath?: string }) => {
       const store = state.stores[scope.storePath ?? ""] ?? state.store;
-      return {
-        get: (sessionKey: string) =>
-          Object.hasOwn(store, sessionKey)
-            ? normalizeLegacySessionEntryDelivery(store[sessionKey] as SessionEntry)
-            : undefined,
-        entries: () =>
-          Object.entries(store).map(([sessionKey, entry]) => ({
-            sessionKey,
-            entry: normalizeLegacySessionEntryDelivery(entry),
-          })),
-      };
+      return Object.entries(store).map(([sessionKey, entry]) => ({
+        sessionKey,
+        entry: normalizeLegacySessionEntryDelivery(entry),
+      }));
     }),
   };
   return state;
@@ -71,14 +56,13 @@ vi.mock("./paths.js", () => ({
     opts?.agentId === "worker" ? "/tmp/worker-sessions.json" : "/tmp/sessions.json",
 }));
 
-vi.mock("./session-accessor.js", () => ({
-  loadExactSessionEntryCandidatesReadOnlyBatch:
-    storeState.loadExactSessionEntryCandidatesReadOnlyBatch,
-  openSessionEntryReadView: storeState.openSessionEntryReadView,
+vi.mock("./session-entry-read-runtime.js", () => ({
+  readSessionEntriesFromStoreInWorker: storeState.readSessionEntriesFromStoreInWorker,
+  readSessionEntrySummariesInWorker: storeState.readSessionEntrySummariesInWorker,
 }));
 
-vi.mock("./targets.js", () => ({
-  resolveAllAgentSessionStoreTargetsSync: () => [
+vi.mock("./targets-runtime.js", () => ({
+  resolveAllAgentSessionStoreTargetsAsync: async () => [
     { agentId: "main", storePath: "/tmp/sessions.json" },
     { agentId: "shadow", storePath: "/tmp/shadow-sessions.json" },
     { agentId: "worker", storePath: "/tmp/worker-sessions.json" },
@@ -110,12 +94,12 @@ beforeEach(() => {
   setActivePluginRegistry(createSessionConversationTestRegistry());
   storeState.store = {};
   storeState.stores = {};
-  storeState.openSessionEntryReadView.mockClear();
-  storeState.loadExactSessionEntryCandidatesReadOnlyBatch.mockClear();
+  storeState.readSessionEntrySummariesInWorker.mockClear();
+  storeState.readSessionEntriesFromStoreInWorker.mockClear();
 });
 
 describe("extractDeliveryInfo", () => {
-  it("falls back to base sessions for :thread: keys", () => {
+  it("falls back to base sessions for :thread: keys", async () => {
     const baseKey = "agent:main:slack:channel:C0123ABC";
     const threadKey = `${baseKey}:thread:1234567890.123456`;
     storeState.store[baseKey] = buildEntry({
@@ -124,7 +108,7 @@ describe("extractDeliveryInfo", () => {
       accountId: "workspace-1",
     });
 
-    const result = extractDeliveryInfo(threadKey);
+    const result = await extractDeliveryInfo(threadKey);
 
     expect(result).toEqual({
       deliveryContext: {
@@ -136,7 +120,7 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
-  it("continues candidate session keys until it finds the freshest routable entry", () => {
+  it("continues candidate session keys until it finds the freshest routable entry", async () => {
     const sessionKey = "agent:main:matrix:channel:!MixedCase:Example.Org";
     const canonicalKey = "agent:main:matrix:channel:!mixedcase:example.org";
     storeState.store[sessionKey] = {
@@ -153,7 +137,7 @@ describe("extractDeliveryInfo", () => {
       lastTo: "room:!MixedCase:Example.Org",
     };
 
-    const result = extractDeliveryInfo(sessionKey);
+    const result = await extractDeliveryInfo(sessionKey);
 
     expect(result).toEqual({
       deliveryContext: {
@@ -165,7 +149,7 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
-  it("finds legacy lowercase Signal group entries for mixed-case group keys", () => {
+  it("finds legacy lowercase Signal group entries for mixed-case group keys", async () => {
     const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
     const queriedKey = `agent:main:signal:group:${mixedGroupId}`;
     const legacyKey = queriedKey.toLowerCase();
@@ -175,7 +159,7 @@ describe("extractDeliveryInfo", () => {
       accountId: "default",
     });
 
-    const result = extractDeliveryInfo(queriedKey);
+    const result = await extractDeliveryInfo(queriedKey);
 
     expect(result).toEqual({
       deliveryContext: {
@@ -187,7 +171,7 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
-  it("prefers the exact mixed-case Matrix entry over a fresher folded legacy alias", () => {
+  it("prefers the exact mixed-case Matrix entry over a fresher folded legacy alias", async () => {
     // Matrix room IDs are case-sensitive (openclaw#75670): the exact mixed-case
     // session is canonical and must win over a stale lowercased legacy alias even
     // when the alias is fresher. (Previously these collapsed to one lowercased key
@@ -209,7 +193,7 @@ describe("extractDeliveryInfo", () => {
       },
     };
 
-    const result = extractDeliveryInfo(queriedKey);
+    const result = await extractDeliveryInfo(queriedKey);
 
     expect(result).toEqual({
       deliveryContext: createMixedCaseMatrixDelivery(),
@@ -217,7 +201,7 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
-  it("finds Matrix thread entries with a legacy lowercased room and preserved event id", () => {
+  it("finds Matrix thread entries with a legacy lowercased room and preserved event id", async () => {
     const queriedKey =
       "agent:main:matrix:channel:!MixedCase:Example.Org:thread:$RootEvent:Example.Org";
     const legacyThreadKey =
@@ -233,7 +217,7 @@ describe("extractDeliveryInfo", () => {
       },
     };
 
-    const result = extractDeliveryInfo(queriedKey);
+    const result = await extractDeliveryInfo(queriedKey);
 
     expect(result).toEqual({
       deliveryContext: {
@@ -246,7 +230,7 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
-  it("does not return a case-distinct lowercase Matrix sibling when the mixed-case key has no exact entry", () => {
+  it("does not return a case-distinct lowercase Matrix sibling when the mixed-case key has no exact entry", async () => {
     const queriedKey = "agent:main:matrix:channel:!MixedCase:Example.Org";
     const lowercaseSiblingKey = "agent:main:matrix:channel:!mixedcase:example.org";
     storeState.store[lowercaseSiblingKey] = buildEntry({
@@ -255,7 +239,7 @@ describe("extractDeliveryInfo", () => {
       accountId: "matrix-account",
     });
 
-    const result = extractDeliveryInfo(queriedKey);
+    const result = await extractDeliveryInfo(queriedKey);
 
     expect(result).toEqual({
       deliveryContext: undefined,
@@ -263,11 +247,11 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
-  it("does not return an exact lowercase Matrix key with mixed-case delivery metadata", () => {
+  it("does not return an exact lowercase Matrix key with mixed-case delivery metadata", async () => {
     const queriedKey = "agent:main:matrix:channel:!mixedcase:example.org";
     storeState.store[queriedKey] = buildEntry(createMixedCaseMatrixDelivery());
 
-    const result = extractDeliveryInfo(queriedKey);
+    const result = await extractDeliveryInfo(queriedKey);
 
     expect(result).toEqual({
       deliveryContext: undefined,
@@ -275,7 +259,7 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
-  it("does not return a folded Matrix thread artifact when the stored thread id differs by case", () => {
+  it("does not return a folded Matrix thread artifact when the stored thread id differs by case", async () => {
     const queriedKey = "agent:main:matrix:channel:!MixedCase:Example.Org:thread:$ThreadRootAbC";
     const foldedThreadKey =
       "agent:main:matrix:channel:!mixedcase:example.org:thread:$threadrootabc";
@@ -286,7 +270,7 @@ describe("extractDeliveryInfo", () => {
       threadId: "$threadrootabc",
     });
 
-    const result = extractDeliveryInfo(queriedKey);
+    const result = await extractDeliveryInfo(queriedKey);
 
     expect(result).toEqual({
       deliveryContext: undefined,
@@ -294,7 +278,7 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
-  it("falls back to the base session when a thread entry only has partial route metadata", () => {
+  it("falls back to the base session when a thread entry only has partial route metadata", async () => {
     const baseKey = "agent:main:matrix:channel:!MixedCase:example.org";
     const threadKey = `${baseKey}:thread:$thread-event`;
     storeState.store[threadKey] = {
@@ -312,7 +296,7 @@ describe("extractDeliveryInfo", () => {
       lastTo: "room:!MixedCase:example.org",
     };
 
-    const result = extractDeliveryInfo(threadKey);
+    const result = await extractDeliveryInfo(threadKey);
 
     expect(result).toEqual({
       deliveryContext: {
@@ -326,7 +310,7 @@ describe("extractDeliveryInfo", () => {
 });
 
 describe("extractDeliveryInfoBatch", () => {
-  it("shares alias discovery while preserving raw keys, thread fallback, and result order", () => {
+  it("shares alias discovery while preserving raw keys, thread fallback, and result order", async () => {
     const canonicalKey = "agent:main:telegram:group:mixedcase";
     const queriedKey = "agent:main:telegram:group:MiXeDCase";
     const aliasKey = "agent:main:telegram:group:MixedCase";
@@ -349,7 +333,7 @@ describe("extractDeliveryInfoBatch", () => {
     );
 
     expect(
-      extractDeliveryInfoBatch([
+      await extractDeliveryInfoBatch([
         canonicalKey,
         queriedKey,
         `${queriedKey}:topic:55`,
@@ -368,7 +352,7 @@ describe("extractDeliveryInfoBatch", () => {
     expect(inventories).toBe(1);
   });
 
-  it("keeps unreadable targets separate from healthy exact routes in the same store", () => {
+  it("keeps unreadable targets separate from healthy exact routes in the same store", async () => {
     const healthyKey = "agent:main:telegram:dm:healthy";
     const brokenKey = "agent:main:telegram:dm:broken";
     storeState.store[healthyKey] = buildEntry(createTelegramUserDelivery());
@@ -380,7 +364,7 @@ describe("extractDeliveryInfoBatch", () => {
     });
 
     expect(
-      extractDeliveryInfoBatch([brokenKey, healthyKey, "agent:main:missing", healthyKey]),
+      await extractDeliveryInfoBatch([brokenKey, healthyKey, "agent:main:missing", healthyKey]),
     ).toEqual([
       { deliveryContext: undefined, threadId: undefined },
       { deliveryContext: createTelegramUserDelivery(), threadId: undefined },
@@ -389,7 +373,7 @@ describe("extractDeliveryInfoBatch", () => {
     ]);
   });
 
-  it("keeps global owners and ordered routable stores separate within one batch", () => {
+  it("keeps global owners and ordered routable stores separate within one batch", async () => {
     const shadowKey = "agent:shadow:telegram:dm:shadow";
     const opsDelivery = { channel: "telegram", to: "telegram:ops" };
     const workerDelivery = { channel: "telegram", to: "telegram:worker" };
@@ -408,7 +392,7 @@ describe("extractDeliveryInfoBatch", () => {
     });
 
     expect(
-      extractDeliveryInfoBatch(["agent:worker:main", shadowKey, "agent:ops:main"], {
+      await extractDeliveryInfoBatch(["agent:worker:main", shadowKey, "agent:ops:main"], {
         cfg: {
           session: { scope: "global" },
           agents: { ownership: "explicit", entries: { ops: {}, worker: {}, shadow: {} } },
@@ -419,10 +403,9 @@ describe("extractDeliveryInfoBatch", () => {
       { deliveryContext: shadowDelivery, threadId: undefined },
       { deliveryContext: opsDelivery, threadId: undefined },
     ]);
-    const admittedPaths =
-      storeState.loadExactSessionEntryCandidatesReadOnlyBatch.mock.calls.flatMap(([scopes]) =>
-        scopes.map((scope) => scope.storePath),
-      );
+    const admittedPaths = storeState.readSessionEntriesFromStoreInWorker.mock.calls.map(
+      ([scope]) => scope.storePath,
+    );
     expect(admittedPaths).not.toContain("/tmp/shadow-sessions.json");
   });
 });
