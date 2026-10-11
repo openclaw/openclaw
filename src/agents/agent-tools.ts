@@ -440,6 +440,7 @@ function* assembleOpenClawCodingTools(
             sessionPortalTarget,
             sandboxSessionRenameOnly: capabilityProfile.policy.sandboxSessionRenameOnly,
             sessionPermissionPolicy,
+            requesterIsSubagent: capabilityProfile.policy.subagentPolicy !== undefined,
             execSession: sessionPermissionPolicy
               ? { permissionMode: sessionPermissionPolicy.mode }
               : undefined,

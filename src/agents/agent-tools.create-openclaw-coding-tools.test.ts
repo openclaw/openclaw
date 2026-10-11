@@ -960,13 +960,12 @@ describe("createOpenClawCodingTools", () => {
       },
     });
 
-    const persistedEnvelopeTools = createToolsForStoredSession(
-      storeTemplate,
-      "agent:main:acp:child",
-    );
-    expectNoSubagentControlTools(persistedEnvelopeTools);
+    const envelopeTools = createToolsForStoredSession(storeTemplate, "agent:main:acp:child");
+    expectNoSubagentControlTools(envelopeTools);
+    expect(latestCreateOpenClawToolsOptions().requesterIsSubagent).toBe(true);
 
     const restrictedTools = createToolsForStoredSession(storeTemplate, "agent:main:acp:plain");
+    expect(latestCreateOpenClawToolsOptions().requesterIsSubagent).toBe(false);
     const restrictedNames = new Set(restrictedTools.map((tool) => tool.name));
     expect(restrictedNames.has("sessions_spawn")).toBe(true);
     expect(restrictedNames.has("subagents")).toBe(true);
