@@ -34,13 +34,15 @@ export async function openChatSidePanelType(page: Page | Locator, label: string)
     Terminal: { slot: "terminal", action: "Toggle terminal" },
   };
   const panel = panelActions[label];
-  if (
-    panel &&
-    (await page.locator(`[data-panel-slot="${panel.slot}"]:not([hidden])`).isVisible())
-  ) {
+  const content = panel && page.locator(`[data-panel-slot="${panel.slot}"]:not([hidden])`);
+  if (await content?.isVisible()) {
     return;
   }
   await selectChatLayoutAction(page, panel?.action ?? label);
+  // Automatic reveal can precede the toggle; finish with the requested open state.
+  if (panel?.slot === "subagents" && content && !(await content.isVisible())) {
+    await selectChatLayoutAction(page, panel.action);
+  }
 }
 
 export async function focusChatSidePanel(page: Page): Promise<void> {
