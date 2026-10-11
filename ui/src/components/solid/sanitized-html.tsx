@@ -1,29 +1,23 @@
 import { dynamic, type JSX } from "@solidjs/web";
-import { createEffect, onCleanup } from "solid-js";
-import { MarkdownDomReconciler } from "../../lib/markdown-dom-reconciler.ts";
+import { untrack } from "solid-js";
 
-/** Render HTML already sanitized by the shared Markdown owner. */
+/** Only accepts HTML escaped or sanitized by the caller's content owner. */
 export function SanitizedHtml(props: {
   html: string;
-  tag?: "div" | "article";
+  tag?: "article" | "code" | "div";
   class?: JSX.HTMLAttributes<HTMLElement>["class"];
   style?: JSX.HTMLAttributes<HTMLElement>["style"];
   onClick?: JSX.EventHandler<HTMLElement, MouseEvent>;
 }) {
-  let container!: HTMLElement;
-  let renderer: MarkdownDomReconciler | undefined;
-  const ref = (element: HTMLElement) => {
-    container = element;
-  };
-  const Container = dynamic(() => props.tag ?? "div");
-  const onClick: JSX.EventHandler<HTMLElement, MouseEvent> = (event) => props.onClick?.(event);
-  createEffect(
-    () => props.html,
-    (html) => {
-      renderer ??= new MarkdownDomReconciler(container);
-      renderer.updateHtml(html);
-    },
+  const tag = untrack(() => props.tag ?? "div");
+  const Container = dynamic(() => tag);
+  return (
+    <Container
+      class={props.class}
+      style={props.style}
+      onClick={props.onClick}
+      // eslint-disable-next-line solid/no-innerhtml -- Content is escaped or sanitized by the caller's canonical owner.
+      innerHTML={props.html}
+    />
   );
-  onCleanup(() => renderer?.dispose());
-  return <Container ref={ref} class={props.class} style={props.style} onClick={onClick} />;
 }
