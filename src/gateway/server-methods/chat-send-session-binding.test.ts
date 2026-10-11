@@ -329,7 +329,11 @@ it.each(admissionScenarios)(
         }
         if (closure !== "queued") {
           await upsertSessionEntryCore(scope, { sessionId: "late-session", updatedAt: Date.now() });
-          await userTurn.persist();
+          if (closure === "released") {
+            await expect(userTurn.persist()).rejects.toThrow("Chat input actor admission ended");
+          } else {
+            await userTurn.persist();
+          }
           expect(
             await loadTranscriptEvents({
               ...scope,

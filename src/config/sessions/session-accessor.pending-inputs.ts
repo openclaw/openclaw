@@ -203,7 +203,7 @@ type PendingInputStageOptions = PendingInputRequest & {
 };
 
 /** Accept durable input without changing the active transcript or scheduling execution. */
-export async function stageSessionPendingInput(
+export function stageSessionPendingInput(
   scope: PendingInputScope,
   options: PendingInputStageOptions,
 ): Promise<SessionPendingInputReceipt | undefined> {
@@ -217,20 +217,23 @@ export async function stageSessionPendingInput(
   };
   const preparedRequest = preparePendingInputRequest(options);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
-  const inputActor = await getSessionInputActor(captured);
-  const admission = inputActor ? undefined : resolveSqliteWriteAdmissionScope(captured);
-  const stage = async () => {
-    const store = await preparePendingInputStore(
-      captured,
-      options.authority?.assertLifetimeCurrent ?? options.assertCurrent,
-    );
-    const accept = () =>
-      stagePreparedPendingInput(captured, options, preparedRequest, lifecycleGeneration, store);
-    // Actor commands own the physical FIFO and revalidate the prepared snapshot.
-    // Holding the legacy reservation here would make native acceptance queue behind itself.
-    return inputActor ? accept() : store.withAdmission(accept, admission !== undefined);
-  };
-  return admission ? runOpenClawAgentWriteAdmission(toDatabaseOptions(admission), stage) : stage();
+  return getSessionInputActor(captured).then((inputActor) => {
+    const admission = inputActor ? undefined : resolveSqliteWriteAdmissionScope(captured);
+    const stage = async () => {
+      const store = await preparePendingInputStore(
+        captured,
+        options.authority?.assertLifetimeCurrent ?? options.assertCurrent,
+      );
+      const accept = () =>
+        stagePreparedPendingInput(captured, options, preparedRequest, lifecycleGeneration, store);
+      // Actor commands own the physical FIFO and revalidate the prepared snapshot.
+      // Holding the legacy reservation here would make native acceptance queue behind itself.
+      return inputActor ? accept() : store.withAdmission(accept, admission !== undefined);
+    };
+    return admission
+      ? runOpenClawAgentWriteAdmission(toDatabaseOptions(admission), stage)
+      : stage();
+  });
 }
 
 async function stagePreparedPendingInput(

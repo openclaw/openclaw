@@ -82,7 +82,10 @@ export async function persistUserTurnTranscript(
     {
       ...(params.cwd ? { cwd: params.cwd } : {}),
       ...(params.config
-        ? { config: params.config as SessionTranscriptTurnPersistOptions["config"] }
+        ? {
+            // SAFETY: Recorder targets carry the host's loaded config; their public contract keeps it opaque.
+            config: params.config as SessionTranscriptTurnPersistOptions["config"],
+          }
         : {}),
       ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
       ...(params.initialSessionEntry ? { initialSessionEntry: params.initialSessionEntry } : {}),
@@ -119,6 +122,7 @@ export async function persistUserTurnTranscript(
             beforeFreshMessageCommit: params.beforeFreshMessageCommit,
             prepareMessageAfterIdempotencyCheck: (candidate) =>
               preparePersistedUserTurnMessageForTranscriptWrite(
+                // SAFETY: Preparation receives the typed user message above; goal preparation only adds metadata.
                 candidate as PersistedUserTurnMessage,
                 params,
               ),
