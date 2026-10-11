@@ -43,6 +43,8 @@ export type AgentHarnessHostCapabilities = Readonly<{
   /** Native runtimes must install pre-tool admission for these pending workspace operations. */
   workspaceReadiness?: Readonly<{
     toolNames: readonly string[];
+    /** Await the existing workspace owner while preserving this run's authority. */
+    waitUntilReady: () => Promise<void>;
   }>;
   /** Native delegation without person selection must remain unambiguous at admission. */
   assertNativeSubagentSpawnAllowed?: () => void;

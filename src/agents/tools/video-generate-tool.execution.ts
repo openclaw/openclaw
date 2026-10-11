@@ -14,6 +14,7 @@ import type {
 } from "../../video-generation/types.js";
 import type { AgentGeneratedAttachment } from "../generated-attachments.js";
 import type { ToolFsPolicy } from "../tool-fs-policy.js";
+import type { AgentWorkspaceReadiness } from "../workspace-readiness.js";
 import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
 import type { MediaGenerationTaskHandle } from "./media-generate-background-shared.js";
 import { videoGenerationTaskLifecycle } from "./media-generate-background.js";
@@ -52,6 +53,7 @@ export function normalizeResolution(
 }
 
 export async function loadReferenceAssets(params: {
+  workspaceReadiness?: AgentWorkspaceReadiness;
   inputs: string[];
   roles: string[];
   expectedKind: "image" | "video" | "audio";

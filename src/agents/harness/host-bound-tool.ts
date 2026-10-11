@@ -1,11 +1,46 @@
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
+import { bindAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
+import { wrapToolWithAbortSignal } from "../agent-tools.abort.js";
+import { rewrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
 } from "../runtime/internal-hooks.js";
 import { registerTrustedToolNoStartError } from "../tool-result-error.js";
 import type { AnyAgentTool } from "../tools/common.js";
+import { wrapToolWithGatewayCallerIdentity } from "../tools/gateway-caller-context.js";
 import type { AgentWorkspaceReadiness } from "../workspace-readiness.js";
+import { isWorkspaceTool } from "./host-capability-workspace.js";
+
+/** Assemble each host tool's policy, caller and readiness gates in their execution order. */
+export function bindHostToolSurface(
+  tools: AnyAgentTool[],
+  params: {
+    assertActive: () => void;
+    observeResult: (result: unknown) => void;
+    hookContext: Parameters<typeof rewrapToolWithBeforeToolCallHook>[1];
+    callerIdentity: Parameters<typeof wrapToolWithGatewayCallerIdentity>[1] | undefined;
+    abortSignal: AbortSignal;
+    workspaceReadiness?: AgentWorkspaceReadiness;
+  },
+): AnyAgentTool[] {
+  params.assertActive();
+  return tools
+    .map((tool) => bindAgentToolSourceExecutionGuard(tool, params.assertActive))
+    .map((tool) => rewrapToolWithBeforeToolCallHook(tool, params.hookContext))
+    .map((tool) =>
+      params.callerIdentity ? wrapToolWithGatewayCallerIdentity(tool, params.callerIdentity) : tool,
+    )
+    .map((tool) => wrapToolWithAbortSignal(tool, params.abortSignal))
+    .map((tool) =>
+      gateBoundTool(
+        tool,
+        params.assertActive,
+        params.observeResult,
+        isWorkspaceTool(tool) ? params.workspaceReadiness : undefined,
+      ),
+    );
+}
 
 export function gateBoundTool(
   tool: AnyAgentTool,

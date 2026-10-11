@@ -48,7 +48,6 @@ import {
   timeWorktreePreparationPhase,
   withWorktreePreparationTiming,
 } from "./preparation-timing.js";
-import { provisionIncludedFiles } from "./provisioned-files.js";
 import {
   readRegistryWorktrees,
   readRegistryWorktreeForMutation,
@@ -66,6 +65,10 @@ import {
 } from "./registry.js";
 import { assertExactStateOwner } from "./removal-git.js";
 import { removeSettledManagedWorktree, type RemoveWorktreeParams } from "./removal.js";
+import {
+  completeRepositoryWorktreeSetup,
+  type MaterializedRepositoryWorktree,
+} from "./repository-setup.js";
 import { captureWorktreeRunEndContext, withWorktreeRunEnd } from "./run-end-lifecycle.js";
 import { worktreeRunLeaseScope } from "./run-lease-owner.js";
 import { reapWorktreeRunLeases } from "./run-lease-store.js";
@@ -80,7 +83,6 @@ import {
   resolveRepository,
   rebindLiveWorktreeRepository,
   resolveRepositoryIdentity,
-  runSetupScript,
   withWorktreeSource,
   withWorktreeSources,
   type ResolvedRepository,
@@ -144,13 +146,6 @@ type RepositoryCreationParams = CreateManagedWorktreeParams &
 type WorktreeCreation =
   | ManagedWorktreeCreationOutcome
   | (() => Promise<ManagedWorktreeCreationOutcome>);
-type MaterializedRepositoryWorktree = {
-  worktreePath: string;
-  recordBase: string;
-  provisionedBytes: number;
-  setupBytes: number;
-  runRepositorySetup: boolean;
-};
 
 async function claimManagedRemoval(
   env: NodeJS.ProcessEnv,
@@ -509,7 +504,7 @@ export class ManagedWorktreeService {
         return created;
       });
       const provisionedPaths = await timeWorktreePreparationPhase("provision", () =>
-        this.completeRepositoryWorktreeSetup(params, repository, materialized),
+        completeRepositoryWorktreeSetup(params, this.env, repository, materialized),
       );
       // Pending → live preserves the slot count; retained checkout custody owns publication.
       return await timeWorktreePreparationPhase("publication", () =>
@@ -713,39 +708,6 @@ export class ManagedWorktreeService {
       setupBytes,
       runRepositorySetup,
     };
-  }
-
-  private async completeRepositoryWorktreeSetup(
-    params: CreateManagedWorktreeParams & WorktreeAllocationGuard,
-    repository: ResolvedRepository,
-    materialized: MaterializedRepositoryWorktree,
-  ): Promise<string[]> {
-    const { worktreePath, provisionedBytes, setupBytes, runRepositorySetup } = materialized;
-    const provisionedPaths =
-      params.provisionIgnoredFiles === false
-        ? []
-        : await withWorktreeSource(params, async (current) => {
-            current.signal?.throwIfAborted();
-            current.commitGuard?.();
-            await requireAllocationSpace(
-              current,
-              this.env,
-              worktreePath,
-              repository,
-              2 * provisionedBytes + setupBytes,
-            );
-            return provisionIncludedFiles(repository.sourceRoot, worktreePath, {
-              signal: current.signal,
-              assertCurrent: current.commitGuard,
-            });
-          });
-    if (runRepositorySetup) {
-      await requireAllocationSpace(params, this.env, worktreePath, repository, setupBytes);
-      await timeWorktreePreparationPhase("setup", () =>
-        runSetupScript(repository.sourceRoot, worktreePath, params),
-      );
-    }
-    return provisionedPaths;
   }
 
   async list(): Promise<ManagedWorktreeRecord[]> {

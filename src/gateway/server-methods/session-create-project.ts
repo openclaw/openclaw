@@ -553,6 +553,9 @@ export async function prepareSessionWorkspaceForRun(params: {
                   missingSessionMessage:
                     "Session disappeared while preparing its workspace; start a new session.",
                 });
+                // Subsequent Git effects must accept the project binding this
+                // preparation just published, while retaining its pending intent.
+                Object.assign(saved, bound);
                 Object.assign(entry, bound);
                 params.onPromptReady?.();
               }

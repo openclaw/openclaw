@@ -561,8 +561,17 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       nativeProcessAuthority?.requiresProcessAdmission && runtime.nativeToolSurfaceEnabled;
     const requiresModelAdmission =
       nativeModelAdmission !== undefined && decision.nativeModelInputTools !== undefined;
+    const workspaceReadiness = runtime.nativeToolSurfaceEnabled
+      ? params.hostCapabilities.workspaceReadiness
+      : undefined;
     const requiresWorkspaceAdmission =
-      Boolean(params.hostCapabilities.workspaceReadiness) && runtime.nativeToolSurfaceEnabled;
+      workspaceReadiness !== undefined && decision.nativeModelInputTools !== undefined;
+    // Optional hook admission can be unavailable on supported native installations.
+    // Finish checkout before starting those threads instead of requiring a new hook policy.
+    if (workspaceReadiness && !requiresWorkspaceAdmission) {
+      await workspaceReadiness.waitUntilReady();
+      connection.assertCurrent();
+    }
     const requiresExecutionAdmission =
       requiresProcessAdmission || requiresModelAdmission || requiresWorkspaceAdmission;
     const relayEvents =

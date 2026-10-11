@@ -3,13 +3,18 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { getAgentToolActionDescriptor } from "../agent-tool-metadata.js";
 import type { OpenClawCodingToolsOptions } from "../agent-tools.options.js";
-import { isCodeModeControlTool } from "../code-mode-control-tools.js";
+import {
+  getCodeModeExecBeforeHookMetadataForToolKind,
+  isCodeModeControlTool,
+} from "../code-mode-control-tools.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { normalizeToolPolicyName } from "../tool-policy-shared.js";
 import type { AnyAgentTool } from "../tools/common.js";
+import { captureAgentWorkspaceReadiness } from "../workspace-readiness.js";
+import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import { cloneHostSnapshot as cloneSnapshot } from "./host-snapshot.js";
 
-export const WORKSPACE_TOOL_NAMES = Object.freeze([
+const WORKSPACE_TOOL_NAMES = Object.freeze([
   "exec",
   "process",
   "read",
@@ -32,7 +37,7 @@ const nativeWorkspaceToolNames: Readonly<Record<string, string>> = {
   glob: "find",
 };
 
-export function isWorkspaceToolName(name: string): boolean {
+function isWorkspaceToolName(name: string): boolean {
   const normalized = normalizeToolPolicyName(name);
   return workspaceToolNames.has(nativeWorkspaceToolNames[normalized] ?? normalized);
 }
@@ -48,6 +53,45 @@ export function isWorkspaceTool(tool: AnyAgentTool): boolean {
     operation === "process" ||
     isWorkspaceToolName(tool.name)
   );
+}
+
+/** Bind one captured workspace owner to native admission and the host tool surface. */
+export function prepareHostWorkspaceReadiness(
+  sessionKey: string | undefined,
+  assertActive: () => void,
+) {
+  const readiness = captureAgentWorkspaceReadiness(sessionKey);
+  const wait = readiness
+    ? async (assertCurrent: () => void) => {
+        assertCurrent();
+        readiness.assertCurrent();
+        await readiness.waitUntilReady();
+        assertCurrent();
+        readiness.assertCurrent();
+      }
+    : undefined;
+  return {
+    readiness,
+    capability: wait
+      ? Object.freeze({ toolNames: WORKSPACE_TOOL_NAMES, waitUntilReady: () => wait(assertActive) })
+      : undefined,
+    beforeToolCall: wait
+      ? async (
+          request: Parameters<AgentHarnessHostCapabilities["runBeforeToolCall"]>[0],
+          assertCurrent: () => void,
+        ) => {
+          if (
+            !getCodeModeExecBeforeHookMetadataForToolKind({
+              toolKind: request.toolKind,
+              params: request.params,
+            }) &&
+            isWorkspaceToolName(request.toolName)
+          ) {
+            await wait(assertCurrent);
+          }
+        }
+      : undefined,
+  };
 }
 
 export function captureRequiredWorkspaceToolFloor(
