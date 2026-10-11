@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { TaskStatus } from "@lit/task";
+import { initialState, Task, TaskStatus } from "@lit/task";
 import type { TranscriptsStatusResult } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -8,7 +8,7 @@ import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { repeat } from "lit/directives/repeat.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { icons } from "../../components/icons.ts";
 import {
@@ -24,8 +24,9 @@ import {
 import { t } from "../../i18n/index.ts";
 import { registerTranscriptsEnglish } from "../../i18n/locales/en-transcripts.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import { ConfigStatusController } from "./config-status-controller.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 
 registerTranscriptsEnglish();
@@ -54,18 +55,74 @@ class MeetingCaptureSettings extends OpenClawLightDomElement {
   private sourceDraft: Record<string, unknown> = {};
   private locatorRequirements: SourceProvider["autoStart"];
   private originalLocatorRequirements: SourceProvider["autoStart"];
-  private readonly status = new ConfigStatusController<TranscriptsStatusResult>(this, {
-    getContext: () => this.context,
-    method: "transcripts.status",
-    permission: "read",
-    revision: "hash",
-    onInvalidate: () => this.status.task.abort(),
-    onComplete: (status) => this.retainLocatorRequirements(status),
+  private connectionHello: unknown;
+  private connectionAuth: unknown;
+  private readonly gateway = new GatewayPageController(this, {
+    getGateway: () => this.context?.gateway,
+    invalidateRequests: () => this.statusTask.abort(),
+    onSnapshot: ({ snapshot: { hello } }) => {
+      // A new handshake or authorization can replace a still-connected client.
+      if (hello !== this.connectionHello || hello?.auth !== this.connectionAuth) {
+        this.gateway.invalidate();
+        this.statusTask.abort();
+      }
+      this.connectionHello = hello;
+      this.connectionAuth = hello?.auth;
+    },
+  });
+  private readonly subscriptions = new SubscriptionsController(this).watchStore(
+    () => this.context?.runtimeConfig,
+  );
+
+  private get client() {
+    const snapshot = this.context?.gateway.snapshot;
+    return this.isConnected &&
+      snapshot?.phase === "connected" &&
+      hasOperatorReadAccess(snapshot.hello?.auth ?? null)
+      ? snapshot.client
+      : null;
+  }
+
+  private readonly statusTask = new Task(this, {
+    args: () =>
+      [
+        this.client,
+        this.gateway.epoch,
+        this.context?.runtimeConfig.state.configSnapshot?.hash,
+      ] as const,
+    task: async ([client, , hash], { signal }) => {
+      if (!client) {
+        return initialState;
+      }
+      const scope = this.gateway.capture();
+      const gateway = this.context.gateway;
+      const hello = gateway.snapshot.hello;
+      const auth = hello?.auth;
+      const result = await client.request<TranscriptsStatusResult>(
+        "transcripts.status",
+        {},
+        { signal },
+      );
+      const isCurrent = () =>
+        this.client === client &&
+        scope !== null &&
+        this.gateway.isCurrent(scope) &&
+        this.context.gateway === gateway &&
+        gateway.snapshot.hello === hello &&
+        hello?.auth === auth &&
+        this.context.runtimeConfig.state.configSnapshot?.hash === hash;
+      return isCurrent() ? { status: result, isCurrent } : initialState;
+    },
+    onComplete: (result) => {
+      if (result.isCurrent()) {
+        this.retainLocatorRequirements(result.status);
+      }
+    },
   });
 
   override disconnectedCallback() {
-    this.status.task.abort();
-    this.status.subscriptions.clear();
+    this.statusTask.abort();
+    this.subscriptions.clear();
     this.editSource(null);
     super.disconnectedCallback();
   }
@@ -339,18 +396,18 @@ class MeetingCaptureSettings extends OpenClawLightDomElement {
   private get knownCaptureStatus() {
     // Task retains its value while pending, including across connection changes.
     // Only the original request owner can seed an editor's validation rules.
-    const result = this.status.task.value;
+    const result = this.statusTask.value;
     return result?.isCurrent() ? result.status : null;
   }
 
   private get captureStatus() {
-    return this.status.task.status === TaskStatus.COMPLETE ? this.knownCaptureStatus : null;
+    return this.statusTask.status === TaskStatus.COMPLETE ? this.knownCaptureStatus : null;
   }
 
   override render() {
     const status = this.captureStatus;
     const error =
-      this.status.task.status === TaskStatus.ERROR ? formatUiError(this.status.task.error) : null;
+      this.statusTask.status === TaskStatus.ERROR ? formatUiError(this.statusTask.error) : null;
     const saved = status?.latestTranscript;
     const sourceRows = this.sources.map((raw, index) => {
       const source = asNullableRecord(raw);
@@ -452,8 +509,8 @@ class MeetingCaptureSettings extends OpenClawLightDomElement {
                 title: t("meetingCapture.health"),
                 control: html`<button
                   class="btn"
-                  ?disabled=${!this.status.client || this.status.task.status === TaskStatus.PENDING}
-                  @click=${() => void this.status.task.run()}
+                  ?disabled=${!this.client || this.statusTask.status === TaskStatus.PENDING}
+                  @click=${() => void this.statusTask.run()}
                 >
                   ${icons.refresh}${t("common.refresh")}
                 </button>`,
@@ -466,7 +523,7 @@ class MeetingCaptureSettings extends OpenClawLightDomElement {
                   : nothing
               }
               ${
-                this.status.task.status === TaskStatus.PENDING
+                this.statusTask.status === TaskStatus.PENDING
                   ? renderSettingsEmpty(html`<span role="status">${t("common.loading")}</span>`)
                   : nothing
               }

@@ -1,11 +1,12 @@
 import { consume } from "@lit/context";
-import { TaskStatus } from "@lit/task";
+import { initialState, Task, TaskStatus } from "@lit/task";
 import type { SessionsStorageStatusResult } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { live } from "lit/directives/live.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import {
   renderLearnMoreLink,
@@ -21,9 +22,10 @@ import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatByteSize, formatDateTimeMs } from "../../lib/format.ts";
+import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
-import { ConfigStatusController } from "./config-status-controller.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { SESSION_STORAGE_SETTINGS_TARGET_ID } from "./settings-targets.ts";
 
 registerSettingsEnglish();
@@ -53,23 +55,23 @@ class SessionStorageSettings extends OpenClawLightDomElement {
   @state() private runOperation: object | null = null;
   private followingRun = false;
 
-  private readonly status = new ConfigStatusController<SessionsStorageStatusResult>(this, {
-    getContext: () => this.context,
-    method: "sessions.storage.status",
-    permission: "admin",
-    revision: "appliedConfigHash",
-    retireOnConfigReplacement: true,
-    handshakeDependencies: true,
-    onInvalidate: () => this.retireRequests(),
-    onComplete: (status) => this.observeMaintenance(status),
-    onError: () => {
-      this.maintenancePoll.stop();
-      this.runOutcome = null;
+  private connectionHello: unknown;
+  private connectionAuth: unknown;
+  private readonly gateway = new GatewayPageController(this, {
+    getGateway: () => this.context?.gateway,
+    invalidateRequests: () => this.retireRequests(),
+    onSnapshot: ({ snapshot: { hello } }) => {
+      if (hello !== this.connectionHello || hello?.auth !== this.connectionAuth) {
+        this.gateway.invalidate();
+        this.retireRequests();
+      }
+      this.connectionHello = hello;
+      this.connectionAuth = hello?.auth;
     },
   });
 
   private retireRequests() {
-    this.status.task.abort();
+    this.statusTask.abort();
     this.maintenancePoll.stop();
     this.followingRun = false;
     this.ageDraft = null;
@@ -77,15 +79,73 @@ class SessionStorageSettings extends OpenClawLightDomElement {
     this.runError = null;
     this.runOutcome = null;
   }
+  private readonly subscriptions = new SubscriptionsController(this).watch(
+    () => this.context?.runtimeConfig,
+    (config, notify) => {
+      this.gateway.invalidate();
+      this.retireRequests();
+      return config.subscribe(notify);
+    },
+  );
+
+  private get client() {
+    const snapshot = this.context?.gateway.snapshot;
+    return this.isConnected &&
+      snapshot?.phase === "connected" &&
+      hasOperatorAdminAccess(snapshot.hello?.auth ?? null)
+      ? snapshot.client
+      : null;
+  }
+
+  private readonly statusTask = new Task(this, {
+    args: () =>
+      [
+        this.client,
+        this.gateway.epoch,
+        this.context?.gateway.snapshot.hello,
+        this.context?.gateway.snapshot.hello?.auth,
+        this.context?.runtimeConfig.state.configSnapshot?.appliedConfigHash,
+      ] as const,
+    task: async ([client, , hello, auth, appliedHash], { signal }) => {
+      if (!client) {
+        return initialState;
+      }
+      const scope = this.gateway.capture();
+      const gateway = this.context.gateway;
+      const status = await client.request<SessionsStorageStatusResult>(
+        "sessions.storage.status",
+        {},
+        { signal },
+      );
+      const isCurrent = () =>
+        this.client === client &&
+        scope !== null &&
+        this.gateway.isCurrent(scope) &&
+        this.context.gateway === gateway &&
+        gateway.snapshot.hello === hello &&
+        hello?.auth === auth &&
+        this.context.runtimeConfig.state.configSnapshot?.appliedConfigHash === appliedHash;
+      return isCurrent() ? { status, isCurrent } : initialState;
+    },
+    onComplete: (result) => {
+      if (result.isCurrent()) {
+        this.observeMaintenance(result.status);
+      }
+    },
+    onError: () => {
+      this.maintenancePoll.stop();
+      this.runOutcome = null;
+    },
+  });
 
   private readonly maintenancePoll = new PollController(
     this,
     2_000,
     () => {
-      if (!this.status.client) {
+      if (!this.client) {
         this.maintenancePoll.stop();
-      } else if (this.status.task.status !== TaskStatus.PENDING) {
-        void this.status.task.run();
+      } else if (this.statusTask.status !== TaskStatus.PENDING) {
+        void this.statusTask.run();
       }
     },
     false,
@@ -116,7 +176,7 @@ class SessionStorageSettings extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     this.retireRequests();
-    this.status.subscriptions.clear();
+    this.subscriptions.clear();
     super.disconnectedCallback();
   }
 
@@ -125,7 +185,7 @@ class SessionStorageSettings extends OpenClawLightDomElement {
     return (
       this.mutationDisabled ||
       this.runOperation !== null ||
-      !this.status.client ||
+      !this.client ||
       !config.canSet ||
       !config.state.connected ||
       config.state.configLoading ||
@@ -151,7 +211,7 @@ class SessionStorageSettings extends OpenClawLightDomElement {
     const config = this.context.runtimeConfig.state;
     const session = asNullableRecord(asNullableRecord(config.configSnapshot?.config)?.session);
     const coldStorage = asNullableRecord(asNullableRecord(session?.maintenance)?.coldStorage);
-    const result = this.status.task.value;
+    const result = this.statusTask.value;
     return (
       !this.disabled &&
       this.ageDraft === null &&
@@ -159,15 +219,15 @@ class SessionStorageSettings extends OpenClawLightDomElement {
       !config.configNeedsApply &&
       typeof config.configSnapshot?.appliedConfigHash === "string" &&
       coldStorage?.enabled === true &&
-      this.status.task.status === TaskStatus.COMPLETE &&
+      this.statusTask.status === TaskStatus.COMPLETE &&
       result?.isCurrent() === true &&
       !result.status.maintenance.running
     );
   }
 
   private async runNow() {
-    const client = this.status.client;
-    const scope = this.status.gateway.capture();
+    const client = this.client;
+    const scope = this.gateway.capture();
     if (!this.canRun || !client || !scope) {
       return;
     }
@@ -179,8 +239,8 @@ class SessionStorageSettings extends OpenClawLightDomElement {
     this.runOutcome = null;
     const isCurrent = () =>
       this.runOperation === operation &&
-      this.status.client === client &&
-      this.status.gateway.isCurrent(scope) &&
+      this.client === client &&
+      this.gateway.isCurrent(scope) &&
       this.context.gateway === gateway &&
       gateway.snapshot.hello === hello;
     try {
@@ -193,7 +253,7 @@ class SessionStorageSettings extends OpenClawLightDomElement {
         ? t("configView.sessionStorage.runStarted")
         : null;
       this.observeMaintenance(result);
-      await this.status.task.run();
+      await this.statusTask.run();
     } catch (error) {
       if (isCurrent()) {
         this.runError = formatUiError(error);
@@ -315,9 +375,9 @@ class SessionStorageSettings extends OpenClawLightDomElement {
   }
 
   override render() {
-    const result = this.status.task.value;
+    const result = this.statusTask.value;
     const status =
-      this.status.task.status !== TaskStatus.ERROR && result?.isCurrent() ? result.status : null;
+      this.statusTask.status !== TaskStatus.ERROR && result?.isCurrent() ? result.status : null;
     const coldStorage = this.coldStorage;
     return html`
       ${renderSettingsPage(html`
@@ -328,8 +388,8 @@ class SessionStorageSettings extends OpenClawLightDomElement {
               description: t("configView.sessionStorage.description"),
               actions: html`<button
                 class="btn"
-                ?disabled=${!this.status.client || this.status.task.status === TaskStatus.PENDING}
-                @click=${() => void this.status.task.run()}
+                ?disabled=${!this.client || this.statusTask.status === TaskStatus.PENDING}
+                @click=${() => void this.statusTask.run()}
               >
                 ${t("common.refresh")}
               </button>`,
@@ -337,13 +397,13 @@ class SessionStorageSettings extends OpenClawLightDomElement {
             status
               ? this.renderInventory(status)
               : renderSettingsEmpty(
-                  this.status.task.status === TaskStatus.ERROR
+                  this.statusTask.status === TaskStatus.ERROR
                     ? html`<span role="alert"
-                        >${formatUiError(this.status.task.error)}
+                        >${formatUiError(this.statusTask.error)}
                         ${t("configView.sessionStorage.refreshAfterError")}</span
                       >`
                     : t(
-                        this.status.client
+                        this.client
                           ? "common.loading"
                           : this.context.gateway.snapshot.phase === "connected"
                             ? "configView.sessionStorage.adminRequired"
