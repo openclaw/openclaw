@@ -1853,7 +1853,7 @@ src/config/sessions/session-accessor.sqlite-transcript-metadata-read.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-store.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-write.ts	2
 src/config/sessions/session-accessor.sqlite-visible-cursor.ts	1
-src/config/sessions/session-accessor.transcript-range.ts	3
+src/config/sessions/session-accessor.transcript-range.worker.ts	3
 src/config/sessions/session-accessor.transcript-turn.ts	1
 src/config/sessions/session-reset-boundary-event.ts	2
 src/config/sessions/session-snapshot-merge.ts	9
@@ -2550,7 +2550,6 @@ src/snapshot/git-backup-codec.ts	7
 src/snapshot/git-backup.ts	2
 src/snapshot/local-repository.ts	6
 src/snapshot/manifest.ts	1
-src/state/config-machine-state.ts	1
 src/state/local-onboarding-state.ts	1
 src/state/openclaw-agent-db-permissions.ts	1
 src/state/openclaw-agent-db-registry-listing.ts	2
@@ -2743,9 +2742,6 @@ ui/src/local-storage.ts	2
 ui/src/main.ts	1
 ui/src/pages/activity/view.ts	2
 ui/src/pages/agents/model-config.ts	2
-ui/src/pages/channels/view.detail.ts	1
-ui/src/pages/channels/view.nostr-profile-form.ts	3
-ui/src/pages/channels/view.nostr.ts	5
 ui/src/pages/chat/chat-gateway.ts	1
 ui/src/pages/chat/chat-history-retry.ts	1
 ui/src/pages/chat/chat-page-retained-sessions.ts	1
@@ -2758,7 +2754,6 @@ ui/src/pages/chat/chat-send-timing.ts	1
 ui/src/pages/chat/chat-state-events.ts	6
 ui/src/pages/chat/chat-state-page.ts	2
 ui/src/pages/chat/chat-thread-items.ts	1
-ui/src/pages/chat/components/chat-audio-player.ts	1
 ui/src/pages/chat/components/chat-composer-plus-menu.ts	1
 ui/src/pages/chat/components/chat-composer-view.ts	1
 ui/src/pages/chat/components/chat-composer.ts	4
@@ -2804,17 +2799,12 @@ ui/src/pages/config/view-appearance-preferences.ts	2
 ui/src/pages/config/view-diff.ts	2
 ui/src/pages/config/view-schema.ts	2
 ui/src/pages/config/view.ts	3
-ui/src/pages/cron/view-runs.ts	3
-ui/src/pages/cron/view.ts	4
 ui/src/pages/custodian/custodian-surface.ts	2
 ui/src/pages/custodian/session-lifecycle.ts	1
 ui/src/pages/debug/view.ts	3
 ui/src/pages/labs/labs-registry.ts	4
 ui/src/pages/logs/view.ts	2
 ui/src/pages/memory-import/view.ts	2
-ui/src/pages/model-providers/view.ts	2
-ui/src/pages/model-setup/provider-picker.ts	2
-ui/src/pages/model-setup/view.ts	2
 ui/src/pages/new-session/draft-place-browser.ts	2
 ui/src/pages/new-session/place-browser.ts	1
 ui/src/pages/new-session/preferences.ts	1

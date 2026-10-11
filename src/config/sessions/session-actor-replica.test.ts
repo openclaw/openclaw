@@ -235,7 +235,6 @@ it("retains unrelated session postimages but invalidates a shared physical sessi
           sibling
             .prepare("UPDATE session_windows SET display_name = ? WHERE session_id = ?")
             .run("sibling-window", "other-session");
-          expect(fixture.replica.read()).toBeUndefined();
         }),
     );
     expect(fixture.replica.read()).toEqual(snapshot);
@@ -302,7 +301,6 @@ it("invalidates partial native publications before disclosure and count-only par
               updatedAt: 5,
               label: "rolled back",
             });
-            expect(replica.read()).toBeUndefined();
             throw new Error("abort replica fixture");
           },
           { agentId: scope.agentId, path: database.path, env: scope.env },

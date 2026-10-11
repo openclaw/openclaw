@@ -32,12 +32,12 @@ type LeafControlSelection = {
 };
 
 export class SessionManagerEntries extends SessionManagerAppend {
-  private createEntry<T extends { type: SessionEntry["type"] }>(data: T) {
+  private createEntry<T extends { type: SessionEntry["type"] }>(data: T, timestamp = Date.now()) {
     return {
       ...data,
       id: generateSessionEntryId(),
       parentId: this.appendParentId,
-      timestamp: new Date().toISOString(),
+      timestamp: new Date(timestamp).toISOString(),
     };
   }
 
@@ -164,15 +164,13 @@ export class SessionManagerEntries extends SessionManagerAppend {
     content: string | (TextContent | ImageContent)[],
     display: boolean,
     details?: unknown,
+    timestamp?: number,
   ): Promise<string> {
-    const entry: CustomMessageEntry = this.createEntry({
-      type: "custom_message",
-      customType,
-      content,
-      display,
-      details,
-      timestamp: new Date().toISOString(),
-    });
+    // Runtime context replays as user input, including its original timestamp.
+    const entry: CustomMessageEntry = this.createEntry(
+      { type: "custom_message", customType, content, display, details },
+      timestamp,
+    );
     await this.appendEntryAsync(entry, { invalidateSerializedPrefixCache: true });
     return entry.id;
   }
@@ -183,16 +181,13 @@ export class SessionManagerEntries extends SessionManagerAppend {
     content: string | (TextContent | ImageContent)[],
     display: boolean,
     details?: unknown,
+    timestamp?: number,
   ): string {
     prepareSessionManagerSync("appendCustomMessageEntry", this.persistenceTarget, this);
-    const entry: CustomMessageEntry = this.createEntry({
-      type: "custom_message",
-      customType,
-      content,
-      display,
-      details,
-      timestamp: new Date().toISOString(),
-    });
+    const entry: CustomMessageEntry = this.createEntry(
+      { type: "custom_message", customType, content, display, details },
+      timestamp,
+    );
     this.appendEntry(entry, { invalidateSerializedPrefixCache: true });
     return entry.id;
   }
