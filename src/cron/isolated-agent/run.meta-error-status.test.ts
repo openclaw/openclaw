@@ -207,6 +207,27 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     expectObjectFields(await runTurn(), testCase.expected);
   });
 
+  it("finishes silently after the run collected its only collector child", async () => {
+    const silentPayload = { text: "NO_REPLY" };
+    mockAgentRun({
+      payloads: [silentPayload],
+      acceptedSessionSpawns: [
+        {
+          runId: "run-child",
+          childSessionKey: "agent:default:child",
+          expectsCompletionMessage: false,
+          collected: true,
+        },
+      ],
+    });
+    mockAnnounceOutcome([silentPayload], silentPayload.text, {
+      deliveryDisposition: { kind: "heartbeat", controlOnly: true },
+    });
+    const result = await runTurn();
+    expectDispatch({ spawnOnlyHandoff: false, skipDelivery: "heartbeat" });
+    expectObjectFields(result, { status: "ok", error: undefined });
+  });
+
   it("preserves a heartbeat-only accepted child handoff failure as a cron error", async () => {
     const heartbeatPayload = { text: "HEARTBEAT_OK" };
     const error = "cron child-session handoff timed out before producing a final assistant payload";
