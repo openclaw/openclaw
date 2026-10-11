@@ -1,10 +1,11 @@
 import type { CronHistoryResult } from "@openclaw/gateway-protocol";
-import { html, nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
+import { createMemo, flush } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronRunLogEntry } from "../../api/types.ts";
-import { t } from "../../i18n/index.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { t } from "../../lib/reactive/i18n.ts";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import { attachHistoryActivity } from "../chat/chat-history-request.ts";
 import { mergeChatTranscriptPages } from "../chat/chat-transcript-pages.ts";
 import { renderChatHistoryBoundary } from "../chat/components/chat-history-boundary.ts";
@@ -13,28 +14,23 @@ import { renderChatTranscriptFeed } from "../chat/components/chat-transcript-fee
 type Scope = { client: GatewayBrowserClient; isCurrent: () => boolean };
 
 /** The run log owns transcript identity; never resolve a client-selected session alias. */
-export class CronRunTranscript implements ReactiveController {
+export class CronRunTranscript {
   private attempt = 0;
-  private entry: CronRunLogEntry | null = null;
+  entry: CronRunLogEntry | null = null;
   private trigger: HTMLButtonElement | null = null;
   private scope: Scope | null = null;
-  private messages: unknown[] = [];
-  private nextCursor: string | undefined;
+  messages: unknown[] = [];
+  nextCursor: string | undefined;
   private readonly cursors = new Set<string>();
-  private loading = false;
-  private error: string | null = null;
-  private failedCursor: string | undefined;
+  loading = false;
+  error: string | null = null;
+  failedCursor: string | undefined;
 
   constructor(
-    private readonly host: HTMLElement & ReactiveControllerHost,
+    private readonly host: HTMLElement,
+    private readonly notify: () => void,
     private readonly capture: () => Scope | null,
-  ) {
-    host.addController(this);
-  }
-
-  hostDisconnected() {
-    this.close();
-  }
+  ) {}
 
   close(restoreFocus = false) {
     const trigger = this.trigger;
@@ -48,7 +44,7 @@ export class CronRunTranscript implements ReactiveController {
     this.loading = false;
     this.error = null;
     this.failedCursor = undefined;
-    this.host.requestUpdate();
+    this.notify();
     if (restoreFocus && trigger?.isConnected) {
       trigger.focus();
     }
@@ -67,7 +63,7 @@ export class CronRunTranscript implements ReactiveController {
     if (this.entry !== entry || this.scope !== scope || !scope.isCurrent()) {
       return;
     }
-    await this.host.updateComplete;
+    flush();
     if (this.entry !== entry || this.scope !== scope || !scope.isCurrent()) {
       return;
     }
@@ -76,7 +72,7 @@ export class CronRunTranscript implements ReactiveController {
     region?.scrollIntoView({ block: "start", behavior: "instant" });
   }
 
-  private async load(cursor?: string) {
+  async load(cursor?: string) {
     const { entry, scope, attempt } = this;
     if (!entry || !scope || this.loading || !scope.isCurrent()) {
       return;
@@ -85,7 +81,7 @@ export class CronRunTranscript implements ReactiveController {
     this.loading = true;
     this.error = null;
     this.failedCursor = cursor;
-    this.host.requestUpdate();
+    this.notify();
     try {
       if (
         !entry.jobId ||
@@ -123,49 +119,67 @@ export class CronRunTranscript implements ReactiveController {
     }
     if (current()) {
       this.loading = false;
-      this.host.requestUpdate();
+      this.notify();
     }
   }
+}
 
-  render() {
-    if (!this.entry) {
-      return nothing;
-    }
-    return html`<section
-      class="card"
-      role="region"
-      tabindex="-1"
-      aria-label=${t("cron.runEntry.transcript")}
-      data-cron-run-transcript
-    >
-      <div class="row">
-        <h2>${t("cron.runEntry.transcript")}</h2>
-        <button class="btn btn--sm" @click=${() => this.close(true)}>${t("common.close")}</button>
-      </div>
-      ${
-        this.error
-          ? html`<p role="alert">${this.error}</p>
+export function CronRunTranscriptView(props: {
+  controller: CronRunTranscript;
+  revision: () => number;
+}) {
+  const state = () => {
+    props.revision();
+    return props.controller;
+  };
+  const transcript = createMemo(() => {
+    const current = state();
+    return [
+      current.nextCursor
+        ? renderChatHistoryBoundary({
+            hasMore: true,
+            loading: current.loading,
+            onShowEarlier: () => void props.controller.load(props.controller.nextCursor),
+          })
+        : undefined,
+      renderChatTranscriptFeed(current.messages),
+    ];
+  });
+  return (
+    <>
+      {state().entry ? (
+        <section
+          class="card"
+          role="region"
+          tabindex="-1"
+          aria-label={t("cron.runEntry.transcript")}
+          data-cron-run-transcript
+        >
+          <div class="row">
+            <h2>{t("cron.runEntry.transcript")}</h2>
+            <button class="btn btn--sm" onClick={() => props.controller.close(true)}>
+              {t("common.close")}
+            </button>
+          </div>
+          {state().error ? (
+            <>
+              <p role="alert">{state().error}</p>
               <button
                 class="btn btn--sm"
-                ?disabled=${this.loading}
-                @click=${() => void this.load(this.failedCursor)}
+                disabled={state().loading}
+                onClick={() => void props.controller.load(props.controller.failedCursor)}
               >
-                ${t("common.retry")}
-              </button>`
-          : nothing
-      }
-      ${this.loading ? html`<p role="status">${t("common.loading")}</p>` : nothing}
-      ${
-        this.nextCursor
-          ? renderChatHistoryBoundary({
-              hasMore: true,
-              loading: this.loading,
-              onShowEarlier: () => void this.load(this.nextCursor),
-            })
-          : nothing
-      }
-      ${!this.loading && !this.error && this.messages.length === 0 ? html`<p>${t("cron.runEntry.transcriptEmpty")}</p>` : nothing}
-      ${renderChatTranscriptFeed(this.messages)}
-    </section>`;
-  }
+                {t("common.retry")}
+              </button>
+            </>
+          ) : null}
+          {state().loading ? <p role="status">{t("common.loading")}</p> : null}
+          {!state().loading && !state().error && state().messages.length === 0 ? (
+            <p>{t("cron.runEntry.transcriptEmpty")}</p>
+          ) : null}
+          <LitContent render={() => transcript()} />
+        </section>
+      ) : null}
+    </>
+  );
 }
