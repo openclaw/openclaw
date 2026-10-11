@@ -20,7 +20,7 @@ import {
   startSessionWorkAdmissionInterruption,
 } from "./session-lifecycle-admission.js";
 
-it.each(["completed", "cancelled", "cancelled-then-restart", "restart"] as const)(
+it.each(["completed", "cancelled", "cancelled-then-restart", "restart", "timeout"] as const)(
   "uses the adopted run's %s outcome when capturing restart work",
   async (outcome) => {
     const scope = "settling-restart.sqlite";
@@ -40,7 +40,9 @@ it.each(["completed", "cancelled", "cancelled-then-restart", "restart"] as const
         ? createAgentRunRestartAbortError()
         : outcome.startsWith("cancelled")
           ? createAgentRunDirectAbortError()
-          : undefined;
+          : outcome === "timeout"
+            ? Object.assign(new Error("timed out"), { name: "TimeoutError" })
+            : undefined;
     const target = { scope, sessionKey, sessionId };
     const captured = captureGatewaySessionWorkAdmissions(resolveGatewayContext);
     try {
@@ -62,9 +64,10 @@ it.each(["completed", "cancelled", "cancelled-then-restart", "restart"] as const
           reason: createAgentRunRestartAbortError(),
         });
       }
-      expect(captured.isActive(target)).toBe(outcome === "restart");
+      const recoverable = !outcome.startsWith("cancelled");
+      expect(captured.isActive(target)).toBe(recoverable);
       expect(captureGatewaySessionWorkAdmissions(resolveGatewayContext).isActive(target)).toBe(
-        outcome === "restart",
+        recoverable,
       );
       // Cleanup keeps its exclusion lease without authorizing a stopped turn to resume.
       expect(isSessionWorkAdmissionActive(scope, [sessionKey, sessionId])).toBe(true);

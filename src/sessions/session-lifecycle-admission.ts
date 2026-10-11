@@ -1,6 +1,6 @@
 // Serializes lifecycle mutations and work admission for logical session identities.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
+import { isAgentRunDirectAbortReason } from "../agents/run-termination.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -358,11 +358,11 @@ export function hasOnlySessionLifecycleMutationKindActive(
 }
 
 function isRestartRecoverableAdmission(admission: SessionWorkAdmission): boolean {
-  // Terminal cleanup still holds a lease; only a restart abort retains unfinished work.
+  // Finished execution can still owe delivery; only a settled explicit stop ends that custody.
   const abortReason = admission.getAbortReason?.() ?? admission.interrupted;
   return (
     admission.phase === "acquired" &&
-    (!admission.isSettling?.() || isAgentRunRestartAbortReason(abortReason))
+    (!admission.isSettling?.() || !isAgentRunDirectAbortReason(abortReason))
   );
 }
 

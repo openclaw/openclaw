@@ -42,6 +42,7 @@ import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agen
 import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-preflight.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { createAgentRunDirectAbortError } from "../run-termination.js";
 import { readStartupRecoveryWarning } from "./main-session-restart-recovery-diagnostics.js";
 import {
   markRestartAbortedMainSessions,
@@ -401,6 +402,7 @@ it.each(["release", "completed", "cancelled", "rotation"] as const)(
     const resolveGatewayContext = () => undefined;
     let admission: SessionWorkAdmissionLease | undefined;
     let cancelled = false;
+    const cancellation = createAgentRunDirectAbortError();
     const apply = sessionAccessor.applySessionEntryReplacements;
     let restoreSpy = () => {};
     try {
@@ -410,6 +412,7 @@ it.each(["release", "completed", "cancelled", "rotation"] as const)(
         identities: [sessionKey, sessionId],
         resolveGatewayContext,
         isSettling: () => cancelled,
+        getAbortReason: () => (cancelled ? cancellation : undefined),
         assertAllowed: () => {},
       });
       const spy = vi
