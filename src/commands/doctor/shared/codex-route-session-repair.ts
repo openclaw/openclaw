@@ -51,7 +51,6 @@ import {
   migrateLegacyRuntimeModelRef,
   resolveLegacyRuntimeModelProviderAlias,
 } from "./legacy-runtime-model-providers.js";
-import { bindProviderRenameAuthProfiles } from "./provider-rename-auth.js";
 import { rewriteRenamedSessionRoutes, type ProviderRename } from "./provider-rename.js";
 import type { SessionModelRetirement } from "./retired-model-ref-repair.js";
 import { createRetiredModelRefRepairResolver } from "./retired-model-ref-repair.js";
@@ -267,8 +266,6 @@ function repairCodexSessionStoreRoutes(params: {
   providerRenameOnly?: boolean;
   retirement?: SessionModelRetirement;
   providerRenames?: readonly ProviderRename[];
-  providerRenameChanges?: Set<string>;
-  providerRenameAgentId?: string;
   warnings?: string[];
 }): string[] {
   const now = params.now ?? Date.now();
@@ -308,9 +305,6 @@ function repairCodexSessionStoreRoutes(params: {
       ? rewriteRenamedSessionRoutes({
           entry,
           renames: params.providerRenames,
-          path: `session.${JSON.stringify([params.providerRenameAgentId, sessionKey])}`,
-          changes: params.providerRenameChanges,
-          agentId: params.providerRenameAgentId,
         })
       : false;
     if (params.providerRenameOnly) {
@@ -490,8 +484,6 @@ export async function maybeRepairCodexSessionRoutes(params: {
     !params.providerRenameOnly && !params.shouldRepair && params.authProfileOnly === true;
   const shouldRepair = params.shouldRepair || authProfileOnly;
   const warnings: string[] = [];
-  const previewProviderChanges = new Set<string>();
-  const committedProviderChanges = new Set<string>();
   const pending = readDeferredPluginMigrations({ env });
   const isRetained = createRetainedAgentDatabaseMatcher(env, () =>
     resolveConfiguredAgentDatabaseTargets(params.cfg, { env }),
@@ -499,14 +491,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
   const sessionTargets = resolveAllAgentSessionStoreTargetsSync(params.cfg, { env }).filter(
     (target) => !isRetained(target.storePath, target.agentId),
   );
-  const providerRenames = params.providerRenames?.length
-    ? bindProviderRenameAuthProfiles(
-        params.cfg,
-        params.providerRenames,
-        env,
-        sessionTargets.map((target) => target.agentId),
-      )
-    : undefined;
+  const providerRenames = params.providerRenames;
   const resolveRetired =
     authProfileOnly || params.providerRenameOnly
       ? undefined
@@ -561,24 +546,10 @@ export async function maybeRepairCodexSessionRoutes(params: {
         providerRenameOnly: params.providerRenameOnly,
         retirement,
         providerRenames,
-        providerRenameChanges: committedProviderChanges,
-        providerRenameAgentId: target.agentId,
         warnings,
       });
     // Preview uses the same owner-bound repair against copies, preserving persisted entries.
-    const scan = (store: Record<string, SessionEntry>) =>
-      repairCodexSessionStoreRoutes({
-        store: structuredClone(store),
-        blockedModelIdentities: params.blockedModelIdentities,
-        authProfileIdMap,
-        authProfileOnly,
-        providerRenameOnly: params.providerRenameOnly,
-        retirement,
-        providerRenames,
-        providerRenameChanges: previewProviderChanges,
-        providerRenameAgentId: target.agentId,
-        warnings,
-      });
+    const scan = (store: Record<string, SessionEntry>) => repair(structuredClone(store));
     const staleSqliteSessionKeys: string[] = [];
     const scanEntry = ({ entry, sessionKey }: { entry: SessionEntry; sessionKey: string }) => {
       if (scan({ [sessionKey]: entry }).length > 0) {
@@ -621,14 +592,6 @@ export async function maybeRepairCodexSessionRoutes(params: {
       repairedSessions: 0,
       warnings: [
         ...warnings,
-        ...Array.from(previewProviderChanges, (change) =>
-          change.replace(/^Upgraded /, "Would upgrade "),
-        ),
-        ...(previewProviderChanges.size > 0
-          ? [
-              "To re-pin an account, select the intended saved target-provider account with /model after the repair.",
-            ]
-          : []),
         ...(stale.length > 0
           ? [
               [
@@ -696,12 +659,6 @@ export async function maybeRepairCodexSessionRoutes(params: {
             authProfileOnly
               ? `Updated auth-profile references in ${repairedScope}.`
               : `Repaired legacy bindings or retired model routes in ${repairedScope} while preserving auth-profile pins.`,
-            ...committedProviderChanges,
-            ...(committedProviderChanges.size > 0
-              ? [
-                  "To re-pin an account, select the intended saved target-provider account with /model.",
-                ]
-              : []),
           ]
         : [],
   };

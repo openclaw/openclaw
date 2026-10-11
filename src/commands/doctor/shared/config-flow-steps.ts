@@ -24,7 +24,6 @@ import {
 import type { InstalledPluginIdRecovery } from "./installed-plugin-id-recovery.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
-import { bindProviderRenameAuthProfiles } from "./provider-rename-auth.js";
 import { applyProviderRenames, planProviderRenames } from "./provider-rename.js";
 
 /** Apply legacy config migrations and update preview/fix state for doctor config flow. */
@@ -254,12 +253,9 @@ export function restoreDoctorConfigEnvRefs(
     context: { authoredRaw: source.parsed, resolvedRaw: source.resolved },
   };
   // Replay the resolved routing decision on authored templates before plugin cleanup.
-  const providerRenames = bindProviderRenameAuthProfiles(
+  const providerRenames = planProviderRenames(
     canonicalResolved,
-    planProviderRenames(
-      canonicalResolved,
-      resolvePluginDoctorProviderRenames({ config: canonicalResolved }),
-    ),
+    resolvePluginDoctorProviderRenames({ config: canonicalResolved }),
   );
   const authoredProviderConfig = applyProviderRenames(canonicalAuthored, providerRenames).config;
   const migratedAuthored = applyLegacyDoctorMigrations(authoredProviderConfig, options);

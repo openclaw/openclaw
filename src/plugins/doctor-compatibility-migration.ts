@@ -5,11 +5,17 @@ import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type {
+  PluginDoctorCompatibilityNormalizer,
   PluginDoctorHistoricalWebhookListener,
   PluginDoctorProviderRename,
-  PluginDoctorCompatibilityNormalizer,
 } from "./doctor-contract-module.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+
+export type PluginDoctorCompatibilityResult = {
+  config: OpenClawConfig;
+  changes: string[];
+  warnings?: string[];
+};
 
 /** Selection and order belong to callers; every hook transforms a private candidate. */
 export function applyPluginDoctorCompatibilitySequence(
@@ -17,11 +23,9 @@ export function applyPluginDoctorCompatibilitySequence(
   entries: Iterable<{
     pluginId: string;
     normalizeCompatibilityConfig?: PluginDoctorCompatibilityNormalizer;
-    transform?: (
-      mutation: ReturnType<PluginDoctorCompatibilityNormalizer>,
-    ) => ReturnType<PluginDoctorCompatibilityNormalizer>;
+    transform?: (mutation: ChannelDoctorConfigMutation) => ChannelDoctorConfigMutation;
   }>,
-): { config: OpenClawConfig; changes: string[]; warnings?: string[] } {
+): PluginDoctorCompatibilityResult {
   let next = config;
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -53,26 +57,18 @@ export function applyPluginDoctorCompatibilitySequence(
   return { config: next, changes, ...(warnings.length ? { warnings } : {}) };
 }
 
-type CompatibilityEntry = {
-  pluginId: string;
-  origin?: PluginOrigin;
-  rules: readonly LegacyConfigRule[];
-  providerRenames: readonly PluginDoctorProviderRename[];
-  normalizeCompatibilityConfig?: PluginDoctorCompatibilityNormalizer;
-  historicalWebhookListener?: PluginDoctorHistoricalWebhookListener;
-  historicalWebhookNormalizer?: PluginDoctorCompatibilityNormalizer;
-};
-
-export type PluginDoctorCompatibilityResult = {
-  config: OpenClawConfig;
-  changes: string[];
-  warnings?: string[];
-};
-
-/** Compose owner-selected repairs without making the registry own their execution policy. */
+/** Apply resolved declarations without coupling the compatibility owner to registry loading. */
 export function applyResolvedPluginDoctorCompatibilityMigrations(
   cfg: OpenClawConfig,
-  entries: readonly CompatibilityEntry[],
+  entries: readonly {
+    pluginId: string;
+    origin?: PluginOrigin;
+    rules: readonly LegacyConfigRule[];
+    providerRenames: readonly PluginDoctorProviderRename[];
+    normalizeCompatibilityConfig?: PluginDoctorCompatibilityNormalizer;
+    historicalWebhookListener?: PluginDoctorHistoricalWebhookListener;
+    historicalWebhookNormalizer?: PluginDoctorCompatibilityNormalizer;
+  }[],
   params: {
     env?: NodeJS.ProcessEnv;
     startup?: boolean;

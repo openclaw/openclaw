@@ -90,13 +90,10 @@ export async function runWriteConfigHealth(
     // Static imports initialize session/runtime owners during config-only reads with no rename.
     const { maybeRepairCodexSessionRoutes } =
       await import("../commands/doctor/shared/codex-route-session-repair.js");
-    const { bindProviderRenameAuthProfiles } =
-      await import("../commands/doctor/shared/provider-rename-auth.js");
     const { maybeRepairProviderRenameCronJobs } =
       await import("../commands/doctor/shared/provider-rename-state.js");
     const { applyProviderRenames } = await import("../commands/doctor/shared/provider-rename.js");
     const renamedCron = await maybeRepairProviderRenameCronJobs({
-      cfg: ctx.cfg,
       renames: providerRenames,
       env: ctx.env,
       shouldRepair: true,
@@ -115,10 +112,7 @@ export async function runWriteConfigHealth(
         "Provider references could not be fully repaired. Config was preserved; rerun openclaw doctor --fix.",
       );
     }
-    const migration = applyProviderRenames(
-      ctx.cfg,
-      bindProviderRenameAuthProfiles(ctx.cfg, providerRenames, ctx.env),
-    );
+    const migration = applyProviderRenames(ctx.cfg, providerRenames);
     ctx.cfg = migration.config;
     if (migration.changes.length > 0) {
       ctx.configResult.pendingChangePanels = [

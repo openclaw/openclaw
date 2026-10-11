@@ -49,19 +49,12 @@ Doctor leaves saved `ollama` auth profiles untouched; if the key exists only in
 that saved profile, run `openclaw onboard --auth-choice ollama-cloud` to configure
 Cloud authentication.
 
-Old `@ollama:...` model-reference pins never cross into the Cloud provider.
-Doctor chooses from the owning agent's visible saved profiles: shared profiles
-plus that agent's local profiles, never another agent's local profiles. Defaults
-and other inherited references use only shared profiles visible to every agent.
-An existing valid Cloud pin
-is preserved; otherwise Doctor selects `ollama-cloud:default` when visible, then
-the sole visible Cloud profile. With no Cloud profile or an ambiguous choice, it
-removes the suffix so normal environment or later sign-in resolution can apply.
-Doctor lists each changed pin and explains how to re-pin a model explicitly;
-the credential store is not modified or migrated.
+Migrated model references drop their `@profile` suffix rather than moving an
+account pin across providers. Doctor emits one reminder to re-pin with
+`/model <provider/model>@<profile>` if needed. Saved credentials are not modified.
 
-Use `openclaw doctor --lint --json` to preview, or `openclaw doctor --fix` to
-apply the migration. Updates use the same repair. Doctor repairs cron and session
+Run `openclaw doctor --fix` to apply the migration. Updates use the same repair.
+Doctor repairs cron and session
 references through their existing state owners, then backs up and publishes the
 config last. The Cloud provider is already available through the Ollama plugin.
 If interrupted before config publication, the hosted `ollama` entry remains and

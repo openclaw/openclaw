@@ -8,17 +8,7 @@ import {
   rewriteModelRefs,
 } from "./legacy-config-migrations.runtime.models.refs.js";
 
-export type ProviderRenameAuthProfiles = {
-  targetAuthProfileIds: readonly string[];
-  targetAuthProfileId?: string;
-};
-
-export type ProviderRename = PluginDoctorProviderRename & {
-  targetAuthProfileIds?: readonly string[];
-  targetAuthProfileId?: string;
-  targetAuthProfilesByAgent?: Readonly<Record<string, ProviderRenameAuthProfiles>>;
-  sharedAuthProfiles?: ProviderRenameAuthProfiles;
-};
+export type ProviderRename = PluginDoctorProviderRename;
 
 function urlOrigin(value: string): string | undefined {
   try {
@@ -42,24 +32,13 @@ export function planProviderRenames(
 export function rewriteProviderModelRef(
   ref: string,
   renames: readonly ProviderRename[],
-  agentId?: string,
 ): string | undefined {
   const parsed = splitTrailingAuthProfile(ref);
   const rename = renames.find(({ from }) => parsed.model.startsWith(`${from}/`));
   if (!rename) {
     return undefined;
   }
-  const model = `${rename.to}${parsed.model.slice(rename.from.length)}`;
-  if (!parsed.profile) {
-    return model;
-  }
-  const auth = agentId
-    ? (rename.targetAuthProfilesByAgent?.[agentId] ?? rename.sharedAuthProfiles ?? rename)
-    : rename;
-  const profile = auth.targetAuthProfileIds?.includes(parsed.profile)
-    ? parsed.profile
-    : auth.targetAuthProfileId;
-  return profile ? `${model}@${profile}` : model;
+  return `${rename.to}${parsed.model.slice(rename.from.length)}`;
 }
 
 function mergeProviders(
@@ -92,54 +71,14 @@ export function applyProviderRenames(
     return { config, changes: [] };
   }
   const changes: string[] = [];
-  let changedAuthPin = false;
-  const normalize =
-    (scopedRenames: readonly ProviderRename[], agentId?: string) => (ref: string) => {
-      const rewritten = rewriteProviderModelRef(ref, scopedRenames, agentId);
-      if (
-        rewritten !== undefined &&
-        splitTrailingAuthProfile(ref).profile !== splitTrailingAuthProfile(rewritten).profile
-      ) {
-        changedAuthPin = true;
-      }
-      return rewritten ?? null;
-    };
-  // Inherited references must remain usable by every agent, not just the system agent.
-  const globalRenames = renames.map((rename) =>
-    rename.sharedAuthProfiles ? { ...rename, ...rename.sharedAuthProfiles } : rename,
-  );
-  const entries = config.agents?.entries;
-  const globalConfig = entries
-    ? { ...config, agents: { ...config.agents, entries: undefined } }
-    : config;
-  let rewritten = rewriteModelRefs(globalConfig, "config", changes, normalize(globalRenames))
+  const rewritten = rewriteModelRefs(
+    config,
+    "config",
+    changes,
+    (ref) => rewriteProviderModelRef(ref, renames) ?? null,
+  )
     // SAFETY: The walker preserves the config shape, changing only model-reference strings and map keys.
     .value as OpenClawConfig;
-  if (entries) {
-    rewritten = {
-      ...rewritten,
-      agents: {
-        ...rewritten.agents,
-        entries: Object.fromEntries(
-          Object.entries(entries).map(([agentId, entry]) => [
-            agentId,
-            rewriteModelRefs(
-              entry,
-              `config.agents.entries.${agentId}`,
-              changes,
-              normalize(renames, agentId),
-              // SAFETY: The walker preserves this typed agent entry's fields while rewriting model references.
-            ).value as typeof entry,
-          ]),
-        ),
-      },
-    };
-  }
-  if (changedAuthPin) {
-    changes.push(
-      "Provider migration updated auth profile pins; to choose another saved account, re-pin the model with /model <provider/model>@<profile>.",
-    );
-  }
   const providers = { ...rewritten.models?.providers };
   let moved = false;
   for (const { from, to } of renames) {
@@ -154,6 +93,11 @@ export function applyProviderRenames(
     moved = true;
     changes.push(`Migrated models.providers.${from} to models.providers.${to}.`);
   }
+  if (moved) {
+    changes.push(
+      "Migrated model references no longer pin saved accounts. Re-pin with /model <provider/model>@<profile> to choose a saved account.",
+    );
+  }
   return {
     config: moved ? { ...rewritten, models: { ...rewritten.models, providers } } : rewritten,
     changes,
@@ -165,9 +109,6 @@ function rewriteRenamedSessionModelPair<ProviderKey extends string, ModelKey ext
   providerKey: ProviderKey,
   modelKey: ModelKey,
   renames: readonly ProviderRename[],
-  path: string,
-  changes?: Set<string>,
-  agentId?: string,
 ): boolean {
   const provider = entry[providerKey];
   const model = entry[modelKey];
@@ -178,13 +119,12 @@ function rewriteRenamedSessionModelPair<ProviderKey extends string, ModelKey ext
   if (provider && !renames.some((rename) => rename.from === provider)) {
     return false;
   }
-  const scopedModel = rewriteProviderModelRef(model, renames, agentId);
-  const pairChanges: string[] = [];
+  const scopedModel = rewriteProviderModelRef(model, renames);
   const pair = rewriteModelRefs(
     { provider, model },
-    `${path}.${modelKey}`,
-    pairChanges,
-    (ref) => rewriteProviderModelRef(ref, renames, agentId) ?? null,
+    modelKey,
+    [],
+    (ref) => rewriteProviderModelRef(ref, renames) ?? null,
   );
   if (scopedModel === undefined && !pair.changed) {
     return false;
@@ -195,24 +135,12 @@ function rewriteRenamedSessionModelPair<ProviderKey extends string, ModelKey ext
     entry[providerKey] = rewritten.provider;
   }
   entry[modelKey] = scopedModel ?? rewritten.model;
-  if (scopedModel !== undefined) {
-    changes?.add(
-      `Upgraded ${path}.${modelKey} from ${JSON.stringify(model)} to ${JSON.stringify(scopedModel)}.`,
-    );
-  } else {
-    for (const change of pairChanges) {
-      changes?.add(change);
-    }
-  }
   return true;
 }
 
 export function rewriteRenamedSessionRoutes(params: {
   entry: SessionEntry;
   renames: readonly ProviderRename[];
-  path: string;
-  changes?: Set<string>;
-  agentId?: string;
 }): boolean {
   let changed = false;
   for (const [providerKey, modelKey] of [
@@ -221,15 +149,8 @@ export function rewriteRenamedSessionRoutes(params: {
     ["modelOverrideFallbackOriginProvider", "modelOverrideFallbackOriginModel"],
   ] as const) {
     changed =
-      rewriteRenamedSessionModelPair(
-        params.entry,
-        providerKey,
-        modelKey,
-        params.renames,
-        params.path,
-        params.changes,
-        params.agentId,
-      ) || changed;
+      rewriteRenamedSessionModelPair(params.entry, providerKey, modelKey, params.renames) ||
+      changed;
   }
   if (params.entry.modelFallback) {
     for (const [providerKey, modelKey] of [
@@ -243,9 +164,6 @@ export function rewriteRenamedSessionRoutes(params: {
           providerKey,
           modelKey,
           params.renames,
-          `${params.path}.modelFallback`,
-          params.changes,
-          params.agentId,
         ) || changed;
     }
   }

@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProviderRename } from "../commands/doctor/shared/provider-rename.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
@@ -15,12 +14,6 @@ import {
   getRegistryJitiMocks,
   resetRegistryJitiMocks,
 } from "./test-helpers/registry-jiti-mocks.js";
-
-// mock-isolation: Registry tests own plugin selection; binder tests cover persisted auth reads.
-vi.mock("../commands/doctor/shared/provider-rename-auth.js", () => ({
-  bindProviderRenameAuthProfiles: (_config: OpenClawConfig, renames: readonly ProviderRename[]) =>
-    renames,
-}));
 
 // Script contract exports at module binding while keeping setup instance ownership.
 vi.mock("./plugin-instance-module-loader.js", async (importOriginal) => {
@@ -205,13 +198,13 @@ describe("doctor-contract-registry module loader", () => {
     expect(listPluginDoctorLegacyConfigRules({ workspaceDir: pluginRoot, env: {} })).toHaveLength(
       testCase.expectedRuleCount,
     );
+    expect(resolvePluginDoctorProviderRenames({ pluginIds: ["old"], env: {} })).toHaveLength(
+      testCase.expectedRuleCount,
+    );
     expect(mocks.createJiti).toHaveBeenCalledTimes(testCase.expectedLoadCount);
   });
 
-  it.each([
-    { declared: false, providers: ["old", "new"], loads: 0 },
-    { declared: true, providers: ["old"], loads: 1 },
-  ])("rejects undeclared or unowned provider renames: %j", ({ declared, providers, loads }) => {
+  it("rejects provider renames outside the plugin's declared providers", () => {
     const root = makeTempDir();
     fs.writeFileSync(path.join(root, "doctor-contract-api.ts"), "export {};\n", "utf-8");
     mocks.createJiti.mockImplementation(() => () => ({
@@ -219,12 +212,14 @@ describe("doctor-contract-registry module loader", () => {
     }));
     mockDoctorPlugins({
       id: "owner",
-      providers,
+      providers: ["old"],
       rootDir: root,
-      doctorContract: { configRepair: declared },
+      doctorContract: { configRepair: true },
     });
     expect(resolvePluginDoctorProviderRenames({ pluginIds: ["old"], env: {} })).toEqual([]);
-    expect(mocks.createJiti).toHaveBeenCalledTimes(loads);
+    expect(doctorContractWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("Provider renames must belong to the plugin's declared providers."),
+    );
   });
 
   it("selects provider renames only from scoped, non-deferred config-repair owners", () => {
@@ -244,51 +239,56 @@ describe("doctor-contract-registry module loader", () => {
     const config: OpenClawConfig = {
       models: { providers: { "old-provider": { baseUrl: rename.baseUrl, models: [] } } },
     };
+    const onInspectedPlugin = vi.fn();
+    applyPluginDoctorCompatibilityMigrations(config, {
+      pluginIds: ["old-provider"],
+      env: {},
+      onInspectedPlugin,
+    });
+    expect(onInspectedPlugin).toHaveBeenCalledExactlyOnceWith("owner", true);
     expect(resolvePluginDoctorProviderRenames({ config, env: {} })).toEqual([rename]);
-    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
     expect(
       withDeferredPluginDoctorMigrations(["owner"], () =>
         resolvePluginDoctorProviderRenames({ config, env: {} }),
       ),
     ).toEqual([]);
-    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves hosted Ollama auth during preflight compatibility repair", async () => {
-    const root = makeTempDir();
-    fs.writeFileSync(path.join(root, "doctor-contract-api.ts"), "export {};\n", "utf-8");
-    const contract = await vi.importActual("../../extensions/ollama/doctor-contract-api.js");
-    mocks.createJiti.mockImplementation(() => () => contract);
-    mockDoctorPlugins({
-      id: "ollama",
-      providers: ["ollama", "ollama-cloud"],
-      rootDir: root,
-      doctorContract: { configRepair: true },
-    });
-    const config: OpenClawConfig = {
-      models: {
-        providers: {
-          ollama: {
-            baseUrl: "https://OLLAMA.COM:443/api",
-            api: "ollama",
-            apiKey: "OLLAMA_API_KEY",
-            models: [],
+  it.each(["https://OLLAMA.COM:443/api", "${OLLAMA_BASE_URL}"])(
+    "preserves the hosted Ollama entry during preflight with baseUrl %s",
+    async (baseUrl) => {
+      const root = makeTempDir();
+      fs.writeFileSync(path.join(root, "doctor-contract-api.ts"), "export {};\n", "utf-8");
+      const contract = await vi.importActual("../../extensions/ollama/doctor-contract-api.js");
+      mocks.createJiti.mockImplementation(() => () => contract);
+      mockDoctorPlugins({
+        id: "ollama",
+        providers: ["ollama", "ollama-cloud"],
+        rootDir: root,
+        doctorContract: { configRepair: true },
+      });
+      const config: OpenClawConfig = {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl,
+              api: "ollama",
+              apiKey: "OLLAMA_API_KEY",
+              models: [],
+            },
           },
         },
-      },
-      agents: { defaults: { model: "ollama/model:cloud@ollama:default" } },
-      auth: { profiles: { "ollama:default": { provider: "ollama", mode: "api_key" } } },
-    };
-    const result = applyPluginDoctorCompatibilityMigrations(config, {
-      env: {},
-      pluginIds: ["ollama"],
-    });
-    expect(result.config).toEqual(config);
-    expect(result.changes).toEqual([]);
-    expect(resolvePluginDoctorProviderRenames({ config, env: {} })).toEqual([
-      { from: "ollama", to: "ollama-cloud", baseUrl: "https://ollama.com" },
-    ]);
-  });
+        agents: { defaults: { model: "ollama/model:cloud@ollama:default" } },
+        auth: { profiles: { "ollama:default": { provider: "ollama", mode: "api_key" } } },
+      };
+      const result = applyPluginDoctorCompatibilityMigrations(config, {
+        env: { OLLAMA_BASE_URL: "https://ollama.com" },
+        pluginIds: ["ollama"],
+      });
+      expect(result.config).toEqual(config);
+      expect(result.changes).toEqual([]);
+    },
+  );
 
   it.each([false, true])("isolates a normalizer-only config repair (throws=%s)", (throws) => {
     const pluginRoot = makeTempDir();

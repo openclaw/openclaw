@@ -1,21 +1,14 @@
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { PluginDoctorCronChange } from "../../../plugins/doctor-contract-module.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
-import {
-  inspectCronJobsForDoctor,
-  repairCronJobsForDoctor,
-  resolveStoredCronJobOwner,
-} from "../cron/store-repair.js";
+import { inspectCronJobsForDoctor, repairCronJobsForDoctor } from "../cron/store-repair.js";
 import { rewriteModelRefs } from "./legacy-config-migrations.runtime.models.refs.js";
-import { bindProviderRenameAuthProfiles } from "./provider-rename-auth.js";
 import { rewriteProviderModelRef } from "./provider-rename.js";
 import type { ProviderRename } from "./provider-rename.js";
 
 /** Repair persisted definitions across every cron partition, not just the configured store. */
 export async function maybeRepairProviderRenameCronJobs(params: {
-  cfg: OpenClawConfig;
   renames: readonly ProviderRename[];
   env?: NodeJS.ProcessEnv;
   shouldRepair: boolean;
@@ -26,16 +19,10 @@ export async function maybeRepairProviderRenameCronJobs(params: {
   const env = params.env ?? process.env;
   try {
     const inventory = await inspectCronJobsForDoctor({ env });
-    const jobs = inventory.jobs.map((job) => ({
-      job,
-      agentId: job.definition ? resolveStoredCronJobOwner(job.definition) : undefined,
-    }));
-    const renames = bindProviderRenameAuthProfiles(params.cfg, params.renames, env, [
-      ...new Set(jobs.flatMap(({ agentId }) => (agentId ? [agentId] : []))),
-    ]);
+    const renames = params.renames;
     const requested: PluginDoctorCronChange[] = [];
     const referenceChanges: string[] = [];
-    for (const { job, agentId } of jobs) {
+    for (const job of inventory.jobs) {
       if (!job.definition) {
         continue;
       }
@@ -43,7 +30,7 @@ export async function maybeRepairProviderRenameCronJobs(params: {
         job.definition.payload,
         `cron.${JSON.stringify([job.storeKey, job.id])}.payload`,
         referenceChanges,
-        (ref) => rewriteProviderModelRef(ref, renames, agentId) ?? null,
+        (ref) => rewriteProviderModelRef(ref, renames) ?? null,
       );
       if (payload.changed) {
         requested.push({ job, definition: { ...job.definition, payload: payload.value } });
@@ -58,7 +45,6 @@ export async function maybeRepairProviderRenameCronJobs(params: {
         warnings: [
           `Provider renames affect ${requested.length} persisted cron job(s). Run "openclaw doctor --fix" to repair their model references.`,
           ...referenceChanges.map((change) => change.replace(/^Upgraded /, "Would upgrade ")),
-          "To re-pin an account, select the intended saved target-provider account with /model after the repair.",
         ],
       };
     }
@@ -83,7 +69,6 @@ export async function maybeRepairProviderRenameCronJobs(params: {
           ? [
               `Renamed provider model references in ${result.changed} persisted cron job(s).`,
               ...referenceChanges,
-              "To re-pin an account, select the intended saved target-provider account with /model.",
               `Saved pre-repair cron backup: ${result.backupPath}`,
             ]
           : [],
