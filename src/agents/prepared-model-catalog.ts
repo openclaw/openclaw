@@ -9,6 +9,7 @@ import {
 } from "./agent-scope.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { findModelInCatalog } from "./model-catalog-lookup.js";
+import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
@@ -322,7 +323,12 @@ async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
   // publication belongs exclusively to startup/reload or agent-run admission.
   const activated = await activateStandalonePreparedModelRuntime(activationExact, {
     catalogMode: persistOfflineRefresh ? "live" : "static",
-    ...(persistOfflineRefresh ? { force: true } : {}),
+    ...(persistOfflineRefresh
+      ? {
+          force: true,
+          providerDiscoveryTimeoutMs: PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
+        }
+      : {}),
   });
   if (activated && acceptsPreparedSnapshotConfig(activated, activationExact, configPolicy)) {
     return { snapshot: activated, refreshed: persistOfflineRefresh };
