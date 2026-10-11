@@ -10,20 +10,20 @@ import type { YamlAst } from "./ast.js";
 
 type YamlOcPathMatch =
   | { readonly kind: "root"; readonly node: YamlAst }
-  | { readonly kind: "scalar"; readonly value: unknown; readonly path: readonly string[] }
+  | { readonly kind: "scalar"; readonly value: unknown; readonly path: readonly unknown[] }
   | {
       readonly kind: "map";
-      readonly path: readonly string[];
+      readonly path: readonly unknown[];
     }
   | {
       readonly kind: "seq";
-      readonly path: readonly string[];
+      readonly path: readonly unknown[];
     }
   | {
       readonly kind: "pair";
       readonly key: string;
       readonly value: unknown;
-      readonly path: readonly string[];
+      readonly path: readonly unknown[];
     };
 
 export function resolveYamlOcPath(ast: YamlAst, path: OcPath): YamlOcPathMatch | null {
@@ -40,7 +40,7 @@ function walkNode(
   node: Node | null,
   segments: readonly string[],
   i: number,
-  walked: readonly string[],
+  walked: readonly unknown[],
 ): YamlOcPathMatch | null {
   if (node === null) {
     return null;
@@ -78,7 +78,8 @@ function walkNode(
     if (pair === undefined) {
       return null;
     }
-    const childWalked = [...walked, seg];
+    // Match addresses as text, but retain the selected key's type for YAML writes.
+    const childWalked = [...walked, isScalar(pair.key) ? pair.key.value : seg];
     if (i === segments.length - 1 && isScalar(pair.value)) {
       return {
         kind: "pair",

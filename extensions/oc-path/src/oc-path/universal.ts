@@ -257,14 +257,14 @@ function yamlScalarToText(value: unknown): string {
   return JSON.stringify(value) ?? "";
 }
 
-function yamlLine(ast: YamlAst, path: readonly string[]): number {
+function yamlLine(ast: YamlAst, path: readonly unknown[]): number {
   let node: unknown = ast.doc.contents;
   for (const segment of path) {
     if (node === null || typeof node !== "object") {
       break;
     }
     if (isSeq(node)) {
-      const index = parseArrayIndexSegment(segment, node.items.length);
+      const index = parseArrayIndexSegment(String(segment), node.items.length);
       if (index === null) {
         break;
       }
@@ -273,8 +273,9 @@ function yamlLine(ast: YamlAst, path: readonly string[]): number {
     }
     if (isMap(node)) {
       const pair = (node as { items: readonly Pair[] }).items.find((entry) => {
-        const key = isScalar(entry.key) ? entry.key.value : entry.key;
-        return String(key) === segment;
+        return isScalar(entry.key)
+          ? Object.is(entry.key.value, segment)
+          : String(entry.key) === segment;
       });
       node = pair?.value ?? null;
       continue;
