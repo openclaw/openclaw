@@ -4,35 +4,36 @@ import { StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as stateReads from "./openclaw-state-db-readonly.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
-import {
-  getUserPreferences,
-  setCanonicalUserPreferences,
-  setUserPreferences,
-} from "./user-preferences.js";
+import { prepareUserProfileRolePolicyAuthority } from "./user-channel-identity-operations.js";
+import { setCanonicalUserPreferences } from "./user-preferences.js";
+import { getUserPreferences, setUserPreferences } from "./user-preferences.test-support.js";
 import {
   prepareUserProfileGitHubAttribution,
+  readUserProfileGitHubCommand,
   resolveUserProfileGitHubAttribution,
 } from "./user-profile-github-identity.js";
-import { listUserProfilesSync } from "./user-profile-identity.read.js";
-import { resolveCanonicalCachedGitHubIdentity } from "./user-profile-reads.js";
+import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
+import { getUserProfileListItem } from "./user-profile-list-item.test-support.js";
+import {
+  readUserProfileDirectory,
+  resolveCanonicalCachedGitHubIdentity,
+} from "./user-profile-reads.js";
+import { linkEmail, setAvatar, syncGitHubIdentity } from "./user-profile-writes.worker.js";
 import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
 import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 import {
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
   getUserProfileDisplay,
-  getUserProfileListItem,
-  linkEmail,
-  setAvatar,
-  syncGitHubIdentity,
 } from "./user-profiles.js";
-import { executeUserProfileCommand } from "./user-profiles.worker.js";
+import { userProfileOperations } from "./user-profiles.worker.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -84,13 +85,12 @@ function syncEmailGitHubProfile(
 }
 
 describe("multi-account people", () => {
-  it("bounds directory materialization while preserving merged-profile filtering and account order", () => {
+  it("bounds directory materialization while preserving merged-profile filtering and account order", async () => {
     const options = stateOptions();
     const database = openOpenClawStateDatabase(options);
     ensureUserProfilesSchema(options, database);
-    const directory = (limit: number) =>
-      executeUserProfileCommand({ type: "userProfiles.directory", input: { limit } }, options);
-    expect(directory(2)).toEqual({ profiles: [], truncated: false });
+    const directory = (limit: number) => readUserProfileDirectory(limit, options);
+    expect(await directory(2)).toEqual({ profiles: [], truncated: false });
 
     const insertProfile = database.db.prepare(
       "INSERT INTO user_profiles (id, merged_into, created_at, updated_at) VALUES (?, ?, ?, 1)",
@@ -124,7 +124,15 @@ describe("multi-account people", () => {
       return rows;
     });
     try {
-      expect(directory(2)).toEqual({
+      expect(
+        userProfileOperations["userProfiles.directory"](
+          { limit: 2 },
+          {
+            open: () => database,
+            stateOptions: () => ({ ...options, env: process.env }),
+          },
+        ),
+      ).toEqual({
         profiles: [
           { id: "a", logins: ["person", "person-work"] },
           { id: "b", logins: [] },
@@ -136,8 +144,8 @@ describe("multi-account people", () => {
     } finally {
       reads.mockRestore();
     }
-    expect(directory(0)).toEqual({ profiles: [], truncated: true });
-    expect(directory(4)).toEqual({
+    expect(await directory(0)).toEqual({ profiles: [], truncated: true });
+    expect(await directory(4)).toEqual({
       profiles: [
         { id: "a", logins: ["person", "person-work"] },
         { id: "b", logins: [] },
@@ -165,7 +173,7 @@ describe("multi-account people", () => {
 
   it("adds the nullable primary column to existing profiles without advancing the schema", async () => {
     const options = stateOptions();
-    const db = openOpenClawStateDatabase(options).db;
+    let db = openOpenClawStateDatabase(options).db;
     db.exec(
       "CREATE TABLE user_profiles (id TEXT NOT NULL PRIMARY KEY, display_name TEXT, avatar BLOB, avatar_mime TEXT, avatar_sha256 TEXT, merged_into TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL) STRICT",
     );
@@ -179,16 +187,25 @@ describe("multi-account people", () => {
       "INSERT INTO user_profile_identities (provider, subject, profile_id, created_at) VALUES ('github', '70', ?, 1)",
     ).run("legacy-person");
     const version = db.prepare("PRAGMA user_version").get()?.user_version;
+    // Decode the legacy shape before the schema owner makes it admissible for reopen.
     expect(
-      (await resolveUserProfileGitHubAttribution(["legacy-person"], options)).get("legacy-person"),
-    ).toBeNull();
+      readUserProfileGitHubCommand(db, {
+        type: "userProfiles.githubAttribution.resolve",
+        profileIds: ["legacy-person"],
+      }),
+    ).toMatchObject({ identities: new Map([["legacy-person", null]]) });
     db.exec("ALTER TABLE user_profile_identities ADD COLUMN canonical_login TEXT");
     db.prepare(
       "UPDATE user_profile_identities SET canonical_login = 'legacy' WHERE subject = '70'",
     ).run();
     expect(
-      (await resolveUserProfileGitHubAttribution(["legacy-person"], options)).get("legacy-person"),
-    ).toEqual({ accountId: 70, login: "legacy" });
+      readUserProfileGitHubCommand(db, {
+        type: "userProfiles.githubAttribution.resolve",
+        profileIds: ["legacy-person"],
+      }),
+    ).toMatchObject({
+      identities: new Map([["legacy-person", { accountId: 70, login: "legacy" }]]),
+    });
     expect(db.prepare("PRAGMA table_info(user_profiles)").all()).not.toContainEqual(
       expect.objectContaining({ name: "primary_github_account_id" }),
     );
@@ -216,6 +233,8 @@ describe("multi-account people", () => {
       }),
     );
     expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(version);
+    await closeOpenClawStateDatabaseAsync();
+    db = openOpenClawStateDatabase(options).db;
     db.prepare("UPDATE user_profiles SET primary_github_account_id = 999 WHERE id = ?").run(
       profile.id,
     );
@@ -282,11 +301,11 @@ describe("multi-account people", () => {
       });
     }
     expect(
-      listUserProfilesSync(options).filter((profile) => profile.mergedInto === null),
+      readUserProfileSnapshotSync(options).profiles.filter(
+        (profile) => profile.mergedInto === null,
+      ),
     ).toHaveLength(1);
-    expect(
-      executeUserProfileCommand({ type: "userProfiles.directory", input: { limit: 10 } }, options),
-    ).toEqual({
+    expect(await readUserProfileDirectory(10, options)).toEqual({
       profiles: [{ id: person.id, logins: ["person", "person-work"] }],
       truncated: false,
     });
@@ -324,6 +343,22 @@ describe("multi-account people", () => {
     }, options);
     setUserPreferences(person.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: true }, options);
     const preparedCredit = await prepareUserProfileGitHubAttribution([work.id], options);
+    const attributionRead = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    try {
+      const credit = await resolveUserProfileGitHubAttribution([work.id], options);
+      const identity = credit.get(work.id);
+      expect(identity?.accountId).toBe(primary.accountId);
+      if (identity) {
+        identity.login = "caller-edit";
+      }
+      expect((await resolveUserProfileGitHubAttribution([work.id], options)).get(work.id)).toEqual({
+        accountId: primary.accountId,
+        login: primary.canonicalLogin,
+      });
+      expect(attributionRead).not.toHaveBeenCalled();
+    } finally {
+      attributionRead.mockRestore();
+    }
     expect(await setCanonicalUserPreferences(work.id, { theme: "dark" }, options)).toMatchObject({
       ok: true,
     });
@@ -346,7 +381,7 @@ describe("multi-account people", () => {
     ).toBe(version);
   });
 
-  it("keeps an inherited primary through repeated merges regardless of account age", () => {
+  it("keeps an inherited primary through repeated merges regardless of account age", async () => {
     const options = stateOptions();
     const older = syncEmailGitHubProfile(
       { accountId: 80, canonicalLogin: "older-work", email: "older@example.test" },
@@ -366,10 +401,13 @@ describe("multi-account people", () => {
       id: target.id,
       githubIdentity: { login: "primary-person" },
     });
+    expect(await prepareUserProfileRolePolicyAuthority(older.id, options)).toMatchObject({
+      profileId: target.id,
+      role: null,
+      githubLogin: "primary-person",
+    });
     expect(getProfileAvatar(older.id, options)?.bytes).toEqual(new Uint8Array([4, 5]));
-    expect(
-      executeUserProfileCommand({ type: "userProfiles.directory", input: { limit: 10 } }, options),
-    ).toEqual({
+    expect(await readUserProfileDirectory(10, options)).toEqual({
       profiles: [{ id: target.id, logins: ["older-work", "primary-person"] }],
       truncated: false,
     });
@@ -402,6 +440,10 @@ describe("multi-account people", () => {
       expect(
         (await resolveUserProfileGitHubAttribution([person.id], options)).get(person.id),
       ).toBeNull();
+      expect(await prepareUserProfileRolePolicyAuthority(person.id, options)).toMatchObject({
+        profileId: person.id,
+        githubLogin: null,
+      });
     }
   });
 });

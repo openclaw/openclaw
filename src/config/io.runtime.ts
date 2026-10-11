@@ -258,10 +258,19 @@ export function readCurrentConfigForPolicyCheck(params: {
   configPath: string;
   env: NodeJS.ProcessEnv;
 }): OpenClawConfig {
-  return createCurrentConfigReader({
+  return readCurrentConfigForPolicyCheckWithMigrations({
     ...params,
     deferredPluginMigrations: readDeferredPluginMigrations({ env: params.env }),
-  }).loadConfig({ skipSuspiciousRecovery: true });
+  });
+}
+
+/** Reread current disk policy without querying migration state; the caller owns row freshness. */
+export function readCurrentConfigForPolicyCheckWithMigrations(params: {
+  configPath: string;
+  env: NodeJS.ProcessEnv;
+  deferredPluginMigrations: readonly DeferredPluginMigration[];
+}): OpenClawConfig {
+  return createCurrentConfigReader(params).loadConfig({ skipSuspiciousRecovery: true });
 }
 
 /** Await fresh migration facts for this read; retained synchronous guards use their own boundary. */
@@ -371,8 +380,9 @@ export async function recoverConfigFromLastKnownGood(params: {
 
 export async function recoverConfigFromJsonRootSuffix(
   snapshot: ConfigFileSnapshot,
+  assertRecoveryCandidate?: (config: unknown) => void,
 ): Promise<boolean> {
-  return await createConfigIO().recoverConfigFromJsonRootSuffix(snapshot);
+  return await createConfigIO().recoverConfigFromJsonRootSuffix(snapshot, assertRecoveryCandidate);
 }
 
 export async function readSourceConfigSnapshot(): Promise<ConfigFileSnapshot> {

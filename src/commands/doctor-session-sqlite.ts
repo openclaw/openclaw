@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { listAgentIds } from "../agents/agent-roster.js";
 import {
   resolveTrajectoryPath,
   resolveTrajectoryPointerPath,
@@ -21,13 +22,13 @@ import {
   captureDeferredPluginSessionSources,
   deferredPluginSessionStoreIds,
   readDeferredPluginSessionImport,
+  readStaleDeferredPluginSessionImport,
   recordDeferredPluginSessionImport,
   type DeferredPluginSessionImport,
 } from "../infra/deferred-plugin-session-sources.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   readMigrationArtifactIdentity,
-  sameMigrationArtifact,
   moveMigrationArtifact,
   type MigrationArtifactIdentity,
 } from "../infra/session-sqlite-migration-artifact.js";
@@ -42,8 +43,8 @@ import {
   updateMigrationManifestTarget,
   writeSessionSqliteMigrationManifest,
   type ActiveSessionSqliteMigrationRun,
-  type SessionSqliteMigrationTargetInput,
   type SessionSqliteMigrationMove,
+  type SessionSqliteMigrationMoveKind,
 } from "../infra/session-sqlite-migration-manifest.js";
 import {
   readOnlySqliteValidationSnapshot,
@@ -52,6 +53,7 @@ import {
 } from "../infra/session-sqlite-migration-readers.js";
 import { prepareActiveSqliteTranscriptSettlement } from "./doctor-session-sqlite-active.js";
 import {
+  archiveImportedLegacySessionStores,
   planImportedTranscriptArtifactsToArchive,
   planSessionJsonlArchiveMove,
 } from "./doctor-session-sqlite-archive.js";
@@ -65,11 +67,10 @@ import {
 } from "./doctor-session-sqlite-diagnostics.js";
 import {
   collectHistoricalArchiveSources,
-  discoverLegacyHistoricalTranscripts,
+  appendLegacyHistoricalTranscripts,
   gatherLegacyArchiveCoverage,
   listUnreferencedJsonlFiles,
   readLegacySessionRecords,
-  readArchivedSessionOwnership,
   type HistoricalArchiveSources,
 } from "./doctor-session-sqlite-discovery.js";
 import { writeSessionSqliteMigrationFailureReports } from "./doctor-session-sqlite-failure.js";
@@ -83,10 +84,13 @@ import {
   archiveConflictingRetainedSessionSources,
   countRetainedSessionSources,
   prepareRetainedSessionImport,
+  retireDeferredPluginSessionImport,
 } from "./doctor-session-sqlite-retained.js";
 import { settleDuplicateSessionSqliteArchives } from "./doctor-session-sqlite-retirement.js";
 import {
+  createMigrationTargetInput,
   filterLegacySessionStoreTargets,
+  prepareDoctorSessionSqliteTargets,
   resolveDoctorSessionSqliteConfig,
   resolveDoctorSessionSqliteMaintenancePaths,
   resolveDoctorSessionSqliteMaintenanceRoots,
@@ -106,7 +110,6 @@ import {
 import { validateLegacySessionRecords } from "./doctor-session-sqlite-verification.js";
 import {
   assertDoctorSqliteMaintenancePathsNotAliased,
-  isDestructiveDoctorSessionSqliteMode,
   type DoctorSqliteMaintenanceAuthority,
 } from "./doctor-sqlite-maintenance-lock.js";
 export type {
@@ -125,29 +128,21 @@ const retainedArchivePlans = new WeakMap<
   }
 >();
 
-/**
- * Runs the targeted doctor SQLite session migration/inspection submode.
- * Destructive production callers hold the Gateway/SQLite-maintenance state lock for the full call.
- */
+/** Destructive production callers hold the Gateway/SQLite-maintenance state lock for the full call. */
 export async function runDoctorSessionSqlite(
   options: DoctorSessionSqliteOptions,
+  authority?: DoctorSqliteMaintenanceAuthority,
 ): Promise<DoctorSessionSqliteReport> {
   const env = options.env ?? process.env;
   const cfg = resolveDoctorSessionSqliteConfig(options);
+  const configuredAgentIds = new Set(listAgentIds(cfg));
   const pendingPlugins = readDeferredPluginMigrations({ env });
   const verifyMissingIndex = createMissingSessionIndexVerifier({ cfg, env });
-  const { targets: candidates, knownTargets } = resolveDoctorSessionSqliteTargets({
-    ...options,
-    cfg,
-    env,
-  });
-  if (isDestructiveDoctorSessionSqliteMode(options.mode)) {
-    assertDoctorSqliteMaintenancePathsNotAliased(
-      `session SQLite ${options.mode}`,
-      resolveDoctorSessionSqliteMaintenancePaths(candidates),
-      resolveDoctorSessionSqliteMaintenanceRoots(candidates, env),
-    );
-  }
+  const {
+    targets: candidates,
+    knownTargets,
+    repairEntryStates,
+  } = await prepareDoctorSessionSqliteTargets({ ...options, cfg, env, authority });
   const settlements =
     options.mode === "import" || options.mode === "recover"
       ? await settleDuplicateSessionSqliteArchives({
@@ -156,6 +151,10 @@ export async function runDoctorSessionSqlite(
           targets: candidates.map(createMigrationTargetInput),
         })
       : [];
+  const settlementIssuesForStore = (storePath: string) =>
+    settlements
+      .filter((item) => item.target.storePath === storePath)
+      .flatMap((item) => item.issues);
   let historicalSources = ["import", "dry-run", "validate", "recover"].includes(options.mode)
     ? collectHistoricalArchiveSources({ cfg, env })
     : undefined;
@@ -175,38 +174,44 @@ export async function runDoctorSessionSqlite(
   if (options.mode === "recover") {
     return recoverDoctorSessionSqliteTargets({
       env,
-      options,
       targets,
+      prepareTarget: (target) => repairEntryStates([target]),
       recoveryInventory: historicalSources?.inventory,
       historicalArchiveStores: new Set([
         ...historicalArchives.keys(),
         ...settlements.map(({ target }) => target.storePath),
       ]),
       validateTarget: async (target) => {
-        const report = collectHistoricalArchiveSources({ cfg, env }).sources.get(target.storePath)
-          ?.transcripts.length
-          ? (
-              await runDoctorSessionSqlite({
+        authority?.assertCurrent();
+        const report =
+          collectHistoricalArchiveSources({ cfg, env }).sources.get(target.storePath)?.transcripts
+            .length ||
+          readStaleDeferredPluginSessionImport({ target, sqlitePath: target.sqlitePath, env })
+            ? (
+                await runDoctorSessionSqlite(
+                  {
+                    cfg,
+                    env,
+                    mode: "import",
+                    store: target.storePath,
+                    agent: target.agentId,
+                  },
+                  authority,
+                )
+              ).targets[0]!
+            : await inspectOrMigrateTarget({
+                configuredAgentIds,
                 cfg,
                 env,
-                mode: "import",
-                store: target.storePath,
-                agent: target.agentId,
-              })
-            ).targets[0]!
-          : await inspectOrMigrateTarget({
-              cfg,
-              env,
-              mode: "recover",
-              target,
-              verifyMissingIndex,
-              deferredPluginIds: deferredPluginSessionStoreIds({ target, pending: pendingPlugins }),
-            });
-        report.issues.push(
-          ...settlements
-            .filter((item) => item.target.storePath === target.storePath)
-            .flatMap((item) => item.issues),
-        );
+                mode: "recover",
+                target,
+                verifyMissingIndex,
+                deferredPluginIds: deferredPluginSessionStoreIds({
+                  target,
+                  pending: pendingPlugins,
+                }),
+              });
+        report.issues.push(...settlementIssuesForStore(target.storePath));
         return report;
       },
     });
@@ -233,6 +238,7 @@ export async function runDoctorSessionSqlite(
   for (const target of targets) {
     reports.push(
       await inspectOrMigrateTarget({
+        configuredAgentIds,
         activeRun,
         archiveTargets,
         verifyMissingIndex,
@@ -254,11 +260,7 @@ export async function runDoctorSessionSqlite(
     );
   }
   for (const report of reports) {
-    report.issues.push(
-      ...settlements
-        .filter((item) => item.target.storePath === report.storePath)
-        .flatMap((item) => item.issues),
-    );
+    report.issues.push(...settlementIssuesForStore(report.storePath));
   }
   if (activeRun && coverage) {
     for (const owner of archiveTargets) {
@@ -409,6 +411,24 @@ export async function runDoctorSessionSqlite(
       undefined,
       publishArchive,
     );
+    for (const owner of archiveTargets) {
+      if (owner.retainedImportVerified && owner.deferredPluginIds.length === 0) {
+        try {
+          retireDeferredPluginSessionImport({
+            cfg,
+            env,
+            target: owner.sourceTarget,
+            sqlitePath: owner.target.sqlitePath,
+          });
+        } catch (error) {
+          owner.report.issues.push({
+            code: "retained_plugin_source_conflict",
+            message: `Deferred import receipt awaits retirement: ${formatErrorMessage(error)}. Run openclaw doctor --fix to retry.`,
+          });
+          updateMigrationManifestTarget(activeRun, owner.target, owner.report.issues);
+        }
+      }
+    }
     const hasBlockingIssues = reports.some(
       (report) => countBlockingSessionSqliteIssues(report) > 0,
     );
@@ -451,6 +471,11 @@ export async function runDoctorSessionSqlite(
   return report;
 }
 
+/** Verified originals retained for unavailable plugins still await settlement. */
+export function hasRetainedDoctorSessionSources(report: DoctorSessionSqliteReport): boolean {
+  return retainedArchivePlans.has(report);
+}
+
 /** Retire only this import's verified originals before the last plugin obligation clears. */
 export async function settleRetainedDoctorSessionSources(
   report: DoctorSessionSqliteReport,
@@ -462,7 +487,7 @@ export async function settleRetainedDoctorSessionSources(
   if (!plan) {
     return;
   }
-  const assertCurrent = () => {
+  const assertCurrent = (): undefined => {
     authority.assertCurrent();
     assertCompletionCurrent();
   };
@@ -572,6 +597,16 @@ export async function settleRetainedDoctorSessionSources(
     if (issue || owners.some((owner) => fs.existsSync(owner.target.storePath))) {
       throw new Error(issue?.message ?? "Retained session sources could not be archived.");
     }
+    for (const { owner } of plan.owners) {
+      retireDeferredPluginSessionImport({
+        cfg: plan.cfg,
+        env: plan.env,
+        target: owner.sourceTarget,
+        sqlitePath: owner.target.sqlitePath,
+        completedPluginIds,
+        assertCurrent,
+      });
+    }
   } catch (error) {
     failure = error instanceof Error ? error : new Error(formatErrorMessage(error));
     const failedOwners = owners.filter((owner) =>
@@ -636,6 +671,7 @@ export async function reconcileDoctorSessionSqlitePublication(
 }
 
 async function inspectOrMigrateTarget(params: {
+  configuredAgentIds: ReadonlySet<string>;
   verifyMissingIndex: ReturnType<typeof createMissingSessionIndexVerifier>;
   historicalArchives?: HistoricalArchiveSources;
   recoveryInventory?: ReturnType<typeof collectRecoveryInventory>;
@@ -660,11 +696,18 @@ async function inspectOrMigrateTarget(params: {
     archivedLegacyStoreFiles: [],
     issues,
   });
-  const retained = prepareRetainedSessionImport(params, issues);
+  const updateManifest = (validationBeforeArchive?: "passed" | "failed") =>
+    updateMigrationManifestTarget(
+      params.activeRun,
+      createMigrationTargetInput(params.target),
+      report.issues,
+      { validationBeforeArchive },
+    );
+  const retained = await prepareRetainedSessionImport(params, report);
   if (!retained) {
     return report;
   }
-  const { retainedImport, sourceConflicts, retainedIndexPath } = retained;
+  const { retainedImport, staleImport, sourceConflicts, retainedIndexPath } = retained;
   if (params.mode === "recover" && !shouldFilterLegacySessionRecordsByTarget(params.target)) {
     await archiveConflictingRetainedSessionSources(params, sourceConflicts, report);
   }
@@ -683,59 +726,42 @@ async function inspectOrMigrateTarget(params: {
     (!retainedImport || !retainedIndexPath) &&
     params.mode !== "inspect" &&
     params.mode !== "compact" &&
-    (issues.length === 0 || retainedImport)
+    (issues.every(({ code }) => code === "retained_plugin_source_index_rebuilt") ||
+      retainedImport ||
+      staleImport)
   ) {
-    const archiveSources = params.historicalArchives?.get(
-      canonicalMigrationFilePath(params.target.storePath),
-    );
-    const ownershipRecords = readArchivedSessionOwnership(
-      params.target,
-      retainedImport ? [] : (archiveSources?.stores ?? []),
+    await appendLegacyHistoricalTranscripts({
+      ...params,
+      allRecords,
+      retainedImport,
+      sourceConflicts,
       issues,
-    );
-    const snapshot = readOnlySqliteValidationSnapshot(params.target);
-    if (snapshot.ok && ownershipRecords) {
-      const discovered = await discoverLegacyHistoricalTranscripts({
-        target: params.target,
-        records: allRecords,
-        ownershipRecords,
-        referencedPaths: params.referencedPaths,
-        archiveSources: !retainedImport ? archiveSources?.transcripts : [],
-        verifiedSourcePaths: retainedImport
-          ? new Set(
-              retainedImport.sources
-                .filter((source) => !sourceConflicts.has(source.path))
-                .map((source) => source.path),
-            )
-          : undefined,
-        snapshot: snapshot.snapshot,
-        issues,
-      });
-      for (const historical of discovered) {
-        const registered = allRecords.find(
-          (record) =>
-            record.sessionKey === historical.sessionKey &&
-            record.entry.sessionId === historical.entry.sessionId &&
-            (!record.transcriptPath || !fs.existsSync(record.transcriptPath)),
-        );
-        if (registered) {
-          // Resolve a missing legacy filename here, never in runtime session path resolution.
-          registered.transcriptPath = historical.transcriptPath;
-          registered.transcriptDependencies.push(...historical.transcriptDependencies);
-          registered.historical = historical.historical;
-        } else {
-          allRecords.push(historical);
-        }
-      }
-    } else if (!snapshot.ok) {
-      issues.push({ code: "sqlite_read_failed", message: String(snapshot.error) });
-    }
+    });
   }
-  const records = shouldFilterLegacySessionRecordsByTarget(params.target)
+  let records = shouldFilterLegacySessionRecordsByTarget(params.target)
     ? allRecords.filter((record) =>
         isLegacySessionRecordOwnedByTarget(params.cfg, params.target, record.sessionKey),
       )
     : allRecords;
+  if (staleImport) {
+    const snapshot = readOnlySqliteValidationSnapshot(params.target);
+    if (!snapshot.ok) {
+      issues.push({ code: "sqlite_read_failed", message: String(snapshot.error) });
+      return report;
+    }
+    records = records.filter((record) => {
+      if (!snapshot.snapshot.archivedSessionIds.has(record.entry.sessionId)) {
+        record.preserveCurrentSession = true;
+        return true;
+      }
+      issues.push({
+        code: "historical_transcript_deferred",
+        sessionKey: record.sessionKey,
+        message: `${record.transcriptPath}: live SQLite already archives this history. Retained source was not replayed; existing deletion and archive state remain authoritative.`,
+      });
+      return false;
+    });
+  }
   const referencedTranscriptFiles = new Set(
     allRecords.flatMap((record) => (record.transcriptPath ? [record.transcriptPath] : [])),
   );
@@ -793,6 +819,16 @@ async function inspectOrMigrateTarget(params: {
       }
     }
   }
+  if (params.mode === "import" && retainedImport) {
+    for (const source of report.unreferencedJsonlFiles) {
+      if (!retainedSourcePaths?.has(canonicalMigrationFilePath(source)) && fs.existsSync(source)) {
+        report.issues.push({
+          code: "plugin_migration_source_retained",
+          message: `${source}: skipped because the deferred-plugin-session-import receipt for ${params.target.storePath} still retains inputs for plugin(s): ${retainedImport.pluginIds.join(", ")}. Run openclaw doctor --fix to finish or retire the plugin migration, then rerun openclaw doctor --session-sqlite import. The new transcript remains in place.`,
+        });
+      }
+    }
+  }
   if (
     retainedImport &&
     params.mode !== "import" &&
@@ -812,24 +848,20 @@ async function inspectOrMigrateTarget(params: {
     return report;
   }
   // A retained but ineligible support artifact does not make an already migrated store work.
-  if (records.length === 0 && !fs.existsSync(params.target.storePath) && !retainedImport) {
+  if (
+    records.length === 0 &&
+    report.unreferencedJsonlFiles.length === 0 &&
+    !fs.existsSync(params.target.storePath) &&
+    !retainedImport
+  ) {
     if (issues.length === 0) {
       report.sqliteEntries = 0;
     }
-    updateMigrationManifestTarget(
-      params.activeRun,
-      createMigrationTargetInput(params.target),
-      issues,
-    );
+    updateManifest();
     return report;
   }
   if (!retainedImport && params.verifyMissingIndex(report)) {
-    updateMigrationManifestTarget(
-      params.activeRun,
-      createMigrationTargetInput(params.target),
-      report.issues,
-      { validationBeforeArchive: "passed" },
-    );
+    updateManifest("passed");
     return report;
   }
   if (retainedImport) {
@@ -846,14 +878,7 @@ async function inspectOrMigrateTarget(params: {
   let validationPassed = retainedImport !== undefined;
   if (params.mode === "import" && retainedImport) {
     // Exact source and database identities carry the earlier verified import into archival.
-    updateMigrationManifestTarget(
-      params.activeRun,
-      createMigrationTargetInput(params.target),
-      report.issues,
-      {
-        validationBeforeArchive: "passed",
-      },
-    );
+    updateManifest("passed");
   }
   if (
     params.mode === "import" &&
@@ -867,14 +892,7 @@ async function inspectOrMigrateTarget(params: {
       "before-archive",
       params.env,
     );
-    updateMigrationManifestTarget(
-      params.activeRun,
-      createMigrationTargetInput(params.target),
-      report.issues,
-      {
-        validationBeforeArchive: validationPassed ? "passed" : "failed",
-      },
-    );
+    updateManifest(validationPassed ? "passed" : "failed");
     if (validationPassed && params.activeRun) {
       const recoveredMoves = records.flatMap((record) =>
         record.historical?.archiveMove && record.recovery?.complete
@@ -914,7 +932,12 @@ async function inspectOrMigrateTarget(params: {
     }
   }
   if (params.mode === "import") {
-    const deferredPluginIds = params.deferredPluginIds ?? [];
+    const indexIdentity = params.expectedIndexIdentity;
+    const indexless = !indexIdentity && !fs.existsSync(params.target.storePath);
+    const deferredPluginIds =
+      indexless && (!params.configuredAgentIds.has(params.target.agentId) || records.length === 0)
+        ? []
+        : (params.deferredPluginIds ?? []);
     // Zero-row validation may certify an existing canonical store, but must never
     // create a database solely for an unused shared-index owner.
     const verifiedImport =
@@ -924,11 +947,12 @@ async function inspectOrMigrateTarget(params: {
         fs.existsSync(resolveTargetSqlitePath(params.target, params.env)));
     let retainedImportVerified = retainedImport !== undefined;
     let verifiedSources = retainedImport?.sources;
-    const indexIdentity = params.expectedIndexIdentity;
     if (
       !retainedImport &&
-      indexIdentity &&
       verifiedImport &&
+      (indexIdentity ||
+        records.some((record) => !record.historical?.archiveMove) ||
+        report.unreferencedJsonlFiles.length > 0) &&
       report.issues.every(isRetainedSourceIssue)
     ) {
       try {
@@ -953,19 +977,6 @@ async function inspectOrMigrateTarget(params: {
     ) {
       if (!retainedImport) {
         if (!verifiedSources) {
-          if (
-            !fs.existsSync(params.target.storePath) &&
-            records.every((record) => record.historical?.archiveMove) &&
-            listUnreferencedJsonlFiles(params.target.storePath, []).length === 0
-          ) {
-            // Historical archives already have verified move receipts; no live inputs need deferral.
-            report.sqliteEntries = readSqliteEntryCount(params.target);
-            return report;
-          }
-          report.issues.push({
-            code: "plugin_migration_source_retained",
-            message: `Deferred plugin session inputs have no verified source index: ${params.target.storePath}. Core sessions were imported; originals remain protected for plugin(s): ${deferredPluginIds.join(", ")}.`,
-          });
           report.sqliteEntries = readSqliteEntryCount(params.target);
           return report;
         }
@@ -979,6 +990,12 @@ async function inspectOrMigrateTarget(params: {
           recordCount: records.length,
         });
         retainedImportVerified = true;
+        if (indexless) {
+          report.issues.push({
+            code: "retained_plugin_source_index_rebuilt",
+            message: `Derived the retained source index from verified transcripts for ${path.dirname(params.target.storePath)}. Recorded their identities in the completed import receipt without creating sessions.json or replaying existing metadata.`,
+          });
+        }
       }
       appendRetainedPluginSessionSourceIssue(report, deferredPluginIds);
     }
@@ -1004,11 +1021,7 @@ async function inspectOrMigrateTarget(params: {
   if (params.mode !== "import") {
     appendActiveSqliteTranscriptFileIssues(params.target, report, retainedSourcePaths);
   }
-  updateMigrationManifestTarget(
-    params.activeRun,
-    createMigrationTargetInput(params.target),
-    report.issues,
-  );
+  updateManifest();
   return report;
 }
 
@@ -1016,7 +1029,7 @@ async function archiveLegacyArtifacts(
   owners: readonly LegacyArchiveTarget[],
   coverage: ReturnType<typeof gatherLegacyArchiveCoverage>,
   activeRun: ActiveSessionSqliteMigrationRun,
-  assertCurrent?: () => void,
+  assertCurrent?: () => undefined,
   capturedSources?: ReadonlySet<string>,
   publishSourceRemoval?: (remove: () => void, retainSource: () => void) => void,
 ): Promise<void> {
@@ -1163,7 +1176,10 @@ async function archiveLegacyArtifacts(
         imports.every((record) => record?.sourceFingerprint && record.recovery?.complete) &&
         refs.every(
           ({ owner, record }) =>
-            !hasSessionIssue(owner.report, "transcript_malformed", record.sessionKey),
+            !owner.report.issues.some(
+              (issue) =>
+                issue.code === "transcript_malformed" && issue.sessionKey === record.sessionKey,
+            ),
         );
       for (const move of moves) {
         if (retainedPaths.has(move.sourcePath)) {
@@ -1229,21 +1245,11 @@ async function archiveLegacyArtifacts(
     ) {
       continue;
     }
-    for (const source of listUnreferencedJsonlFiles(storePath, [
-      ...referencedPaths,
-      ...planned.keys(),
-    ])) {
-      if (retainedPaths.has(source)) {
-        continue;
-      }
-      if (capturedSources && !capturedSources.has(source)) {
-        continue;
-      }
+    const planUnreferencedMove = (source: string, kind: SessionSqliteMigrationMoveKind) => {
       try {
         const move = planSessionJsonlArchiveMove({
           archiveKey: "archive-tier",
-          baseNameRaw: path.basename(source),
-          kind: "unreferenced-jsonl",
+          kind,
           reservedArchivePaths,
           sourcePathRaw: source,
           target: owner.target,
@@ -1257,8 +1263,60 @@ async function archiveLegacyArtifacts(
         };
         reservedArchivePaths.add(move.archivePath);
         planned.set(source, { move, owners: new Map([[owner, undefined]]) });
+        return true;
       } catch (error) {
         recordFailure(owner, source, error, true);
+        return false;
+      }
+    };
+    const pointers = new Set<string>();
+    const receiptSources = new Set(
+      owner.retainedImportVerified
+        ? (owner.verifiedSources ?? []).map((source) => source.path)
+        : [],
+    );
+    for (const source of listUnreferencedJsonlFiles(storePath, [
+      ...referencedPaths,
+      ...planned.keys(),
+    ])) {
+      if (retainedPaths.has(source)) {
+        continue;
+      }
+      if (
+        (capturedSources && !capturedSources.has(source)) ||
+        (owner.retainedImportVerified && !receiptSources.has(source))
+      ) {
+        continue;
+      }
+      const pointer = resolveTrajectoryPointerPath(source);
+      if (planUnreferencedMove(source, "unreferenced-jsonl") && pointer) {
+        pointers.add(pointer);
+      }
+    }
+    // A pointer sidecar only locates its transcript's trajectory, so it settles with that
+    // transcript, including a receipt-verified one an earlier run archived without it.
+    for (const transcript of receiptSources) {
+      const pointer = resolveTrajectoryPointerPath(transcript);
+      if (
+        pointer &&
+        receiptSources.has(pointer) &&
+        !owner.sourceConflicts?.has(transcript) &&
+        !fs.existsSync(transcript)
+      ) {
+        pointers.add(pointer);
+      }
+    }
+    for (const pointer of pointers) {
+      const source = canonicalMigrationFilePath(pointer);
+      if (
+        fs.existsSync(source) &&
+        !planned.has(source) &&
+        !referencedPaths.has(source) &&
+        !retainedPaths.has(source) &&
+        !owner.sourceConflicts?.has(pointer) &&
+        (!capturedSources || capturedSources.has(source))
+      ) {
+        planUnreferencedMove(source, "trajectory");
       }
     }
   }
@@ -1291,11 +1349,7 @@ async function archiveLegacyArtifacts(
         move.sourcePath,
         move.archivePath,
         move.artifact!.identity,
-        assertCurrent
-          ? () => {
-              assertCurrent();
-            }
-          : undefined,
+        assertCurrent,
         publishSourceRemoval,
       );
       assertCurrent?.();
@@ -1326,129 +1380,6 @@ async function archiveLegacyArtifacts(
       ...referencedPaths,
     ]);
   }
-}
-
-async function archiveImportedLegacySessionStores(
-  owners: readonly LegacyArchiveTarget[],
-  activeRun: ActiveSessionSqliteMigrationRun,
-  coverage: ReturnType<typeof gatherLegacyArchiveCoverage>,
-  assertCurrent?: () => void,
-  publishSourceRemoval?: (remove: () => void, retainSource: () => void) => void,
-): Promise<void> {
-  const byStore = new Map<string, LegacyArchiveTarget[]>();
-  for (const owner of owners) {
-    const storePath = owner.target.storePath;
-    byStore.set(storePath, [...(byStore.get(storePath) ?? []), owner]);
-  }
-  for (const [storePath, entries] of byStore) {
-    assertCurrent?.();
-    // A historical-only target may never have had an index; losing an admitted index is a failure.
-    if (!coverage.indexIdentities.has(storePath) && !fs.existsSync(storePath)) {
-      continue;
-    }
-    if (
-      !coverage.selectedStorePaths.has(storePath) ||
-      entries.some(
-        ({ report }) =>
-          countBlockingSessionSqliteIssues(report) > 0 ||
-          report.issues.some((issue) => issue.code === "active_sqlite_transcript_jsonl"),
-      )
-    ) {
-      continue;
-    }
-    const first = entries[0]!;
-    let publicationPlanned = false;
-    try {
-      const expected = coverage.indexIdentities.get(storePath);
-      if (!expected || !sameMigrationArtifact(readMigrationArtifactIdentity(storePath), expected)) {
-        throw new Error("Session index changed after import; retaining the unverified original");
-      }
-      const move = planSessionJsonlArchiveMove({
-        archiveKey: "legacy-store",
-        baseNameRaw: path.basename(storePath),
-        kind: "legacy-store",
-        sourcePathRaw: storePath,
-        target: first.target,
-      });
-      const manifestTargets = activeRun.manifest.targets.filter(
-        (target) => target.storePath === storePath,
-      );
-      const transcripts = manifestTargets.flatMap((target) =>
-        target.plannedMoves.filter((item) => item.kind === "transcript"),
-      );
-      const complete =
-        entries.every(
-          ({ validated, report }) =>
-            validated &&
-            report.issues.every((issue) => issue.code === "historical_duplicate_settled"),
-        ) && transcripts.every((item) => item.artifact?.classification !== "protected");
-      const dependencies = entries
-        .flatMap(({ records }) => records.flatMap((record) => record.transcriptDependencies))
-        .map(canonicalMigrationFilePath);
-      move.artifact = {
-        identity: expected,
-        classification: complete ? "imported" : "protected",
-        reason: complete ? "verified-index-import" : "incomplete-index-import",
-        dependencies: [...new Set(dependencies)],
-        disposal: { state: "retained" },
-      };
-      for (const { target } of entries) {
-        assertCurrent?.();
-        recordPlannedMigrationMoves(activeRun, target, [move]);
-        assertSafeSessionSqliteMigrationMove(move, target);
-      }
-      publicationPlanned = true;
-      assertCurrent?.();
-      await moveMigrationArtifact(
-        move.sourcePath,
-        move.archivePath,
-        expected,
-        assertCurrent
-          ? () => {
-              assertCurrent();
-            }
-          : undefined,
-        publishSourceRemoval,
-      );
-      assertCurrent?.();
-      for (const { target, report } of entries) {
-        recordCompletedMigrationMoves(activeRun, target, [move]);
-        report.archivedLegacyStoreFiles!.push(move.archivePath);
-      }
-    } catch (error) {
-      if (error instanceof DeferredPluginMigrationConflictError && error.pending.length > 0) {
-        break;
-      }
-      for (const { report, target } of entries) {
-        report.issues.push({
-          code: "legacy_store_archive_failed",
-          message: `${storePath}: ${formatErrorMessage(error)}`,
-        });
-        // A recorded index plan already protects its dependencies and can reconcile on retry.
-        // Earlier failures have no artifact record, so retain that failure on the owner instead.
-        if (!publicationPlanned) {
-          assertCurrent?.();
-          updateMigrationManifestTarget(activeRun, target, report.issues);
-        }
-      }
-    }
-  }
-}
-
-function hasSessionIssue(
-  report: DoctorSessionSqliteTargetReport,
-  code: string,
-  sessionKey: string,
-): boolean {
-  return report.issues.some((issue) => issue.code === code && issue.sessionKey === sessionKey);
-}
-
-function createMigrationTargetInput(target: SessionStoreTarget): SessionSqliteMigrationTargetInput {
-  return {
-    agentId: target.agentId,
-    sqlitePath: canonicalMigrationFilePath(resolveTargetSqlitePath(target)),
-    storePath: canonicalMigrationFilePath(target.storePath),
-  };
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

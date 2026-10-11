@@ -4,6 +4,7 @@ import {
   type StructuralStyle,
   type TextEdit,
 } from "./text-styles-shared.js";
+import type { MarkdownSource } from "./text-styles-source-spans.js";
 import { TextStyle, type Style } from "./zca-constants.js";
 
 export function collectStructuralStyles(
@@ -189,17 +190,9 @@ function splitLines(
   range: { start: number; end: number },
   text: string,
 ): Array<{ start: number; end: number }> {
-  const lines: Array<{ start: number; end: number }> = [];
-  let start = range.start;
-  while (start < range.end) {
-    const newline = text.indexOf("\n", start);
-    const end = newline === -1 ? range.end : Math.min(newline, range.end);
-    if (end > start && text.slice(start, end).replace(/[ \t\r\n]/gu, "")) {
-      lines.push({ start, end });
-    }
-    start = end + 1;
-  }
-  return lines;
+  return splitStyledLines(range, text).filter(({ start, end }) =>
+    text.slice(start, end).replace(/[ \t\r\n]/gu, ""),
+  );
 }
 
 export function applyTextEdits(
@@ -236,42 +229,23 @@ export function applyTextEdits(
     .flatMap((style) =>
       style.style === TextStyle.Indent ? splitStyledLines(style, output) : [style],
     )
-    .filter((style) => style.end > style.start)
-    .toSorted(
-      (left, right) =>
-        left.start - right.start ||
-        left.priority - right.priority ||
-        left.sequence - right.sequence,
-    );
+    .filter((style) => style.end > style.start);
   for (const [editIndex, edit] of edits.entries()) {
     if ((!edit.indentSize && !edit.listStyle) || !edit.text) {
       continue;
     }
     const start = editedInsertionStart(edits, editIndex);
     const range = { start, end: start + edit.text.length };
-    if (edit.indentSize) {
+    const insertedStyles = [
+      ...(edit.indentSize
+        ? [{ style: TextStyle.Indent, indentSize: edit.indentSize, priority: 2 }]
+        : []),
+      ...(edit.listStyle ? [{ style: edit.listStyle, priority: 3 }] : []),
+    ];
+    for (const style of insertedStyles) {
       ordered.push(
         ...splitStyledLines(
-          {
-            ...range,
-            style: TextStyle.Indent,
-            indentSize: edit.indentSize,
-            priority: 2,
-            sequence: structuralStyles.length + editIndex,
-          },
-          output,
-        ),
-      );
-    }
-    if (edit.listStyle) {
-      ordered.push(
-        ...splitStyledLines(
-          {
-            ...range,
-            style: edit.listStyle,
-            priority: 3,
-            sequence: structuralStyles.length + editIndex,
-          },
+          { ...range, ...style, sequence: structuralStyles.length + editIndex },
           output,
         ),
       );
@@ -283,20 +257,13 @@ export function applyTextEdits(
   );
 
   const styles: Style[] = [];
-  for (const style of ordered.map((orderedStyle) =>
-    orderedStyle.style === TextStyle.Indent
-      ? {
-          start: orderedStyle.start,
-          len: orderedStyle.end - orderedStyle.start,
-          st: TextStyle.Indent,
-          indentSize: orderedStyle.indentSize,
-        }
-      : {
-          start: orderedStyle.start,
-          len: orderedStyle.end - orderedStyle.start,
-          st: orderedStyle.style,
-        },
-  )) {
+  for (const orderedStyle of ordered) {
+    const style = {
+      start: orderedStyle.start,
+      len: orderedStyle.end - orderedStyle.start,
+      st: orderedStyle.style,
+      ...(orderedStyle.style === TextStyle.Indent ? { indentSize: orderedStyle.indentSize } : {}),
+    };
     const previous = styles.at(-1);
     if (
       previous?.st === TextStyle.Indent &&
@@ -367,19 +334,14 @@ function mapEditedOffset(
     if (offset < edit.end) {
       return edit.start + delta + (preferEnd ? edit.text.length : 0);
     }
-    if (offset === edit.end) {
-      return edit.start + delta + edit.text.length;
-    }
   }
   return offset + delta;
 }
 
 export function restoreTrailingNewlines(
   text: string,
-  source: string,
-  ir: MarkdownIRWithBlockMetadata,
+  { ir, lines: sourceLines }: MarkdownSource,
 ): string {
-  const sourceLines = source.split("\n");
   let lastContentLine = sourceLines.length - 1;
   while (
     lastContentLine >= 0 &&
@@ -416,20 +378,13 @@ export function sliceTextStyles(
         return null;
       }
 
-      if (style.st === TextStyle.Indent) {
-        return {
-          start: overlapStart - start,
-          len: overlapEnd - overlapStart,
-          st: style.st,
-          indentSize: style.indentSize,
-        };
-      }
-
-      return {
+      const range = {
         start: overlapStart - start,
         len: overlapEnd - overlapStart,
-        st: style.st,
       };
+      return style.st === TextStyle.Indent
+        ? { ...range, st: style.st, indentSize: style.indentSize }
+        : { ...range, st: style.st };
     })
     .filter((style): style is NonNullable<typeof style> => style !== null);
 

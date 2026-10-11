@@ -4,7 +4,7 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
-import { captureStateDatabaseCoordinatorRuntime } from "../infra/state-database-coordinator.js";
+import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { captureOpenClawStateSchemaReadAdmission } from "./openclaw-state-db-schema-policy.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
@@ -16,19 +16,28 @@ export function captureOpenClawStateReadContextWithAdmission(
   captureAdmission: (pathname: string) => OpenClawStateWorkerContext["admission"],
 ): Pick<
   OpenClawStateWorkerContext,
-  "admission" | "maintenanceScope" | "existingSchemaPath" | "runInCapturedSchemaScope"
-> {
+  | "admission"
+  | "maintenanceScope"
+  | "existingSchemaPath"
+  | "runInCapturedSchemaScope"
+  | "stateIntegrity"
+  | "artifactPreservingReads"
+> & { assertPublicationCurrent: () => void } {
   const schema = captureOpenClawStateSchemaReadAdmission(pathname);
   const capturedAdmission = captureAdmission(pathname);
+  const integrity = capturedAdmission.captureIntegrity?.();
+  const assertPublicationCurrent = capturedAdmission.assertCurrent;
   let admission = capturedAdmission;
   let runInCapturedSchemaScope: OpenClawStateWorkerContext["runInCapturedSchemaScope"];
   if (schema) {
     const inCapturedScope = AsyncLocalStorage.snapshot();
     admission = {
       databasePath: capturedAdmission.databasePath,
+      coordinationKey: capturedAdmission.coordinationKey,
       get identity() {
         return capturedAdmission.identity;
       },
+      captureIntegrity: capturedAdmission.captureIntegrity,
       assertCurrent() {
         capturedAdmission.assertCurrent();
         schema.assertCurrent();
@@ -43,8 +52,11 @@ export function captureOpenClawStateReadContextWithAdmission(
   return {
     maintenanceScope: getOpenClawDatabaseMaintenanceScope(),
     admission,
+    assertPublicationCurrent,
     existingSchemaPath: schema?.path,
+    stateIntegrity: integrity,
     runInCapturedSchemaScope,
+    artifactPreservingReads: isArtifactPreservingStateRead("agent", pathname) || undefined,
   };
 }
 
@@ -65,7 +77,6 @@ export function captureOpenClawStateReadWorkerContextWithAdmission(
       captureAdmission,
     ),
     environment,
-    coordinatorRuntime: captureStateDatabaseCoordinatorRuntime(),
   };
 }
 

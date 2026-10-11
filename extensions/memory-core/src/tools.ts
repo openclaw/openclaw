@@ -24,7 +24,7 @@ import {
   type MemoryCorpusAttempt,
   type MemoryCorpusFailure,
 } from "./memory-corpus.js";
-import { executeMemoryReadResult, executeWikiMemoryReadResult } from "./memory-read-tool.js";
+import { executeMemoryReadResult } from "./memory-read-tool.js";
 import {
   buildPausedMemoryIndexUnavailableResult,
   executeMemorySearchToolQuery,
@@ -277,6 +277,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
             agentId,
             purpose: memoryManagerPurpose,
             acquireLocalService: options.acquireLocalService,
+            runInBackgroundContext: options.runInBackgroundContext,
           });
           if (memoryManagerPurpose === "cli" && "manager" in context) {
             if (cleanupStarted) {
@@ -296,12 +297,8 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
           }
           let partial: Awaited<ReturnType<typeof executeMemorySearchToolQuery>> | null = null;
           let acceptingPartial = true;
-          const attempted = await attemptMemoryCorpus<Awaited<
-            ReturnType<typeof executeMemorySearchToolQuery>
-          > | null>({
-            corpus: "memory",
+          const attempted = await attemptMemoryCorpus({
             signal,
-            unavailableValue: null,
             getPartialValue: () => (partial?.rawResults.length ? partial : null),
             run: async () => {
               const memory = await acquireMemoryManager();
@@ -319,12 +316,6 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
               return await executeMemorySearchToolQuery({
                 onRebuildNotice: (read) => rebuildNotices.push(read),
                 initialManager: { manager: memory.manager, managerMs: memory.debug?.managerMs },
-                refreshManager: async () => {
-                  const refreshed = await acquireMemoryManager();
-                  return "error" in refreshed
-                    ? null
-                    : { manager: refreshed.manager, managerMs: refreshed.debug?.managerMs };
-                },
                 query: {
                   text: query,
                   resultLimit: maxResults ?? settings.query.maxResults,
@@ -579,7 +570,7 @@ export function createMemoryGetTool(options: MemoryToolOptions) {
         const lines = readPositiveIntegerParam(rawParams, "lines");
         const requestedCorpus = readCorpusParam(rawParams, ["memory", "wiki", "all"]);
         const { readAgentMemoryFile } = await loadMemoryToolRuntime();
-        const request = {
+        return await executeMemoryReadResult({
           relPath,
           from: from ?? undefined,
           lines: lines ?? undefined,
@@ -588,11 +579,6 @@ export function createMemoryGetTool(options: MemoryToolOptions) {
           sandboxed: options.sandboxed,
           requestedCorpus,
           signal: callerSignal,
-        };
-        if (requestedCorpus === "wiki") {
-          return await executeWikiMemoryReadResult(request);
-        }
-        return await executeMemoryReadResult({
           read: async () =>
             await readAgentMemoryFile({
               cfg,
@@ -601,7 +587,6 @@ export function createMemoryGetTool(options: MemoryToolOptions) {
               from: from ?? undefined,
               lines: lines ?? undefined,
             }),
-          ...request,
         });
       },
   });

@@ -9,6 +9,9 @@ import { withConsoleLogsRoutedToStderrForJson } from "../cli/json-output-mode.js
 import { createNodeWorkerCommand } from "../cli/node-cli/command-options.js";
 import { runCliWithExitFinalization } from "../cli/one-shot-exit.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "../cli/profile.js";
+import { withCliPluginInvocation } from "../cli/run-main-plugin-cache.js";
+import { withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
+import { closeCliResources } from "../cli/runtime-cleanup.js";
 import { normalizeEnv } from "../infra/env.js";
 import { isMainModule } from "../infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "../infra/openclaw-exec-env.js";
@@ -82,10 +85,26 @@ async function runMacNodeWorkerEntry(argv: string[] = process.argv): Promise<voi
 }
 
 if (isMainModule({ currentFile: fileURLToPath(import.meta.url) })) {
-  // The worker records its exit request after draining runtime-owned resources.
-  // Finalize it here so plugin-owned pipes cannot pin shutdown or startup failure.
+  // This sealed entry bypasses runMain. Give its registrations and plugin
+  // children the same explicit executable lifetime, including failed startup.
   await runCliWithExitFinalization({
-    run: () => runMacNodeWorkerEntry(),
+    run: () =>
+      withCliProcessScope(() =>
+        withCliPluginInvocation(false, async (cleanup) => {
+          const resources = cleanup?.pluginResources;
+          try {
+            await (resources
+              ? resources.run(() => runMacNodeWorkerEntry())
+              : runMacNodeWorkerEntry());
+          } finally {
+            try {
+              await closeCliResources(cleanup);
+            } finally {
+              await resources?.release();
+            }
+          }
+        }),
+      ),
     onError: (error: unknown) => {
       process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
       process.exitCode = 1;

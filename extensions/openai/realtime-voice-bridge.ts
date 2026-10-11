@@ -13,8 +13,8 @@ import {
 import WebSocket from "ws";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
-  captureOpenAIRealtimeWsClose,
   readRealtimeErrorDetail,
+  resolveOpenAIRealtimeRequestHeaders,
 } from "./realtime-provider-shared.js";
 import { buildOpenAIRealtimeSidebandUrl } from "./realtime-quicksilver-wire.js";
 import {
@@ -33,7 +33,6 @@ import {
   isOpenAIRealtimeStartupAuthFailure,
   requireOpenAIRealtimeApiKey,
   requireOpenAIRealtimePlatformAuth,
-  resolveOpenAIRealtimeEnvApiKey,
   resolveOpenAIRealtimeSecretInput,
   type OpenAIRealtimeUserMessageOptions,
   type OpenAIRealtimeVoiceBridgeConfig,
@@ -44,8 +43,6 @@ const OPENAI_REALTIME_MAX_BUFFERED_AUDIO_BYTES = 1024 * 1024;
 const OPENAI_REALTIME_AUDIO_DROP_WARN_INTERVAL_MS = 5_000;
 
 export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements RealtimeVoiceBridge {
-  private static readonly DEFAULT_MODEL = OPENAI_REALTIME_DEFAULT_MODEL;
-
   private static readonly MAX_RECONNECT_ATTEMPTS = 5;
 
   private static readonly BASE_RECONNECT_DELAY_MS = 1000;
@@ -251,19 +248,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
           return;
         }
         this.resetRealtimeSessionState();
-        // Finalization retains capture failures; observe Promises returned by the host view.
-        void this.runtime
-          .captureWsEventAsync({
-            url,
-            direction: "local",
-            kind: "ws-open",
-            flowId: this.flowId,
-            meta: {
-              provider: "openai",
-              capability: "realtime-voice",
-            },
-          })
-          .catch(() => {});
+        this.captureTransportEvent({ url, direction: "local", kind: "ws-open" });
         this.sendSessionUpdate();
       });
 
@@ -286,19 +271,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
             return;
           }
         }
-        void this.runtime
-          .captureWsEventAsync({
-            url,
-            direction: "inbound",
-            kind: "ws-frame",
-            flowId: this.flowId,
-            payload: data,
-            meta: {
-              provider: "openai",
-              capability: "realtime-voice",
-            },
-          })
-          .catch(() => {});
+        this.captureTransportEvent({ url, direction: "inbound", kind: "ws-frame", payload: data });
         try {
           const event = JSON.parse(data.toString()) as RealtimeEvent;
           if (event.type === "error" && !attempt.ready) {
@@ -345,19 +318,12 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
         if (!this.lifecycle.acceptsEvents(lifecycleConnection) || this.ws !== ws) {
           return;
         }
-        void this.runtime
-          .captureWsEventAsync({
-            url,
-            direction: "local",
-            kind: "error",
-            flowId: this.flowId,
-            errorText: coerceErrorMessage(error),
-            meta: {
-              provider: "openai",
-              capability: "realtime-voice",
-            },
-          })
-          .catch(() => {});
+        this.captureTransportEvent({
+          url,
+          direction: "local",
+          kind: "error",
+          errorText: coerceErrorMessage(error),
+        });
         if (!attempt.ready) {
           const startupError = toStringifiedError(error);
           rejectStartup(
@@ -372,16 +338,18 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
       });
 
       ws.on("close", (code, reasonBuffer) => {
-        captureOpenAIRealtimeWsClose(
-          {
-            url,
-            flowId: this.flowId,
-            capability: "realtime-voice",
-            code,
-            reasonBuffer,
+        this.captureTransportEvent({
+          url,
+          direction: "local",
+          kind: "ws-close",
+          closeCode: typeof code === "number" ? code : undefined,
+          meta: {
+            reason:
+              Buffer.isBuffer(reasonBuffer) && reasonBuffer.length > 0
+                ? reasonBuffer.toString("utf8")
+                : undefined,
           },
-          this.runtime.captureWsEventAsync,
-        );
+        });
         if (!this.lifecycle.isCurrent(lifecycleConnection)) {
           return;
         }
@@ -445,7 +413,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
     | { url: string; headers: Record<string, string> }
     | Promise<{ url: string; headers: Record<string, string> }> {
     const cfg = this.config;
-    const model = cfg.model ?? OpenAIRealtimeBridge.DEFAULT_MODEL;
+    const model = cfg.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
     if (cfg.azureEndpoint && cfg.azureDeployment) {
       const apiKey = requireOpenAIRealtimeApiKey(cfg.apiKey);
       const base = cfg.azureEndpoint
@@ -457,30 +425,29 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
       )}`;
       return {
         url,
-        headers: this.runtime.resolveProviderRequestHeaders({
-          provider: "openai",
-          baseUrl: url,
-          capability: "audio",
-          transport: "websocket",
-          defaultHeaders: { "api-key": apiKey },
-        }) ?? { "api-key": apiKey },
+        headers: resolveOpenAIRealtimeRequestHeaders(
+          this.runtime,
+          url,
+          { "api-key": apiKey },
+          "websocket",
+        ),
       };
     }
 
     if (hasOpenAIRealtimeConfiguredApiKeyInput(cfg.apiKey)) {
       const directApiKey = resolveOpenAIRealtimeSecretInput(cfg.apiKey);
-      if (directApiKey.status === "missing") {
+      if (!directApiKey) {
         throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
       }
-      return this.resolveApiKeyConnectionParams(directApiKey.value, model);
+      return this.resolveApiKeyConnectionParams(directApiKey, model);
     }
 
     if (cfg.azureEndpoint) {
-      const directApiKey = resolveOpenAIRealtimeEnvApiKey();
-      if (directApiKey.status === "missing") {
+      const directApiKey = resolveOpenAIRealtimeSecretInput(process.env.OPENAI_API_KEY);
+      if (!directApiKey) {
         throw new Error(OPENAI_REALTIME_API_KEY_REQUIRED);
       }
-      return this.resolveApiKeyConnectionParams(directApiKey.value, model);
+      return this.resolveApiKeyConnectionParams(directApiKey, model);
     }
 
     return this.resolveDefaultConnectionParams(model);
@@ -498,7 +465,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
       },
       this.runtime,
     );
-    return this.resolveApiKeyConnectionParams(auth.value, model);
+    return this.resolveApiKeyConnectionParams(auth, model);
   }
 
   private resolveApiKeyConnectionParams(
@@ -507,7 +474,18 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
   ): { url: string; headers: Record<string, string> } {
     const cfg = this.config;
     let url: string;
-    if (cfg.azureEndpoint) {
+    if (cfg.baseUrl) {
+      const endpoint = new URL(cfg.baseUrl);
+      // Signed endpoint queries can depend on the original escaping of other fields.
+      const query = endpoint.search
+        ? endpoint.search
+            .slice(1)
+            .split("&")
+            .filter((part) => !new URLSearchParams(part).has("model"))
+        : [];
+      endpoint.search = [...query, `model=${encodeURIComponent(model)}`].join("&");
+      url = endpoint.toString();
+    } else if (cfg.azureEndpoint) {
       const base = cfg.azureEndpoint
         .replace(/\/$/, "")
         .replace(/^http(s?):/, (_, secure: string) => `ws${secure}:`);
@@ -517,17 +495,14 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
         ? buildOpenAIRealtimeSidebandUrl(cfg.callId)
         : `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
     }
-    const defaultHeaders = { Authorization: `Bearer ${apiKey}` };
     return {
       url,
-      headers:
-        this.runtime.resolveProviderRequestHeaders({
-          provider: "openai",
-          baseUrl: url,
-          capability: "audio",
-          transport: "websocket",
-          defaultHeaders,
-        }) ?? defaultHeaders,
+      headers: resolveOpenAIRealtimeRequestHeaders(
+        this.runtime,
+        url,
+        { Authorization: `Bearer ${apiKey}` },
+        "websocket",
+      ),
     };
   }
 
@@ -598,7 +573,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
     }
   }
 
-  private markSessionReady(connection: RealtimeVoiceSessionConnection): void {
+  protected onSessionUpdated(connection: RealtimeVoiceSessionConnection): void {
     if (!this.lifecycle.ready(connection)) {
       return;
     }
@@ -663,27 +638,17 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
     this.config.onClose?.(terminalOutcome);
   }
 
-  protected sendEvent(event: unknown, detail?: string): void {
+  protected sendEvent(event: { type: string; [key: string]: unknown }, detail?: string): void {
     const ws = this.ws;
     if (ws?.readyState === WebSocket.OPEN) {
-      const type =
-        event && typeof event === "object" && typeof (event as { type?: unknown }).type === "string"
-          ? (event as { type: string }).type
-          : "unknown";
+      const { type } = event;
       const payload = JSON.stringify(event);
-      void this.runtime
-        .captureWsEventAsync({
-          url: this.connectionUrl,
-          direction: "outbound",
-          kind: "ws-frame",
-          flowId: this.flowId,
-          payload,
-          meta: {
-            provider: "openai",
-            capability: "realtime-voice",
-          },
-        })
-        .catch(() => {});
+      this.captureTransportEvent({
+        url: this.connectionUrl,
+        direction: "outbound",
+        kind: "ws-frame",
+        payload,
+      });
       ws.send(payload);
       // Observers report a sent frame, so nested control cannot overtake it.
       this.config.onEvent?.({ direction: "client", type, ...(detail ? { detail } : {}) });
@@ -694,12 +659,21 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
     return this.lifecycle.acceptsEvents(connection);
   }
 
-  protected isTransportOpen(): boolean {
-    return this.ws?.readyState === WebSocket.OPEN;
+  private captureTransportEvent(
+    event: Omit<Parameters<NonNullable<OpenAIRealtimeHost["captureWsEventAsync"]>>[0], "flowId">,
+  ): void {
+    // Finalization retains capture failures; observe Promises returned by the host view.
+    void this.runtime
+      .captureWsEventAsync?.({
+        ...event,
+        flowId: this.flowId,
+        meta: { provider: "openai", capability: "realtime-voice", ...event.meta },
+      })
+      .catch(() => {});
   }
 
-  protected onSessionUpdated(connection: RealtimeVoiceSessionConnection): void {
-    this.markSessionReady(connection);
+  protected isTransportOpen(): boolean {
+    return this.ws?.readyState === WebSocket.OPEN;
   }
 
   protected rotateExpiredSession(): void {

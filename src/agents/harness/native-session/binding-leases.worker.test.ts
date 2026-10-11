@@ -1,14 +1,16 @@
 import { setImmediate as immediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as mutationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
-  createPluginStateKeyedStore,
+  createPluginStateKeyedStoreV2,
   createPluginStateSyncKeyedStore,
+  type PluginStateActionAuthority,
 } from "../../../plugin-state/plugin-state-store.js";
-import { holdStateCoordinator } from "../../../state/openclaw-state-coordinator.test-support.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { createNativeSessionBindingLeases } from "./binding-leases.js";
+import { holdStateDatabaseWriteTransaction } from "../../../test-utils/state-database-contention.js";
+import { createNativeSessionBindingLeasesV2 } from "./binding-leases.js";
 import {
   bindingTestOptions,
   prepareBindingTestLease,
@@ -22,10 +24,26 @@ function bindingStores(env: NodeJS.ProcessEnv) {
     overflowPolicy: "reject-new" as const,
     env,
   };
-  const asyncState = createPluginStateKeyedStore<TestBindingRecord>("binding-proof", options);
+  const asyncState = createPluginStateKeyedStoreV2<TestBindingRecord>("binding-proof", options, {
+    assertCurrent() {},
+  });
   const syncState = createPluginStateSyncKeyedStore<TestBindingRecord>("binding-proof", options);
-  const state = { ...syncState, withCurrent: asyncState.withCurrent!.bind(asyncState) };
-  return { state, asyncState, owner: createNativeSessionBindingLeases(state, bindingTestOptions) };
+  const state = {
+    withCurrent(authority: PluginStateActionAuthority) {
+      return createPluginStateKeyedStoreV2<TestBindingRecord>("binding-proof", options, authority);
+    },
+    assertLeaseCurrent(key: string, token: string) {
+      const lease = syncState.lookup(key)?.lease;
+      if (lease?.token !== token || lease.expiresAt <= Date.now()) {
+        throw bindingTestOptions.errors.lostLease(key);
+      }
+    },
+  };
+  return {
+    state,
+    asyncState,
+    owner: createNativeSessionBindingLeasesV2(state, bindingTestOptions),
+  };
 }
 
 afterEach(() => {
@@ -38,28 +56,33 @@ describe("native binding worker admission", () => {
     await withOpenClawTestState({ label: "binding-worker-contention" }, async (fixture) => {
       const { owner, asyncState } = bindingStores(fixture.env);
       await asyncState.register("binding", { value: "before" });
-      const release = await holdStateCoordinator(resolveOpenClawStateSqlitePath(fixture.env));
+      const holder = holdStateDatabaseWriteTransaction(
+        resolveOpenClawStateSqlitePath(fixture.env),
+        1_000,
+      );
       let settled = false;
-      const mutation = owner
-        .transact("binding", (current) => ({
-          next: { ...current, value: "after" },
-          result: "stored",
-        }))
-        .then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        )
-        .finally(() => {
-          settled = true;
-        });
+      let mutation: Promise<{ value: string } | { error: unknown }> | undefined;
       let progressedBeforeSettlement = false;
       try {
+        await holder.ready;
+        mutation = owner
+          .transact("binding", (current) => ({
+            next: { ...current, value: "after" },
+            result: "stored",
+          }))
+          .then(
+            (value) => ({ value }),
+            (error: unknown) => ({ error }),
+          )
+          .finally(() => {
+            settled = true;
+          });
         await immediate();
-        await release.observe();
-        progressedBeforeSettlement = !settled;
+        progressedBeforeSettlement = !settled && Atomics.load(holder.released, 0) === 0;
       } finally {
-        await release();
+        holder.release();
         await mutation;
+        await holder.joined;
       }
       const result = await mutation;
       expect(progressedBeforeSettlement).toBe(true);
@@ -84,21 +107,17 @@ describe("native binding worker admission", () => {
             throw new Error("binding action revoked");
           }
         };
-        const admission = mutationAdmission.createSqliteWorkerOperationAdmission;
-        vi.spyOn(mutationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-          (admit, attachment) =>
-            admission((request, grant) => {
-              if (request.stage === "commit" && prepared && !refusedCommit) {
-                refusedCommit = true;
-                if (failure === "revocation") {
-                  current = false;
-                } else {
-                  vi.setSystemTime(Date.now() + bindingTestOptions.lease.staleMs + 1);
-                }
-              }
-              admit(request, grant);
-            }, attachment),
-        );
+        probe.admission(mutationAdmission, (request, grant, admit) => {
+          if (request.stage === "commit" && prepared && !refusedCommit) {
+            refusedCommit = true;
+            if (failure === "revocation") {
+              current = false;
+            } else {
+              vi.setSystemTime(Date.now() + bindingTestOptions.lease.staleMs + 1);
+            }
+          }
+          admit(request, grant);
+        });
         await expect(
           owner.withLease(
             "binding",

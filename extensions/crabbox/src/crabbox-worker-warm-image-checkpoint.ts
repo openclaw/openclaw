@@ -3,8 +3,13 @@ import {
   isRecord,
   normalizeOptionalString as nonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { crabboxCommandError } from "./crabbox-worker-command-error.js";
-import { runCrabboxCommand, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
+import {
+  crabboxCommandError,
+  crabboxCommandOutput,
+  parseCrabboxJson,
+  runCrabboxCommand,
+  type CrabboxCommandRunner,
+} from "./crabbox-worker-command.js";
 import { WARM_IMAGE_COMMAND_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 import type { WarmImageRecord } from "./crabbox-worker-warm-image-store.js";
 
@@ -12,6 +17,7 @@ const CHECKPOINT_ID_PATTERN = /^chk_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 
 export class CrabboxCheckpointCreateError extends Error {
   private readonly notSubmitted?: { provider: string; leaseId: string };
+  private readonly unsupported?: { message: string };
 
   static wasNotSubmitted(error: unknown, context: { provider: string; id: string }): boolean {
     return (
@@ -19,6 +25,15 @@ export class CrabboxCheckpointCreateError extends Error {
       error.notSubmitted?.provider === context.provider &&
       error.notSubmitted.leaseId === context.id
     );
+  }
+
+  static unsupportedCapture(
+    error: unknown,
+    context: { provider: string; id: string },
+  ): { message: string } | undefined {
+    return error instanceof CrabboxCheckpointCreateError && this.wasNotSubmitted(error, context)
+      ? error.unsupported
+      : undefined;
   }
 
   constructor(result: SpawnResult) {
@@ -51,6 +66,20 @@ export class CrabboxCheckpointCreateError extends Error {
         CHECKPOINT_ID_PATTERN.test(record.checkpointId)
       ) {
         this.notSubmitted = { provider: record.provider, leaseId: record.leaseId };
+      } else if (
+        Object.keys(record).length === 7 &&
+        record.schema === "crabbox.checkpoint.create.failure.v1" &&
+        record.outcome === "not_submitted" &&
+        record.reason === "native_unsupported" &&
+        record.localReservation === "none" &&
+        typeof record.provider === "string" &&
+        typeof record.leaseId === "string" &&
+        typeof record.message === "string" &&
+        record.message.length > 0 &&
+        record.message.length <= 1024
+      ) {
+        this.notSubmitted = { provider: record.provider, leaseId: record.leaseId };
+        this.unsupported = { message: record.message };
       }
     } catch {
       // Old, malformed, or incomplete failure output retains capture uncertainty.
@@ -59,12 +88,7 @@ export class CrabboxCheckpointCreateError extends Error {
 }
 
 function parseCheckpointJson(stdout: string, action: string): Record<string, unknown> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    throw new Error(`Crabbox checkpoint ${action} returned invalid JSON`);
-  }
+  const parsed = parseCrabboxJson(stdout, `checkpoint ${action}`);
   if (!isRecord(parsed)) {
     throw new Error(`Crabbox checkpoint ${action} returned an invalid record`);
   }
@@ -151,8 +175,9 @@ export function createCheckpointCommands(runCommand: CrabboxCommandRunner) {
     input?: string,
   ): Promise<string> => {
     assertCurrent(context);
+    const commandAction = action === "scrub" ? action : `checkpoint ${action}`;
     const result = await runCrabboxCommand({
-      action: action === "scrub" ? action : `checkpoint ${action}`,
+      action: commandAction,
       args,
       binary: context.binary,
       runCommand,
@@ -160,13 +185,10 @@ export function createCheckpointCommands(runCommand: CrabboxCommandRunner) {
       ...(context.signal ? { signal: context.signal } : {}),
       ...(input === undefined ? {} : { input }),
     });
-    if (result.termination !== "exit" || result.code !== 0) {
-      if (action === "create") {
-        throw new CrabboxCheckpointCreateError(result);
-      }
-      throw crabboxCommandError(action === "scrub" ? action : `checkpoint ${action}`, result);
+    if (action === "create" && (result.termination !== "exit" || result.code !== 0)) {
+      throw new CrabboxCheckpointCreateError(result);
     }
-    return result.stdout;
+    return crabboxCommandOutput(commandAction, result);
   };
   const deleteCheckpoint = async (
     context: CheckpointContext | MaintenanceContext,
@@ -174,9 +196,6 @@ export function createCheckpointCommands(runCommand: CrabboxCommandRunner) {
     remainingMs: () => number,
   ): Promise<boolean> => {
     const binaries = "binary" in context ? [context.binary] : context.binaries;
-    if (binaries.length === 0) {
-      return false;
-    }
     for (const [index, binary] of binaries.entries()) {
       assertCurrent(context);
       const timeoutMs = remainingMs();

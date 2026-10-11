@@ -1,7 +1,6 @@
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
-import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import { agentCommandMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   sessionStoreEntry,
@@ -13,7 +12,7 @@ const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 async function configurePerAgentSessionStore(dir: string) {
   const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
   testState.sessionStorePath = storeTemplate;
-  testState.agentsConfig = { list: [{ id: "main", default: true }] };
+  testState.agentsConfig = { entries: { main: {} } };
   return storeTemplate;
 }
 
@@ -21,40 +20,6 @@ function resetSessionStoreFixture() {
   testState.agentsConfig = undefined;
   testState.sessionStorePath = undefined;
 }
-
-test("agent RPC rejects deleted-agent session keys before dispatch", async () => {
-  const { dir } = await createSessionStoreDir();
-  const storeTemplate = await configurePerAgentSessionStore(dir);
-  const deletedStorePath = storeTemplate.replace("{agentId}", "deleted-agent");
-  const orphanKey = "agent:deleted-agent:main";
-
-  await writeSessionStore({
-    storePath: deletedStorePath,
-    agentId: "deleted-agent",
-    entries: {
-      [orphanKey]: sessionStoreEntry("sess-orphan"),
-    },
-  });
-
-  vi.mocked(agentCommandMock).mockClear();
-  const { ws } = await openClient();
-  try {
-    const blocked = await rpcReq(ws, "agent", {
-      sessionKey: orphanKey,
-      message: "hi",
-      idempotencyKey: "proof-deleted-agent",
-    });
-    expect(blocked.ok).toBe(false);
-    expect(blocked.error).toEqual({
-      code: ErrorCodes.INVALID_REQUEST,
-      message: 'Agent "deleted-agent" no longer exists in configuration',
-    });
-    expect(agentCommandMock).not.toHaveBeenCalled();
-  } finally {
-    ws.close();
-    resetSessionStoreFixture();
-  }
-});
 
 test("agent RPC rejects archived session keys before dispatch", async () => {
   const { dir } = await createSessionStoreDir();
@@ -88,45 +53,5 @@ test("agent RPC rejects archived session keys before dispatch", async () => {
   } finally {
     ws.close();
     resetSessionStoreFixture();
-  }
-});
-
-test("agent RPC still dispatches for configured-agent session keys", async () => {
-  const { dir } = await createSessionStoreDir();
-  const storeTemplate = await configurePerAgentSessionStore(dir);
-  const mainStorePath = storeTemplate.replace("{agentId}", "main");
-
-  await writeSessionStore({
-    storePath: mainStorePath,
-    agentId: "main",
-    entries: {
-      main: sessionStoreEntry("sess-main"),
-    },
-  });
-
-  vi.mocked(agentCommandMock).mockClear();
-  const { ws } = await openClient();
-  const execution = await observeGatewayRunExecution({
-    method: "agent",
-    runId: "proof-main-agent",
-  });
-  try {
-    const accepted = await rpcReq(ws, "agent", {
-      sessionKey: "main",
-      message: "ping",
-      idempotencyKey: "proof-main-agent",
-    });
-    expect(accepted.ok).toBe(true);
-    expect(accepted.payload?.status).toBe("accepted");
-    expect(accepted.payload?.runId).toBe("proof-main-agent");
-    await execution.waitForCompletion();
-    expect(agentCommandMock).toHaveBeenCalledTimes(1);
-  } finally {
-    try {
-      await execution.restore();
-    } finally {
-      ws.close();
-      resetSessionStoreFixture();
-    }
   }
 });

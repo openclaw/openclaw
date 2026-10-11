@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { readSessionBindingInspectionConversation } from "../../infra/outbound/session-binding-normalization.js";
@@ -7,9 +9,14 @@ import {
   type ConversationRef,
   type SessionBindingRecord,
 } from "../../infra/outbound/session-binding-service.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { deriveLastRoutePolicy } from "../../routing/resolve-route.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  buildAgentMainSessionKey,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import {
   resolveConversationBindingSelection,
   projectConfiguredConversationBindingRouteFacts,
@@ -38,6 +45,17 @@ export type RuntimeConversationBindingRouteResult = {
   boundAgentId?: string;
   pluginId?: string;
 };
+
+type RuntimeConversationBindingRouteResolver<Result = ResolvedAgentRoute> = (selection: {
+  inspection: ReturnType<typeof inspectSessionBindingByConversation>;
+  bindingOwnerAvailable: boolean;
+  bindingRecord: SessionBindingRecord | null;
+  boundAgentId?: string;
+}) => Result;
+
+type RuntimeConversationBindingRouteInput<Result = ResolvedAgentRoute> =
+  | { route: ResolvedAgentRoute; resolveRoute?: never }
+  | { route?: never; resolveRoute: RuntimeConversationBindingRouteResolver<Result> };
 
 type ConfiguredBindingRouteConversationInput =
   | {
@@ -74,15 +92,8 @@ export function resolveConfiguredBindingRoute(
       cfg: params.cfg,
       conversation: resolveConfiguredBindingConversationRef(params),
     }) ?? null;
-  if (!bindingResolution) {
-    return {
-      bindingResolution: null,
-      route: projectConfiguredConversationBindingRouteFacts(params.route),
-    };
-  }
-
-  const boundSessionKey = bindingResolution.statefulTarget.sessionKey.trim();
-  if (!boundSessionKey) {
+  const boundSessionKey = bindingResolution?.statefulTarget.sessionKey.trim();
+  if (!bindingResolution || !boundSessionKey) {
     return {
       bindingResolution,
       route: projectConfiguredConversationBindingRouteFacts(params.route),
@@ -111,12 +122,41 @@ export function resolveConfiguredBindingRoute(
   };
 }
 
+function selectRuntimeConversationBindingRoute(
+  inspection: ReturnType<typeof inspectSessionBindingByConversation>,
+) {
+  const selection = resolveConversationBindingSelection(
+    inspection.status === "available" ? inspection.binding : null,
+  );
+  const bindingRecord = selection.kind === "none" ? null : selection.binding;
+  const explicitAgentId =
+    selection.kind === "agent"
+      ? (parseAgentSessionKey(selection.sessionKey)?.agentId ??
+        normalizeOptionalString(selection.binding.metadata?.agentId))
+      : undefined;
+  const boundAgentId =
+    selection.kind === "agent" && explicitAgentId
+      ? resolveConversationBindingAgentId(selection.binding, explicitAgentId)
+      : undefined;
+  const routeSelection = {
+    inspection,
+    bindingOwnerAvailable: inspection.status === "available",
+    bindingRecord,
+    boundAgentId,
+  };
+  return { selection, routeSelection };
+}
+
 /** Projects prepared ownership facts without reading or changing binding storage. */
-export function inspectRuntimeConversationBindingRoute(params: {
-  route: ResolvedAgentRoute;
-  inspection: ReturnType<typeof inspectSessionBindingByConversation>;
-}): RuntimeConversationBindingRouteResult {
+export function inspectRuntimeConversationBindingRoute(
+  params: RuntimeConversationBindingRouteInput & {
+    inspection: ReturnType<typeof inspectSessionBindingByConversation>;
+  },
+): RuntimeConversationBindingRouteResult {
   const { inspection } = params;
+  const { selection, routeSelection } = selectRuntimeConversationBindingRoute(inspection);
+  const { bindingRecord } = routeSelection;
+  const baseRoute = params.resolveRoute ? params.resolveRoute(routeSelection) : params.route;
   const inspectedConversation = readSessionBindingInspectionConversation(inspection);
   if (inspection.status === "unavailable") {
     return {
@@ -124,50 +164,52 @@ export function inspectRuntimeConversationBindingRoute(params: {
       bindingRecord: null,
       route: inspectedConversation
         ? withConversationBindingRouteFacts(
-            { ...params.route },
+            { ...baseRoute },
             { kind: "unavailable" },
-            params.route.agentId,
+            baseRoute.agentId,
             inspectedConversation,
           )
-        : params.route,
+        : baseRoute,
     };
   }
-  const selection = resolveConversationBindingSelection(inspection.binding);
   const conversation = inspectedConversation ?? inspection.binding?.conversation;
   const observe = (route: ResolvedAgentRoute) =>
     conversation
-      ? withConversationBindingRouteFacts(route, selection, params.route.agentId, conversation)
+      ? withConversationBindingRouteFacts(route, selection, baseRoute.agentId, conversation)
       : route;
-  if (selection.kind === "none") {
-    if (selection.ignoredCronSessionKey) {
+  if (selection.kind !== "agent") {
+    if (selection.kind === "none" && selection.ignoredCronSessionKey) {
       logVerbose(
         `ignored runtime conversation binding to isolated cron run session ${selection.ignoredCronSessionKey}`,
       );
     }
     return {
       bindingOwnerAvailable: true,
-      bindingRecord: null,
-      route: observe({ ...params.route }),
-    };
-  }
-  const bindingRecord = selection.binding;
-  if (selection.kind === "plugin") {
-    return {
-      bindingOwnerAvailable: true,
       bindingRecord,
-      pluginId: selection.pluginId,
-      route: observe({ ...params.route }),
+      ...(selection.kind === "plugin" ? { pluginId: selection.pluginId } : {}),
+      route: observe({ ...baseRoute }),
     };
   }
   const boundSessionKey = selection.sessionKey;
-  const boundAgentId = resolveConversationBindingAgentId(selection.binding, params.route.agentId);
+  const resolvedBoundAgentId = resolveConversationBindingAgentId(
+    selection.binding,
+    baseRoute.agentId,
+  );
+  const mainSessionKey =
+    resolvedBoundAgentId === baseRoute.agentId
+      ? baseRoute.mainSessionKey
+      : buildAgentMainSessionKey({
+          agentId: resolvedBoundAgentId,
+          mainKey: parseAgentSessionKey(baseRoute.mainSessionKey)?.rest,
+        });
   const route: ResolvedAgentRoute = {
-    ...params.route,
+    ...baseRoute,
     sessionKey: boundSessionKey,
-    agentId: boundAgentId,
+    agentId: resolvedBoundAgentId,
+    mainSessionKey,
     lastRoutePolicy: deriveLastRoutePolicy({
       sessionKey: boundSessionKey,
-      mainSessionKey: params.route.mainSessionKey,
+      mainSessionKey,
     }),
     matchedBy: "binding.channel",
   };
@@ -175,27 +217,38 @@ export function inspectRuntimeConversationBindingRoute(params: {
     bindingOwnerAvailable: true,
     bindingRecord,
     boundSessionKey,
-    boundAgentId,
+    boundAgentId: resolvedBoundAgentId,
     route: observe(route),
   };
 }
 
 /**
  * Resolves runtime routing after the binding owner settles its activity mutation.
+ * Route callbacks may await a parent conversation before selecting a fallback.
  * Legacy adapters may still perform synchronous persistence during migration.
  */
 export async function resolveRuntimeConversationBindingRouteAsync(
-  params: { route: ResolvedAgentRoute } & ConfiguredBindingRouteConversationInput,
+  params: RuntimeConversationBindingRouteInput<ResolvedAgentRoute | Promise<ResolvedAgentRoute>> & {
+    touchBinding?: boolean;
+  } & ConfiguredBindingRouteConversationInput,
 ): Promise<RuntimeConversationBindingRouteResult> {
-  const route = { ...params.route };
+  const routeInput: RuntimeConversationBindingRouteInput<
+    ResolvedAgentRoute | Promise<ResolvedAgentRoute>
+  > = params.resolveRoute ? { resolveRoute: params.resolveRoute } : { route: { ...params.route } };
   const conversation = resolveConfiguredBindingConversationRef(params);
   const service = getSessionBindingService();
-  let result = inspectRuntimeConversationBindingRoute({
-    route,
-    inspection: await service.inspectByConversationAsync(conversation),
-  });
+  const inspect = async () => {
+    const inspection = await service.inspectByConversationAsync(conversation);
+    const route = routeInput.resolveRoute
+      ? await routeInput.resolveRoute(
+          selectRuntimeConversationBindingRoute(inspection).routeSelection,
+        )
+      : routeInput.route;
+    return inspectRuntimeConversationBindingRoute({ route, inspection });
+  };
+  let result = await inspect();
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    if (!result.bindingRecord) {
+    if (!result.bindingRecord || params.touchBinding === false) {
       return result;
     }
     const { bindingId, boundAt, targetSessionKey, targetKind } = result.bindingRecord;
@@ -204,10 +257,7 @@ export async function resolveRuntimeConversationBindingRouteAsync(
       accountId: result.bindingRecord.conversation.accountId,
     };
     await service.touchAsync(bindingId, undefined, scope);
-    result = inspectRuntimeConversationBindingRoute({
-      route,
-      inspection: await service.inspectByConversationAsync(conversation),
-    });
+    result = await inspect();
     if (
       !result.bindingRecord ||
       (result.bindingRecord.bindingId === bindingId &&
@@ -226,18 +276,22 @@ export async function resolveRuntimeConversationBindingRouteAsync(
   );
 }
 
+/** @deprecated Use resolveRuntimeConversationBindingRouteAsync; removed in the next Plugin SDK major. */
 export function resolveRuntimeConversationBindingRoute(
-  params: {
-    route: ResolvedAgentRoute;
+  params: RuntimeConversationBindingRouteInput & {
     touchBinding?: boolean;
   } & ConfiguredBindingRouteConversationInput,
 ): RuntimeConversationBindingRouteResult {
-  const result = inspectRuntimeConversationBindingRoute({
-    route: params.route,
-    inspection: inspectSessionBindingByConversation(
-      resolveConfiguredBindingConversationRef(params),
-    ),
+  warnPluginSdkDeprecation({
+    family: "conversation-bindings",
+    method: "resolveRuntimeConversationBindingRoute",
+    replacement: "resolveRuntimeConversationBindingRouteAsync",
+    compatibility: "The synchronous route retains its immediate inspection and touch behavior.",
   });
+  const inspection = inspectSessionBindingByConversation(
+    resolveConfiguredBindingConversationRef(params),
+  );
+  const result = inspectRuntimeConversationBindingRoute({ ...params, inspection });
   if (params.touchBinding !== false && result.bindingRecord) {
     getSessionBindingService().touch(
       result.bindingRecord.bindingId,
@@ -254,34 +308,29 @@ export async function ensureConfiguredBindingRouteReady(params: {
   bindingResolution: ConfiguredBindingResolution | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const readyPromise = ensureConfiguredBindingTargetReady(params);
-  let timer: ReturnType<typeof setTimeout> | undefined;
   const timeoutToken = Symbol("configured-binding-route-ready-timeout");
-  const timeoutPromise = new Promise<typeof timeoutToken>((resolve) => {
-    timer = setTimeout(() => resolve(timeoutToken), CONFIGURED_BINDING_ROUTE_READY_TIMEOUT_MS);
-    timer.unref?.();
-  });
-
-  try {
-    const result = await Promise.race([readyPromise, timeoutPromise]);
-    if (result !== timeoutToken) {
-      return result;
-    }
-    // Let late driver work finish for diagnostics, but return a bounded failure to the caller.
-    logVerbose(
-      `configured binding route ready check timed out after ${
-        CONFIGURED_BINDING_ROUTE_READY_TIMEOUT_MS / 1_000
-      }s`,
-    );
-    readyPromise.then(
-      (lateResult) =>
-        logVerbose(
-          `configured binding route ready check settled after timeout (ok=${lateResult.ok})`,
-        ),
-      (err: unknown) =>
-        logVerbose(`configured binding route ready check rejected after timeout: ${String(err)}`),
-    );
-    return { ok: false, error: "Configured binding route ready check timed out" };
-  } finally {
-    clearTimeout(timer);
+  const result = await raceWithTimeout(
+    readyPromise,
+    CONFIGURED_BINDING_ROUTE_READY_TIMEOUT_MS,
+    (): typeof timeoutToken => timeoutToken,
+    { ref: false },
+  );
+  if (result !== timeoutToken) {
+    return result;
   }
+  // Let late driver work finish for diagnostics, but return a bounded failure to the caller.
+  logVerbose(
+    `configured binding route ready check timed out after ${
+      CONFIGURED_BINDING_ROUTE_READY_TIMEOUT_MS / 1_000
+    }s`,
+  );
+  readyPromise.then(
+    (lateResult) =>
+      logVerbose(
+        `configured binding route ready check settled after timeout (ok=${lateResult.ok})`,
+      ),
+    (err: unknown) =>
+      logVerbose(`configured binding route ready check rejected after timeout: ${String(err)}`),
+  );
+  return { ok: false, error: "Configured binding route ready check timed out" };
 }

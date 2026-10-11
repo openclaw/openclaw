@@ -1,6 +1,8 @@
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import type { SessionCapability } from "../lib/sessions/session-capability.ts";
+import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -9,11 +11,25 @@ import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
-  requireRecord,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
+
+async function seedPullRequestSummary(page: Page, key: string, state: "open" | "merged") {
+  await page.evaluate(
+    (summary) => {
+      const app = document.querySelector("openclaw-app") as HTMLElement & {
+        runtime: { context: { sessions: SessionCapability } };
+      };
+      app.runtime.context.sessions.setPullRequestSummary(summary.key, {
+        numbers: [1],
+        state: summary.state,
+      });
+    },
+    { key, state },
+  );
+}
 
 suite.define(() => {
   it("vertically centers session actions in a two-line row", async () => {
@@ -25,21 +41,22 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
-    await page.addInitScript(() => {
+    await page.addInitScript((storageKey) => {
       localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
-    });
+      const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
+      localStorage.setItem(
+        storageKey,
+        JSON.stringify({ ...settings, sidebarEntries: ["session:agent:main:two-line"] }),
+      );
+    }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
     await installMockGateway(page, {
       mainSessionKey: "agent:main:main",
       methodResponses: {
         "sessions.list": sessionsListResponse([
           sessionRow("agent:main:main", "Main", baseTime),
-          Object.assign(
-            sessionRow("agent:main:two-line", "Two-line session", baseTime - 1, {
-              pinned: true,
-              pinnedAt: baseTime,
-            }),
-            { lastMessagePreview: "Finishing repository setup review" },
-          ),
+          Object.assign(sessionRow("agent:main:two-line", "Two-line session", baseTime - 1), {
+            lastMessagePreview: "Finishing repository setup review",
+          }),
         ]),
       },
       sessionKey: "agent:main:two-line",
@@ -307,7 +324,7 @@ suite.define(() => {
     await page.addInitScript(() => {
       localStorage.setItem("openclaw:sidebar:sessions:show-preview", "false");
     });
-    const gateway = await installMockGateway(page, {
+    await installMockGateway(page, {
       featureMethods: [
         "chat.metadata",
         "chat.startup",
@@ -341,34 +358,7 @@ suite.define(() => {
       );
       await codingToggle.waitFor({ state: "visible" });
       await codingToggle.click();
-      await expect
-        .poll(async () => {
-          const requests = await gateway.getRequests(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD);
-          return requests.some((request) => {
-            const sessionKeys = requireRecord(request.params).sessionKeys;
-            return Array.isArray(sessionKeys) && sessionKeys.includes(pullRequestKey);
-          });
-        })
-        .toBe(true);
-      await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
-        sessions: {
-          [pullRequestKey]: {
-            pullRequests: [
-              {
-                branch: "fix/unread-pr",
-                number: 1,
-                owner: "openclaw",
-                repo: "openclaw",
-                state: "merged",
-                title: "Unread row pull request",
-                url: "https://example.test/openclaw/openclaw/pull/1",
-              },
-            ],
-            rateLimited: false,
-            status: "ready",
-          },
-        },
-      });
+      await seedPullRequestSummary(page, pullRequestKey, "merged");
 
       const plainRow = page.locator(`[data-session-key="${plainKey}"]`);
       const pullRequestRow = page.locator(`[data-session-key="${pullRequestKey}"]`);
@@ -485,7 +475,7 @@ suite.define(() => {
     await page.addInitScript(() => {
       localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
     });
-    const gateway = await installMockGateway(page, {
+    await installMockGateway(page, {
       featureMethods: [
         "chat.metadata",
         "chat.startup",
@@ -524,34 +514,7 @@ suite.define(() => {
       );
       await codingToggle.waitFor({ state: "visible" });
       await codingToggle.click();
-      await expect
-        .poll(async () => {
-          const requests = await gateway.getRequests(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD);
-          return requests.some((request) => {
-            const sessionKeys = requireRecord(request.params).sessionKeys;
-            return Array.isArray(sessionKeys) && sessionKeys.includes("agent:main:combined-state");
-          });
-        })
-        .toBe(true);
-      await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
-        sessions: {
-          "agent:main:combined-state": {
-            pullRequests: [
-              {
-                branch: "fix/combined-state",
-                number: 1,
-                owner: "openclaw",
-                repo: "openclaw",
-                state: "open",
-                title: "Combined state fix",
-                url: "https://example.test/openclaw/openclaw/pull/1",
-              },
-            ],
-            rateLimited: false,
-            status: "ready",
-          },
-        },
-      });
+      await seedPullRequestSummary(page, "agent:main:combined-state", "open");
 
       const row = page.locator('[data-session-key="agent:main:combined-state"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });

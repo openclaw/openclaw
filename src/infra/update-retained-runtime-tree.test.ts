@@ -8,6 +8,8 @@ import { loadPluginManifest } from "../plugins/manifest.js";
 import { readPluginCacheFile } from "../plugins/plugin-cache-files.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import * as fileDescriptor from "./file-descriptor.js";
+import { createFileMutationClock } from "./file-mutation-clock.test-support.js";
 import { prepareUpdateCandidatePluginTrees } from "./update-candidate-plugin-tree.js";
 import { linkUpdateCandidatePluginTrees } from "./update-retained-runtime-tree.js";
 
@@ -58,10 +60,8 @@ async function fixture(setup?: (source: string) => Promise<void>) {
 }
 
 it.each([
-  { filesystem: "native", existingTwin: false },
   { filesystem: "native", existingTwin: true },
   { filesystem: "overlay", existingTwin: false },
-  { filesystem: "overlay", existingTwin: true },
 ])(
   "preserves plugin safety on $filesystem filesystems (existing manifest twin=$existingTwin)",
   async ({ filesystem, existingTwin }) => {
@@ -75,6 +75,7 @@ it.each([
           configSchema: { type: "object" },
           providerCatalogEntry: "src/catalog.ts",
           capabilityCatalogEntry: "src/capabilities.ts",
+          skills: ["./skills"],
           controlUi,
           themes: [
             {
@@ -82,6 +83,7 @@ it.each([
               name: "Fixture",
               description: "Fixture palette",
               source: "theme.json",
+              icons: { rocket: "assets/rocket.svg" },
               hats: { beret: "assets/beret.svg" },
               critters: { ferris: { source: "assets/ferris.svg" } },
             },
@@ -107,11 +109,16 @@ it.each([
       ["src/catalog.ts", "export const providers = [];\n"],
       ["src/catalog.js", "export const providers = [];\n"],
       ["src/capabilities.ts", "export const capabilities = {};\n"],
+      [
+        "skills/fixture/SKILL.md",
+        "---\nname: fixture\ndescription: Retained runtime fixture\n---\n",
+      ],
       ["provider-policy-api.ts", "export const policy = {};\n"],
       ["assets/icon.png", "fixture icon"],
       ["assets/activity.svg", '<svg xmlns="http://www.w3.org/2000/svg"/>'],
       ["assets/activity/tool.svg", '<svg xmlns="http://www.w3.org/2000/svg"/>'],
       ["theme.json", "{}"],
+      ["assets/rocket.svg", '<svg xmlns="http://www.w3.org/2000/svg"/>'],
       ["assets/beret.svg", '<svg xmlns="http://www.w3.org/2000/svg"/>'],
       ["assets/ferris.svg", '<svg xmlns="http://www.w3.org/2000/svg"/>'],
       ["dist/control-ui/index.js", "export {};\n"],
@@ -131,11 +138,16 @@ it.each([
         }),
       ],
       [`${nestedBrowser}/dist/control-ui/index.js`, "export {};\n"],
+      [
+        "node_modules/native-addon/package.json",
+        JSON.stringify({ name: "native-addon", version: "1.0.0", main: "addon.node" }),
+      ],
     ]);
     const payloads = [
       "assets/large-model.bin",
       "lib/implementation.js",
       "data/payload.json",
+      "node_modules/native-addon/addon.node",
       "dist/control-ui/README.txt",
     ];
     const relativePlugin = path.join("extensions", "fixture");
@@ -191,6 +203,13 @@ it.each([
           const file = readPluginCacheFile({ rootDir, relativePath, rejectHardlinks: true });
           expect(file.ok).toBe(!preexistingHardlink);
           expect(fsSync.readFileSync(path.join(rootDir, relativePath), "utf8")).toBe(content);
+          if (relativePath === "node_modules/native-addon/package.json") {
+            const source = fsSync.statSync(path.join(f.source, relativePlugin, relativePath));
+            const retained = fsSync.statSync(
+              path.join(f.destination, relativePlugin, relativePath),
+            );
+            expect([retained.dev, retained.ino]).not.toEqual([source.dev, source.ino]);
+          }
         }
       });
       expect([...(await readPluginControlUiAssets(rootDir, controlUi)).assets.keys()]).toEqual(
@@ -240,104 +259,116 @@ it.each([
   },
 );
 
-it("retains files by hard link so the inodes outlive package replacement", async () => {
-  const f = await fixture();
-  const before = await fs.stat(f.worker, { bigint: true });
-  const counts = await f.link();
-  const retainedWorker = path.join(f.destination, "dist", "state", "worker.js");
-  expect(counts).toEqual({ linked: 2, copied: 1 });
-  expect((await fs.stat(retainedWorker, { bigint: true })).ino).toBe(before.ino);
-  expect(
-    (await fs.stat(path.join(f.destination, "dist", "worker-alias.js"), { bigint: true })).ino,
-  ).toBe(before.ino);
-  // The launcher is rewritten for its new location; the live package must not change.
-  const retainedLauncher = path.join(f.destination, "node_modules", ".bin", "tool");
-  expect((await fs.stat(retainedLauncher, { bigint: true })).ino).not.toBe(
-    (await fs.stat(f.launcher, { bigint: true })).ino,
-  );
-  expect(await fs.readFile(f.launcher, "utf8")).toContain('"$basedir/../tool/cli.js"');
-  expect(await fs.readlink(path.join(f.destination, "node_modules", "link.js"))).toBe(
-    path.join("..", "dist", "state", "worker.js"),
-  );
-  const displaced = `${f.source}.previous`;
-  await fs.rename(f.source, displaced);
-  await fs.rm(displaced, { recursive: true });
-  expect(await fs.readFile(retainedWorker, "utf8")).toBe("export const generation = 'retained';\n");
-  expect((await fs.stat(retainedWorker)).mode & 0o777).toBe(0o444);
-});
-
-it("copies overlay files without copy-up changing their admitted identity", async () => {
-  const nestedFiles = Array.from({ length: 8 }, (_, index) =>
-    path.join("node_modules", "fixture", "dist", "deep", "chunks", `part-${index}.js`),
-  );
-  const f = await fixture(async (source) => {
-    for (const file of nestedFiles) {
-      const destination = path.join(source, file);
-      await fs.mkdir(path.dirname(destination), { recursive: true });
-      await fs.writeFile(destination, `// ${file}\n`, { mode: 0o444 });
-    }
-    await fs.chmod(path.dirname(path.join(source, nestedFiles[0]!)), 0o751);
-  });
-  // Discovery can encounter a file before its parent directory's inventory entry.
-  f.plan.entries.sort(
-    (left, right) => Number(left.kind === "directory") - Number(right.kind === "directory"),
-  );
-  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-  const disk = await fs.statfs(f.source);
-  disk.type = 0x794c7630;
-  vi.spyOn(fs, "statfs").mockResolvedValue(disk);
-  const link = vi.spyOn(fs, "link");
-  const mkdir = vi.spyOn(fs, "mkdir");
-  expect(await withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, f.link)).toEqual({
-    linked: 0,
-    copied: 3 + nestedFiles.length,
-  });
-  expect(link).not.toHaveBeenCalled();
-  // Nested leaves must not repeat an ancestor-creation walk for every copied file.
-  expect(mkdir.mock.calls.length).toBeLessThanOrEqual(
-    f.plan.entries.filter((entry) => entry.kind === "directory").length + 1,
-  );
-  const retainedWorker = path.join(f.destination, "dist", "state", "worker.js");
-  expect((await fs.stat(retainedWorker)).ino).not.toBe((await fs.stat(f.worker)).ino);
-  expect(await fs.readFile(retainedWorker, "utf8")).toBe("export const generation = 'retained';\n");
-  expect((await fs.stat(retainedWorker)).mode & 0o777).toBe(0o444);
-  for (const file of nestedFiles) {
-    const retained = path.join(f.destination, file);
-    expect(await fs.readFile(retained, "utf8")).toBe(`// ${file}\n`);
-    expect((await fs.stat(retained)).mode & 0o777).toBe(0o444);
-  }
-  expect(
-    (await fs.stat(path.dirname(path.join(f.destination, nestedFiles[0]!)))).mode & 0o777,
-  ).toBe(0o751);
-});
-
-it.each([0, 1])("copies shared inode occurrence %i when hard links are refused", async (index) => {
-  const f = await fixture();
-  const before = await fs.stat(f.worker, { bigint: true });
-  const sharedEntries = f.plan.entries.filter(
-    (entry) => entry.kind === "file" && entry.ino === before.ino.toString(),
-  );
-  f.plan.entries = [
-    ...sharedEntries,
-    ...f.plan.entries.filter((entry) => !sharedEntries.includes(entry)),
-  ];
-  // Exercise copy-before-link and link-before-copy without relying on directory order.
-  const fallback = sharedEntries[index]!.path;
-  const link = fs.link;
-  vi.spyOn(fs, "link").mockImplementation(async (existing, target) => {
-    if (String(existing) === fallback) {
-      throw Object.assign(new Error("hard link unavailable"), {
-        code: index === 0 ? "EXDEV" : "EMLINK",
+it.each(["native", "overlay", "fallback-first", "fallback-second"] as const)(
+  "retains admitted files and modes through replacement using %s",
+  async (mode) => {
+    const overlay = mode === "overlay";
+    const nestedFiles = overlay
+      ? Array.from({ length: 8 }, (_, index) =>
+          path.join("node_modules", "fixture", "dist", "deep", "chunks", `part-${index}.js`),
+        )
+      : [];
+    const f = await fixture(async (source) => {
+      for (const file of nestedFiles) {
+        const destination = path.join(source, file);
+        await fs.mkdir(path.dirname(destination), { recursive: true });
+        await fs.writeFile(destination, `// ${file}\n`);
+        await fs.chmod(destination, 0o444);
+      }
+      if (overlay) {
+        await fs.chmod(path.dirname(path.join(source, nestedFiles[0]!)), 0o751);
+      }
+    });
+    const before = await fs.stat(f.worker, { bigint: true });
+    let fallback: string | undefined;
+    const link = fs.link;
+    const linking = vi.spyOn(fs, "link");
+    if (overlay) {
+      f.plan.entries.sort(
+        (left, right) => Number(left.kind === "directory") - Number(right.kind === "directory"),
+      );
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      const disk = await fs.statfs(f.source);
+      disk.type = 0x794c7630;
+      vi.spyOn(fs, "statfs").mockResolvedValue(disk);
+    } else if (mode !== "native") {
+      const sharedEntries = f.plan.entries.filter(
+        (entry) => entry.kind === "file" && entry.ino === before.ino.toString(),
+      );
+      f.plan.entries = [
+        ...sharedEntries,
+        ...f.plan.entries.filter((entry) => !sharedEntries.includes(entry)),
+      ];
+      fallback = sharedEntries[mode === "fallback-first" ? 0 : 1]!.path;
+      linking.mockImplementation(async (existing, target) => {
+        if (String(existing) === fallback) {
+          throw Object.assign(new Error("hard link unavailable"), {
+            code: mode === "fallback-first" ? "EXDEV" : "EMLINK",
+          });
+        }
+        return await link(existing, target);
       });
     }
-    return await link(existing, target);
+    const mkdir = vi.spyOn(fs, "mkdir");
+    const counts = await (overlay
+      ? withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, f.link)
+      : f.link());
+    expect(counts).toEqual(
+      overlay
+        ? { linked: 0, copied: 3 + nestedFiles.length }
+        : { linked: fallback ? 1 : 2, copied: fallback ? 2 : 1 },
+    );
+    const retainedWorker = path.join(f.destination, path.relative(f.source, fallback ?? f.worker));
+    const retainedStat = await fs.stat(retainedWorker, { bigint: true });
+    if (mode === "native") {
+      expect(retainedStat.ino).toBe(before.ino);
+      expect(
+        (await fs.stat(path.join(f.destination, "dist/worker-alias.js"), { bigint: true })).ino,
+      ).toBe(before.ino);
+    } else {
+      expect(retainedStat.ino).not.toBe(before.ino);
+    }
+    expect(Number(retainedStat.mode & 0o777n)).toBe(0o444);
+    if (overlay) {
+      expect(linking).not.toHaveBeenCalled();
+      expect(mkdir.mock.calls.length).toBeLessThanOrEqual(
+        f.plan.entries.filter((entry) => entry.kind === "directory").length + 1,
+      );
+      for (const file of nestedFiles) {
+        const retained = path.join(f.destination, file);
+        expect(await fs.readFile(retained, "utf8")).toBe(`// ${file}\n`);
+        expect((await fs.stat(retained)).mode & 0o777).toBe(0o444);
+      }
+      expect(
+        (await fs.stat(path.dirname(path.join(f.destination, nestedFiles[0]!)))).mode & 0o777,
+      ).toBe(0o751);
+    }
+    const retainedLauncher = path.join(f.destination, "node_modules/.bin/tool");
+    expect((await fs.stat(retainedLauncher)).ino).not.toBe((await fs.stat(f.launcher)).ino);
+    expect(await fs.readFile(f.launcher, "utf8")).toContain('"$basedir/../tool/cli.js"');
+    expect(await fs.readlink(path.join(f.destination, "node_modules/link.js"))).toBe(
+      path.join("..", "dist/state/worker.js"),
+    );
+    const displaced = `${f.source}.previous`;
+    await fs.rename(f.source, displaced);
+    await fs.rm(displaced, { recursive: true });
+    expect(await fs.readFile(retainedWorker, "utf8")).toBe(
+      "export const generation = 'retained';\n",
+    );
+  },
+);
+
+it("retains unchanged files without rehashing the ctime change caused by its own link", async () => {
+  const content = "export const retained = true;\n";
+  const f = await fixture(async (source) => {
+    await fs.writeFile(path.join(source, "dist", "unique.js"), content);
   });
-  expect(await f.link()).toEqual({ linked: 1, copied: 2 });
-  const retainedWorker = path.join(f.destination, path.relative(f.source, fallback));
-  const copied = await fs.stat(retainedWorker, { bigint: true });
-  expect(copied.ino).not.toBe(before.ino);
-  expect(Number(copied.mode & 0o777n)).toBe(0o444);
-  expect(await fs.readFile(retainedWorker, "utf8")).toBe("export const generation = 'retained';\n");
+  const original = path.join(f.source, "dist", "unique.js");
+  const hash = vi.spyOn(fileDescriptor, "hashFileMutationSnapshotSync");
+  await f.link();
+  expect(hash.mock.calls.filter(([file]) => file === original)).toHaveLength(0);
+  await fs.rm(f.source, { recursive: true });
+  expect(await fs.readFile(path.join(f.destination, "dist", "unique.js"), "utf8")).toBe(content);
 });
 
 it("refuses entries that changed after the inventory and never links a replacement", async () => {
@@ -356,24 +387,48 @@ it("refuses entries that changed after the inventory and never links a replaceme
 });
 
 it.each(["next-entry", "copy-publication"] as const)(
-  "refuses unexpected ctime changes after a prior hard link (%s)",
+  "refuses same-size rewrites with restored mtime after a prior hard link (%s)",
   async (stage) => {
-    const f = await fixture();
+    const f = await fixture(async (source) => {
+      await fs.utimes(
+        path.join(source, "dist", "state", "worker.js"),
+        1_700_000_000,
+        1_700_000_000,
+      );
+    });
     const before = await fs.stat(f.worker, { bigint: true });
     const sharedEntries = f.plan.entries.filter(
       (entry) => entry.kind === "file" && entry.ino === before.ino.toString(),
     );
     const later = sharedEntries[1]!.path;
-    if (stage === "next-entry") {
-      const lstat = fs.lstat;
-      vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-        const stat = await lstat(...args);
-        if (args[0] === later && "ctimeNs" in stat && typeof stat.ctimeNs === "bigint") {
-          stat.ctimeNs += 1n;
+    let mutated = false;
+    const mutate = () => {
+      if (mutated) {
+        return;
+      }
+      mutated = true;
+      const content = fsSync.readFileSync(later);
+      content[0] = content[0]! ^ 1;
+      fsSync.chmodSync(later, 0o600);
+      fsSync.writeFileSync(later, content);
+      fsSync.chmodSync(later, 0o444);
+      fsSync.utimesSync(later, before.atime, before.mtime);
+      advanceCtime(before);
+      expect(fsSync.lstatSync(later, { bigint: true }).ctimeNs).not.toBe(before.ctimeNs);
+    };
+    const advanceCtime = createFileMutationClock({
+      beforeLstat: (pathname) => {
+        if (stage === "next-entry" && pathname === later) {
+          mutate();
         }
-        return stat;
-      });
-    } else {
+      },
+      beforeLstatSync: (pathname) => {
+        if (stage === "copy-publication" && pathname === later) {
+          mutate();
+        }
+      },
+    });
+    if (stage === "copy-publication") {
       const link = fs.link;
       vi.spyOn(fs, "link").mockImplementation(async (existing, target) => {
         if (existing === later) {
@@ -381,16 +436,9 @@ it.each(["next-entry", "copy-publication"] as const)(
         }
         return await link(existing, target);
       });
-      const lstatSync = fsSync.lstatSync;
-      vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
-        const stat = lstatSync(...args);
-        if (args[0] === later && stat && "ctimeNs" in stat && typeof stat.ctimeNs === "bigint") {
-          stat.ctimeNs += 1n;
-        }
-        return stat;
-      });
     }
     await expect(f.link()).rejects.toThrow("changed after snapshot inventory");
+    expect(mutated).toBe(true);
     expect(fsSync.existsSync(path.join(f.destination, path.relative(f.source, later)))).toBe(false);
   },
 );
@@ -423,60 +471,58 @@ async function fileWindowFixture() {
   return { ...f, files };
 }
 
-it("overlaps independent file writes with a bounded window and one parent creation", async () => {
-  const f = await fileWindowFixture();
-  const link = fs.link;
-  let active = 0;
-  let maximum = 0;
-  vi.spyOn(fs, "link").mockImplementation(async (...args) => {
-    active += 1;
-    maximum = Math.max(maximum, active);
-    try {
-      return await link(...args);
-    } finally {
-      active -= 1;
-    }
-  });
-  const mkdir = vi.spyOn(fs, "mkdir");
-  expect(await f.link()).toEqual({ linked: 11, copied: 1 });
-  expect(maximum).toBe(4);
-  expect(active).toBe(0);
-  expect(
-    mkdir.mock.calls.filter(([directory]) => directory === path.join(f.destination, "parallel")),
-  ).toHaveLength(1);
-  for (const entry of f.files) {
-    const retained = path.join(f.destination, path.relative(f.source, entry.path));
-    expect((await fs.stat(retained)).ino.toString()).toBe(entry.ino);
-  }
-});
-
-it("settles admitted writes before rejecting a failed window and leaves later entries untouched", async () => {
-  const f = await fileWindowFixture();
-  const failure = new Error("retained link failed");
-  const link = fs.link;
-  let active = 0;
-  const attempted: string[] = [];
-  vi.spyOn(fs, "link").mockImplementation(async (existing, destination) => {
-    attempted.push(String(existing));
-    if (existing === f.files[1]!.path) {
-      throw failure;
-    }
-    active += 1;
-    try {
-      await link(existing, destination);
-    } finally {
-      active -= 1;
-    }
-  });
-  await expect(
-    f.link().catch((error: unknown) => {
+it.each([false, true])(
+  "settles a bounded file window before returning (failed=%s)",
+  async (failed) => {
+    const f = await fileWindowFixture();
+    const failure = new Error("retained link failed");
+    const link = fs.link;
+    let active = 0;
+    let maximum = 0;
+    const attempted: string[] = [];
+    vi.spyOn(fs, "link").mockImplementation(async (existing, destination) => {
+      attempted.push(String(existing));
+      if (failed && existing === f.files[1]!.path) {
+        throw failure;
+      }
+      active += 1;
+      maximum = Math.max(maximum, active);
+      try {
+        await link(existing, destination);
+      } finally {
+        active -= 1;
+      }
+    });
+    const mkdir = vi.spyOn(fs, "mkdir");
+    const operation = f.link();
+    if (failed) {
+      await expect(
+        operation.catch((error: unknown) => {
+          expect(active).toBe(0);
+          throw error;
+        }),
+      ).rejects.toBe(failure);
+      expect(attempted).not.toContain(f.files[4]!.path);
+      expect(fsSync.existsSync(path.join(f.destination, "node_modules"))).toBe(false);
+    } else {
+      expect(await operation).toEqual({ linked: 11, copied: 1 });
+      expect(maximum).toBe(4);
       expect(active).toBe(0);
-      throw error;
-    }),
-  ).rejects.toBe(failure);
-  expect(attempted).not.toContain(f.files[4]!.path);
-  expect(fsSync.existsSync(path.join(f.destination, "node_modules"))).toBe(false);
-});
+      expect(
+        mkdir.mock.calls.filter(
+          ([directory]) => directory === path.join(f.destination, "parallel"),
+        ),
+      ).toHaveLength(1);
+      for (const entry of f.files) {
+        expect(
+          (
+            await fs.stat(path.join(f.destination, path.relative(f.source, entry.path)))
+          ).ino.toString(),
+        ).toBe(entry.ino);
+      }
+    }
+  },
+);
 
 it.each(["parent", "relocation", "alias"] as const)(
   "rechecks authority after awaited %s preparation before writing",

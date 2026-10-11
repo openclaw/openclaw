@@ -10,6 +10,18 @@ title: "Installer internals"
 
 OpenClaw ships three installer scripts, served from `openclaw.ai`.
 
+Node remains the default runtime. `install.sh --runtime bun` is an explicit
+Bun-only alternative on macOS and glibc Linux, on x64 and arm64. It installs the
+OpenClaw release's pinned Bun fork without requiring Node. See
+[Bun-only global install](/install/bun#bun-only-global-install).
+
+The shell entrypoints in a source checkout share `scripts/install-policy.sh`.
+Run `node scripts/build-installers.mjs` to assemble standalone copies in
+`dist/installers/` before copying, piping, or publishing them. Website sync and
+native builds use these assembled scripts. The npm package keeps both source
+files together for installed updater compatibility. Installing from the website
+never downloads a separate policy helper.
+
 | Script                             | Platform                      | What it does                                                                                                                   |
 | ---------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | [`install.sh`](#installsh)         | macOS / Linux / WSL           | Installs Node if needed, installs OpenClaw via npm (default) or git, can run onboarding.                                       |
@@ -18,7 +30,7 @@ OpenClaw ships three installer scripts, served from `openclaw.ai`.
 
 All three support Node **24.16+ or 26.1+** with a WAL-reset-safe linked SQLite library. When Node is missing and nvm is not detected, `install.sh` provisions Node 26 through Homebrew on macOS and the supported Node 24 LTS line through NodeSource on Linux. When a supported RPM-owned Node links unsafe SQLite, `install.sh` preserves the distro package and provisions a user-space Node runtime through `install-cli.sh`. The rootless `install-cli.sh` downloads Node 24.21.0 on macOS and glibc Linux. FreeBSD uses an installed system runtime. Linux ARMv7 is unsupported. On Windows, winget/Chocolatey/Scoop install the supported Node LTS line, and the portable fallback downloads Node 26.
 
-Before changing packages, every installer probes the exact npm executable it will use. npm 11.15 and earlier installs normally; npm 11.16 and later, including npm 12, receives `--allow-scripts` for only the npm-resolved OpenClaw candidate identity. An unreadable npm version stops before package mutation. A remaining `.openclaw-lifecycle-pending` marker or legacy `dist/openclaw-install-guard` makes the install fail instead of reporting a lifecycle-skipped package as successful.
+Before changing packages, every installer checks the exact npm executable it will use. npm 11.15 and earlier installs normally; npm 11.16 and later, including npm 12, receives `--allow-scripts` for only the npm-resolved OpenClaw candidate identity. An unreadable npm version stops before package mutation. A remaining `.openclaw-lifecycle-pending` marker or legacy `dist/openclaw-install-guard` makes the install fail instead of reporting a lifecycle-skipped package as successful.
 
 On npm 12, local `.tgz` and `.tar.gz` installs and updates need a comma-free archive filename and parent path. npm uses commas to separate lifecycle approvals, so move the archive to a comma-free path before retrying. Relative tarball arguments are still supported; the installer resolves their full path for approval.
 
@@ -53,7 +65,7 @@ then runs them from the checkout so Corepack reads that target's package-manager
 pin. The same directory leads `PATH` for nested install and build commands;
 workspace and lockfile environment overrides are bound to the target checkout
 for those children only. An older ambient `pnpm --version` is not a safe
-selection probe: its version-switching path can modify the target lockfile.
+selection check: its version-switching path can modify the target lockfile.
 
 If Corepack is missing or cannot provision the pinned version, the installers
 use their selected npm executable to install that exact pnpm version into a
@@ -140,13 +152,59 @@ checks also default to five minutes.
   </Step>
   <Step title="Post-install tasks">
     - Resolves the just-installed `openclaw` binary for follow-up commands
-    - npm-prefix and daemon-status probes use a default five-second timeout; completed probes return without waiting for that deadline.
-    - For an unconfigured install, starts onboarding before doctor or gateway probes. With `--no-onboard` or no TTY, it prints the command to finish setup later.
+    - npm-prefix and daemon-status checks use a default five-second timeout; completed checks return without waiting for that deadline.
+    - For an unconfigured install, starts onboarding before doctor or gateway checks. With `--no-onboard` or no TTY, it prints the command to finish setup later.
     - For a configured install, refreshes and restarts a loaded gateway service best-effort and runs repair Doctor. Upgrade repair failures are fatal; plugin update failures remain warnings.
     - When `--verify` runs, it checks the installed version and checks gateway health only after configuration exists.
 
   </Step>
 </Steps>
+
+### Bun runtime
+
+```sh
+curl -fsSL https://openclaw.ai/install.sh | bash -s -- --runtime bun
+```
+
+The Bun path resolves dist-tags from npm’s small tag document without Node
+(exact versions skip that lookup), reads that
+release's Bun pin, verifies archive and executable SHA-256 hashes and the fork
+revision, then stages the runtime at
+`~/.openclaw/tools/bun-<tag>/bun` (`OPENCLAW_HOME` replaces the home directory).
+It installs with `bun add -g --trust`, verifies the package's matching pin and
+Bun launcher, and gives Bun's global bin directory priority in the shell PATH.
+A mismatched packaged pin fails verification. Published releases that omit
+that file, including `2026.10.1`, use the verified pin from their exact release
+tag and must report the requested version through the generated launcher.
+Custom package specs still require a bundled pin. Re-running with a newer release stages its new pin and re-pins an
+existing Gateway service without resetting configuration.
+These service re-pins leave state and configuration untouched; run Doctor
+separately when you need repairs or migrations.
+If a shell profile cannot be safely updated, installation continues and prints
+manual PATH setup commands; existing Gateway services are still re-pinned.
+Service setup receives the caller's original temporary-directory environment,
+so the service never retains the installer's disposable scratch directory.
+
+On macOS, the installer uses `OPENCLAW_SQLITE_LIBRARY` when set; otherwise it
+ensures Homebrew SQLite is installed and exports `HOMEBREW_PREFIX`. It validates
+SQLite before installing OpenClaw. Fresh interactive onboarding receives
+`--install-daemon --daemon-runtime bun`, followed by a Gateway install with the
+exact Bun runtime path. `--no-onboard` leaves a fresh installation without a
+service; existing installed services are still re-pinned.
+
+`--bun-path` accepts an absolute, executable OpenClaw fork path. For published
+versions it must match the pin, including its executable hash. A custom package
+spec requires this option; its installed pin is checked before invoking the CLI.
+Git-checkout builds require Node/pnpm and cannot use `--runtime bun`. Windows,
+musl/Alpine, and platforms without a pin artifact are refused.
+
+`--dry-run` fetches registry and pin metadata and prints the version, pin tag,
+asset, and target path without downloading a runtime or installing packages.
+For fixture mirrors, `OPENCLAW_INSTALL_NPM_REGISTRY` replaces
+`https://registry.npmjs.org`, `OPENCLAW_INSTALL_BUN_PIN_URL` sets a pin URL (an
+optional `{version}` is replaced with the resolved version), and
+`OPENCLAW_INSTALL_BUN_RELEASE_BASE_URL` replaces
+`https://github.com/openclaw/bun/releases/download`.
 
 ### Existing nvm installations
 
@@ -236,6 +294,8 @@ object is unavailable or cannot resolve to a commit.
 | Flag                                    | Description                                                             |
 | --------------------------------------- | ----------------------------------------------------------------------- |
 | `--install-method \| --method npm\|git` | Choose install method (default: `npm`)                                  |
+| `--runtime node\|bun`                   | Select runtime (default: `node`); Bun requires a published fork pin     |
+| `--bun-path <absolute path>`            | Use an existing, verified OpenClaw Bun fork                             |
 | `--npm`                                 | Shortcut for npm method                                                 |
 | `--git \| --github`                     | Shortcut for git method                                                 |
 | `--version <version\|dist-tag\|spec>`   | npm version, dist-tag, or package spec (default: `latest`)              |
@@ -258,6 +318,8 @@ object is unavailable or cannot resolve to a commit.
 | ------------------------------------------------- | ------------------------------------------------------------------ |
 | `OPENCLAW_INSTALL_METHOD=git\|npm`                | Install method                                                     |
 | `OPENCLAW_VERSION=latest\|next\|<semver>\|<spec>` | npm version, dist-tag, or package spec                             |
+| `OPENCLAW_RUNTIME=node\|bun`                      | Runtime (default: `node`)                                          |
+| `OPENCLAW_BUN_PATH=<absolute path>`               | Existing OpenClaw Bun fork executable                              |
 | `OPENCLAW_BETA=0\|1`                              | Use beta if available                                              |
 | `OPENCLAW_HOME=<path>`                            | Base directory for OpenClaw state and default git/onboarding paths |
 | `OPENCLAW_GIT_DIR=<path>`                         | Checkout directory                                                 |
@@ -309,7 +371,7 @@ system Node packages.
   <Step title="Refresh loaded gateway service">
     If a gateway service is already loaded from that same prefix, the script runs
     `openclaw gateway install --force`, which activates the replacement service,
-    and then probes gateway health best-effort.
+    and then checks gateway health best-effort.
   </Step>
 </Steps>
 
@@ -391,7 +453,7 @@ its existing service-refresh behavior.
 | `--compatible-with <ver>`               | Refuse a CLI that cannot modify config written by `<ver>`                         |
 | `--node-version <ver>`                  | Node version (default: `24.21.0`)                                                 |
 | `--node-only`                           | Install only the private Node runtime under `--prefix`; no system package changes |
-| `--runtime-only`                        | Install Node and CLI without Gateway probes, service refresh, or onboarding       |
+| `--runtime-only`                        | Install Node and CLI without Gateway checks, service refresh, or onboarding       |
 | `--json`                                | Emit NDJSON events                                                                |
 | `--onboard`                             | Run `openclaw onboard` after install                                              |
 | `--no-onboard`                          | Skip onboarding (default)                                                         |

@@ -29,13 +29,6 @@ type RowUpdate = Updateable<WorkerEnvironments>;
 type SshFallbackPortInsert = Insertable<WorkerEnvironmentSshFallbackPorts>;
 type CredentialInsert = Insertable<WorkerEnvironmentCredentials>;
 
-function nextOwnerEpoch(ownerEpoch: number): number {
-  const next = ownerEpoch + 1;
-  if (!Number.isSafeInteger(next)) {
-    throw new Error("Worker environment owner epoch is exhausted");
-  }
-  return next;
-}
 export function nextGlobalOwnerEpoch(db: DatabaseSync): number {
   // Transcript commit identity is (session, epoch, seq), so an ownership
   // generation may never be reused when a session moves between environments.
@@ -51,9 +44,12 @@ export function nextGlobalOwnerEpoch(db: DatabaseSync): number {
       .selectFrom("worker_transcript_commit_heads")
       .select(({ fn }) => fn.max<number>("run_epoch").as("run_epoch")),
   );
-  return nextOwnerEpoch(
-    Math.max(latestEnvironment?.owner_epoch ?? 0, latestTranscriptCommit?.run_epoch ?? 0),
-  );
+  const next =
+    Math.max(latestEnvironment?.owner_epoch ?? 0, latestTranscriptCommit?.run_epoch ?? 0) + 1;
+  if (!Number.isSafeInteger(next)) {
+    throw new Error("Worker environment owner epoch is exhausted");
+  }
+  return next;
 }
 export function updateRow(
   db: DatabaseSync,
@@ -117,22 +113,13 @@ export function revokeCredential(db: DatabaseSync, environmentId: string): void 
   );
 }
 export function upsertCredential(db: DatabaseSync, credential: CredentialInsert): void {
+  const { environment_id: environmentId, ...values } = credential;
   executeSqliteQuerySync(
     db,
     queryWorkerEnvironmentStore(db)
       .insertInto("worker_environment_credentials")
-      .values(credential)
-      .onConflict((conflict) =>
-        conflict.column("environment_id").doUpdateSet({
-          credential_hash: credential.credential_hash,
-          bundle_hash: credential.bundle_hash,
-          session_id: credential.session_id,
-          rpc_set_version: credential.rpc_set_version,
-          owner_epoch: credential.owner_epoch,
-          expires_at_ms: credential.expires_at_ms,
-          delivered_at_ms: credential.delivered_at_ms,
-        }),
-      ),
+      .values({ environment_id: environmentId, ...values })
+      .onConflict((conflict) => conflict.column("environment_id").doUpdateSet(values)),
   );
 }
 export function credentialInsert(params: {
@@ -199,7 +186,7 @@ export function reconcileAttachedSessionOwners(db: DatabaseSync, nowMs: number):
     const [, ...duplicates] = owners.toSorted(compareAttachmentAuthority);
     for (const duplicate of duplicates) {
       // Fence legacy duplicate live owners before startup snapshots them.
-      updateWorkerEnvironmentRecord(db, duplicate.environmentId, "attached", {
+      updateRow(db, duplicate.environmentId, "attached", {
         owner_epoch: nextGlobalOwnerEpoch(db),
         state: "idle",
         attached_session_ids_json: json([]),

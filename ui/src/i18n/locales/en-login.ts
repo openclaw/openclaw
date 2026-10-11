@@ -4,6 +4,17 @@ import { en } from "./en.ts";
 // Recovery copy follows the lazy login and plugin views; the loader label stays eager.
 const enLogin = {
   login: {
+    unsupportedBrowser: {
+      title: "Update your browser to use OpenClaw",
+      description:
+        "This browser is missing features the Control UI needs to display menus and dialogs.",
+      apple: "Use macOS 26.2 or iOS 26.2 or later, with Safari 26.2 or later.",
+      browsers: "You can also use Chrome or Firefox released within the last six months.",
+      native: "On an older Mac, open this dashboard in an up-to-date browser instead.",
+      open: "Open in browser",
+      opened: "Opened in your default browser.",
+      failed: "Could not open your browser. Copy this page’s address into an up-to-date browser.",
+    },
     heading: "Connect to OpenClaw",
     lede: "Enter the Gateway URL and secret, or open the one-time link that openclaw dashboard prints on the Gateway host.",
     gatewayUrl: "Gateway URL",
@@ -24,11 +35,19 @@ const enLogin = {
     toggleSecretVisibility: "Toggle Gateway secret visibility",
     failure: {
       rawError: "Raw error",
+      busy: {
+        title: "Gateway busy, retrying…",
+        summary:
+          "The Gateway is reachable, but the connection could not be opened. This page will retry automatically.",
+        countdown: "Retrying in {seconds}s…",
+        retrying: "Retrying now…",
+      },
       profileUnavailable: {
-        title: "Profile verification unavailable",
+        title: "Couldn't verify your account",
+        summary: "OpenClaw couldn't check your account right now. Please try again shortly.",
         stepRetry: "Retry shortly.",
         stepAdmin:
-          "If this continues, ask a Gateway administrator to check the identity provider and GitHub API credential.",
+          "If this continues, ask the person who manages OpenClaw to check account access.",
       },
       verifiedUserRequired: {
         title: "Verified identity required",
@@ -38,6 +57,16 @@ const enLogin = {
           "Reconnect through the trusted proxy or Tailscale so the Gateway can verify your identity.",
         stepSharedSecret:
           "For trusted local operator access, use the shared Gateway token or password.",
+      },
+      accessDenied: {
+        title: "No access to this Gateway",
+        summary:
+          "You're signed in, but this Gateway hasn't granted your account access, or that access has ended.",
+        stepAdmin:
+          "Ask a Gateway administrator to assign your profile a role, or to grant or restore your access.",
+        stepFindProfile:
+          "Administrators can find your profile with openclaw users list --json, then assign a role with users.setRole.",
+        stepReconnect: "This page reconnects on its own once access is granted.",
       },
       authRequired: {
         title: "This Gateway expects its token",
@@ -57,6 +86,15 @@ const enLogin = {
         stepDashboard:
           "Run openclaw dashboard --no-open for a fresh URL, or openclaw gateway auth-token --show to recover the token.",
         stepReplace: "Replace the Gateway secret with the token for this Gateway URL.",
+      },
+      bootstrapInvalid: {
+        title: "Pairing link is no longer valid",
+        summary:
+          "This one-time dashboard link may have expired or already been used. Request a fresh link instead of changing the Gateway secret.",
+        stepOpen:
+          "Open the fresh link that the command opens or copies in this browser. Pairing links can be used only once and expire after ten minutes.",
+        stepJson:
+          "If the browser or clipboard is unavailable, run openclaw dashboard --json on the Gateway host and open its browserUrl in this browser.",
       },
       trustedProxy: {
         title: "Proxy authentication required",
@@ -93,6 +131,13 @@ const enLogin = {
         waiting:
           "Waiting for approval… this page connects on its own once the request is approved.",
         checkNow: "Check now",
+        declinedTitle: "Access request declined",
+        declinedSummary:
+          "The operator declined this browser's access request. Automatic retries have stopped. You can request approval again when you are ready.",
+        expiredTitle: "Access request expired",
+        expiredSummary:
+          "This browser's access request timed out without approval. Request approval again to continue.",
+        requestAgain: "Request again",
       },
       insecure: {
         title: "Secure browser context required",

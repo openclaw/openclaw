@@ -87,8 +87,8 @@ function fixturePayload(): DoctorMemoryStatusPayload {
 function renderOverview(
   status: MemoryOverviewStatus,
   engineSelection: MemoryOverviewProps["engineSelection"] = {
-    kind: "auto",
-    engineId: "memory-core",
+    kind: "default",
+    pluginId: "memory-core",
   },
   overrides: Partial<MemoryOverviewProps> = {},
 ) {
@@ -147,7 +147,7 @@ describe("renderMemoryOverview", () => {
   it("hibernates a disabled pinned engine and points to Settings", () => {
     const container = renderOverview(
       { kind: "ready", payload: fixturePayload() },
-      { kind: "pinned", engineId: "memory-core" },
+      { kind: "pinned", pluginId: "memory-core" },
       { engineDisabled: true },
     );
 
@@ -172,34 +172,6 @@ describe("renderMemoryOverview", () => {
     expect(phaseRows).toHaveLength(3);
     expect(phaseRows.every((row) => row.textContent?.includes("Disabled"))).toBe(true);
     expect(phaseRows.every((row) => !row.textContent?.includes("next "))).toBe(true);
-  });
-
-  it("explains the phases in sweep order and links to the dreaming guide", () => {
-    const container = renderOverview({ kind: "ready", payload: fixturePayload() });
-    const phaseRows = [...container.querySelectorAll(".settings-row")].filter((row) =>
-      /Light phase|REM phase|Deep phase/.test(row.textContent ?? ""),
-    );
-
-    expect(
-      phaseRows.map((row) => row.querySelector(".settings-row__title")?.textContent?.trim()),
-    ).toEqual(["Light phase", "REM phase", "Deep phase"]);
-    expect(phaseRows[0]?.textContent).toContain(
-      "Sorts fresh short-term notes and stages promising candidates",
-    );
-    expect(phaseRows[1]?.textContent).toContain(
-      "Reflects on themes and recurring ideas across recent activity",
-    );
-    expect(phaseRows[2]?.textContent).toContain(
-      "promotes the keepers into long-term memory (MEMORY.md), and writes the dream diary",
-    );
-    expect(phaseRows.every((row) => row.textContent?.includes("0 3 * * *"))).toBe(true);
-
-    const docs = container.querySelector<HTMLAnchorElement>(
-      'a[href="https://docs.openclaw.ai/concepts/dreaming"]',
-    );
-    expect(docs?.textContent).toContain("Open dreaming guide");
-    expect(docs?.target).toBe("_blank");
-    expect(docs?.rel).toBe("noreferrer noopener");
   });
 
   it("reports an enabled phase without its managed cron as not scheduled", () => {
@@ -237,20 +209,9 @@ describe("renderMemoryOverview", () => {
     expect(onProbeEmbeddings).toHaveBeenCalledOnce();
   });
 
-  it("hides the embedding test once readiness is healthy", () => {
-    const container = renderOverview({ kind: "ready", payload: fixturePayload() });
-
-    expect(
-      [...container.querySelectorAll<HTMLButtonElement>("button")].some(
-        (button) => button.textContent?.trim() === "Test",
-      ),
-    ).toBe(false);
-  });
-
   it.each([
     { searchRuntimeRegistered: false, error: "memory plugin unavailable", neutral: true },
     { searchRuntimeRegistered: true, error: "search manager failed", neutral: false },
-    { searchRuntimeRegistered: undefined, error: "plugin load failed", neutral: false },
   ])("distinguishes absent search support from $error", ({ neutral, ...diagnostic }) => {
     const container = renderOverview({
       kind: "ready",

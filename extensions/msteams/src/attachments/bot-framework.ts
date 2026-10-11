@@ -1,3 +1,4 @@
+import { lookup } from "node:dns/promises";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
@@ -14,7 +15,6 @@ import {
   applyAuthorizationHeaderForUrl,
   type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,
-  type MSTeamsAttachmentResolveFn,
   resolveAttachmentFetchPolicy,
   resolveMSTeamsMediaKind,
   safeFetchWithPolicy,
@@ -25,10 +25,6 @@ import type {
   MSTeamsInboundMedia,
 } from "./types.js";
 
-/**
- * Bot Framework Service token scope for requesting a token used against
- * the Bot Connector (v3) REST endpoints such as `/v3/attachments/{id}`.
- */
 const BOT_FRAMEWORK_SCOPE = "https://api.botframework.com";
 
 /**
@@ -57,19 +53,10 @@ type BotFrameworkAttachmentInfo = {
   views?: BotFrameworkView[] | null;
 };
 
-function normalizeServiceUrl(serviceUrl: string): string {
-  // Bot Framework service URLs sometimes carry a trailing slash; normalize so
-  // we can safely append `/v3/attachments/...` below.
-  return serviceUrl.replace(/\/+$/, "");
-}
-
 type BotFrameworkAttachmentRequest = {
   url: string;
   accessToken: string;
   policy: MSTeamsAttachmentFetchPolicy;
-  fetchFn?: typeof fetch;
-  fetchFnSupportsDispatcher?: boolean;
-  resolveFn?: MSTeamsAttachmentResolveFn;
   logger?: MSTeamsAttachmentDownloadLogger;
   deadline?: MSTeamsRequestDeadline;
 };
@@ -90,9 +77,7 @@ async function fetchBotFrameworkAttachment(
     response = await safeFetchWithPolicy({
       url: params.url,
       policy: params.policy,
-      fetchFn: params.fetchFn,
-      fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
-      resolveFn: params.resolveFn,
+      resolveFn: lookup,
       requestInit: { headers },
       timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
     });
@@ -137,7 +122,6 @@ async function saveBotFrameworkAttachmentView(
     maxBytes: number;
     fileNameHint?: string;
     contentTypeHint?: string;
-    preserveFilenames?: boolean;
   },
 ): Promise<{ path: string; contentType?: string } | undefined> {
   const response = await fetchBotFrameworkAttachment(params, "attachmentView");
@@ -165,7 +149,6 @@ async function saveBotFrameworkAttachmentView(
       maxBytes: params.maxBytes,
       fallbackContentType: params.contentTypeHint,
       subdir: "inbound",
-      originalFilename: params.preserveFilenames ? params.fileNameHint : undefined,
     });
   } catch (err) {
     params.logger?.warn?.("msteams botFramework attachmentView save failed", {
@@ -189,13 +172,7 @@ type BotFrameworkDownloadOptions = {
   maxBytes: number;
   allowHosts?: string[];
   authAllowHosts?: string[];
-  fetchFn?: typeof fetch;
-  fetchFnSupportsDispatcher?: boolean;
-  resolveFn?: MSTeamsAttachmentResolveFn;
   deadline?: MSTeamsRequestDeadline;
-  fileNameHint?: string | null;
-  contentTypeHint?: string | null;
-  preserveFilenames?: boolean;
   logger?: MSTeamsAttachmentDownloadLogger;
 };
 
@@ -210,7 +187,7 @@ async function downloadMSTeamsBotFrameworkAttachment(
     allowHosts: params.allowHosts,
     authAllowHosts: params.authAllowHosts,
   });
-  const baseUrl = `${normalizeServiceUrl(params.serviceUrl)}/v3/attachments/${encodeURIComponent(params.attachmentId)}`;
+  const baseUrl = `${params.serviceUrl.replace(/\/+$/, "")}/v3/attachments/${encodeURIComponent(params.attachmentId)}`;
   if (!isUrlAllowed(baseUrl, policy.allowHosts)) {
     return undefined;
   }
@@ -236,9 +213,6 @@ async function downloadMSTeamsBotFrameworkAttachment(
     url: baseUrl,
     accessToken,
     policy,
-    fetchFn: params.fetchFn,
-    fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
-    resolveFn: params.resolveFn,
     logger: params.logger,
     deadline: params.deadline,
   };
@@ -267,14 +241,8 @@ async function downloadMSTeamsBotFrameworkAttachment(
     return undefined;
   }
 
-  const fileNameHint =
-    (typeof params.fileNameHint === "string" && params.fileNameHint) ||
-    (typeof info.name === "string" && info.name) ||
-    undefined;
-  const contentTypeHint =
-    (typeof params.contentTypeHint === "string" && params.contentTypeHint) ||
-    (typeof info.type === "string" && info.type) ||
-    undefined;
+  const fileNameHint = (typeof info.name === "string" && info.name) || undefined;
+  const contentTypeHint = (typeof info.type === "string" && info.type) || undefined;
 
   const saved = await saveBotFrameworkAttachmentView({
     ...request,
@@ -282,7 +250,6 @@ async function downloadMSTeamsBotFrameworkAttachment(
     maxBytes: params.maxBytes,
     fileNameHint,
     contentTypeHint,
-    preserveFilenames: params.preserveFilenames,
   });
   if (!saved) {
     return undefined;

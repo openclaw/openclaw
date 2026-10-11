@@ -34,6 +34,7 @@ import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js"
 import {
   attachWorkerTurnExecutionIdentityStore,
   bindWorkerTurnOwner,
+  bindWorkerTurnCapabilities,
   getWorkerTurnExecutionIdentityCapability,
 } from "./placement-turn-claim-events.js";
 import { createWorkerEnvironmentService, type WorkerEnvironmentService } from "./service.js";
@@ -128,15 +129,13 @@ export const testState = {} as {
   config: OpenClawConfig;
   nowMs: number;
   providersEnabled: boolean;
-  reuseReadWorkers: boolean;
   releaseTurnOwners: Array<() => void | Promise<void>>;
   prepareInstallation: WorkerEnvironmentServiceOptions["prepareInstallation"];
   bootstrapWorker: WorkerEnvironmentServiceOptions["bootstrapWorker"];
 };
 
-export function setupWorkerEnvironmentServiceSuite(options: { reuseReadWorkers?: boolean } = {}) {
+export function setupWorkerEnvironmentServiceSuite() {
   beforeEach(async () => {
-    testState.reuseReadWorkers = options.reuseReadWorkers === true;
     testState.releaseTurnOwners = [];
     testState.root = await fs.mkdtemp(
       path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-service-"),
@@ -185,21 +184,15 @@ export function setupWorkerEnvironmentServiceSuite(options: { reuseReadWorkers?:
     await fs.rm(testState.root, { recursive: true, force: true });
   });
 
-  if (options.reuseReadWorkers) {
-    afterAll(async () => {
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-    });
-  }
+  afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+  });
 }
 
 async function closeWorkerEnvironmentDatabase() {
-  if (testState.reuseReadWorkers) {
-    // Close native handles and admission for this case; retain only the reader worker code.
-    await closeOpenClawStateDatabaseByPathAsync(testState.stateDb.path);
-  } else {
-    await closeOpenClawStateDatabaseAsync();
-  }
+  // Close native handles and admission for this case; retain only the reader worker code.
+  await closeOpenClawStateDatabaseByPathAsync(testState.stateDb.path);
   closeOpenClawStateDatabaseForTest();
 }
 
@@ -233,7 +226,7 @@ export function createService(
       | "executeInference"
       | "inferenceStore"
       | "closeNodeBootstrapArtifacts"
-      | "executeSessionTool"
+      | "createGatewayTools"
       | "executeComputer"
       | "providerCallTimeoutMs"
       | "projectNamespace"
@@ -319,23 +312,33 @@ export async function seedBootstrapping(
   install?: WorkerInstallationArtifact["install"],
   sharedHost = false,
 ) {
-  const intent = await testState.store.createIntent({
-    environmentId,
-    providerId: "fake",
-    profileId: "development",
-    profileSnapshot: { ...(install ? { install } : {}), settings: { region: "test" } },
-    provisionOperationId: `provision:${environmentId}`,
-  });
-  const provisioning = await testState.store.transition({
-    environmentId,
-    from: intent.state,
-    to: "provisioning",
+  const provisioning = await seedProvisioning(environmentId, {
+    ...(install ? { install } : {}),
+    settings: { region: "test" },
   });
   return testState.store.transition({
     environmentId,
     from: provisioning.state,
     to: "bootstrapping",
     patch: { leaseId: `lease:${environmentId}`, sshEndpoint: SSH_ENDPOINT, sharedHost },
+  });
+}
+
+async function seedProvisioning(
+  environmentId: string,
+  profileSnapshot: Parameters<WorkerEnvironmentStore["createIntent"]>[0]["profileSnapshot"],
+) {
+  const intent = await testState.store.createIntent({
+    environmentId,
+    providerId: "fake",
+    profileId: "development",
+    profileSnapshot,
+    provisionOperationId: `provision:${environmentId}`,
+  });
+  return testState.store.transition({
+    environmentId,
+    from: intent.state,
+    to: "provisioning",
   });
 }
 
@@ -357,17 +360,8 @@ export async function seedReadyDesktop(
   environmentId: string,
   desktop: WorkerDesktopEndpoint = DESKTOP,
 ) {
-  const intent = await testState.store.createIntent({
-    environmentId,
-    providerId: "fake",
-    profileId: "development",
-    profileSnapshot: { settings: { region: "test", desktop: true } },
-    provisionOperationId: `provision:${environmentId}`,
-  });
-  const provisioning = await testState.store.transition({
-    environmentId,
-    from: intent.state,
-    to: "provisioning",
+  const provisioning = await seedProvisioning(environmentId, {
+    settings: { region: "test", desktop: true },
   });
   const bootstrapping = await testState.store.transition({
     environmentId,
@@ -391,17 +385,8 @@ export async function seedReadyNodeDesktop(
   environmentId: string,
   desktop: WorkerDesktopEndpoint = DESKTOP,
 ) {
-  const intent = await testState.store.createIntent({
-    environmentId,
-    providerId: "fake",
-    profileId: "development",
-    profileSnapshot: { settings: { region: "test", desktop: true } },
-    provisionOperationId: `provision:${environmentId}`,
-  });
-  const provisioning = await testState.store.transition({
-    environmentId,
-    from: intent.state,
-    to: "provisioning",
+  const provisioning = await seedProvisioning(environmentId, {
+    settings: { region: "test", desktop: true },
   });
   return testState.store.transition({
     environmentId,
@@ -665,7 +650,8 @@ export async function bindPlacementHarness(
   const databasePath = testState.stateDb.path;
   attachWorkerTurnExecutionIdentityStore(executionStore, databasePath);
   const placementStore = {
-    assertWorkerRuntimeRefresh: vi.fn(() => {
+    fenceWorkerTurnForRecovery: vi.fn(),
+    prepareWorkerRuntimeRefresh: vi.fn(async () => {
       throw new Error("Cannot refresh a worker runtime while its turn is active");
     }),
     readWorkerTurnClaim: vi.fn(() => claim),
@@ -674,8 +660,8 @@ export async function bindPlacementHarness(
     getExecutionIdentityCapability: (current: WorkerSessionTurnClaim) =>
       getWorkerTurnExecutionIdentityCapability(executionStore, current),
     isWorkerTurnToolAuthorized: vi.fn(() => true),
-    updateAckCursors: vi.fn(),
-    prepareWorkspaceResultOwnerRevocation: vi.fn(),
+    updateAckCursors: vi.fn(async () => {}),
+    prepareWorkspaceResultOwnerRevocation: vi.fn(async () => {}),
     registerTurnClaimClosedHandler: vi.fn(() => () => {}),
   };
   const instance = createOperationalRunInstanceRef(claim.runId);
@@ -713,5 +699,13 @@ export async function bindPlacementHarness(
     },
   );
   const workerService = createService(createProvider(), { ...serviceOptions, placementStore });
-  return { identity, placementStore, workerService, source, releaseSource };
+  return {
+    identity,
+    placementStore,
+    workerService,
+    source,
+    releaseSource,
+    bindToolSurface: (surface: Parameters<typeof bindWorkerTurnCapabilities>[2]["toolSurface"]) =>
+      bindWorkerTurnCapabilities(executionStore, claim, { toolSurface: surface }),
+  };
 }

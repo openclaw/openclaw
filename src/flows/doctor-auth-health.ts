@@ -14,16 +14,10 @@ export async function runAuthProfileMigration(ctx: DoctorHealthFlowContext): Pro
   const { repairAuthProfileMigration } = await import("../commands/doctor/auth-profile-repair.js");
   const { maybeRepairLegacyOAuthProfileIds } =
     await import("../commands/doctor-auth-legacy-oauth.js");
-  const { maybeRepairLegacyOAuthSidecarProfiles } =
-    await import("../commands/doctor-auth-oauth-sidecar.js");
   const { maybeMigrateLegacyPluginModelCatalogs } =
     await import("../commands/doctor-plugin-model-catalog.js");
   const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
   const { note } = await import("../../packages/terminal-core/src/note.js");
-  await maybeRepairLegacyOAuthSidecarProfiles({
-    cfg: ctx.cfg,
-    prompter: ctx.prompter,
-  });
   if (ctx.configResult.openAICodexAuthProfileIdMap === undefined) {
     const authRepair = await repairAuthProfileMigration({
       cfg: ctx.cfg,
@@ -44,12 +38,13 @@ export async function runAuthProfileMigration(ctx: DoctorHealthFlowContext): Pro
       ];
     }
   }
-  await maybeMigrateLegacyPluginModelCatalogs({
+  const migrationContext = () => ({
     cfg: ctx.cfg,
     ...(ctx.env ? { env: ctx.env } : {}),
     prompter: ctx.prompter,
     runtime: ctx.runtime,
   });
+  await maybeMigrateLegacyPluginModelCatalogs(migrationContext());
   const modelsBeforeRepair = ctx.cfg.agents?.defaults?.models;
   const legacyOAuthRepair = await maybeRepairLegacyOAuthProfileIds(ctx.cfg, ctx.prompter);
   ctx.cfg = legacyOAuthRepair.config;
@@ -67,12 +62,7 @@ export async function runAuthProfileMigration(ctx: DoctorHealthFlowContext): Pro
   }
   const { maybeMigrateModelCatalogCredentials } =
     await import("../commands/doctor-model-catalog-credentials.js");
-  await maybeMigrateModelCatalogCredentials({
-    cfg: ctx.cfg,
-    ...(ctx.env ? { env: ctx.env } : {}),
-    prompter: ctx.prompter,
-    runtime: ctx.runtime,
-  });
+  await maybeMigrateModelCatalogCredentials(migrationContext());
   let authProfileHealthReady = true;
   if (
     ctx.configResult.retiredAuthProfileCleanupPlans?.length ||
@@ -80,9 +70,9 @@ export async function runAuthProfileMigration(ctx: DoctorHealthFlowContext): Pro
   ) {
     const { runRetiredAuthProfileCleanup, runWriteConfigHealth } =
       await import("./doctor-health-contribution-runners.config.js");
-    await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
+    const persisted = await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
     authProfileHealthReady =
-      !ctx.configWriteRefusal && isDeepStrictEqual(ctx.cfg, ctx.cfgForPersistence);
+      persisted && !ctx.configWriteRefusal && isDeepStrictEqual(ctx.cfg, ctx.cfgForPersistence);
     if (authProfileHealthReady) {
       await runRetiredAuthProfileCleanup(ctx);
     }

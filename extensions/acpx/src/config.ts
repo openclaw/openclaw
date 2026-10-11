@@ -11,13 +11,14 @@ import type {
   AcpxPermissionMode,
   AcpxNonInteractivePermissionPolicy,
   McpServerConfig,
-  AcpxMcpServer,
   ResolvedAcpxPluginConfig,
 } from "./config-schema.js";
 export { type ResolvedAcpxPluginConfig } from "./config-schema.js";
 
-const ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME = "openclaw-plugin-tools";
-const ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME = "openclaw-tools";
+const MANAGED_MCP_BRIDGES = [
+  ["pluginToolsMcpBridge", "openclaw-plugin-tools", "plugin-tools-serve"],
+  ["openClawToolsMcpBridge", "openclaw-tools", "openclaw-tools-serve"],
+] as const;
 const requireFromHere = createRequire(import.meta.url);
 
 function isAcpxPluginRoot(dir: string): boolean {
@@ -148,32 +149,20 @@ function resolveConfiguredMcpServers(params: {
   moduleUrl?: string;
 }): Record<string, McpServerConfig> {
   const resolved = { ...params.mcpServers };
-  if (params.pluginToolsMcpBridge && resolved[ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME]) {
-    throw new Error(
-      `mcpServers.${ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME} is reserved when pluginToolsMcpBridge=true`,
-    );
+  for (const [flag, name] of MANAGED_MCP_BRIDGES) {
+    if (params[flag] && resolved[name]) {
+      throw new Error(`mcpServers.${name} is reserved when ${flag}=true`);
+    }
   }
-  if (params.openClawToolsMcpBridge && resolved[ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME]) {
-    throw new Error(
-      `mcpServers.${ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME} is reserved when openClawToolsMcpBridge=true`,
-    );
-  }
-  if (params.pluginToolsMcpBridge) {
-    resolved[ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME] = resolveManagedToolsMcpServerConfig(
-      "plugin-tools-serve",
-      params.moduleUrl,
-    );
-  }
-  if (params.openClawToolsMcpBridge) {
-    resolved[ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME] = resolveManagedToolsMcpServerConfig(
-      "openclaw-tools-serve",
-      params.moduleUrl,
-    );
+  for (const [flag, name, entryPoint] of MANAGED_MCP_BRIDGES) {
+    if (params[flag]) {
+      resolved[name] = resolveManagedToolsMcpServerConfig(entryPoint, params.moduleUrl);
+    }
   }
   return resolved;
 }
 
-export function toAcpMcpServers(mcpServers: Record<string, McpServerConfig>): AcpxMcpServer[] {
+export function toAcpMcpServers(mcpServers: Record<string, McpServerConfig>) {
   return Object.entries(mcpServers).map(([name, server]) => ({
     name,
     command: server.command,
@@ -198,9 +187,9 @@ export function resolveAcpxPluginConfig(params: {
   }
   const normalized = parsed.data;
   const workspaceDir = params.workspaceDir?.trim() || process.cwd();
-  const cwd = path.resolve(normalized.cwd?.trim() || workspaceDir);
+  const cwd = path.resolve(normalized.cwd ?? workspaceDir);
   const stateDir = path.resolve(
-    normalized.stateDir?.trim() || path.join(params.stateDir ?? resolveStateDir(), "acpx"),
+    normalized.stateDir ?? path.join(params.stateDir ?? resolveStateDir(), "acpx"),
   );
   const pluginToolsMcpBridge = normalized.pluginToolsMcpBridge === true;
   const openClawToolsMcpBridge = normalized.openClawToolsMcpBridge === true;

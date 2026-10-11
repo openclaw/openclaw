@@ -1,7 +1,15 @@
 // Qa Lab tests cover lab server capture plugin behavior.
 import { createServer } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
-import { mapCaptureEventForQa, readQaCaptureStartupStatus } from "./lab-server-capture.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createQaCaptureLifecycle,
+  mapCaptureEventForQa,
+  readQaCaptureStartupStatus,
+} from "./lab-server-capture.js";
+
+vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
+  acquireDebugProxyCaptureStoreAsync: undefined,
+}));
 
 const cleanups: Array<() => Promise<void>> = [];
 
@@ -12,6 +20,17 @@ afterEach(async () => {
 });
 
 describe("qa-lab server capture helpers", () => {
+  it("refuses unavailable async capture without running the operation", async () => {
+    const capture = createQaCaptureLifecycle();
+    const operation = vi.fn();
+    await expect(capture.withStore(operation)).rejects.toThrow(
+      "QA capture requires async proxy capture support. Upgrade the OpenClaw host.",
+    );
+    expect(operation).not.toHaveBeenCalled();
+    capture.stopAdmission();
+    await expect(capture.release()).resolves.toBeUndefined();
+  });
+
   it("maps capture rows into QA-friendly fields", () => {
     const record = mapCaptureEventForQa({
       flowId: "flow-1",

@@ -2,14 +2,33 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { isCronJobActive } from "../active-jobs.js";
 import { noteCronJobsStoreCommit } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import type { CronRuntimeMutationContracts } from "../store/runtime-mutation.types.js";
-import type { CronScheduleMaintenanceOptions } from "../store/runtime-worker.types.js";
+import type {
+  CronRuntimeMutationContracts,
+  CronScheduleMaintenanceOptions,
+} from "../store/runtime-worker.types.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
-import { applyCronRuntimeRowsToState } from "./runtime-store.js";
+import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import type { CronServiceState } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
 
 type MaintenanceOutcome = CronRuntimeMutationContracts["cron.scheduleUnowned"]["outcome"];
+
+/** Capture local activity before dispatch; new activity may race this snapshot. */
+export function captureCronScheduleOwnership(state: CronServiceState, jobIds: readonly string[]) {
+  return jobIds.map((jobId) => {
+    const reservation = state.queuedRunReservationsByJobId.get(jobId);
+    return {
+      jobId,
+      active: isCronJobActive(jobId),
+      reservation: reservation
+        ? {
+            markerAtMs: reservation.markerAtMs,
+            preserveWhenDisabled: reservation.preserveWhenDisabled,
+          }
+        : undefined,
+    };
+  });
+}
 
 /** Schedules authoritative rows in the worker without clearing live process ownership. */
 export async function recomputeUnownedCronSchedules(
@@ -29,40 +48,14 @@ export async function recomputeUnownedCronSchedules(
         throw new Error("Cron schedule maintenance owner retired");
       }
     },
-    prepare({ jobIds }) {
-      const owners = jobIds.map((jobId) => ({
-        jobId,
-        active: isCronJobActive(jobId),
-        reservation: state.queuedRunReservationsByJobId.get(jobId),
-      }));
-      const ownership = owners.map(({ jobId, active, reservation }) => ({
-        jobId,
-        active,
-        reservation: reservation
-          ? {
-              markerAtMs: reservation.markerAtMs,
-              preserveWhenDisabled: reservation.preserveWhenDisabled,
-            }
-          : undefined,
-      }));
-      return {
-        value: { nowMs: opts?.nowMs ?? state.deps.nowMs(), ownership },
-        assertCurrent() {
-          for (let index = 0; index < owners.length; index += 1) {
-            const owner = owners[index]!;
-            const prepared = ownership[index]!;
-            const current = state.queuedRunReservationsByJobId.get(owner.jobId);
-            if (
-              owner.active !== isCronJobActive(owner.jobId) ||
-              current !== owner.reservation ||
-              current?.markerAtMs !== prepared.reservation?.markerAtMs ||
-              current?.preserveWhenDisabled !== prepared.reservation?.preserveWhenDisabled
-            ) {
-              throw new Error("Cron schedule ownership changed before commit");
-            }
-          }
-        },
-      };
+    snapshot: {
+      nowMs: opts?.nowMs ?? state.deps.nowMs(),
+      ownership: captureCronScheduleOwnership(state, state.store?.jobs.map((job) => job.id) ?? []),
+    },
+    onSettled(result) {
+      if (result === "unknown") {
+        noteCronJobsStoreCommit(storeKey);
+      }
     },
     publish(committed) {
       outcome = committed;

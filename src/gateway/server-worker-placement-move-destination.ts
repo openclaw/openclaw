@@ -1,7 +1,8 @@
-import type { managedWorktrees } from "../agents/worktrees/service.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveWorkerPlacementSessionTarget } from "./server-worker-placement-session-target.js";
-import type * as sessionUtils from "./session-utils.js";
+import {
+  resolveWorkerPlacementSessionTarget,
+  type WorkerPlacementSessionRuntime,
+} from "./server-worker-placement-session-target.js";
 import { resolveDevicePlacementEligibility } from "./worker-environments/device-placement-eligibility.js";
 import { resolveWorkerPlacementDestination } from "./worker-environments/placement-destination.js";
 import type * as placementSessionRuntime from "./worker-environments/placement-session-runtime.js";
@@ -11,18 +12,16 @@ import type {
 } from "./worker-environments/service-contract.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
 
-type MovePlacementSessionRuntime = {
-  managedWorktrees: typeof managedWorktrees;
-  resolveWorkerPlacementCapabilities: typeof placementSessionRuntime.resolveWorkerPlacementCapabilities;
-  resolveWorkerPlacementSessionRuntime: typeof placementSessionRuntime.resolveWorkerPlacementSessionRuntime;
-  resolveCanonicalSessionEntryFromStoreKeys: typeof sessionUtils.resolveCanonicalSessionEntryFromStoreKeys;
-  resolveGatewaySessionStoreTargetWithStore: typeof sessionUtils.resolveGatewaySessionStoreTargetWithStore;
-};
-
 export function createGatewayWorkerPlacementMoveDestinationResolver(params: {
   environments: WorkerEnvironmentService;
   getConfig: () => OpenClawConfig;
-  loadSessionRuntime: () => Promise<MovePlacementSessionRuntime>;
+  loadSessionRuntime: () => Promise<
+    WorkerPlacementSessionRuntime &
+      Pick<
+        typeof placementSessionRuntime,
+        "resolveWorkerPlacementCapabilities" | "resolveWorkerPlacementSessionRuntimeAsync"
+      >
+  >;
 }) {
   return async (
     identity: Pick<WorkerPlacementMoveRequest, "sessionId" | "sessionKey" | "agentId">,
@@ -32,12 +31,13 @@ export function createGatewayWorkerPlacementMoveDestinationResolver(params: {
       return undefined;
     }
     const sessionRuntime = await params.loadSessionRuntime();
-    const { config, target, entry } = resolveWorkerPlacementSessionTarget({
+    const { config, target, entry, assertCurrent } = await resolveWorkerPlacementSessionTarget({
       sessionRuntime,
       config: params.getConfig(),
       ...identity,
       errorMessage: `Session ${identity.sessionKey} changed before placement move recovery.`,
     });
+    assertCurrent(params.getConfig());
     const destination = resolveWorkerPlacementDestination({
       cfg: config,
       ...(moveTarget.kind === "profile"
@@ -51,11 +51,12 @@ export function createGatewayWorkerPlacementMoveDestinationResolver(params: {
     if (!destination.ok || !destination.value) {
       throw new Error(destination.ok ? "worker move target is missing" : destination.error);
     }
-    const runtime = sessionRuntime.resolveWorkerPlacementSessionRuntime({
+    const runtime = await sessionRuntime.resolveWorkerPlacementSessionRuntimeAsync({
       cfg: config,
       entry,
       agentId: target.agentId,
       sessionKey: target.canonicalKey,
+      assertCurrent: () => assertCurrent(params.getConfig()),
     });
     const { executionMode, devicePlacement } =
       sessionRuntime.resolveWorkerPlacementCapabilities(runtime);
@@ -81,6 +82,7 @@ export function createGatewayWorkerPlacementMoveDestinationResolver(params: {
         throw new Error(eligibility.error);
       }
     }
+    assertCurrent(params.getConfig());
     return { executionMode, ...destination.value, ...(devicePlacement ? { devicePlacement } : {}) };
   };
 }

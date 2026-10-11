@@ -1,4 +1,5 @@
 // update.run campaign tests cover failure release and concurrent campaign ownership.
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateScheduleState } from "../../../packages/gateway-protocol/src/index.js";
@@ -13,6 +14,7 @@ import {
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
+import type { RespondFn } from "./types.js";
 
 let ledgerHome: TempHomeEnv | undefined;
 let lifecycle: UpdateCheckLifecycle;
@@ -30,6 +32,7 @@ let currentCampaignId: string | undefined;
 let updateSchedule: UpdateScheduleState | null;
 let updateChannel: "stable" | "beta" | "dev" | null;
 const versionMock = vi.hoisted(() => ({ value: "1.0.0" }));
+const sentinelAdmission = vi.hoisted((): { beforeGrant?: (stage: string) => void } => ({}));
 type UpdateCampaignAdoption = ReturnType<UpdateCampaignController["adopt"]>;
 
 const adoptCampaignMock = vi.fn<() => UpdateCampaignAdoption>(() => ({
@@ -75,12 +78,12 @@ const cancelManagedServiceUpdateHandoffMock = vi.fn<
 >(async () => "restored-in-process");
 const scheduleGatewayRestartMock = vi.fn(() => ({ scheduled: true }));
 const logGatewayInfoMock = vi.fn();
-const writeRestartSentinelMock = vi.fn(async () => undefined);
+const writeRestartSentinelMock = vi.fn<
+  (
+    ...args: Parameters<typeof import("../../infra/restart-sentinel.js").writeRestartSentinel>
+  ) => Promise<unknown>
+>(async () => undefined);
 const recordLatestUpdateRestartSentinelMock = vi.fn();
-
-vi.mock("../../../packages/gateway-protocol/src/index.js", () => ({
-  validateUpdateRunParams: () => true,
-}));
 
 vi.mock("../../config/commands.flags.js", () => ({
   isRestartEnabled: () => true,
@@ -110,6 +113,21 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
   return {
     ...actual,
     writeRestartSentinel: writeRestartSentinelMock,
+  };
+});
+
+vi.mock("../../infra/sqlite-worker-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/sqlite-worker-store.js")>();
+  return {
+    ...actual,
+    createSqliteWorkerWriteAdmission: (
+      assertCurrent: Parameters<typeof actual.createSqliteWorkerWriteAdmission>[0],
+      nativeLocations: readonly string[],
+    ) =>
+      actual.createSqliteWorkerWriteAdmission((request) => {
+        sentinelAdmission.beforeGrant?.(request.stage);
+        assertCurrent(request);
+      }, nativeLocations),
   };
 });
 
@@ -144,12 +162,25 @@ vi.mock("../../infra/gateway-owner-lease.js", () => ({
         },
 }));
 
+vi.mock("../../infra/update-check-lifecycle.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/update-check-lifecycle.js")>();
+  return {
+    ...actual,
+    currentUpdateCheckLifecycle: () => ({
+      ...actual.currentUpdateCheckLifecycle(),
+      campaign: {
+        adopt: adoptCampaignMock,
+        clear: clearCampaignMock,
+        getState: getCampaignStateMock,
+        bindRun: vi.fn(),
+      },
+    }),
+  };
+});
+
 vi.mock("../../infra/update-campaign.js", () => ({
-  gatewayUpdateCampaign: {
-    adopt: adoptCampaignMock,
-    clear: clearCampaignMock,
-    getState: getCampaignStateMock,
-    bindRun: vi.fn(),
+  UpdateCampaignController: function unexpectedCampaignConstruction() {
+    throw new Error("update.run must consume its existing campaign owner");
   },
 }));
 
@@ -186,18 +217,15 @@ vi.mock("../../version.js", () => ({
   },
 }));
 
-vi.mock("../server-restart-sentinel.js", () => ({
+vi.mock("../server-update-sentinel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-update-sentinel.js")>()),
   getLatestUpdateRestartSentinel: () => null,
   recordLatestUpdateRestartSentinel: recordLatestUpdateRestartSentinelMock,
-  refreshLatestUpdateRestartSentinel: async () => null,
+  prepareLatestUpdateRestartSentinel: async () => null,
 }));
 
 vi.mock("./restart-request.js", () => ({
   parseRestartRequestParams: () => ({}),
-}));
-
-vi.mock("./validation.js", () => ({
-  assertValidParams: () => true,
 }));
 
 beforeEach(() => {
@@ -318,7 +346,7 @@ function mockPackageInstallSurface(kind: "global" | "package-root"): void {
 
 async function invokeUpdateRun(
   params: Record<string, unknown> = {},
-  respond: (ok: boolean, response?: unknown) => void = () => undefined,
+  respond: RespondFn = () => undefined,
 ): Promise<void> {
   const { updateHandlers } = await import("./update.js");
   await expectDefined(
@@ -355,6 +383,10 @@ function expectNoUpdateMutation(): void {
 
 describe("update.run campaign ownership", () => {
   it("pins a directly applied package campaign to its announced version", async () => {
+    const sentinel = await vi.importActual<typeof import("../../infra/restart-sentinel.js")>(
+      "../../infra/restart-sentinel.js",
+    );
+    writeRestartSentinelMock.mockImplementationOnce(sentinel.writeRestartSentinel);
     updateChannel = "beta";
     mockPackageInstallSurface("global");
 
@@ -363,6 +395,9 @@ describe("update.run campaign ownership", () => {
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({ channel: "beta", tag: "2.0.0" }),
     );
+    await expect(sentinel.readRestartSentinel()).resolves.toMatchObject({
+      payload: { kind: "update", stats: { handoffId: "handoff-1" } },
+    });
     expect(logGatewayInfoMock).toHaveBeenCalledWith(
       expect.stringMatching(/^update\.run adopted campaign campaign-1 actor=control-ui /),
       { target: { kind: "package", version: "2.0.0" } },
@@ -599,9 +634,17 @@ describe("update.run campaign ownership", () => {
     ])("rejects malformed $name before any update mutation", async ({ target }) => {
       detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
 
-      const response = await captureUpdateRun({ target });
+      const respond = vi.fn();
+      await invokeUpdateRun({ target }, respond);
 
-      expect(response?.result).toMatchObject({ status: "error", reason: "invalid-update-target" });
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining("invalid update.run params:"),
+        }),
+      );
       expectNoUpdateMutation();
       expect(adoptCampaignMock).not.toHaveBeenCalled();
     });
@@ -740,6 +783,41 @@ describe("update.run campaign ownership", () => {
       expect.anything(),
     );
   });
+
+  it.each(["transaction", "commit"] as const)(
+    "preserves the durable sentinel when its campaign retires at %s admission",
+    async (stage) => {
+      const sentinel = await vi.importActual<typeof import("../../infra/restart-sentinel.js")>(
+        "../../infra/restart-sentinel.js",
+      );
+      const existing = await sentinel.writeRestartSentinel({
+        kind: "restart",
+        status: "ok",
+        ts: 1,
+        message: "Existing notification",
+      });
+      startManagedServiceUpdateHandoffMock.mockRejectedValueOnce(
+        new Error("entrypoint unavailable"),
+      );
+      writeRestartSentinelMock.mockImplementationOnce(sentinel.writeRestartSentinel);
+      const observed: string[] = [];
+      sentinelAdmission.beforeGrant = (requested) => {
+        observed.push(requested);
+        if (requested === stage) {
+          currentCampaignId = "campaign-2";
+        }
+      };
+      try {
+        await invokeUpdateRun();
+      } finally {
+        sentinelAdmission.beforeGrant = undefined;
+      }
+      expect(observed).toContain(stage);
+      await expect(sentinel.readRestartSentinel()).resolves.toEqual(existing);
+      expect(recordLatestUpdateRestartSentinelMock).not.toHaveBeenCalled();
+      expect(clearCampaignMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps the adopted campaign while a foreground update is accepted", async () => {
     await invokeUpdateRun();

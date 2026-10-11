@@ -1,4 +1,3 @@
-// Bounded response capture retains the runtime owner's admission and finalizer.
 import type { HeadersLike } from "../infra/fetch-headers.js";
 import { withResponseBodyTimeout } from "../infra/http-response-body-timeout.js";
 import { reportCapturePersistenceFailure, type CaptureOwner } from "./runtime-owner.js";
@@ -17,18 +16,10 @@ export type HttpCaptureParams = {
 
 export type HttpCaptureErrorParams = Omit<HttpCaptureParams, "response"> & { error: unknown };
 
-// Cap captured response bodies so debug proxy capture cannot be turned into an
-// out-of-memory vector. The patched global fetch tees every outbound response
-// through clone(), so a single large (or hostile, effectively endless) provider
-// response would otherwise be buffered fully into memory just to record it.
+// Bound the diagnostic clone independently of the caller's response body.
 const MAX_CAPTURED_RESPONSE_BODY_BYTES = 16 * 1024 * 1024;
-// The byte cap bounds how much a capture can buffer; this bounds how long it can
-// wait for the next byte. Without it a remote that sends headers and then stalls
-// keeps the capture branch of the clone() tee readable forever, and a tee branch
-// only settles once both branches cancel or the source reaches EOF — so the
-// caller's own cancellation, and the transport release that follows it, wait on
-// a diagnostic read. Matches the idle bounds the shared body readers already
-// take (src/infra/http-body.ts).
+// A stalled clone can retain the caller's transport until both tee branches
+// cancel. Match the shared body reader's idle limit in src/infra/http-body.ts.
 const CAPTURED_RESPONSE_BODY_IDLE_TIMEOUT_MS = 10_000;
 
 /** Distinguishes the capture deadline from a genuine response-stream failure. */
@@ -40,16 +31,9 @@ export type CapturedResponseBodyResult =
   | { status: "failed"; buffer: Buffer; error: unknown }
   | { status: "too-large" | "unavailable" };
 
-// Reads a cloned capture response body under a byte cap. Oversized or
-// non-streaming Response-like bodies return a metadata-only status instead of
-// allocating the full body.
-//
-// Unlike media-core's readResponseWithLimit this never awaits reader.cancel():
-// the body here is one branch of a Response.clone() tee whose sibling (the
-// caller-facing response) is still live, and cancelling such a branch never
-// settles (it only resolves once BOTH branches cancel). Awaiting it would hang
-// the capture pipeline and retain the buffered prefix forever, so we cancel
-// fire-and-forget, mirroring src/agents/tools/web-shared.ts#readResponseText.
+// Oversized or non-streaming bodies produce metadata-only captures. Never await
+// reader.cancel(): this clone's cancellation waits for the still-live caller's
+// tee branch and would hang capture finalization.
 export function readCapturedResponseBodyBounded(
   response: Response,
   owner: CaptureOwner,

@@ -11,12 +11,17 @@ import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-run
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import type { OutboundMediaLoadOptions } from "openclaw/plugin-sdk/outbound-media";
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
+import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import {
   classifyMSTeamsSendError,
   formatMSTeamsSendErrorHint,
   formatUnknownError,
 } from "./errors.js";
-import { prepareFileConsentActivityFs, requiresFileConsent } from "./file-consent-helpers.js";
+import {
+  FILE_CONSENT_THRESHOLD_BYTES,
+  prepareFileConsentActivityFs,
+  requiresFileConsent,
+} from "./file-consent-helpers.js";
 import { formatMSTeamsMarkdown } from "./format.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
@@ -24,7 +29,7 @@ import {
   requireMSTeamsSharePointSiteId,
   uploadAndShareSharePoint,
 } from "./graph-upload.js";
-import { extractFilename, extractMessageId } from "./media-helpers.js";
+import { extractFilename, extractMessageId, MSTEAMS_MAX_MEDIA_BYTES } from "./media-helpers.js";
 import {
   buildMSTeamsAdaptiveCardActivity,
   buildMSTeamsMessageActivity,
@@ -46,13 +51,11 @@ type MSTeamsSendOptions = MSTeamsSendHandoff & {
 };
 
 type SendMSTeamsMessageParams = {
-  /** Full config (for credentials) */
   cfg: OpenClawConfig;
+  accountId?: string | null;
   /** Conversation ID or user ID to send to */
   to: string;
-  /** Message text */
   text: string;
-  /** Optional media URL */
   mediaUrl?: string;
   /** Optional filename override for uploaded media/files */
   filename?: string;
@@ -68,15 +71,6 @@ type SendMSTeamsMessageResult = {
   /** If a FileConsentCard was sent instead of the file, this contains the upload ID */
   pendingUploadId?: string;
 };
-
-/** Threshold for large files that require FileConsentCard flow in personal chats */
-const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024; // 4MB
-
-/**
- * MSTeams-specific media size limit (100MB).
- * Higher than the default to support Teams file-consent and SharePoint uploads.
- */
-const MSTEAMS_MAX_MEDIA_BYTES = 100 * 1024 * 1024;
 
 function createMSTeamsSendError(errorPrefix: string, error: unknown): Error {
   if (
@@ -139,21 +133,17 @@ function createMSTeamsSendReceipt(params: {
 function createMSTeamsSendResult(params: {
   conversationId: string;
   messageId: string;
-  platformMessageIds?: readonly string[];
   kind: MessageReceiptPartKind;
   pendingUploadId?: string;
 }): SendMSTeamsMessageResult {
-  const platformMessageIds = (
-    params.platformMessageIds?.length ? [...params.platformMessageIds] : [params.messageId]
-  )
-    .map((messageId) => messageId.trim())
-    .filter((messageId) => messageId && messageId !== "unknown");
+  const platformMessageId = params.messageId.trim();
   return {
     messageId: params.messageId,
     conversationId: params.conversationId,
     receipt: createMSTeamsSendReceipt({
       conversationId: params.conversationId,
-      platformMessageIds,
+      platformMessageIds:
+        platformMessageId && platformMessageId !== "unknown" ? [platformMessageId] : [],
       kind: params.kind,
     }),
     ...(params.pendingUploadId ? { pendingUploadId: params.pendingUploadId } : {}),
@@ -161,57 +151,49 @@ function createMSTeamsSendResult(params: {
 }
 
 type SendMSTeamsPollParams = {
-  /** Full config (for credentials) */
   cfg: OpenClawConfig;
+  accountId?: string | null;
   /** Conversation ID or user ID to send to */
   to: string;
-  /** Poll question */
   question: string;
-  /** Poll options */
   options: string[];
   /** Max selections (defaults to 1) */
   maxSelections?: number;
 } & MSTeamsSendHandoff;
 
-type SendMSTeamsPollResult = {
-  pollId: string;
-  messageId: string;
-  conversationId: string;
-};
-
-type SendMSTeamsCardParams = {
-  /** Full config (for credentials) */
-  cfg: OpenClawConfig;
-  /** Conversation ID or user ID to send to */
-  to: string;
-  /** Adaptive Card JSON object */
+type SendMSTeamsCardParams = Pick<SendMSTeamsMessageParams, "cfg" | "accountId" | "to"> & {
   card: Record<string, unknown>;
 } & MSTeamsSendOptions;
 
-type SendMSTeamsCardResult = SendMSTeamsMessageResult;
+function resolveMSTeamsMarkdownTableMode(cfg: OpenClawConfig, accountId?: string | null) {
+  return resolveMarkdownTableMode({
+    cfg: {
+      ...cfg,
+      channels: { ...cfg.channels, msteams: resolveMSTeamsAccountConfig(cfg, accountId) },
+    },
+    channel: "msteams",
+  });
+}
 
-/**
- * Send a message to a Teams conversation or user.
- *
- * Uses the stored ConversationReference from previous interactions.
- * The bot must have received at least one message from the conversation
- * before proactive messaging works.
- *
- * File handling by conversation type:
- * - Personal (1:1) chats: small images (<4MB) use base64, large files and non-images use FileConsentCard
- * - Group chats / channels: files require configured SharePoint storage
- */
+/** Proactive delivery requires a conversation reference captured from an earlier inbound turn. */
 export async function sendMessageMSTeams(
   params: SendMSTeamsMessageParams,
 ): Promise<SendMSTeamsMessageResult> {
   assertMSTeamsSendHandoff(params);
-  const { cfg, to, text, mediaUrl, filename, mediaAccess, mediaLocalRoots, mediaReadFile } = params;
-  const tableMode = resolveMarkdownTableMode({
+  const {
     cfg,
-    channel: "msteams",
-  });
+    accountId,
+    to,
+    text,
+    mediaUrl,
+    filename,
+    mediaAccess,
+    mediaLocalRoots,
+    mediaReadFile,
+  } = params;
+  const tableMode = resolveMSTeamsMarkdownTableMode(cfg, accountId);
   const messageText = formatMSTeamsMarkdown(text ?? "", tableMode);
-  const ctx = await resolveMSTeamsSendContext({ cfg, to });
+  const ctx = await resolveMSTeamsSendContext({ cfg, accountId, to });
   const { conversationId, log, conversationType, tokenProvider, sharePointSiteId } = ctx;
 
   log.debug?.("sending proactive message", {
@@ -221,7 +203,6 @@ export async function sendMessageMSTeams(
     hasMedia: Boolean(mediaUrl),
   });
 
-  // Handle media if present
   if (mediaUrl) {
     const mediaMaxBytes = ctx.mediaMaxBytes ?? MSTEAMS_MAX_MEDIA_BYTES;
     const media = await loadOutboundMediaFromUrl(mediaUrl, {
@@ -250,13 +231,9 @@ export async function sendMessageMSTeams(
         conversationType,
         contentType: media.contentType,
         bufferSize: media.buffer.length,
-        thresholdBytes: FILE_CONSENT_THRESHOLD_BYTES,
       })
     ) {
-      // Proactive CLI sends run in a different process from the gateway's
-      // monitor that receives the fileConsent/invoke callback. Use the FS-
-      // backed helper so the invoke handler can find the pending upload when
-      // the user clicks "Allow".
+      // Persist consent bytes so the Gateway can receive the callback after this process exits.
       assertMSTeamsSendHandoff(params);
       const { activity, uploadId } = await prepareFileConsentActivityFs({
         media: { buffer: media.buffer, filename: fileName, contentType: media.contentType },
@@ -370,13 +347,9 @@ export async function sendMessageMSTeams(
     }
   }
 
-  // No media: send text only
   return sendTextWithMedia(ctx, messageText, undefined, params);
 }
 
-/**
- * Send a text message with optional base64 media URL.
- */
 async function sendTextWithMedia(
   ctx: MSTeamsProactiveContext,
   text: string,
@@ -385,7 +358,6 @@ async function sendTextWithMedia(
 ): Promise<SendMSTeamsMessageResult> {
   const {
     app,
-    appId,
     conversationId,
     ref,
     log,
@@ -402,6 +374,7 @@ async function sendTextWithMedia(
   const acceptedKinds: MessageReceiptPartKind[] = [];
   try {
     platformMessageIds = await sendMSTeamsMessages({
+      accountId: ctx.accountId,
       assertDirectAdapterHandoff: options.assertDirectAdapterHandoff,
       onPlatformSendDispatch: options.onPlatformSendDispatch,
       onMessageSent: async (messageId, messageIndex) => {
@@ -414,10 +387,8 @@ async function sendTextWithMedia(
       },
       replyStyle,
       app,
-      appId,
       conversationRef: ref,
       messages,
-      retry: {},
       onRetry: (event) => {
         log.debug?.("retrying send", { conversationId, ...event });
       },
@@ -473,6 +444,7 @@ async function sendProactiveActivityRaw({
 }: ProactiveActivityRawParams): Promise<string> {
   const baseRef = buildConversationReference(ctx.ref);
   const response = await sendMSTeamsActivityWithReference(ctx.app, baseRef, activity, {
+    accountId: ctx.accountId,
     assertDirectAdapterHandoff,
     onPlatformSendDispatch,
     ...(ctx.threadActivityId ? { threadActivityId: ctx.threadActivityId } : {}),
@@ -489,16 +461,12 @@ async function sendProactiveActivity(params: ProactiveActivityParams): Promise<s
   }
 }
 
-/**
- * Send a poll (Adaptive Card) to a Teams conversation or user.
- */
-export async function sendPollMSTeams(
-  params: SendMSTeamsPollParams,
-): Promise<SendMSTeamsPollResult> {
+export async function sendPollMSTeams(params: SendMSTeamsPollParams) {
   assertMSTeamsSendHandoff(params);
-  const { cfg, to, question, options, maxSelections } = params;
+  const { cfg, accountId, to, question, options, maxSelections } = params;
   const ctx = await resolveMSTeamsSendContext({
     cfg,
+    accountId,
     to,
   });
   const { conversationId, log } = ctx;
@@ -517,7 +485,6 @@ export async function sendPollMSTeams(
 
   const activity = buildMSTeamsAdaptiveCardActivity(pollCard.card);
 
-  // Send poll via proactive conversation (Adaptive Cards require direct activity send)
   const messageId = await sendProactiveActivity({
     ctx,
     activity,
@@ -535,16 +502,14 @@ export async function sendPollMSTeams(
   };
 }
 
-/**
- * Send an arbitrary Adaptive Card to a Teams conversation or user.
- */
 export async function sendAdaptiveCardMSTeams(
   params: SendMSTeamsCardParams,
-): Promise<SendMSTeamsCardResult> {
+): Promise<SendMSTeamsMessageResult> {
   assertMSTeamsSendHandoff(params);
-  const { cfg, to, card } = params;
+  const { cfg, accountId, to, card } = params;
   const ctx = await resolveMSTeamsSendContext({
     cfg,
+    accountId,
     to,
   });
   const { conversationId, log } = ctx;
@@ -557,7 +522,6 @@ export async function sendAdaptiveCardMSTeams(
 
   const activity = buildMSTeamsAdaptiveCardActivity(card);
 
-  // Send card via proactive conversation
   const messageId = await sendProactiveActivity({
     ctx,
     activity,
@@ -579,34 +543,22 @@ export async function sendAdaptiveCardMSTeams(
 }
 
 type MSTeamsMessageMutationParams = {
-  /** Full config (for credentials) */
   cfg: OpenClawConfig;
+  accountId?: string | null;
   /** Conversation ID or user ID */
   to: string;
   /** Activity ID of the message to edit or delete */
   activityId: string;
 };
 
-type MSTeamsMessageMutationResult = {
-  conversationId: string;
-};
-
-/**
- * Edit (update) a previously sent message in a Teams conversation.
- *
- * Uses the Bot Framework REST API for proactive edits outside of the
- * original turn context.
- */
-export async function editMessageMSTeams(
-  params: MSTeamsMessageMutationParams & { text: string },
-): Promise<MSTeamsMessageMutationResult> {
-  return updateMSTeamsMessageActivity({
+export async function editMessageMSTeams(params: MSTeamsMessageMutationParams & { text: string }) {
+  return mutateMSTeamsMessageActivity({
     ...params,
     activity: {
       ...buildMSTeamsMessageActivity(
         formatMSTeamsMarkdown(
           params.text,
-          resolveMarkdownTableMode({ cfg: params.cfg, channel: "msteams" }),
+          resolveMSTeamsMarkdownTableMode(params.cfg, params.accountId),
         ),
       ),
       id: params.activityId,
@@ -616,8 +568,8 @@ export async function editMessageMSTeams(
 
 export async function editAdaptiveCardMSTeams(
   params: MSTeamsMessageMutationParams & { card: Record<string, unknown> },
-): Promise<MSTeamsMessageMutationResult> {
-  return updateMSTeamsMessageActivity({
+) {
+  return mutateMSTeamsMessageActivity({
     ...params,
     activity: {
       ...buildMSTeamsAdaptiveCardActivity(params.card),
@@ -626,58 +578,39 @@ export async function editAdaptiveCardMSTeams(
   });
 }
 
-async function updateMSTeamsMessageActivity(
-  params: MSTeamsMessageMutationParams & { activity: Record<string, unknown> },
-): Promise<MSTeamsMessageMutationResult> {
-  const { cfg, to, activityId, activity } = params;
-  const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
-    cfg,
-    to,
-  });
-
-  log.debug?.("editing proactive message", { conversationId, activityId });
-
-  try {
-    const baseRef = buildConversationReference(ref);
-    await updateMSTeamsActivityWithReference(app, baseRef, activityId, activity, {
-      serviceUrlBoundary: sdkCloudOptions,
-    });
-  } catch (err) {
-    throw createMSTeamsSendError("msteams edit", err);
-  }
-
-  log.info("edited proactive message", { conversationId, activityId });
-
-  return { conversationId };
+export async function deleteMessageMSTeams(params: MSTeamsMessageMutationParams) {
+  return mutateMSTeamsMessageActivity(params);
 }
 
-/**
- * Delete a previously sent message in a Teams conversation.
- *
- * Uses the Bot Framework REST API for proactive deletes outside of the
- * original turn context.
- */
-export async function deleteMessageMSTeams(
-  params: MSTeamsMessageMutationParams,
-): Promise<MSTeamsMessageMutationResult> {
-  const { cfg, to, activityId } = params;
+async function mutateMSTeamsMessageActivity(
+  params: MSTeamsMessageMutationParams & { activity?: Record<string, unknown> },
+) {
+  const { cfg, accountId, to, activityId, activity } = params;
   const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
     cfg,
+    accountId,
     to,
   });
 
-  log.debug?.("deleting proactive message", { conversationId, activityId });
+  const operation = activity ? "edit" : "delete";
+  log.debug?.(`${activity ? "editing" : "deleting"} proactive message`, {
+    conversationId,
+    activityId,
+  });
 
   try {
     const baseRef = buildConversationReference(ref);
-    await deleteMSTeamsActivityWithReference(app, baseRef, activityId, {
-      serviceUrlBoundary: sdkCloudOptions,
-    });
+    const options = { serviceUrlBoundary: sdkCloudOptions };
+    if (activity) {
+      await updateMSTeamsActivityWithReference(app, baseRef, activityId, activity, options);
+    } else {
+      await deleteMSTeamsActivityWithReference(app, baseRef, activityId, options);
+    }
   } catch (err) {
-    throw createMSTeamsSendError("msteams delete", err);
+    throw createMSTeamsSendError(`msteams ${operation}`, err);
   }
 
-  log.info("deleted proactive message", { conversationId, activityId });
+  log.info(`${activity ? "edited" : "deleted"} proactive message`, { conversationId, activityId });
 
   return { conversationId };
 }

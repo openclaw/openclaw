@@ -5,12 +5,13 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
-import { resolveGatewayAuthPolicyGeneration } from "./auth-policy.js";
+import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { resolveControlUiPluginAuthCookieGrants } from "./control-ui-plugin-auth-cookie.js";
 import {
   applyHttpOperatorRoleScopeCeiling,
   checkHttpCookieUserProfile,
+  prepareHttpUserProfileCatalog,
 } from "./http-auth-user-profile.js";
 import { sendUnauthorized } from "./http-common.js";
 import { getBearerToken } from "./http-header-value.js";
@@ -32,13 +33,13 @@ export function resolveControlUiPluginAuthCookieGeneration(
   cfg: OpenClawConfig,
 ): string | undefined {
   return authGeneration
-    ? sha256Base64Url(`${authGeneration}\0${resolveGatewayAuthPolicyGeneration(cfg)}`)
+    ? sha256Base64Url(`${authGeneration}\0${captureGatewayAuthPolicy(cfg, null).generation}`)
     : undefined;
 }
 
-export function authorizeControlUiPluginCookieRequest(
+function readControlUiPluginCookieRequest(
   req: IncomingMessage,
-  params: { requestPath: string; authGeneration: string | undefined; res?: ServerResponse },
+  params: { requestPath: string; authGeneration: string | undefined },
 ) {
   // WebSocket upgrades bypass this HTTP-only handoff and use
   // checkGatewayHttpRequestAuth directly in attachGatewayUpgradeHandler.
@@ -58,10 +59,34 @@ export function authorizeControlUiPluginCookieRequest(
   if (grants.length === 0) {
     return null;
   }
-  const profileAuth = checkHttpCookieUserProfile(
-    cfg,
-    grants.map((grant) => grant.profileId),
-  );
+  const profileId = grants[0]?.profileId;
+  if (grants.some((grant) => grant.profileId !== profileId)) {
+    return null;
+  }
+  return { cfg, grants, profileId };
+}
+
+export async function prepareControlUiPluginCookieRequest(
+  req: IncomingMessage,
+  params: { requestPath: string; authGeneration: string | undefined; res: ServerResponse },
+) {
+  const selected = readControlUiPluginCookieRequest(req, params);
+  if (selected?.profileId && !(await prepareHttpUserProfileCatalog(params.res))) {
+    return null;
+  }
+  return authorizeControlUiPluginCookieRequest(req, params);
+}
+
+export function authorizeControlUiPluginCookieRequest(
+  req: IncomingMessage,
+  params: { requestPath: string; authGeneration: string | undefined; res?: ServerResponse },
+) {
+  const selected = readControlUiPluginCookieRequest(req, params);
+  if (!selected) {
+    return null;
+  }
+  const { cfg, grants, profileId } = selected;
+  const profileAuth = checkHttpCookieUserProfile(cfg, profileId);
   if (!profileAuth.ok) {
     if (profileAuth.authResult.reason === "operator_access_denied" && params.res) {
       sendGatewayHttpAuthFailure(params.res, profileAuth.authResult);

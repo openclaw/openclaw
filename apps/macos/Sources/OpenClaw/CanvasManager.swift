@@ -11,7 +11,6 @@ final class CanvasManager {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "CanvasManager")
 
     private var panelController: CanvasWindowController?
-    private var panelSessionKey: String?
 
     private init() {}
 
@@ -45,29 +44,20 @@ final class CanvasManager {
 
         if !ensured.created {
             controller.presentAnchoredPanel(anchorProvider: anchorProvider)
-            controller.preferredPlacement = placement
-
-            // Existing session: only navigate when an explicit target was provided.
-            if let normalizedTarget {
-                controller.load(target: normalizedTarget)
-            }
-
-            self.refreshDebugStatus()
-            return controller.directoryPath
         }
-
         controller.preferredPlacement = placement
-
-        // New session: default to the local document root.
-        controller.showCanvas(path: normalizedTarget ?? "/")
+        if ensured.created {
+            controller.showCanvas(path: normalizedTarget ?? "/")
+        } else if let normalizedTarget {
+            controller.load(target: normalizedTarget)
+        }
         self.refreshDebugStatus()
-
         return controller.directoryPath
     }
 
     func hide(sessionKey: String) {
         let session = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard self.panelSessionKey == session else { return }
+        guard self.panelController?.sessionKey == session else { return }
         self.panelController?.hideCanvas()
     }
 
@@ -118,18 +108,14 @@ final class CanvasManager {
         let anchorProvider = self.defaultAnchorProvider ?? Self.mouseAnchorProvider
         let session = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if let controller = panelController, panelSessionKey == session {
+        if let controller = panelController, controller.sessionKey == session {
             Self.logger.debug("ensureController reuse existing session=\(session, privacy: .public)")
-            controller.onVisibilityChanged = { [weak self] visible in
-                self?.onPanelVisibilityChanged?(visible)
-            }
             return (controller, false)
         }
 
         Self.logger.debug("ensureController creating new session=\(session, privacy: .public)")
         self.panelController?.close()
         self.panelController = nil
-        self.panelSessionKey = nil
 
         try FileManager().createDirectory(at: Self.canvasRoot, withIntermediateDirectories: true)
         let controller = try CanvasWindowController(
@@ -140,7 +126,6 @@ final class CanvasManager {
             self?.onPanelVisibilityChanged?(visible)
         }
         self.panelController = controller
-        self.panelSessionKey = session
         return (controller, true)
     }
 }

@@ -111,6 +111,42 @@ export function createCompactHooksPreparedModelRuntime(input: {
   };
 }
 
+export function createCompactHooksAuthStorage() {
+  const runtimeKeys = new Map<string, string>();
+  return {
+    setRuntimeApiKey: vi.fn((provider: string, apiKey: string) => {
+      runtimeKeys.set(provider, apiKey);
+    }),
+    getApiKey: vi.fn(async (provider: string) => runtimeKeys.get(provider)),
+  } satisfies MockResolvedModel["authStorage"];
+}
+
+export function createCompactHooksResolvedModel(
+  provider?: string,
+  modelId?: string,
+): MockResolvedModel {
+  return {
+    logicalRef: { provider: provider ?? "openai", model: modelId ?? "fake" },
+    model: {
+      provider: provider ?? "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      id: modelId ?? "fake",
+      input: [],
+    },
+    error: null,
+    authStorage: createCompactHooksAuthStorage(),
+    modelRegistry: {},
+  };
+}
+
+export const resolveCompactHooksApiKeyMock = vi.fn<
+  typeof import("./stream-resolution.js").resolveEmbeddedAgentApiKey
+>(async ({ provider, resolvedApiKey, authStorage }) => {
+  const apiKey = resolvedApiKey?.trim();
+  return apiKey || (await authStorage?.getApiKey(provider));
+});
+
 export type MockResolvedModel = {
   logicalRef: { provider: string; model: string };
   model: {
@@ -123,6 +159,9 @@ export type MockResolvedModel = {
     requestTimeoutMs?: number;
   };
   error: null;
-  authStorage: Pick<import("../sessions/auth-storage.js").AuthStorage, "setRuntimeApiKey">;
+  authStorage: Pick<
+    import("../sessions/auth-storage.js").AuthStorage,
+    "setRuntimeApiKey" | "getApiKey"
+  >;
   modelRegistry: Record<string, never> | import("../sessions/model-registry.js").ModelRegistry;
 };

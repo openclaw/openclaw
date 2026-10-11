@@ -1,10 +1,8 @@
-import { spawnSync } from "node:child_process";
 import { createHash, randomUUID, type Hash } from "node:crypto";
 import {
   closeSync,
   constants,
   fstatSync,
-  fsyncSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -17,15 +15,19 @@ import {
   rmSync,
   rmdirSync,
   writeFileSync,
+  type BigIntStats,
   type Stats,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
+import { parseArgs } from "node:util";
 import { z } from "zod";
 import {
   crabboxArtifactEvidenceSchema,
   crabboxArtifactIdentitySchema,
+  flushDescriptor as syncFile,
+  flushDirectory as syncDirectory,
   preserveCrabboxArtifacts,
   verifyPreservedCrabboxArtifacts,
   type CrabboxArtifactEvidence,
@@ -37,7 +39,20 @@ import {
   verifyNoStagingClaims,
   type ClaimNamespace,
 } from "./crabbox-staging-claims.mts";
+import {
+  captureDirectoryIdentity as identity,
+  sameDirectoryIdentity,
+  upgradeDirectoryIdentity,
+} from "./crabbox-staging-identity.mts";
 import { canRecordStaging, stagingPrefix } from "./crabbox-staging-location.mts";
+import {
+  currentProcessProvenance,
+  currentBootTimeNs,
+  processDomain,
+  processProvenanceSchema,
+  type ProcessProvenance,
+} from "./crabbox-staging-provenance.mts";
+import { verifyNoStagingUsers } from "./crabbox-staging-users.mts";
 import {
   selectSourceWitness,
   verifySourceWitness,
@@ -57,6 +72,21 @@ const witnessSchema = z.strictObject({
   ref: z.string(),
   commit: z.string().regex(/^[a-f0-9]{40}$/u),
 });
+const operatorConfirmationSchema = z.strictObject({
+  kind: z.literal("same-host-prior-boot"),
+  receiptSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  receiptMtimeNs: z.string().regex(/^[1-9]\d*$/u),
+  ownerPid: z.number().int().min(2),
+  ownerDomain: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/u)
+    .optional(),
+  confirmedAt: z.string().datetime(),
+  current: processProvenanceSchema,
+  syncRootIdentity: identitySchema,
+  rootIdentity: identitySchema,
+});
+type OperatorConfirmation = z.infer<typeof operatorConfirmationSchema>;
 const receiptSchema = z.strictObject({
   version: z.literal(2),
   id: z.uuid(),
@@ -65,8 +95,15 @@ const receiptSchema = z.strictObject({
     .string()
     .regex(/^[a-f0-9]{64}$/u)
     .optional(),
+  ownerProvenance: processProvenanceSchema.optional(),
+  operatorConfirmation: operatorConfirmationSchema.optional(),
+  syncRootIdentity: identitySchema.optional(),
   repository: z.string(),
   repositoryIdentity: identitySchema.optional(),
+  identityRecordedAtNs: z
+    .string()
+    .regex(/^[1-9]\d*$/u)
+    .optional(),
   claims: claimNamespaceSchema.optional(),
   leases: z.array(z.string().min(1).max(512)).max(16).optional(),
   kind: z.enum(["capsule", "worktree"]),
@@ -135,71 +172,22 @@ const manifestSchema = z.strictObject({
 });
 type Manifest = z.infer<typeof manifestSchema>;
 
-let cachedProcessDomain: string | null | undefined;
-function processDomain() {
-  if (cachedProcessDomain !== undefined) {
-    return cachedProcessDomain ?? undefined;
-  }
-  try {
-    let boot: string;
-    let namespace = "";
-    if (process.platform === "linux") {
-      const fd = openSync(
-        "/proc/sys/kernel/random/boot_id",
-        constants.O_RDONLY | constants.O_NONBLOCK,
-      );
-      try {
-        const bytes = Buffer.alloc(128);
-        boot = bytes.subarray(0, readSync(fd, bytes)).toString("utf8").trim();
-      } finally {
-        closeSync(fd);
-      }
-      namespace = readlinkSync("/proc/self/ns/pid");
-      if (!/^pid:\[\d+\]$/u.test(namespace)) {
-        throw new Error("Process namespace identity is unavailable.");
-      }
-    } else if (process.platform === "darwin") {
-      const result = spawnSync("/usr/sbin/sysctl", ["-n", "kern.bootsessionuuid"], {
-        encoding: "utf8",
-        env: {},
-        timeout: 1000,
-        maxBuffer: 1024,
-      });
-      if (result.error || result.status !== 0) {
-        throw new Error("Boot session identity is unavailable.");
-      }
-      boot = result.stdout.trim();
-    } else {
-      throw new Error("Process domain identity is unsupported.");
-    }
-    if (!z.uuid().safeParse(boot.toLowerCase()).success) {
-      throw new Error("Boot session identity is invalid.");
-    }
-    cachedProcessDomain = createHash("sha256")
-      .update(process.platform + ":" + boot.toLowerCase() + ":" + namespace)
-      .digest("hex");
-  } catch {
-    cachedProcessDomain = null;
-  }
-  return cachedProcessDomain ?? undefined;
+// Admission facts stay separate from the receipt bytes used for custody checks.
+const identityDeadlines = new WeakMap<Identity, bigint>();
+function sameIdentity(
+  actual: Identity,
+  expected: Identity,
+  legacyBeforeNs = identityDeadlines.get(expected),
+) {
+  return sameDirectoryIdentity(actual, expected, legacyBeforeNs);
 }
 
-function identity(path: string): Identity {
-  const stat = lstatSync(path, { bigint: true });
-  if (!stat.isDirectory() || stat.isSymbolicLink()) {
-    throw new Error("staging directory was replaced: " + path);
-  }
-  return { dev: String(stat.dev), ino: String(stat.ino) };
-}
-
-function sameIdentity(left: Identity, right: Identity) {
-  return left.dev === right.dev && left.ino === right.ino;
-}
-
-function assertIdentity(path: string, expected: Identity) {
-  if (!sameIdentity(identity(path), expected)) {
-    throw new Error("staging directory identity changed: " + path);
-  }
+function assertIdentity(
+  path: string,
+  expected: Identity,
+  legacyBeforeNs = identityDeadlines.get(expected),
+) {
+  upgradeDirectoryIdentity(path, expected, legacyBeforeNs);
 }
 
 function safeRelative(path: string) {
@@ -211,7 +199,7 @@ function safeRelative(path: string) {
   );
 }
 
-function readBounded(path: string, limit: number) {
+function readBounded(path: string, limit: number, observe?: (stat: BigIntStats) => void) {
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const before = fstatSync(fd, { bigint: true });
@@ -235,52 +223,10 @@ function readBounded(path: string, limit: number) {
     ) {
       throw new Error("staging metadata changed while reading");
     }
+    observe?.(before);
     return bytes;
   } finally {
     closeSync(fd);
-  }
-}
-
-function syncDirectory(path: string) {
-  // Windows does not expose a directory flush through this Node API. Such
-  // receipts remain useful for inspection, but never authorize orphan removal.
-  if (process.platform === "win32") {
-    return false;
-  }
-  let fd: number | undefined;
-  try {
-    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY);
-    fsyncSync(fd);
-    return true;
-  } catch (error) {
-    if (
-      ["EINVAL", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"].includes(
-        (error as NodeJS.ErrnoException).code ?? "",
-      )
-    ) {
-      return false;
-    }
-    throw error;
-  } finally {
-    if (fd !== undefined) {
-      closeSync(fd);
-    }
-  }
-}
-
-function syncFile(fd: number) {
-  try {
-    fsyncSync(fd);
-    return true;
-  } catch (error) {
-    if (
-      ["EINVAL", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"].includes(
-        (error as NodeJS.ErrnoException).code ?? "",
-      )
-    ) {
-      return false;
-    }
-    throw error;
   }
 }
 
@@ -398,21 +344,104 @@ function inventory(
   return entries.toSorted((a, b) => a.path.localeCompare(b.path));
 }
 
+function metadataTimestamp(stat: BigIntStats) {
+  return stat.birthtimeNs > 0n && stat.birthtimeNs < stat.mtimeNs ? stat.birthtimeNs : stat.mtimeNs;
+}
+
+function receiptDeadline(receipt: Receipt) {
+  return receipt.identityRecordedAtNs
+    ? BigInt(receipt.identityRecordedAtNs)
+    : identityDeadlines.get(receipt.rootIdentity);
+}
+
+function admitReceiptIdentities(root: string, receipt: Receipt, recordedAtNs: bigint) {
+  const deadline = receiptDeadline(receipt) ?? recordedAtNs;
+  for (const value of [
+    receipt.rootIdentity,
+    receipt.syncRootIdentity,
+    receipt.payloadIdentity,
+    receipt.repositoryIdentity,
+    receipt.mirror?.slotIdentity,
+    receipt.claims?.anchor,
+  ]) {
+    if (value) {
+      identityDeadlines.set(value, deadline);
+    }
+  }
+  if (lstatSync(root, { throwIfNoEntry: false })) {
+    assertIdentity(root, receipt.rootIdentity);
+    if (receipt.syncRootIdentity) {
+      assertIdentity(dirname(root), receipt.syncRootIdentity);
+    }
+  }
+  return receipt;
+}
+
+function upgradeReceiptIdentities(root: string, receipt: Receipt) {
+  const deadline = receiptDeadline(receipt);
+  // Preserve the original bound before an owner write renews the file timestamps.
+  // Reads never normalize raw custody records: a partially removed legacy disposal
+  // must compare identically before and after its payload disappears.
+  receipt.identityRecordedAtNs ??= deadline?.toString();
+  receipt.rootIdentity = upgradeDirectoryIdentity(root, receipt.rootIdentity, deadline);
+  if (receipt.syncRootIdentity) {
+    receipt.syncRootIdentity = upgradeDirectoryIdentity(
+      dirname(root),
+      receipt.syncRootIdentity,
+      deadline,
+    );
+  }
+  const payload = join(root, "payload");
+  if (lstatSync(payload, { throwIfNoEntry: false })) {
+    receipt.payloadIdentity = upgradeDirectoryIdentity(payload, receipt.payloadIdentity, deadline);
+  }
+  if (receipt.mirror) {
+    receipt.mirror.slotIdentity = upgradeDirectoryIdentity(
+      join(dirname(root), "mirrors", receipt.mirror.key),
+      receipt.mirror.slotIdentity,
+      deadline,
+    );
+  }
+}
+
+const receiptEvidence = new WeakMap<
+  Receipt,
+  { bytes: Buffer; mtimeNs: bigint; generation: string; sha256?: string }
+>();
+function receiptDigest(receipt: Receipt) {
+  const evidence = receiptEvidence.get(receipt);
+  if (!evidence) {
+    return undefined;
+  }
+  return (evidence.sha256 ??= createHash("sha256").update(evidence.bytes).digest("hex"));
+}
+function receiptSignature(receipt: Receipt) {
+  const evidence = receiptEvidence.get(receipt);
+  return evidence ? receiptDigest(receipt) + ":" + evidence.generation : undefined;
+}
+
 function readReceipt(root: string) {
   identity(root);
   let receipt: Receipt;
+  let recordedAtNs = 0n;
+  let mtimeNs = 0n;
+  let generation = "";
+  let bytes: Buffer;
   try {
-    receipt = receiptSchema.parse(
-      JSON.parse(readBounded(join(root, receiptName), headerLimit).toString("utf8")),
-    );
+    bytes = readBounded(join(root, receiptName), headerLimit, (stat) => {
+      recordedAtNs = metadataTimestamp(stat);
+      mtimeNs = stat.mtimeNs;
+      generation = `${stat.dev}:${stat.ino}:${stat.birthtimeNs}:${stat.mtimeNs}:${stat.ctimeNs}`;
+    });
+    receipt = receiptSchema.parse(JSON.parse(bytes.toString("utf8")));
   } catch {
     throw new Error("staging receipt has unknown or invalid metadata");
   }
   if (basename(root) !== prefix + receipt.id) {
     throw new Error("staging generation does not match its directory");
   }
-  assertIdentity(root, receipt.rootIdentity);
-  return receipt;
+  receiptEvidence.set(receipt, { bytes, mtimeNs, generation });
+  return admitReceiptIdentities(root, receipt, recordedAtNs);
 }
 
 function ownerAbsent(pid: number) {
@@ -422,6 +451,145 @@ function ownerAbsent(pid: number) {
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "ESRCH";
   }
+}
+
+function sameHost(left: ProcessProvenance, right: ProcessProvenance) {
+  return (
+    left.platform === right.platform &&
+    left.hostId === right.hostId &&
+    left.pidNamespace === right.pidNamespace
+  );
+}
+
+function ownerState(
+  receipt: Receipt,
+  confirmation?: OperatorConfirmation,
+): "absent" | "active" | "unknown" {
+  const current = currentProcessProvenance();
+  if (!current) {
+    return "unknown";
+  }
+  const recorded = receipt.ownerProvenance;
+  if (recorded) {
+    if (
+      !sameHost(recorded, current) ||
+      (receipt.ownerDomain && receipt.ownerDomain !== processDomain(recorded))
+    ) {
+      return "unknown";
+    }
+    // A PID from another boot can name an unrelated live process now.
+    return recorded.bootId !== current.bootId || ownerAbsent(receipt.ownerPid)
+      ? "absent"
+      : "active";
+  }
+  if (
+    confirmation &&
+    sameHost(confirmation.current, current) &&
+    confirmation.current.bootId === current.bootId &&
+    confirmation.ownerPid === receipt.ownerPid &&
+    confirmation.ownerDomain === receipt.ownerDomain
+  ) {
+    return "absent";
+  }
+  // Existing same-boot digest receipts retain their established PID check.
+  return receipt.ownerDomain === processDomain(current)
+    ? ownerAbsent(receipt.ownerPid)
+      ? "absent"
+      : "active"
+    : "unknown";
+}
+
+function confirmPriorBoot(
+  root: string,
+  receipt: Receipt,
+  expectedDigest: string | undefined,
+  dryRun: boolean,
+): OperatorConfirmation {
+  const current = currentProcessProvenance();
+  const bootTime = currentBootTimeNs();
+  const evidence = receiptEvidence.get(receipt);
+  if (receipt.ownerProvenance || !current || !bootTime || !evidence) {
+    throw new Error(
+      "Legacy confirmation needs a legacy receipt and verified current host/boot provenance.",
+    );
+  }
+  const digest = receiptDigest(receipt)!;
+  if ((!dryRun && !expectedDigest) || (expectedDigest && expectedDigest !== digest)) {
+    throw new Error(
+      "Receipt digest changed or is missing; inspect this ID and confirm its exact --receipt-sha256.",
+    );
+  }
+  if (
+    receipt.ownerDomain === processDomain(current) ||
+    (receipt.claims && receipt.claims.platform !== current.platform)
+  ) {
+    throw new Error("Legacy receipt does not establish a different boot on this platform.");
+  }
+  const prior = receipt.operatorConfirmation;
+  if (prior) {
+    if (
+      !sameHost(prior.current, current) ||
+      prior.ownerPid !== receipt.ownerPid ||
+      prior.ownerDomain !== receipt.ownerDomain
+    ) {
+      throw new Error("Previous confirmation belongs to another host, namespace, or producer.");
+    }
+    assertIdentity(root, prior.rootIdentity);
+    assertIdentity(dirname(root), prior.syncRootIdentity);
+  }
+  const retainedTime =
+    prior &&
+    sameHost(prior.current, current) &&
+    prior.ownerPid === receipt.ownerPid &&
+    prior.ownerDomain === receipt.ownerDomain
+      ? BigInt(prior.receiptMtimeNs)
+      : evidence.mtimeNs;
+  if (retainedTime <= 0n || retainedTime >= bootTime) {
+    throw new Error(
+      "Legacy receipt mtime must predate the current boot; a different opaque domain alone is insufficient.",
+    );
+  }
+  const syncRootIdentity = identity(dirname(root));
+  const rootIdentity = upgradeDirectoryIdentity(
+    root,
+    receipt.rootIdentity,
+    receiptDeadline(receipt),
+  );
+  if (
+    !syncRootIdentity.stable?.volume.startsWith("uuid:") ||
+    rootIdentity.stable?.volume !== syncRootIdentity.stable.volume
+  ) {
+    throw new Error(
+      "Legacy confirmation requires matching UUID-backed sync-root and staging volumes.",
+    );
+  }
+  if (receipt.syncRootIdentity) {
+    assertIdentity(dirname(root), receipt.syncRootIdentity);
+  }
+  const payload = join(root, "payload");
+  if (lstatSync(payload, { throwIfNoEntry: false })) {
+    const observed = upgradeDirectoryIdentity(
+      payload,
+      receipt.payloadIdentity,
+      receiptDeadline(receipt),
+    );
+    if (observed.stable?.volume !== syncRootIdentity.stable.volume) {
+      throw new Error("Legacy payload volume does not match its sync root.");
+    }
+  } else if (receipt.state !== "removing") {
+    throw new Error("Legacy payload is missing before recorded removal.");
+  }
+  return {
+    kind: "same-host-prior-boot",
+    receiptSha256: digest,
+    receiptMtimeNs: String(retainedTime),
+    ownerPid: receipt.ownerPid,
+    ownerDomain: receipt.ownerDomain,
+    confirmedAt: new Date().toISOString(),
+    current,
+    syncRootIdentity,
+    rootIdentity,
+  };
 }
 
 export type StagingHandle = {
@@ -458,7 +626,8 @@ export function createStaging(
       version: 2,
       id,
       ownerPid: process.pid,
-      ownerDomain: recorded ? processDomain() : undefined,
+      ownerProvenance: recorded ? currentProcessProvenance() : undefined,
+      syncRootIdentity: identity(dirname(root)),
       repository: realpathSync(repository),
       repositoryIdentity: identity(realpathSync(repository)),
       kind,
@@ -500,6 +669,8 @@ function stagingHandle(root: string, initialReceipt: Receipt, recorded: boolean)
     if (!recorded) {
       return;
     }
+    upgradeReceiptIdentities(root, receipt);
+    receipt = receiptSchema.parse(receipt);
     // Unsupported durability is terminal for this generation, including later
     // metadata writes. The live producer still owns ordinary cleanup.
     if (
@@ -678,7 +849,6 @@ function mirrorLock(path: string, waitForAllocation = false) {
     if (released) {
       return;
     }
-    assertOwned();
     connection.exec("ROLLBACK");
     connection.close();
     released = true;
@@ -713,7 +883,7 @@ function mirrorSlot(syncRoot: string, key: string, expectedId?: string) {
   const { receipt, disposal } = readMirrorState(syncRoot, id);
   if (
     receipt &&
-    (receipt.mirror?.key !== key || !sameIdentity(receipt.mirror.slotIdentity, slotIdentity))
+    (receipt.mirror?.key !== key || !sameIdentity(slotIdentity, receipt.mirror.slotIdentity))
   ) {
     throw new Error("source mirror staging ownership does not match its slot");
   }
@@ -732,7 +902,7 @@ function idleMirror(receipt: Receipt) {
 }
 
 function saveMirrorReceipt(root: string, receipt: Receipt) {
-  assertIdentity(root, receipt.rootIdentity);
+  upgradeReceiptIdentities(root, receipt);
   if (!writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n")) {
     writeAtomic(
       root,
@@ -775,7 +945,14 @@ function readDisposal(syncRoot: string, id: string) {
   ) {
     throw new Error("source mirror disposal record is not private");
   }
-  const record = disposalSchema.parse(JSON.parse(readBounded(path, headerLimit).toString("utf8")));
+  let recordedAtNs = 0n;
+  const record = disposalSchema.parse(
+    JSON.parse(
+      readBounded(path, headerLimit, (metadata) => {
+        recordedAtNs = metadataTimestamp(metadata);
+      }).toString("utf8"),
+    ),
+  );
   const receipt = record.receipt;
   if (
     record.id !== id ||
@@ -788,6 +965,17 @@ function readDisposal(syncRoot: string, id: string) {
   ) {
     throw new Error("source mirror disposal record has invalid ownership");
   }
+  const root = join(syncRoot, prefix + id);
+  if (receipt) {
+    if (lstatSync(join(root, receiptName), { throwIfNoEntry: false })) {
+      readBounded(join(root, receiptName), headerLimit, (metadata) => {
+        recordedAtNs = metadataTimestamp(metadata);
+      });
+    }
+    admitReceiptIdentities(root, receipt, recordedAtNs);
+  }
+  // A completed disposal may have a successor slot; recovery owns that check.
+  identityDeadlines.set(record.slotIdentity, recordedAtNs);
   return record;
 }
 
@@ -891,17 +1079,24 @@ function claimIdleMirror(syncRoot: string, key: string, expectedId?: string) {
     return {
       release,
       removePayload() {
-        release.assertOwned();
+        if (lstatSync(join(current.root, "recovery.lock"), { throwIfNoEntry: false })) {
+          throw new Error(
+            "Another or interrupted recovery owns this copy; its recovery lock must remain protected.",
+          );
+        }
         if (!current.receipt) {
           if (lstatSync(current.root, { throwIfNoEntry: false })) {
             throw new Error("source mirror root appeared before empty-slot disposal");
           }
-          disposal = saveDisposal(syncRoot, {
-            version: 1,
-            id: current.id,
-            key,
-            slotIdentity: current.slotIdentity,
-          });
+          disposal = saveDisposal(
+            syncRoot,
+            current.disposal ?? {
+              version: 1,
+              id: current.id,
+              key,
+              slotIdentity: current.slotIdentity,
+            },
+          );
           return;
         }
         let receipt = current.receipt;
@@ -921,20 +1116,24 @@ function claimIdleMirror(syncRoot: string, key: string, expectedId?: string) {
           assertIdentity(payload, receipt.payloadIdentity);
         }
         // Never downgrade an already committed disposal during a retry.
-        if (!receipt.mirror?.disposing) {
+        if (!receipt.mirror?.disposing || !current.disposal) {
           receipt = receiptSchema.parse({
             ...receipt,
+            identityRecordedAtNs: receiptDeadline(receipt)?.toString(),
             mirror: { ...receipt.mirror!, disposing: true },
           });
           saveMirrorReceipt(current.root, receipt);
         }
-        disposal = saveDisposal(syncRoot, {
-          version: 1,
-          id: current.id,
-          key,
-          slotIdentity: current.slotIdentity,
-          receipt,
-        });
+        disposal = saveDisposal(
+          syncRoot,
+          current.disposal ?? {
+            version: 1,
+            id: current.id,
+            key,
+            slotIdentity: current.slotIdentity,
+            receipt,
+          },
+        );
         release.assertOwned();
         assertIdentity(current.root, receipt.rootIdentity);
         for (const name of generations) {
@@ -1192,7 +1391,10 @@ export function createMirrorStaging(
     const adopted: Receipt = {
       ...receipt,
       ownerPid: process.pid,
-      ownerDomain: processDomain(),
+      ownerDomain: undefined,
+      ownerProvenance: currentProcessProvenance(),
+      operatorConfirmation: undefined,
+      syncRootIdentity: identity(syncRoot),
       repository,
       repositoryIdentity: identity(repository),
       state: "preparing",
@@ -1221,7 +1423,6 @@ export function createMirrorStaging(
       }
     };
     const ownedReceipt = () => {
-      unlock.assertOwned();
       const current = mirrorSlot(syncRoot, key);
       if (
         current.root !== root ||
@@ -1359,7 +1560,8 @@ function recoveryMetadata(root: string, source: string, artifacts?: CrabboxArtif
     ? identity(source)
     : artifacts?.sourceIdentity;
   const generations: string[] = [];
-  const mirror = readReceipt(root).mirror;
+  const receipt = readReceipt(root);
+  const mirror = receipt.mirror;
   for (const name of names) {
     if (known.has(name)) {
       continue;
@@ -1383,7 +1585,11 @@ function recoveryMetadata(root: string, source: string, artifacts?: CrabboxArtif
     if (
       !match ||
       !sourceIdentity ||
-      !sameIdentity(readArtifactRecord(root, match[1]!).sourceIdentity, sourceIdentity)
+      !sameIdentity(
+        sourceIdentity,
+        readArtifactRecord(root, match[1]!).sourceIdentity,
+        receiptDeadline(receipt),
+      )
     ) {
       throw new Error(
         "staging has an unknown or replaced metadata sibling; preserve it before recovery",
@@ -1407,7 +1613,12 @@ type StagingStatus = {
   leases?: string[];
 };
 
-function metadataStatus(root: string, receipt: Receipt, explicit = false): StagingStatus {
+function metadataStatus(
+  root: string,
+  receipt: Receipt,
+  explicit = false,
+  confirmation?: OperatorConfirmation,
+): StagingStatus {
   const base = {
     id: receipt.id,
     directory: root,
@@ -1426,7 +1637,8 @@ function metadataStatus(root: string, receipt: Receipt, explicit = false): Stagi
         "Another or interrupted recovery owns this copy; inspect that operation before manual disposition.",
     };
   }
-  if (idleMirror(receipt)) {
+  const owner = ownerState(receipt, confirmation);
+  if (idleMirror(receipt) && (!receipt.ownerProvenance || owner !== "unknown")) {
     return {
       ...base,
       status: receipt.mirror?.disposing ? "candidate" : "protected",
@@ -1435,15 +1647,15 @@ function metadataStatus(root: string, receipt: Receipt, explicit = false): Stagi
         : "Idle source mirror retained for reuse; capacity eviction or explicit staging recover uses its exclusive mirror lock.",
     };
   }
-  if (!receipt.ownerDomain || receipt.ownerDomain !== processDomain()) {
+  if (owner === "unknown") {
     return {
       ...base,
       status: "protected",
       reason:
-        "The producer belongs to an unknown or different boot/process namespace; this process cannot establish its absence.",
+        "The producer belongs to an unknown host, boot, or PID namespace; inspect this ID for explicit legacy confirmation.",
     };
   }
-  if (!ownerAbsent(receipt.ownerPid)) {
+  if (owner === "active") {
     return {
       ...base,
       status: "active",
@@ -1530,6 +1742,9 @@ function inspectStaging(
   let skipping = Boolean(options.startAfter);
   let directory;
   try {
+    // Resolve cold volume metadata once before the bounded header scan.
+    identity(realpathSync(syncRoot));
+    currentProcessProvenance();
     directory = opendirSync(syncRoot);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -1537,12 +1752,10 @@ function inspectStaging(
     }
     throw error;
   }
+  const deadline = performance.now() + (options.budgetMs ?? 250);
   try {
     for (;;) {
-      if (
-        entries.length >= (options.limit ?? 64) ||
-        performance.now() - started >= (options.budgetMs ?? 250)
-      ) {
+      if (entries.length >= (options.limit ?? 64) || performance.now() >= deadline) {
         incomplete = true;
         break;
       }
@@ -1611,11 +1824,16 @@ const cursorSchema = z.strictObject({
 function readCursor(syncRoot: string) {
   const physicalRoot = realpathSync(syncRoot);
   const root = join(physicalRoot, cursorName);
+  let recordedAtNs = 0n;
   const value = cursorSchema.parse(
-    JSON.parse(readBounded(join(root, "position.json"), headerLimit).toString("utf8")),
+    JSON.parse(
+      readBounded(join(root, "position.json"), headerLimit, (stat) => {
+        recordedAtNs = metadataTimestamp(stat);
+      }).toString("utf8"),
+    ),
   );
-  assertIdentity(physicalRoot, value.rootIdentity);
-  assertIdentity(root, value.cursorIdentity);
+  assertIdentity(physicalRoot, value.rootIdentity, recordedAtNs);
+  assertIdentity(root, value.cursorIdentity, recordedAtNs);
   if (value.after && basename(value.after) !== value.after) {
     throw new Error("staging discovery cursor is invalid");
   }
@@ -1721,6 +1939,9 @@ type RecoveryOptions = {
   automatic?: boolean;
   witness?: SourceWitness;
   signal?: AbortSignal;
+  dryRun?: boolean;
+  confirmSameHostPriorBoot?: boolean;
+  receiptSha256?: string;
 };
 
 async function recoverStaging(syncRoot: string, id: string, options: RecoveryOptions) {
@@ -1736,10 +1957,56 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
   let lockedDirectory: Identity | undefined;
   const lockOwner = JSON.stringify({ pid: process.pid, generation: randomUUID() }) + "\n";
   const lock = join(root, "recovery.lock");
+  let confirmation: OperatorConfirmation | undefined;
+  let originalDigest: string | undefined;
+  const checkUsers = async (receipt: Receipt, heldMirror = false) => {
+    const slot = receipt.mirror ? join(syncRoot, "mirrors", receipt.mirror.key) : undefined;
+    const result = await verifyNoStagingUsers({
+      roots: [root, ...(slot ? [slot] : [])].filter((path) =>
+        lstatSync(path, { throwIfNoEntry: false }),
+      ),
+      ignoredFiles: heldMirror && slot ? [join(slot, "lock")] : [],
+      signal: options.signal,
+    });
+    if (!result.ok) {
+      unsettled ||= result.unjoined === true;
+      throw new Error(result.reason);
+    }
+  };
+  const assertProducerAbsent = (receipt: Receipt) => {
+    if (ownerState(receipt, confirmation) !== "absent") {
+      throw new Error("The producer's absence can no longer be established.");
+    }
+    if (confirmation) {
+      assertIdentity(dirname(root), confirmation.syncRootIdentity);
+      assertIdentity(root, confirmation.rootIdentity);
+    }
+  };
   try {
     options.signal?.throwIfAborted();
     const { receipt: before, disposal: recordedDisposal } = readMirrorState(syncRoot, id);
+    originalDigest = before ? receiptDigest(before) : undefined;
+    const originalSignature = before ? receiptSignature(before) : undefined;
+    if (
+      options.confirmSameHostPriorBoot &&
+      (options.automatic || !before || recordedDisposal || idleMirror(before))
+    ) {
+      throw new Error(
+        "Prior-boot confirmation is per-ID and only for non-idle legacy capsules; automatic discovery cannot confirm it.",
+      );
+    }
+    if (before && options.confirmSameHostPriorBoot) {
+      confirmation = confirmPriorBoot(root, before, options.receiptSha256, Boolean(options.dryRun));
+    }
+    if (before?.ownerProvenance && ownerState(before) === "unknown") {
+      throw new Error("The recorded producer host or PID namespace does not match this process.");
+    }
     if (recordedDisposal || (before && idleMirror(before))) {
+      if (options.dryRun) {
+        throw new Error(
+          "This inspection evaluates non-idle capsule recovery; idle/disposal records use their separate slot-locked workflow.",
+        );
+      }
       const key = recordedDisposal?.key ?? before!.mirror!.key;
       const slotIdentity = recordedDisposal?.slotIdentity ?? before!.mirror!.slotIdentity;
       if (options.automatic && !recordedDisposal && !before?.mirror?.disposing) {
@@ -1762,15 +2029,10 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
         const slot = join(syncRoot, "mirrors", key);
         if (recordedDisposal && !lstatSync(root, { throwIfNoEntry: false })) {
           const present = lstatSync(slot, { throwIfNoEntry: false });
-          if (!present || !sameIdentity(identity(slot), slotIdentity)) {
-            if (present) {
-              // A later recorded owner may already have allocated this key.
-              // Its slot is never modified while finishing the old tombstone.
-              const newer = mirrorSlot(syncRoot, key);
-              if (!newer.receipt || newer.id === id) {
-                throw new Error("Source mirror disposal slot identity changed.");
-              }
-            }
+          const current = present ? mirrorSlot(syncRoot, key, id) : undefined;
+          // Filesystems can reuse an inode for a new generation. Validate its
+          // receipt before comparing identities; never modify the successor slot.
+          if (!current || (current.receipt && current.id !== id)) {
             removeDisposal(syncRoot, recordedDisposal);
             return {
               id,
@@ -1778,11 +2040,17 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
               reason: "Completed source mirror disposal record removed.",
             };
           }
+          if (!sameIdentity(current.slotIdentity, slotIdentity)) {
+            throw new Error("Source mirror disposal slot identity changed.");
+          }
         }
         victim = claimIdleMirror(syncRoot, key, id);
         allocation();
         allocation = undefined;
         if (victim) {
+          if (before) {
+            await checkUsers(before, true);
+          }
           victim.removePayload();
           allocation = mirrorLock(join(syncRoot, "mirrors", ".allocation.lock"), true);
           if (!allocation) {
@@ -1801,7 +2069,9 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
             : "Source mirror is in use or its ownership changed; retained.",
         };
       } finally {
-        victim?.release();
+        if (!unsettled) {
+          victim?.release();
+        }
         allocation?.();
       }
     }
@@ -1813,11 +2083,32 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
       root,
       { ...before, witness: selectedWitness },
       !options.automatic,
+      confirmation,
     );
     if (status.status !== "candidate") {
-      return { id, recovered: false, reason: status.reason };
+      return {
+        id,
+        recovered: false,
+        eligible: false,
+        receiptSha256: originalDigest,
+        reason: status.reason,
+      };
     }
-    if (before.mirror) {
+    // Metadata must be intact before either confirmation evidence or locks are written.
+    const initialManifest = readManifest(root, before);
+    const initialArtifacts = before.artifactManifest
+      ? readArtifactRecord(root, before.artifactManifest)
+      : initialManifest.artifacts;
+    recoveryMetadata(root, source, initialArtifacts);
+    if (before.mirror && mirrorSlot(syncRoot, before.mirror.key).root !== root) {
+      throw new Error("Source mirror staging ownership changed before recovery.");
+    }
+    await checkUsers(before);
+    if (receiptSignature(readReceipt(root)) !== originalSignature) {
+      throw new Error("staging receipt changed during live-user inspection");
+    }
+    assertProducerAbsent(before);
+    if (before.mirror && !options.dryRun) {
       const allocation = mirrorLock(join(syncRoot, "mirrors", ".allocation.lock"), true);
       if (!allocation) {
         return {
@@ -1844,35 +2135,70 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
       }
     }
     // Interrupted owners do not supply settlement evidence for their child tools.
-    mkdirSync(lock, { mode: 0o700 });
-    locked = true;
-    lockedRoot = identity(root);
-    lockedDirectory = identity(lock);
-    writeFileSync(join(lock, "owner.json"), lockOwner, { mode: 0o600, flag: "wx" });
+    if (!options.dryRun) {
+      mkdirSync(lock, { mode: 0o700 });
+      locked = true;
+      lockedRoot = identity(root);
+      lockedDirectory = identity(lock);
+      writeFileSync(join(lock, "owner.json"), lockOwner, { mode: 0o600, flag: "wx" });
+    }
     let receipt = readReceipt(root);
-    if (JSON.stringify(receipt) !== JSON.stringify(before) || !ownerAbsent(receipt.ownerPid)) {
+    if (receiptSignature(receipt) !== originalSignature) {
       throw new Error("staging ownership changed while acquiring recovery");
     }
+    assertProducerAbsent(receipt);
+    let currentSignature = originalSignature;
+    const assertCurrentReceipt = () => {
+      if (receiptSignature(readReceipt(root)) !== currentSignature) {
+        throw new Error("staging ownership changed during preservation verification");
+      }
+      assertProducerAbsent(receipt);
+      if (options.dryRun) {
+        if (lstatSync(lock, { throwIfNoEntry: false })) {
+          throw new Error("Another recovery acquired this copy during inspection.");
+        }
+      } else {
+        assertIdentity(lock, lockedDirectory!);
+        if (readBounded(join(lock, "owner.json"), headerLimit).toString("utf8") !== lockOwner) {
+          throw new Error("staging recovery lock ownership changed");
+        }
+      }
+    };
     const saveReceipt = (next: Receipt) => {
-      assertIdentity(root, receipt.rootIdentity);
-      receipt = next;
-      if (!writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n")) {
+      if (options.dryRun) {
+        throw new Error("Inspection cannot write recovery metadata.");
+      }
+      assertCurrentReceipt();
+      upgradeReceiptIdentities(root, next);
+      receipt = receiptSchema.parse(next);
+      const bytes = JSON.stringify(receipt) + "\n";
+      if (!writeAtomic(root, receiptName, bytes)) {
         receipt.durable = false;
         writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n", false);
         throw new Error("Durable recovery updates are unavailable; staging remains protected.");
       }
+      receipt = readReceipt(root);
+      currentSignature = receiptSignature(receipt);
     };
+    if (confirmation && !options.dryRun) {
+      saveReceipt({
+        ...receipt,
+        operatorConfirmation: confirmation,
+        syncRootIdentity: confirmation.syncRootIdentity,
+      });
+    }
     const checkClaims = async () => {
       const claims = await verifyNoStagingClaims({
         binary: options.binary,
         cwd: options.cwd,
         namespace: receipt.claims!,
+        legacyBeforeNs: receiptDeadline(receipt),
         sourceRoot: root,
         signal: options.signal,
       });
       if (!claims.ok) {
         unsettled ||= claims.unjoined === true;
-        if (!unsettled) {
+        if (!unsettled && !options.dryRun) {
           saveReceipt({
             ...receipt,
             hold: "claims",
@@ -1899,9 +2225,14 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
         if (!manifest.artifacts) {
           throw new Error("Diagnostic preservation was not recorded.");
         }
-        verifyPreservedCrabboxArtifacts(source, manifest.artifacts, receipt.state === "removing");
+        verifyPreservedCrabboxArtifacts(
+          source,
+          manifest.artifacts,
+          receipt.state === "removing",
+          receiptDeadline(receipt),
+        );
       } catch (error) {
-        if (options.automatic || receipt.state === "removing") {
+        if (options.automatic || options.dryRun || receipt.state === "removing") {
           throw error;
         }
         if (!receipt.repositoryIdentity) {
@@ -1910,10 +2241,12 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
             { cause: error },
           );
         }
+        assertCurrentReceipt();
         const artifacts = preserveCrabboxArtifacts(
           source,
           receipt.repository,
           receipt.repositoryIdentity,
+          receiptDeadline(receipt),
         );
         if (!artifacts?.durable) {
           throw new Error("Durable diagnostic preservation could not be established.", {
@@ -1933,44 +2266,56 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
         });
       }
     }
-    const generations = recoveryMetadata(root, source, manifest.artifacts);
-    const footprint = validatePayload(root, receipt, manifest);
     const witness = await verifySourceWitness({
       source: manifest.source,
       witness: selectedWitness!,
       payloadRoot: root,
+      automatic: options.automatic,
       signal: options.signal,
     });
     if (!witness.ok) {
       unsettled ||= witness.unjoined === true;
-      return { id, recovered: false, reason: witness.reason };
+      return {
+        id,
+        recovered: false,
+        eligible: false,
+        receiptSha256: originalDigest,
+        operatorConfirmation: options.dryRun ? undefined : confirmation,
+        reason: witness.reason,
+      };
     }
     await checkClaims();
+    await checkUsers(receipt, Boolean(releaseMirror));
     options.signal?.throwIfAborted();
     // Both asynchronous readers have settled. Recheck all remaining bytes and
     // authority immediately before recording disposal and removing this payload.
-    if (
-      JSON.stringify(readReceipt(root)) !== JSON.stringify(receipt) ||
-      !ownerAbsent(receipt.ownerPid)
-    ) {
-      throw new Error("staging ownership changed during preservation verification");
-    }
-    if (validatePayload(root, receipt, manifest) !== footprint) {
-      throw new Error("staging changed during preservation verification");
-    }
+    validatePayload(root, receipt, manifest);
     if (manifest.artifacts) {
-      verifyPreservedCrabboxArtifacts(source, manifest.artifacts, receipt.state === "removing");
+      verifyPreservedCrabboxArtifacts(
+        source,
+        manifest.artifacts,
+        receipt.state === "removing",
+        receiptDeadline(receipt),
+      );
     }
-    assertIdentity(lock, lockedDirectory);
-    if (
-      readBounded(join(lock, "owner.json"), headerLimit).toString("utf8") !== lockOwner ||
-      JSON.stringify(recoveryMetadata(root, source, manifest.artifacts)) !==
-        JSON.stringify(generations)
-    ) {
-      throw new Error("staging metadata changed during preservation verification");
+    const generations = recoveryMetadata(root, source, manifest.artifacts);
+    if (options.dryRun) {
+      witness.revalidate();
+      assertCurrentReceipt();
+      return {
+        id,
+        recovered: false,
+        eligible: true,
+        receiptSha256: originalDigest,
+        confirmationRequired: Boolean(confirmation),
+        requiresExclusiveLocks: true,
+        reason:
+          "Read-only recovery checks passed; actual recovery must reacquire locks and revalidate this receipt.",
+      };
     }
     saveReceipt({ ...receipt, state: "removing", hold: undefined, witness: selectedWitness });
     witness.revalidate();
+    assertCurrentReceipt();
     rmSync(join(root, "payload"), { recursive: true, force: true });
     rmSync(join(root, manifestName));
     for (const name of generations) {
@@ -1994,6 +2339,7 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
     return {
       id,
       recovered: true,
+      operatorConfirmation: confirmation,
       reason:
         "Independent retained source, diagnostics, and native claims verified; abandoned staging removed.",
     };
@@ -2004,7 +2350,14 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
         : error instanceof Error
           ? error.message
           : "Staging recovery could not be verified.";
-    return { id, recovered: false, reason };
+    return {
+      id,
+      recovered: false,
+      eligible: false,
+      receiptSha256: originalDigest,
+      operatorConfirmation: options.dryRun ? undefined : confirmation,
+      reason,
+    };
   } finally {
     if (locked && !unsettled && lockedRoot && lockedDirectory) {
       try {
@@ -2040,28 +2393,73 @@ export async function runStagingCommand(
     console.log(JSON.stringify(inspectStaging(syncRoot, { startAfter: args[2] }), null, 2));
     return 0;
   }
-  if (args[0] === "recover" && (args.length === 2 || args.length === 6)) {
+  if (args[0] === "recover" || (args[0] === "inspect" && args[1] && !args[1].startsWith("--"))) {
     try {
+      const parsed = parseArgs({
+        args: args.slice(1),
+        allowPositionals: true,
+        strict: true,
+        tokens: true,
+        options: {
+          "same-host-prior-boot": { type: "boolean" },
+          "confirm-same-host-prior-boot": { type: "boolean" },
+          "receipt-sha256": { type: "string" },
+          "witness-repo": { type: "string" },
+          "witness-ref": { type: "string" },
+        },
+      });
+      const flags = parsed.tokens
+        .filter((token) => token.kind === "option")
+        .map((token) => token.name);
+      const dryRun = args[0] === "inspect";
+      const values = parsed.values;
+      if (
+        parsed.positionals.length !== 1 ||
+        new Set(flags).size !== flags.length ||
+        (dryRun && (values["confirm-same-host-prior-boot"] || values["receipt-sha256"])) ||
+        (!dryRun && values["same-host-prior-boot"])
+      ) {
+        throw new Error(
+          "Choose exactly one staging ID and use inspection or confirmation flags only with their matching command.",
+        );
+      }
+      const confirm = dryRun
+        ? values["same-host-prior-boot"]
+        : values["confirm-same-host-prior-boot"];
+      const digest = values["receipt-sha256"];
+      if (
+        (!dryRun && Boolean(confirm) !== Boolean(digest)) ||
+        (digest && !/^[a-f0-9]{64}$/u.test(digest))
+      ) {
+        throw new Error(
+          "Legacy recovery requires --confirm-same-host-prior-boot and the exact --receipt-sha256 from inspection.",
+        );
+      }
       let witness: SourceWitness | undefined;
-      if (args.length === 6) {
-        const fields = new Map([
-          [args[2], args[3]],
-          [args[4], args[5]],
-        ]);
-        if (fields.size !== 2 || !fields.get("--witness-repo") || !fields.get("--witness-ref")) {
+      if (values["witness-repo"] || values["witness-ref"]) {
+        if (!values["witness-repo"] || !values["witness-ref"]) {
           throw new Error("Supply both --witness-repo and --witness-ref, with one value each.");
         }
-        witness = selectSourceWitness(fields.get("--witness-repo")!, fields.get("--witness-ref")!);
+        witness = selectSourceWitness(values["witness-repo"], values["witness-ref"]);
       }
-      const result = await recoverStaging(syncRoot, args[1]!, { ...options, witness });
-      console.log(JSON.stringify(result, null, 2));
-      return result.recovered ? 0 : 1;
+      const result = await recoverStaging(realpathSync(syncRoot), parsed.positionals[0]!, {
+        ...options,
+        witness,
+        dryRun,
+        confirmSameHostPriorBoot: confirm,
+        receiptSha256: digest,
+      });
+      console.log(
+        JSON.stringify({ ...result, ...(dryRun ? { inspectionOnly: true } : {}) }, null, 2),
+      );
+      return dryRun ? 0 : result.recovered ? 0 : 1;
     } catch (error) {
       console.log(
         JSON.stringify(
           {
             id: args[1],
             recovered: false,
+            eligible: false,
             reason:
               error instanceof Error ? error.message : "Recovery options could not be verified.",
           },
@@ -2073,7 +2471,7 @@ export async function runStagingCommand(
     }
   }
   console.log(
-    "Usage: node scripts/crabbox-wrapper.mjs staging inspect [--after <nextCursor>]\n       node scripts/crabbox-wrapper.mjs staging recover <id> [--witness-repo <path> --witness-ref <full-ref>]\n\nOnly positively settled, unchanged staging with independently retained source and preserved diagnostics can be removed. Existing native claims are inspected without provider calls or claim mutation.",
+    "Usage: node scripts/crabbox-wrapper.mjs staging inspect [--after <nextCursor>]\n       node scripts/crabbox-wrapper.mjs staging inspect <id> [--same-host-prior-boot]\n       node scripts/crabbox-wrapper.mjs staging recover <id> [--confirm-same-host-prior-boot --receipt-sha256 <digest>] [--witness-repo <path> --witness-ref <full-ref>]\n\nOnly positively settled, unchanged staging with independently retained source and preserved diagnostics can be removed. Existing native claims are inspected without provider calls or claim mutation.",
   );
   return args.length === 0 || args[0] === "--help" ? 0 : 2;
 }

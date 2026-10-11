@@ -81,28 +81,6 @@ describe("Doctor retired auth profile cleanup", () => {
     });
   });
 
-  it("removes retired profiles only after the repaired config commits", async () => {
-    await runWriteConfigHealth(createContext());
-
-    expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
-    expect(mocks.removeAuthProfilesAcrossOwnerStores).toHaveBeenCalledWith({
-      agentDir: "/tmp/openclaw/agents/main",
-      cfg: { gateway: { mode: "local" } },
-      profileIds: ["anthropic:claude-cli"],
-    });
-    expect(mocks.replaceConfigFile.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.removeAuthProfilesAcrossOwnerStores.mock.invocationCallOrder[0]!,
-    );
-  });
-
-  it("keeps retired profiles when the repaired config write fails", async () => {
-    mocks.replaceConfigFile.mockRejectedValueOnce(new Error("write failed"));
-
-    await expect(runWriteConfigHealth(createContext())).rejects.toThrow("write failed");
-
-    expect(mocks.removeAuthProfilesAcrossOwnerStores).not.toHaveBeenCalled();
-  });
-
   it("uses each committed receipt for the next write", async () => {
     const ctx = createContext();
     mocks.replaceConfigFile
@@ -137,9 +115,17 @@ describe("Doctor retired auth profile cleanup", () => {
     });
     expect(ctx.cfgForPersistence).toEqual(ctx.cfg);
     expect(mocks.removeAuthProfilesAcrossOwnerStores).toHaveBeenCalledOnce();
+    expect(mocks.removeAuthProfilesAcrossOwnerStores).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw/agents/main",
+      cfg: ctx.cfg,
+      profileIds: ["anthropic:claude-cli"],
+    });
+    expect(mocks.replaceConfigFile.mock.invocationCallOrder[1]).toBeLessThan(
+      mocks.removeAuthProfilesAcrossOwnerStores.mock.invocationCallOrder[0]!,
+    );
   });
 
-  it.each(["missing", "null", "conflict"] as const)(
+  it.each(["missing", "null", "conflict", "write failed"] as const)(
     "keeps cleanup and the saved baseline when the receipt is %s",
     async (failure) => {
       const ctx = createContext();
@@ -148,17 +134,26 @@ describe("Doctor retired auth profile cleanup", () => {
       } else if (failure === "null") {
         ctx.configResult.confirmedConfigSource = { path: ctx.configPath, hash: null };
       } else {
-        mocks.replaceConfigFile.mockRejectedValueOnce(new ConfigMutationConflictError("changed"));
+        mocks.replaceConfigFile.mockRejectedValueOnce(
+          failure === "conflict"
+            ? new ConfigMutationConflictError("changed")
+            : new Error("write failed"),
+        );
       }
       const receipt = ctx.configResult.confirmedConfigSource;
       const baseline = ctx.cfgForPersistence;
 
-      expect(await runWriteConfigHealth(ctx)).toBe(false);
-
-      expect(ctx.configWriteRefusal).toBe("config-conflict");
+      if (failure === "write failed") {
+        await expect(runWriteConfigHealth(ctx)).rejects.toThrow("write failed");
+      } else {
+        expect(await runWriteConfigHealth(ctx)).toBe(false);
+        expect(ctx.configWriteRefusal).toBe("config-conflict");
+      }
       expect(ctx.configResult.confirmedConfigSource).toBe(receipt);
       expect(ctx.cfgForPersistence).toBe(baseline);
-      expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(failure === "conflict" ? 1 : 0);
+      expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(
+        failure === "conflict" || failure === "write failed" ? 1 : 0,
+      );
       expect(mocks.removeAuthProfilesAcrossOwnerStores).not.toHaveBeenCalled();
     },
   );

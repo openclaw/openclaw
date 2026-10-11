@@ -1,4 +1,3 @@
-// Stores and verifies web push subscriptions and delivery payloads.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { expectDefined, normalizeOptionalString } from "@openclaw/normalization-core";
@@ -7,7 +6,6 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { pathMayExistSync } from "./path-existence.js";
 import {
   WebPushSubscriptionBindingError,
-  createWebPushVapidKeyPair,
   deleteBoundWebPushSubscription,
   deleteWebPushSubscriptionIfCurrent,
   hashWebPushEndpoint,
@@ -102,12 +100,11 @@ export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> 
   const webPush = await loadWebPushRuntime();
   const keys = webPush.generateVAPIDKeys();
   const pair = await insertVapidKeyPairIfAbsent({
-    candidate: createWebPushVapidKeyPair(
-      keys.publicKey,
-      keys.privateKey,
-      resolveVapidSubjectFromEnv(),
-    ),
-    nowMs: Date.now(),
+    candidate: {
+      publicKey: keys.publicKey,
+      privateKey: keys.privateKey,
+      subject: resolveVapidSubjectFromEnv(),
+    },
     stateDir: baseDir,
   });
   return { ...pair, subject: resolveVapidSubjectFromEnv() };
@@ -119,12 +116,11 @@ function resolveVapidSubjectFromEnv(): string {
   );
 }
 
-type RegisterWebPushParams = {
-  endpoint: string;
-  keys: { p256dh: string; auth: string };
-  binding?: { deviceId: string; userProfileId: string | null };
+type RegisterWebPushParams = Pick<
+  Parameters<typeof upsertWebPushSubscription>[0],
+  "endpoint" | "keys" | "binding" | "guard"
+> & {
   baseDir?: string;
-  guard?: WebPushMutationGuard;
 };
 
 export async function registerWebPushSubscription(
@@ -230,33 +226,27 @@ async function sendPreparedWebPushNotifications(params: {
     return [];
   }
 
-  const results = await Promise.allSettled(
+  const mapped: WebPushSendResult[] = await Promise.all(
     subscriptions.map((subscription) =>
       sendPreparedWebPushNotification(
         webPush,
         subscription,
         params.payload,
         params.deliveryOptions,
-      ),
+      ).catch((reason: unknown) => ({
+        ok: false,
+        subscriptionId: subscription.subscriptionId,
+        error: reason instanceof Error ? reason.message : "unknown error",
+      })),
     ),
   );
 
-  const mapped = results.map((r, i) =>
-    r.status === "fulfilled"
-      ? r.value
-      : {
-          ok: false,
-          subscriptionId: expectDefined(subscriptions[i], "subscriptions entry at i")
-            .subscriptionId,
-          error: r.reason instanceof Error ? r.reason.message : "unknown error",
-        },
-  );
-
   // Clean up expired subscriptions (HTTP 410 Gone or 404 Not Found) per Web Push spec.
-  const expiredSubscriptions = mapped
-    .map((result, i) => ({ result, sub: subscriptions[i] }))
-    .filter(({ result }) => !result.ok && (result.statusCode === 410 || result.statusCode === 404))
-    .map(({ sub }) => expectDefined(sub, "push web sub"));
+  const expiredSubscriptions = mapped.flatMap((result, i) =>
+    !result.ok && (result.statusCode === 410 || result.statusCode === 404)
+      ? [expectDefined(subscriptions[i], "push web sub")]
+      : [],
+  );
 
   for (const subscription of expiredSubscriptions) {
     try {
@@ -278,11 +268,9 @@ async function sendPreparedWebPushNotifications(params: {
 export async function prepareWebPushNotificationSender(
   baseDir?: string,
 ): Promise<
-  (params: {
-    subscriptions: readonly WebPushSubscription[];
-    payload: WebPushPayload;
-    deliveryOptions?: WebPushDeliveryOptions;
-  }) => Promise<WebPushSendResult[]>
+  (
+    params: Omit<Parameters<typeof sendPreparedWebPushNotifications>[0], "webPush" | "baseDir">,
+  ) => Promise<WebPushSendResult[]>
 > {
   assertLegacyWebPushMigrationComplete(baseDir);
   const vapidKeys = await resolveVapidKeys(baseDir);

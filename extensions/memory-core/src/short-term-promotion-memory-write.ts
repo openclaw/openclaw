@@ -199,9 +199,7 @@ export async function commitMemoryContent(
       },
       fileSystem: {
         promises: {
-          mkdir: fs.mkdir,
-          chmod: fs.chmod,
-          writeFile: fs.writeFile,
+          ...fs,
           rename: async (from, to) => {
             publication.state = "uncertain";
             try {
@@ -225,12 +223,6 @@ export async function commitMemoryContent(
             }
             publication.state = "committed";
           },
-          copyFile: fs.copyFile,
-          unlink: fs.unlink,
-          rm: fs.rm,
-          open: fs.open,
-          stat: fs.stat,
-          lstat: fs.lstat,
         },
       },
     });

@@ -196,7 +196,7 @@ export function captureOpenAIQuicksilverTransportEvent(
 ): void {
   // Finalization retains capture failures; observe the Promise returned by the host view.
   void runtime
-    .captureWsEventAsync({
+    .captureWsEventAsync?.({
       url: "wss://realtime.invalid/private",
       direction,
       kind,

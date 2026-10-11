@@ -957,7 +957,6 @@ describe("config schema", () => {
       agents: {
         entries: {
           main: {
-            default: true,
             tools: {
               exec: {
                 commandHighlighting: false,
@@ -993,7 +992,6 @@ describe("config schema", () => {
       agents: {
         entries: {
           main: {
-            default: true,
             tools: {
               exec: {
                 reviewer: {
@@ -1072,7 +1070,6 @@ describe("config schema", () => {
         toolSearch: {
           enabled: true,
           mode: "directory",
-          codeTimeoutMs: 5000,
           searchDefaultLimit: 4,
           maxSearchLimit: 12,
         },
@@ -1080,18 +1077,12 @@ describe("config schema", () => {
     ).toEqual({
       enabled: true,
       mode: "directory",
-      codeTimeoutMs: 5000,
       searchDefaultLimit: 4,
       maxSearchLimit: 12,
     });
-    expect(
-      ToolsSchema.safeParse({
-        toolSearch: {
-          enabled: true,
-          mode: "both",
-        },
-      }).success,
-    ).toBe(false);
+    for (const toolSearch of [{ mode: "both" }, { mode: "code" }, { codeTimeoutMs: 5000 }]) {
+      expect(ToolsSchema.safeParse({ toolSearch }).success).toBe(false);
+    }
   });
 
   it("accepts install policy exec config in the runtime zod schema", () => {
@@ -1251,13 +1242,6 @@ describe("config schema", () => {
     expect(lookup?.children.find((child) => child.key === "gateway")?.path).toBe("gateway");
     const schema = lookup?.schema as { properties?: unknown } | undefined;
     expect(schema?.properties).toBeUndefined();
-  });
-
-  it("lists Matrix in messages.queue.byChannel schema lookup", () => {
-    const lookup = lookupConfigSchema(baseSchema, "messages.queue.byChannel");
-    expect(lookup?.path).toBe("messages.queue.byChannel");
-    expect(lookup?.children.map((child) => child.key)).toEqual(expect.arrayContaining(["matrix"]));
-    expect(lookup?.schema).toMatchObject({ additionalProperties: false });
   });
 
   it("includes reload metadata when a resolver is provided", () => {

@@ -61,6 +61,34 @@ describe("plugin generation sibling assets", () => {
     },
   );
 
+  it("does not require dependencies of a dependency's unused nested subproject", () => {
+    const root = fixture({
+      "package.json": '{"name":"native-scope-fixture","dependencies":{"dep":"1.0.0"}}',
+      "platform/addon.node": "native fixture bytes",
+      "platform/helper.dat": "companion",
+      "node_modules/dep/package.json": '{"name":"dep","main":"index.cjs"}',
+      "node_modules/dep/index.cjs": "exports.value = 'dep';",
+      // Published packages ship private benchmark projects whose dependencies are never installed.
+      "node_modules/dep/benchmark/package.json":
+        '{"private":true,"dependencies":{"openclaw-absent-benchmark-fixture":"1.0.0"}}',
+      "node_modules/dep/benchmark/bench.mjs": "import 'openclaw-absent-benchmark-fixture';",
+      "entry.cjs": `
+        const fs = require('node:fs');
+        const path = require('node:path');
+        exports.read = () => {
+          const native = fs.realpathSync(path.join(__dirname, 'bin', 'addon.node'));
+          return [
+            require('dep').value,
+            fs.readFileSync(path.join(path.dirname(native), 'helper.dat'), 'utf8'),
+          ];
+        };`,
+    });
+    fs.mkdirSync(path.join(root, "bin"));
+    fs.symlinkSync("../platform/addon.node", path.join(root, "bin", "addon.node"), "file");
+    const captured = host(root, true).load("entry.cjs") as { read(): string[] };
+    expect(captured.read()).toEqual(["dep", "companion"]);
+  });
+
   it("keeps computed source siblings beside the admitted native realpath", async () => {
     await withOpenClawTestState({ label: "native-lazy-companion" }, async (state) => {
       const root = state.path("plugin");

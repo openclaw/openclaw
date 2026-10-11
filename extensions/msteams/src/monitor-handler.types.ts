@@ -1,4 +1,3 @@
-// Msteams type declarations define plugin contracts.
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
@@ -8,6 +7,10 @@ import type { MSTeamsApp } from "./sdk.js";
 
 export type MSTeamsMessageHandlerDeps = {
   cfg: OpenClawConfig;
+  /** Full channel config retained for a fail-closed cross-account route recheck. */
+  accountPolicyCfg?: OpenClawConfig;
+  accountId: string;
+  readConfig?: () => OpenClawConfig;
   runtime: RuntimeEnv;
   appId: string;
   app: MSTeamsApp;

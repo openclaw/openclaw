@@ -48,6 +48,19 @@ const activeExecApprovalHint: ChannelOutboundPayloadHint = {
 };
 
 describe("googleChatApprovalCapability", () => {
+  it("directs exec approval recovery to the Web UI and account setup", () => {
+    const text = googleChatApprovalCapability.describeExecApprovalSetup?.({
+      channel: "googlechat",
+      channelLabel: "Google Chat",
+      accountId: "work",
+    });
+
+    expect(text).toContain("Approve it from the Web UI for now.");
+    expect(text).not.toMatch(/terminal UI|\bTUI\b/i);
+    expect(text).toContain("`channels.googlechat.accounts.work.allowFrom`");
+    expect(text).toContain("`channels.googlechat.accounts.work.defaultTo`");
+  });
+
   it("declares native exec, plugin, and system-agent approval runtime support", () => {
     const runtime = googleChatApprovalCapability.nativeRuntime;
     expect(runtime?.eventKinds).toEqual(["exec", "plugin", "system-agent"]);

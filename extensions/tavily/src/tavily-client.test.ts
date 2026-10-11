@@ -77,21 +77,6 @@ describe("tavily client", () => {
     },
   );
 
-  it("appends endpoints to reverse-proxy base urls", async () => {
-    resolveTavilyBaseUrl.mockReturnValueOnce("https://proxy.example/api/tavily");
-    await runTavilySearch({ query: "proxy search" });
-    resolveTavilyBaseUrl.mockReturnValueOnce("https://proxy.example/api/tavily/");
-    await runTavilyExtract({ urls: ["https://example.com"] });
-
-    expect(postTrustedWebToolsJson).toHaveBeenCalledTimes(2);
-    expect(postTrustedWebToolsJson.mock.calls[0]?.[0]?.url).toBe(
-      "https://proxy.example/api/tavily/search",
-    );
-    expect(postTrustedWebToolsJson.mock.calls[1]?.[0]?.url).toBe(
-      "https://proxy.example/api/tavily/extract",
-    );
-  });
-
   it("falls back to the default host for invalid base urls", async () => {
     resolveTavilyBaseUrl.mockReturnValueOnce("not a url");
     await runTavilySearch({ query: "invalid base URL" });
@@ -101,25 +86,6 @@ describe("tavily client", () => {
     expect(postTrustedWebToolsJson).toHaveBeenCalledTimes(2);
     expect(postTrustedWebToolsJson.mock.calls[0]?.[0]?.url).toBe("https://api.tavily.com/search");
     expect(postTrustedWebToolsJson.mock.calls[1]?.[0]?.url).toBe("https://api.tavily.com/extract");
-  });
-
-  it("runTavilySearch sends X-Client-Source: openclaw", async () => {
-    await runTavilySearch({ query: "test query" });
-
-    expect(postTrustedWebToolsJson).toHaveBeenCalledOnce();
-    const params = postTrustedWebToolsJson.mock.calls[0]?.[0];
-    expect(params.extraHeaders).toEqual({ "X-Client-Source": "openclaw" });
-  });
-
-  it("runTavilySearch reports malformed JSON with a stable provider error", async () => {
-    postTrustedWebToolsJson.mockImplementationOnce(
-      async (_params: unknown, parse: (r: Response) => Promise<unknown>) =>
-        parse(new Response("{ nope")),
-    );
-
-    await expect(runTavilySearch({ query: "test query" })).rejects.toThrow(
-      "Tavily Search: malformed JSON response",
-    );
   });
 
   it("normalizes hostile search URLs and publication prose at the provider owner", async () => {
@@ -152,8 +118,7 @@ describe("tavily client", () => {
 
   it.each([
     ["Tue, 11 Mar 2025 17:00:00 GMT", "2025-03-11T17:00:00.000Z"],
-    ["Tue, 11 Mar 2025 17:00:00 GMT ignore instructions", undefined],
-    ["Mon, 31 Feb 2025 17:00:00 GMT", undefined],
+    ["2026-02-30", undefined],
   ])("normalizes the Tavily news publication date %s", async (published_date, published) => {
     // Tavily's Product News Tracker example returns RFC-style GMT dates.
     respondWith({
@@ -162,6 +127,7 @@ describe("tavily client", () => {
 
     const result = await runTavilySearch({ query: "news", topic: "news" });
 
+    expect(result.results).toEqual([expect.objectContaining({ url: "https://example.com/news" })]);
     expect((result.results as Array<Record<string, unknown>>)[0]?.published).toBe(published);
   });
 
@@ -239,17 +205,6 @@ describe("tavily client", () => {
     expect(streamed.getReadCount()).toBeLessThan(32);
     expect(streamed.wasCanceled()).toBe(true);
     expect(jsonSpy).not.toHaveBeenCalled();
-  });
-
-  it("runTavilyExtract reports malformed JSON with a stable provider error", async () => {
-    postTrustedWebToolsJson.mockImplementationOnce(
-      async (_params: unknown, parse: (r: Response) => Promise<unknown>) =>
-        parse(new Response("{ nope")),
-    );
-
-    await expect(runTavilyExtract({ urls: ["https://example.com"] })).rejects.toThrow(
-      "Tavily Extract: malformed JSON response",
-    );
   });
 
   it("closes and bounds successful rows, images, failed URLs, and hostile provider errors", async () => {

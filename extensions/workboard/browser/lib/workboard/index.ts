@@ -11,7 +11,6 @@ export {
   type WorkboardLifecycle,
   type WorkboardPriority,
   type WorkboardStatus,
-  type WorkboardTaskSummary,
   type WorkboardTemplateId,
   type WorkboardUiState,
 } from "./types.ts";
@@ -24,7 +23,6 @@ export {
   resumeWorkboardLiveRefresh,
 } from "./live-refresh.ts";
 export { findWorkboardSession, getWorkboardLifecycle } from "./lifecycle.ts";
-export { syncWorkboardLifecycle } from "./lifecycle-reconciliation.ts";
 export {
   addWorkboardCardComment,
   archiveWorkboardCard,
@@ -36,7 +34,7 @@ export {
 export { startWorkboardCard, stopWorkboardCard } from "./execution.ts";
 export {
   getWorkboardState,
-  stopWorkboardLifecycleRefresh,
+  resetWorkboardConnectionState,
   stopWorkboardLiveRefresh,
   workboardHasActiveWrites,
   workboardMutationsReady,

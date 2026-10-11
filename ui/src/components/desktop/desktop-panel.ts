@@ -11,9 +11,10 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { DockLayoutController } from "../dock-layout-controller.ts";
-import { FullscreenController } from "../fullscreen-controller.ts";
+import { DesktopFullscreenController } from "../fullscreen-controller.ts";
 import {
   DESKTOP_PANEL_TOGGLE_EVENT,
   type DesktopPanelToggleDetail,
@@ -34,15 +35,15 @@ import { desktopPanelLayout } from "./desktop-panel-layout.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
 import { desktopPanelElementStyles } from "./desktop-panel-styles.ts";
 import { DesktopPictureInPicture } from "./desktop-picture-in-picture.ts";
-import { desktopFullscreenOptions, renderDesktopPresentation } from "./desktop-presentation.ts";
+import { renderDesktopPresentation } from "./desktop-presentation.ts";
 import { DesktopSessionController } from "./desktop-session-controller.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
 
 registerDesktopEnglish();
 
-/** `<openclaw-desktop-panel>` — dockable RFB access to Gateway desktop sources. */
 class OpenClawDesktopPanel extends OpenClawLitElement {
   @property({ attribute: false }) client: GatewayBrowserClient | null = null;
+  @property({ attribute: false }) sessions!: Pick<SessionCapability, "describe">;
   @property({ type: Boolean }) available = false;
   @property({ type: Boolean }) suppressed = false;
   @property({ type: Boolean }) documentMode = false;
@@ -52,7 +53,6 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   @property({ attribute: false }) basePath = "";
   /** Host-owned inventory; null preserves the standalone/session inventory owner. */
   @property({ attribute: false }) suppliedEnvironments: readonly EnvironmentSummary[] | null = null;
-  /** Show the canonical focus/fullscreen controls inside an embedded workspace. */
   @property({ type: Boolean }) workspaceControls = false;
   /** Hosted by a side panel or workspace, which owns visibility and geometry. */
   @property({ type: Boolean }) embedded = false;
@@ -153,11 +153,9 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     isAvailable: () => this.available,
     isFullscreen: () => this.fullscreenMode.active,
   });
-  private readonly fullscreenMode = new FullscreenController(this, {
-    ...desktopFullscreenOptions,
-    section: () => this.renderRoot.querySelector<HTMLElement>("section.bp"),
-    onChange: () => this.dockLayout.syncReservation(),
-  });
+  private readonly fullscreenMode = new DesktopFullscreenController(this, () =>
+    this.dockLayout.syncReservation(),
+  );
 
   static override styles = desktopPanelElementStyles;
 
@@ -206,14 +204,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     }
     const gatewayAvailabilityChanged = changed.has("client") || changed.has("available");
     // Embedded source props track placement without replacing a picker's explicit choice.
-    const contextChanged =
-      gatewayAvailabilityChanged ||
-      changed.has("embedded") ||
-      changed.has("documentMode") ||
-      (changed.has("requestedSource") &&
-        (!this.embedded || this.suppliedEnvironments !== null || this.usesAutomaticSource)) ||
-      changed.has("sessionKey") ||
-      changed.has("documentControl");
+    const contextChanged = this.sessionSource.targetChanged(changed, this.usesAutomaticSource);
     if ((this.documentMode || this.embedded) && contextChanged) {
       // Release input and invalidate pending work before resolving a different session or machine.
       this.returnToPicker("pending");
@@ -344,6 +335,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   private async refreshEnvironments(
     expectedOperationId?: number,
     resolvedSessionTarget?: string | null,
+    refresh = false,
   ): Promise<boolean> {
     if (!this.client || !this.available || (this.embedded && !this.presented)) {
       return false;
@@ -368,6 +360,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     const inventoryRequest = this.sessionSource.loadInventory({
       automatic: this.sourceSelection === "pending",
       target: resolvedSessionTarget,
+      refresh,
       isCurrent: () => operationId === this.operationId && (!this.embedded || this.presented),
     });
     try {
@@ -430,7 +423,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   private async connectEnvironment(
     environmentId: string | null,
     control: boolean,
-    options: { preserveNotice?: boolean; takeoverRecovery?: boolean } = {},
+    takeoverRecovery = false,
   ): Promise<void> {
     const client = this.client;
     if (!environmentId || !client || !this.available || (this.embedded && !this.presented)) {
@@ -454,10 +447,10 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     this.state = "connecting";
     this.errorText = null;
     this.disconnectedReason = null;
-    if (!options.preserveNotice) {
+    if (!takeoverRecovery) {
       this.noticeText = null;
     }
-    this.controlTakeoverRecoveryUsed = options.takeoverRecovery === true;
+    this.controlTakeoverRecoveryUsed = takeoverRecovery;
     try {
       const supplied = desktopAuth.forObserve(source, this.credentialAuth, this.credentials);
       const observed = await client.request<DesktopObserveResult>("desktop.observe", {
@@ -520,7 +513,8 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       }
       this.audio.connect(pending.observed, client.gatewayUrl);
       const connection = await this.desktopClientFactory().connect({
-        background: getComputedStyle(target).backgroundColor,
+        // noVNC applies this to a same-document element; retain live theme inheritance.
+        background: "var(--bg)",
         isCurrent: () => pending.operationId === this.operationId,
         wsUrl: pending.observed.wsPath,
         gatewayUrl: client.gatewayUrl,
@@ -623,10 +617,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       this.noticeText = operator
         ? t("desktop.controlTakenBy", { operator })
         : t("desktop.controlTaken");
-      void this.connectEnvironment(environmentId, false, {
-        preserveNotice: true,
-        takeoverRecovery: true,
-      });
+      void this.connectEnvironment(environmentId, false, true);
       return;
     }
     this.state = "disconnected";
@@ -641,10 +632,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     }
     const notice = this.pictureInPicture.renderNotice(
       this.fullscreenMode.errorText ?? this.launcher.error ?? this.errorText,
-      this.noticeText ??
-        (this.controlling && this.source?.kind === "environment"
-          ? t("desktop.agentInputPaused")
-          : null),
+      this.noticeText,
       this.sessionSource.desktopAvailability,
     );
     return renderDesktopPresentation({
@@ -660,7 +648,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         picker: {
           automatic: this.usesAutomaticSource && this.embedded && this.sessionKey !== null,
           environments: this.environments,
-          onRefresh: () => void this.refreshEnvironments(),
+          onRefresh: () => void this.refreshEnvironments(undefined, undefined, true),
           onConnect: (environmentId: string) => {
             this.sourceSelection = "explicit";
             void this.connectEnvironment(environmentId, false);
@@ -679,7 +667,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
                 this.sourceSelection = "pending";
               }
               this.state = "picker";
-              void this.refreshEnvironments();
+              void this.refreshEnvironments(undefined, undefined, true);
               return;
             }
             if (this.state === "inventory-error" && this.environmentId) {

@@ -15,7 +15,6 @@ export type ClientVoiceConfirmationUtteranceContext = {
 
 type PendingVoiceConfirmation = {
   confirmationId: string;
-  runId?: string;
   fingerprint: string;
   createdAt: number;
   expiresAt: number;
@@ -99,17 +98,6 @@ function cleanupConfirmationScope(scopeKey: string, state: ConfirmationScopeStat
   }
 }
 
-function pruneExpiredPendingConfirmation(
-  scopeKey: string,
-  state: ConfirmationScopeState,
-  now: number,
-): void {
-  if (state.pending && state.pending.expiresAt < now) {
-    clearPendingConfirmation(state);
-  }
-  cleanupConfirmationScope(scopeKey, state);
-}
-
 function schedulePendingConfirmationExpiry(
   scopeKey: string,
   state: ConfirmationScopeState,
@@ -151,7 +139,10 @@ function getPrunedConfirmationScope(
   if (!state) {
     return undefined;
   }
-  pruneExpiredPendingConfirmation(scopeKey, state, now);
+  if (state.pending && state.pending.expiresAt < now) {
+    clearPendingConfirmation(state);
+  }
+  cleanupConfirmationScope(scopeKey, state);
   return confirmationScopes.get(scopeKey);
 }
 
@@ -181,19 +172,12 @@ function resolveApprovedFingerprint(
   const state = confirmationScopes.get(scopeKey);
   const approved = state?.approvedByRun.get(runId);
   const expiresAt = approved?.get(fingerprint);
-  if (!expiresAt || expiresAt < now) {
+  const expired = !expiresAt || expiresAt < now;
+  if (expired || consume) {
     approved?.delete(fingerprint);
-    if (approved?.size === 0) {
-      state?.approvedByRun.delete(runId);
+    if (!expired) {
+      state?.observationsByRun.get(runId)?.delete(fingerprint);
     }
-    if (state) {
-      cleanupConfirmationScope(scopeKey, state);
-    }
-    return false;
-  }
-  if (consume) {
-    approved?.delete(fingerprint);
-    state?.observationsByRun.get(runId)?.delete(fingerprint);
     if (approved?.size === 0) {
       state?.approvedByRun.delete(runId);
     }
@@ -201,7 +185,7 @@ function resolveApprovedFingerprint(
       cleanupConfirmationScope(scopeKey, state);
     }
   }
-  return true;
+  return !expired;
 }
 
 /** Capture host-observed speech before any finalization or persistence can change its challenge. */
@@ -375,15 +359,11 @@ function resolveClientVoiceToolConfirmationPolicy(
     existing ??
     ({
       confirmationId: randomUUID(),
-      ...(params.runId ? { runId: params.runId } : {}),
       fingerprint,
       createdAt: now,
       expiresAt: now + CONFIRMATION_TTL_MS,
       changed: createDeferredCore(),
     } satisfies PendingVoiceConfirmation);
-  if (params.runId) {
-    confirmation.runId = params.runId;
-  }
   if (
     params.runId &&
     params.toolCallId &&
@@ -666,14 +646,11 @@ export function deactivateClientVoiceConfirmationSession(
   }
   clearPendingConfirmation(state);
   const live = new Set(liveRunIds);
-  for (const runId of state.approvedByRun.keys()) {
-    if (!live.has(runId)) {
-      state.approvedByRun.delete(runId);
-    }
-  }
-  for (const runId of state.observationsByRun.keys()) {
-    if (!live.has(runId)) {
-      state.observationsByRun.delete(runId);
+  for (const runs of [state.approvedByRun, state.observationsByRun]) {
+    for (const runId of runs.keys()) {
+      if (!live.has(runId)) {
+        runs.delete(runId);
+      }
     }
   }
   cleanupConfirmationScope(scopeKey, state);

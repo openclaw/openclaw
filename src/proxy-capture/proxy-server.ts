@@ -1,4 +1,3 @@
-// Proxy capture server records proxied HTTP traffic for deterministic test fixtures.
 import { randomUUID } from "node:crypto";
 import {
   createServer,
@@ -12,11 +11,12 @@ import { StringDecoder } from "node:string_decoder";
 import { URL } from "node:url";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { ensureDebugProxyCa } from "./ca.js";
+import { createDebugProxyChildCaptureReceiver } from "./child-server.js";
+import type { DebugProxyCliStore } from "./cli-contract.js";
 import type { DebugProxySettings } from "./env.js";
 import { redactedCaptureHeaders } from "./header-redaction.js";
 import { reportCapturePersistenceFailure } from "./runtime-owner.js";
 import { acquireDebugProxyCaptureStoreAsync } from "./store.async.js";
-import type { AsyncDebugProxyCaptureStore } from "./store.types.js";
 import type { CaptureEventRecord } from "./types.js";
 
 const DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE =
@@ -30,19 +30,13 @@ type BodyPreviewCapture = {
   chunks: Buffer[];
   previewBytes: number;
   totalBytes: number;
-  truncated: boolean;
 };
 
-function isManagedProxyActive(env: NodeJS.ProcessEnv = process.env): boolean {
-  return isTruthyEnvValue(env["OPENCLAW_PROXY_ACTIVE"]);
-}
-
-function allowsDirectConnectWithManagedProxy(env: NodeJS.ProcessEnv = process.env): boolean {
-  return isTruthyEnvValue(env[DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE]);
-}
-
 function assertDebugProxyDirectUpstreamAllowed(env: NodeJS.ProcessEnv = process.env): void {
-  if (!isManagedProxyActive(env) || allowsDirectConnectWithManagedProxy(env)) {
+  if (
+    !isTruthyEnvValue(env["OPENCLAW_PROXY_ACTIVE"]) ||
+    isTruthyEnvValue(env[DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE])
+  ) {
     return;
   }
   throw new Error(
@@ -51,46 +45,12 @@ function assertDebugProxyDirectUpstreamAllowed(env: NodeJS.ProcessEnv = process.
   );
 }
 
-type DebugProxyServerHandle = {
-  proxyUrl: string;
-  stop: () => Promise<void>;
-};
-
 type ProxyCaptureEventInput = Omit<
   CaptureEventRecord,
   "sessionId" | "ts" | "sourceScope" | "sourceProcess"
 >;
 
-function createProxyCaptureRecorder(params: {
-  store: AsyncDebugProxyCaptureStore;
-  settings: DebugProxySettings;
-  pending: Set<Promise<void>>;
-  errors: unknown[];
-}) {
-  return (event: ProxyCaptureEventInput): Promise<void> => {
-    const operation = params.store.recordEvent({
-      sessionId: params.settings.sessionId,
-      ts: Date.now(),
-      sourceScope: "openclaw",
-      sourceProcess: params.settings.sourceProcess,
-      ...event,
-    });
-    params.pending.add(operation);
-    void operation.then(
-      () => params.pending.delete(operation),
-      (error: unknown) => {
-        params.pending.delete(operation);
-        reportCapturePersistenceFailure(params, error);
-      },
-    );
-    return operation;
-  };
-}
-
-function parseConnectTarget(rawTarget: string | undefined): {
-  hostname: string;
-  port: number;
-} {
+function parseConnectTarget(rawTarget: string | undefined) {
   const trimmed = rawTarget?.trim() ?? "";
   if (!trimmed) {
     return { hostname: "127.0.0.1", port: 443 };
@@ -131,7 +91,7 @@ function normalizeTargetUrl(req: IncomingMessage): URL {
 }
 
 function createBodyPreviewCapture(): BodyPreviewCapture {
-  return { chunks: [], previewBytes: 0, totalBytes: 0, truncated: false };
+  return { chunks: [], previewBytes: 0, totalBytes: 0 };
 }
 
 function appendBodyPreviewCapture(capture: BodyPreviewCapture, chunk: Buffer | string): void {
@@ -139,15 +99,11 @@ function appendBodyPreviewCapture(capture: BodyPreviewCapture, chunk: Buffer | s
   capture.totalBytes += buffer.byteLength;
   const remaining = CAPTURE_BODY_PREVIEW_BYTES - capture.previewBytes;
   if (remaining <= 0) {
-    capture.truncated = capture.truncated || buffer.byteLength > 0;
     return;
   }
   const slice = buffer.byteLength > remaining ? buffer.subarray(0, remaining) : buffer;
   capture.chunks.push(slice);
   capture.previewBytes += slice.byteLength;
-  if (slice.byteLength < buffer.byteLength) {
-    capture.truncated = true;
-  }
 }
 
 function finishBodyPreviewCapture(capture: BodyPreviewCapture): {
@@ -158,13 +114,14 @@ function finishBodyPreviewCapture(capture: BodyPreviewCapture): {
     // write(), unlike end(), omits an incomplete trailing code point introduced
     // by the byte cap instead of injecting a replacement character into the preview.
     dataText: new StringDecoder("utf8").write(Buffer.concat(capture.chunks, capture.previewBytes)),
-    metaJson: capture.truncated
-      ? JSON.stringify({
-          bodyBytes: capture.totalBytes,
-          capturePreviewBytes: CAPTURE_BODY_PREVIEW_BYTES,
-          captureTruncated: true,
-        })
-      : undefined,
+    metaJson:
+      capture.totalBytes > capture.previewBytes
+        ? JSON.stringify({
+            bodyBytes: capture.totalBytes,
+            capturePreviewBytes: CAPTURE_BODY_PREVIEW_BYTES,
+            captureTruncated: true,
+          })
+        : undefined,
   };
 }
 
@@ -178,12 +135,16 @@ function finishProxyResponseAfterUpstreamError(res: ServerResponse): void {
     res.destroy();
     return;
   }
-  res.writeHead(502, {
+  endProxyErrorResponse(res, 502, BAD_GATEWAY_BODY);
+}
+
+function endProxyErrorResponse(res: ServerResponse, status: number, body: string): void {
+  res.writeHead(status, {
     Connection: "close",
     "Content-Type": "text/plain; charset=utf-8",
-    "Content-Length": Buffer.byteLength(BAD_GATEWAY_BODY),
+    "Content-Length": Buffer.byteLength(body),
   });
-  res.end(BAD_GATEWAY_BODY);
+  res.end(body);
 }
 
 export async function startDebugProxyServer(params: {
@@ -191,29 +152,57 @@ export async function startDebugProxyServer(params: {
   port?: number;
   settings: DebugProxySettings;
   env?: NodeJS.ProcessEnv;
-}): Promise<DebugProxyServerHandle> {
+  captureStore?: DebugProxyCliStore;
+}) {
   const settings = { ...params.settings };
   const env = { ...(params.env ?? process.env) };
   await ensureDebugProxyCa(settings.certDir);
-  const lease = await acquireDebugProxyCaptureStoreAsync({ env });
+  const lease = params.captureStore
+    ? { store: params.captureStore, release: undefined }
+    : await acquireDebugProxyCaptureStoreAsync({ env });
+  const store = lease.store;
+  const childCapture = createDebugProxyChildCaptureReceiver(settings.sessionId, store);
   const pending = new Set<Promise<void>>();
   const errors: unknown[] = [];
-  const recordProxyEvent = createProxyCaptureRecorder({
-    store: lease.store,
-    settings,
-    pending,
-    errors,
-  });
+  const recordProxyEvent = (event: ProxyCaptureEventInput): Promise<void> => {
+    const operation = store.recordEvent({
+      sessionId: settings.sessionId,
+      ts: Date.now(),
+      sourceScope: "openclaw",
+      sourceProcess: settings.sourceProcess,
+      ...event,
+    });
+    pending.add(operation);
+    void operation.then(
+      () => pending.delete(operation),
+      (error: unknown) => {
+        pending.delete(operation);
+        reportCapturePersistenceFailure({ errors }, error);
+      },
+    );
+    return operation;
+  };
   const host = params.host?.trim() || "127.0.0.1";
 
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    const capture = childCapture.handle(req, res);
+    if (capture) {
+      pending.add(capture);
+      void capture.then(
+        () => pending.delete(capture),
+        (error: unknown) => {
+          pending.delete(capture);
+          reportCapturePersistenceFailure({ errors }, error);
+        },
+      );
+      return;
+    }
     void (async () => {
       const flowId = randomUUID();
       let target: URL;
       try {
         target = normalizeTargetUrl(req);
       } catch (error) {
-        const message = "Invalid proxy target URL";
         void recordProxyEvent({
           protocol: "http",
           direction: "local",
@@ -224,13 +213,7 @@ export async function startDebugProxyServer(params: {
           path: req.url ?? "",
           errorText: error instanceof Error ? error.message : String(error),
         });
-        const responseBody = `${message}\n`;
-        res.writeHead(400, {
-          Connection: "close",
-          "Content-Type": "text/plain; charset=utf-8",
-          "Content-Length": Buffer.byteLength(responseBody),
-        });
-        res.end(responseBody);
+        endProxyErrorResponse(res, 400, "Invalid proxy target URL\n");
         return;
       }
       const targetProtocol = target.protocol === "https:" ? "https" : "http";
@@ -255,13 +238,7 @@ export async function startDebugProxyServer(params: {
           kind: "error",
           errorText: message,
         });
-        const responseBody = `${message}\n`;
-        res.writeHead(403, {
-          Connection: "close",
-          "Content-Type": "text/plain; charset=utf-8",
-          "Content-Length": Buffer.byteLength(responseBody),
-        });
-        res.end(responseBody);
+        endProxyErrorResponse(res, 403, `${message}\n`);
         return;
       }
       const requestCapture = createBodyPreviewCapture();
@@ -390,44 +367,40 @@ export async function startDebugProxyServer(params: {
   server.on("connect", (req, clientSocket, head) => {
     const flowId = randomUUID();
     let hostname = "127.0.0.1";
+    const recordConnectEvent = (
+      event: Pick<ProxyCaptureEventInput, "kind" | "errorText" | "headersJson">,
+    ) =>
+      void recordProxyEvent({
+        protocol: "connect",
+        direction: "local",
+        flowId,
+        host: hostname,
+        path: req.url ?? "",
+        ...event,
+      });
     let port;
     try {
       const parsed = parseConnectTarget(req.url);
       hostname = parsed.hostname;
       port = parsed.port;
     } catch (error) {
-      void recordProxyEvent({
-        protocol: "connect",
-        direction: "local",
+      recordConnectEvent({
         kind: "error",
-        flowId,
-        host: hostname,
-        path: req.url ?? "",
         errorText: error instanceof Error ? error.message : String(error),
       });
       clientSocket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
       return;
     }
-    void recordProxyEvent({
-      protocol: "connect",
-      direction: "local",
+    recordConnectEvent({
       kind: "connect",
-      flowId,
-      host: hostname,
-      path: req.url ?? "",
       headersJson: JSON.stringify(redactedCaptureHeaders(req.headers)),
     });
     try {
       assertDebugProxyDirectUpstreamAllowed();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      void recordProxyEvent({
-        protocol: "connect",
-        direction: "local",
+      recordConnectEvent({
         kind: "error",
-        flowId,
-        host: hostname,
-        path: req.url ?? "",
         errorText: message,
       });
       const responseBody = `${message}\n`;
@@ -450,13 +423,8 @@ export async function startDebugProxyServer(params: {
     });
     function onUpstreamConnectTimeout() {
       const message = `CONNECT upstream opening timed out after ${DEBUG_PROXY_CONNECT_TIMEOUT_MS}ms of inactivity`;
-      void recordProxyEvent({
-        protocol: "connect",
-        direction: "local",
+      recordConnectEvent({
         kind: "error",
-        flowId,
-        host: hostname,
-        path: req.url ?? "",
         errorText: message,
       });
       upstreamSocket.destroy();
@@ -467,25 +435,15 @@ export async function startDebugProxyServer(params: {
     }
     upstreamSocket.setTimeout(DEBUG_PROXY_CONNECT_TIMEOUT_MS, onUpstreamConnectTimeout);
     clientSocket.on("error", (error) => {
-      void recordProxyEvent({
-        protocol: "connect",
-        direction: "local",
+      recordConnectEvent({
         kind: "error",
-        flowId,
-        host: hostname,
-        path: req.url ?? "",
         errorText: error.message,
       });
       upstreamSocket.destroy();
     });
     upstreamSocket.on("error", (error) => {
-      void recordProxyEvent({
-        protocol: "connect",
-        direction: "local",
+      recordConnectEvent({
         kind: "error",
-        flowId,
-        host: hostname,
-        path: req.url ?? "",
         errorText: error.message,
       });
       clientSocket.destroy();
@@ -507,8 +465,10 @@ export async function startDebugProxyServer(params: {
     let stopping: Promise<void> | undefined;
     return {
       proxyUrl: `http://${host}:${address.port}`,
+      captureEnv: childCapture.captureEnv(`http://${host}:${address.port}`),
       stop: () => {
         stopping ??= (async () => {
+          childCapture.stop();
           try {
             await new Promise<void>((resolve, reject) => {
               server.close((error) => {
@@ -524,7 +484,7 @@ export async function startDebugProxyServer(params: {
           }
           await Promise.allSettled(pending);
           try {
-            await lease.release();
+            await lease.release?.();
           } catch (error) {
             errors.push(error);
           }
@@ -537,7 +497,7 @@ export async function startDebugProxyServer(params: {
     };
   } catch (error) {
     try {
-      await lease.release();
+      await lease.release?.();
     } catch (closeError) {
       throw new AggregateError([error, closeError], "Debug proxy capture startup failed.", {
         cause: closeError,

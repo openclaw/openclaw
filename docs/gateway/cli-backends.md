@@ -1,5 +1,5 @@
 ---
-summary: "CLI backends: local AI CLI fallback with optional MCP tool bridge"
+summary: "CLI backends: run agent turns through a local AI CLI, with an optional MCP tool bridge"
 read_when:
   - You want a reliable fallback when API providers fail
   - You are running local AI CLIs and want to reuse them
@@ -7,14 +7,14 @@ read_when:
 title: "CLI backends"
 ---
 
-OpenClaw can run a local AI CLI as a text-only fallback when API providers are down, rate-limited, or misbehaving. It is intentionally conservative:
+OpenClaw can run agent turns through a local AI CLI, such as Claude Code or Gemini CLI, instead of calling the provider API itself:
 
-- OpenClaw tools are not injected directly, but a backend with `bundleMcp: true` can receive Gateway tools through a loopback MCP bridge.
+- A backend with `bundleMcp: true` receives Gateway tools through a loopback MCP bridge. OpenClaw does not inject tool calls into the CLI protocol directly.
 - JSONL streaming for CLIs that support it.
 - Sessions are supported, so follow-up turns stay coherent.
 - Images pass through if the CLI accepts image paths.
 
-Use it as a safety net for "always works" text responses, not a primary path. For a full harness runtime with ACP session controls, background tasks, thread/conversation binding, and persistent external coding sessions, use [ACP Agents](/tools/acp-agents) instead. CLI backends are not ACP.
+A CLI backend can be an agent's primary runtime or a fallback. Choosing **Claude CLI** during onboarding keeps `anthropic/*` model refs and runs them through Claude Code. For ACP session controls, background tasks, thread/conversation binding, and persistent external coding sessions, use [ACP Agents](/tools/acp-agents) instead. CLI backends are not ACP.
 
 <Tip>
   Building a new backend plugin? See [CLI backend plugins](/plugins/cli-backend-plugins). This page covers configuring and operating an already-registered backend.
@@ -22,13 +22,22 @@ Use it as a safety net for "always works" text responses, not a primary path. Fo
 
 ## Quick start
 
-The bundled Anthropic plugin registers a default `claude-cli` backend, so it works with no config beyond having Claude Code installed and logged in:
+The bundled Anthropic plugin registers the `claude-cli` backend. With Claude Code installed and logged in on the Gateway host, select it for Anthropic models:
 
 ```bash
-openclaw agent --agent main --message "hi" --model claude-cli/claude-sonnet-5
+openclaw models auth login --provider anthropic --method cli --set-default
+openclaw agent --agent main --message "hi"
 ```
 
+The login keeps canonical `anthropic/*` model refs and sets `agentRuntime: { id: "claude-cli" }` on Claude model entries that do not already name a runtime, so `--model anthropic/claude-sonnet-5` also runs through Claude Code. It also adds an `"anthropic/*"` entry with the same runtime, so Claude models that are published after sign-in or typed by ID run through Claude Code too. An entry for a specific model that names another runtime still wins. Choosing **Claude CLI** in `openclaw onboard` writes the same config. Legacy `claude-cli/*` refs still work as compatibility input, and `openclaw doctor --fix` rewrites persisted ones to this canonical form.
+
+Deprecated catalog models are not added at sign-in; an existing entry for one is kept and runs through Claude CLI. Configs from an earlier Claude CLI sign-in lack the `"anthropic/*"` entry, so Claude models that sign-in did not add fail with a missing Anthropic API key. `openclaw doctor --fix` and `openclaw update` add it when the default model is an Anthropic model pinned to `claude-cli`, no `"anthropic/*"` entry exists, and no Anthropic credential is configured (an Anthropic auth profile, provider API key, or `ANTHROPIC_API_KEY`/`ANTHROPIC_OAUTH_TOKEN`). With a credential or an API default model, other Claude models keep their current route.
+
 `main` is the default agent id when no explicit agent list is configured. Swap in your own agent id otherwise.
+
+When you switch an existing chat away from Claude CLI and back, the first resumed turn includes a short count, time range, and model summary of messages since the last saved Claude CLI reply—not their contents. The note prefixes that native user prompt; OpenClaw's transcript keeps the original user text. When `sessions_history` is available, the note includes the current chat's session key and call shape so Claude can read those messages on demand. An empty Claude reply leaves no saved reply boundary, so the note can repeat on the following turn.
+
+When an account change starts a fresh native Claude session in an existing chat, its first turn receives the same kind of note about earlier messages in the chat. This includes opaque native logins. Claude can read that history on demand through `sessions_history` when tool policy allows it; OpenClaw never automatically replays raw transcript content or durable context across the account boundary. A brand-new chat has no earlier-message note.
 
 The gateway service must have the CLI on its `PATH`. If a deployment needs a
 nonstandard executable path or arguments, register that adapter in a
@@ -38,11 +47,31 @@ mechanics in `openclaw.json`.
 OpenClaw auto-loads an owning bundled plugin when model selection or a
 model-scoped `agentRuntime.id` references its backend.
 
-Utility completions for session digests, progress narration, and tool-call titles use the selected model's runtime too. Claude CLI runs a fresh, tool-free completion with its own authentication. This includes canonical `anthropic/*` refs configured with `agentRuntime.id: "claude-cli"`.
+Utility completions for Activity recaps, session titles, conversation labels, progress narration, and tool-call titles use the selected model's runtime. Claude CLI runs a fresh, tool-free completion with its own authentication.
+
+When `agents.defaults.utilityModel` is unset, OpenClaw uses the primary provider's declared small model. A Claude CLI primary uses the recommended Haiku model through Claude CLI, even if an Anthropic API credential is also available. It does not automatically switch utility work to the Anthropic API.
+
+An explicitly configured utility model keeps its own runtime. A compatible runtime explicitly selected for the session, or a runtime pinned on the derived model's own entry, also wins over inherited routing. For other runtimes, automatic utility routing can prefer an available provider credential before borrowing the primary model's pinned runtime.
+
+To explicitly use the Anthropic API for utility work, configure its runtime on the utility model:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
+        // Always HTTP, even with no provider credential configured.
+        "anthropic/claude-haiku-4-5": { agentRuntime: { id: "openclaw" } },
+      },
+    },
+  },
+}
+```
 
 ## Using it as a fallback
 
-Add the CLI backend to your fallback list so it only runs when primary models fail:
+To keep the API as the primary route and use Claude Code only when it fails, pin the CLI runtime on the fallback model:
 
 ```json5
 {
@@ -50,18 +79,18 @@ Add the CLI backend to your fallback list so it only runs when primary models fa
     defaults: {
       model: {
         primary: "anthropic/claude-opus-4-6",
-        fallbacks: ["claude-cli/claude-sonnet-5"],
+        fallbacks: ["anthropic/claude-sonnet-5"],
       },
       models: {
         "anthropic/claude-opus-4-6": { alias: "Opus" },
-        "claude-cli/claude-sonnet-5": {},
+        "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
       },
     },
   },
 }
 ```
 
-Configured fallbacks remain eligible when the primary provider fails (auth, rate limits, timeouts), even when they are not in `agents.defaults.modelPolicy.allow`. Add a CLI backend model to that policy only when people should also be able to select it directly. Direct selection means `/model`, a session override, or `--model`. `agents.defaults.models` only owns per-model aliases, parameters, and metadata.
+Configured fallbacks remain eligible when the primary model fails (auth, rate limits, timeouts), even when they are not in `agents.defaults.modelPolicy.allow`. Add the fallback model to that policy only when people should also be able to select it directly. Direct selection means `/model`, a session override, or `--model`. `agents.defaults.models` only owns per-model aliases, parameters, runtime, and metadata.
 
 ## Configuration
 
@@ -89,11 +118,27 @@ plugin code registered with `api.registerCliBackend(...)`.
 
 ## How it works
 
-1. Selects a backend by provider prefix (`claude-cli/...`).
+1. Selects the backend from the model's runtime policy (`agentRuntime.id`), or from the provider prefix of a standalone backend's model ref (`acme-cli/...`).
 2. Builds a system prompt using the same OpenClaw prompt and workspace context.
 3. Executes the CLI with a session id (if supported) so history stays consistent. The bundled `claude-cli` backend communicates directly with the installed Claude Code executable and keeps its authenticated subprocess warm across compatible agent turns.
 4. Parses output (JSON or plain text) and returns the final text.
 5. Persists session ids per backend so follow-ups reuse the same CLI session.
+
+Claude stream-json backends also emit live line-count progress while `write`,
+`edit`, and `apply_patch` arguments stream. Progress contains only the tool id,
+name, and added/removed line counts, with at most four updates per second per
+call. The execution-start event still waits for complete arguments; input
+progress does not mean the tool has begun executing. If input generation is
+interrupted, a later text block does not mark the abandoned tool as started.
+
+Direct agent calls and child-completion updates share the same session reply policy.
+A completion turn's delivery override does not by itself start a fresh CLI session;
+authentication, workspace, and tool compatibility checks still apply.
+Each turn receives delivery instructions for its current mode and available tools,
+while the stored user message and reusable system prompt remain unchanged.
+
+Existing sessions that stored the implicit automatic policy also retain continuity.
+OpenClaw records the current policy when the next turn completes.
 
 ## Timeouts and long-running work
 
@@ -114,6 +159,21 @@ openclaw config set agents.defaults.timeoutSeconds 43200
 
 Background work started inside a CLI is still part of that CLI subprocess. If the parent turn reaches its overall limit, OpenClaw stops the subprocess and its CLI-internal background tasks together. For durable long work, use a detached OpenClaw [sub-agent](/tools/subagents) or [ACP agent](/tools/acp-agents). Detached sub-agents have no run timeout by default.
 
+Local Claude CLI turns with bundled Gateway MCP use OpenClaw's `exec` and `process`
+for shell work. Native `Bash` is disabled for those turns. A command still running
+after the default 10-second yield window returns a managed process handle instead
+of holding the tool call until it finishes. When completion notifications are
+enabled, the result wakes the originating conversation; a busy conversation handles
+it after its current turn. The continuation retains the originating turn’s tool
+policy, including native and other MCP tools, subject to current session policy.
+Restricted turns keep their original limits. If only waiting remains, the agent
+reports that the job is running and ends its turn instead of repeatedly polling. Exec policy, configured
+yield windows, command deadlines, and explicit notification settings still apply.
+
+Exact tool selections, tool-free side questions, standalone CLI runs without
+Gateway MCP, and paired-node Claude runs keep their existing tool contracts.
+Plugin tools such as remote SSH do not become background jobs automatically.
+
 When Claude Code moves a foreground Bash command to the background after its tool timeout,
 OpenClaw keeps the turn active until Claude processes the completion and returns its final answer.
 Follow-up tools still require the current turn's host permissions. Commands started explicitly
@@ -129,6 +189,13 @@ an answer does not end the admitted turn or grant its background work another tu
 The `openclaw agent` command also has its own request deadline. Its 600-second fallback default applies to that command invocation, not to ordinary Gateway turns. See [`openclaw agent`](/cli/agent).
 
 ### Claude CLI specifics
+
+Interrupted turns can retain ordinary partial prose. If an unfinished reply contains
+standalone tool-protocol markup outside a code example, OpenClaw discards that
+partial reply instead of saving it in conversation history. Completed replies keep
+their existing validation, including support for discussing incomplete markup.
+Stopping a turn does not let the Gateway save a buffered copy of a partial reply
+that the CLI runner rejected.
 
 The bundled Anthropic plugin communicates directly with the installed Claude Code
 executable over its structured stdio protocol. Claude Code owns its existing local login and
@@ -169,6 +236,12 @@ would otherwise invalidate cached conversation history. Git tools and workspace
 instructions remain available. This does not prevent cache misses after prompt
 changes, compaction, model or thinking changes, or cache expiry.
 
+OpenClaw disables Claude Code's saved system-prompt snapshots so resumed turns
+receive the current appended instructions, including per-turn plugin context.
+Unchanged prompts keep the warm process and stable prefix; changed prompts restart
+the process and resume the same conversation without rewriting its history.
+Changing prompt bytes can invalidate the cached prefix where they change.
+
 OpenClaw always launches Claude Code with its default permission mode.
 OpenClaw's permission responses and `PreToolUse` hook keep native tools under
 host control, including when user or enterprise settings would otherwise
@@ -197,7 +270,7 @@ every request, and ask `off` with less than full security denies without asking.
 
 ### Native Bash and the exec allowlist
 
-With `ask: "on-miss"`, the `claude-cli` backend checks native `Bash` commands
+When a run retains native `Bash`, `ask: "on-miss"` makes the `claude-cli` backend check commands
 against the agent's [exec allowlist](/tools/exec-approvals). For example:
 
 ```bash
@@ -253,6 +326,10 @@ Explicit account selections and empty account orders remain authoritative. API k
 for the `anthropic` provider require an explicit selection; they do not replace
 native subscription login automatically.
 
+Fresh plugin completions, including Memory Dreaming, use the same account order.
+An explicit profile on the requested model stays authoritative; an empty account
+order preserves native Claude login.
+
 Docker installs need Claude Code and the chosen credentials inside the persisted container home, not only on the host. See [Claude CLI backend in Docker](/install/docker#claude-cli-backend-in-docker).
 
 The gateway service must resolve `claude` on `PATH`. For a nonstandard path,
@@ -267,16 +344,38 @@ register a small wrapper backend plugin.
   - `existing`: only send a session id if one was stored before.
   - `none`: never send a session id.
 - `claude-cli` defaults to `liveSession: "claude-stdio"`, `output: "jsonl"`, and `input: "stdin"`. The owning Anthropic plugin keeps one Claude Code subprocess warm for compatible consecutive agent turns through its direct CLI transport. If the Gateway restarts or the idle process exits, OpenClaw resumes from the stored Claude session id. Stored session ids are verified against a readable project transcript before resume. A missing transcript clears the binding (logged as `reason=transcript-missing`) instead of silently starting a fresh session under `--resume`.
+- Forking a session (Control UI "Fork conversation", `sessions.create` with `fork: true`, `sessions_spawn` with `context: "fork"`) branches the stored CLI session with the transcript. The child's first turn resumes the parent's native session with the backend's fork flag (`--fork-session` for `claude-cli`), pinned to the parent's last recorded checkpoint, then keeps the new native id. The copied binding is validated like any other before it is resumed, so a changed auth profile or environment starts the child fresh instead. The parent's binding is unchanged. Backends without fork and checkpoint-resume support, or bindings without a recorded checkpoint, start a fresh native session in the child. Per-message forks from the chat pane start a fresh CLI session because they cut the transcript at an earlier point.
+- Stopping or timing out a resumed turn preserves its existing native session, including when it already sent a progress message through a Gateway tool. The next turn can resume that history without replaying the interrupted request. A provider-reported expired session or an aborted fork replacement still clears the binding; normal account, workspace, and tool compatibility checks still apply.
 - Stored CLI sessions are provider-owned continuity. Automatic reset is disabled by default. `/reset` and explicit daily or idle `session.reset` policies still cut them.
 - Fresh CLI sessions can recover OpenClaw history from the canonical session SQLite database when its independent account boundary matches the selected credential. Compacted recovery includes the latest summary, retained messages, and subsequent turns on the active branch. A backend can opt in to bounded recovery before compaction with `reseedFromRawTranscriptWhenUncompacted: true`, including after its native session binding is cleared. Recovery includes saved tool-result text and error markers. It does not execute past tools. The current user turn is sent once, outside the recovered history.
 - Helper runs with a caller-owned in-memory transcript use that history for hooks, bounded session notes, and fresh-session reseeding, including meaningful history before compaction. Empty memory stays empty even when the run carries another session's storage identity. Context-engine maintenance rewrites that same memory before the helper returns, even when the engine requests background maintenance. Durable transcripts retain their background maintenance path. An explicitly owned native CLI binding can still resume. Resumed turns send the current prompt and bounded session notes without replaying the conversation history.
+
+Warm processes belong to the conversation, including when turns alternate between a channel and `chat.send`. A different inbound account or auth profile retires the previous process and waits for cleanup before starting its replacement. Account-private standing approvals do not carry into the replacement.
 
 When prompt content changes, a compatible CLI session can resume with an OpenClaw
 context note before the current user prompt. Chat history first matches imported
 Claude user turns against the full local text, including any literal quote of the
 note. If that does not match, it ignores one exact context note for comparison, so
-the same turn appears once. Stored transcript text and unmatched imported turns
-remain intact.
+the same turn appears once. Queued system events, including model-switch notices,
+are ignored for matching even after generated conversation metadata and recent
+chat history. Stored OpenClaw and native transcript text remains unchanged.
+For unmatched imported user turns, chat history removes generated
+resume notes, historical requester guidance, and queued system-event prefixes
+from the display copy only. Historical requester guidance is recognized by its
+complete generated prefix; matching canonical user text and later quoted
+guidance remain unchanged.
+Recognized runtime prompts, such as default heartbeat, exec-completion, restart
+recovery, and native compaction prompts, are hidden rather than shown as human
+messages. Matching canonical user turns and quoted text in later content blocks
+remain unchanged. Native and OpenClaw history share bounded pages and
+message-anchor lookups. The history worker prepares a temporary merged index
+without modifying the canonical transcript. A cold index scans bounded source pages to preserve
+global deduplication; subsequent reads select only their requested window. The
+index is discarded when either transcript changes or its database owner closes.
+Reset-archive fallbacks rebuild the index per request because their source files
+have a separate revision from the active database.
+Incognito history uses a request-scoped memory index and never writes that index
+to disk. No migration or update repair is required.
 
 ### History account boundaries
 
@@ -287,6 +386,10 @@ Automatic durable recovery requires a resolved static credential or a named OAut
 This uses existing session metadata and transcript generation/sequence counters. No SQLite schema migration or transcript deletion occurs. Existing conversations are not backfilled from their latest native binding. Older binaries do not enforce this new recovery boundary. After a downgrade and subsequent transcript writes, upgrading again refuses automatic replay because those writes are not covered. Do not rely on a downgrade to preserve the new security behavior.
 
 Explicit caller-owned in-memory context remains caller-supplied input, not permission to read a durable conversation carrying the same identifiers. Authentication invalidations still refuse its recovery prompt and saved session notes. When automatic recovery is refused, the saved transcript remains intact. The next CLI process receives the current request without the saved history or notes.
+
+An admitted resume of the same native Claude session can still receive the count, time range, and models of intervening messages, plus a `sessions_history` call for the current chat when that tool is available. A fresh native Claude session after an authentication-profile, epoch, or unknown-identity boundary can receive the same metadata about earlier recorded messages in its existing OpenClaw chat. This notice contains no transcript text or saved notes and does not authorize automatic replay; reading history remains an on-demand tool action subject to the current tool policy.
+
+The notice prefixes only that native user turn. OpenClaw keeps the original user text; native-history imports correlate the prefixed turn with its existing local row instead of adding a duplicate.
 
 Serialization: `serialize: true` keeps same-lane runs ordered (most CLIs serialize on one provider lane). OpenClaw also drops stored CLI session reuse when the selected auth identity changes. A changed auth profile id, static API key, static token, or OAuth account identity all count, when the CLI exposes one. OAuth access and refresh token rotation alone does not cut the session. If a CLI has no stable OAuth account id, OpenClaw lets that CLI enforce its own resume permissions.
 
@@ -319,6 +422,11 @@ OpenClaw writes base64 images to temp files. If `imageArg` is set, those paths a
 
 JSON examples inside double-quoted banner text are not treated as response or error records.
 For JSONL, banner scanning starts fresh on each line.
+
+Claude streaming limits discount recognized partial-message envelopes while
+counting their text, thinking, and tool-input payloads. Cumulative snapshots and
+tool results still count toward the output budget. Single-line limits and bounded
+frame counts remain active, including for empty or unrecognized events.
 
 Input modes:
 
@@ -355,9 +463,9 @@ The bundled Anthropic plugin registers for `claude-cli`:
 | `systemPromptMode`    | `append`                                                                                                                                                                                                      |
 
 On Claude Code 2.1.98 or newer, the bundled backend adds
-`--exclude-dynamic-system-prompt-sections` after a bounded version probe on the
-first CLI execution. Concurrent executions share the probe. API catalog discovery
-does not start it. Older, unknown, or failed probes keep the established argv.
+`--exclude-dynamic-system-prompt-sections` after a bounded version check on the
+first CLI execution. Concurrent executions share the check. API catalog discovery
+does not start it. Older, unknown, or failed checks keep the established argv.
 
 The bundled Google plugin registers for `google-gemini-cli`:
 
@@ -445,8 +553,12 @@ When bundle MCP is enabled, OpenClaw:
 The loopback bridge sends keepalive bytes while a tool response or notification
 stream is idle, so HTTP idle timeouts do not interrupt long-running tools. These
 bytes are not tool results or agent progress; client request deadlines and the
-overall agent turn timeout still apply.
+current model attempt's timeout still apply.
 
+The shared listener remains available after the turn that first started it completes.
+Later calls use their own run's permissions and caller liveness, without retaining
+the starting turn's transcript read fence or request scope.
+The listener retains the Gateway's process broker and database-reader lifecycle.
 After plugin replacement, new CLI turns resolve bridge tools against the current
 plugin generation without restarting the listener. Retired plugin instances remain
 unavailable, and each turn still needs its own active context grant.
@@ -457,18 +569,21 @@ bridge retains the admitted sender, account, and conversation; channel access an
 write permissions still apply. That authority ends with the turn or its
 cancellation, including when a warm CLI process is reused for a later turn.
 
-Automations created through the bridge inherit its final permitted tool set and
-supported native tool capabilities. When Claude's native `Bash` supplies `exec`,
+Automations created through the bridge without a finite `toolsAllow` list follow the
+owner session's tool policy at run time. A finite list is capped to the bridge's final
+permitted tools and supported native capabilities. When a run retains native `Bash` for `exec`,
 the saved automation retains its Gateway host target, including with an explicit
 `toolsAllow: ["exec"]` cap. Current account, tool, sandbox, and approval restrictions
 still apply; capturing the target does not grant broader execution permission.
 
-The node-only `exec` tool is offered only when policy permits it and a connected
+Backends that retain their native shell can also receive a node-only `exec` tool,
+offered only when policy permits it and a connected
 node advertises `system.run`. Offline paired devices and approval-only phones do
 not make remote execution available. A configured node binding must identify an
 eligible node. It never redirects to another device. When several eligible nodes
 are connected, select one explicitly. When local execution is allowed by policy,
-use the CLI's native shell for local work.
+use managed `exec` for local Claude MCP turns, or the native shell when the backend
+retains it.
 
 `tools.allow` and `tools.deny` also constrain configured native MCP servers.
 OpenClaw lists each server through its session-scoped runtime, assigns the same
@@ -503,7 +618,7 @@ Backends without an exact translation still fail closed.
 
 If no MCP servers are enabled, OpenClaw still injects a strict config when a backend opts into bundle MCP, so background runs stay isolated.
 
-Session-scoped bundled MCP runtimes are cached for reuse within a session, then reaped after 10 minutes of idle time. One-shot embedded runs such as auth probes, slug generation, and active-memory recall request cleanup at run end. Stdio children and Streamable HTTP or SSE streams therefore do not outlive the run.
+Session-scoped bundled MCP runtimes are cached for reuse within a session, then reaped after 10 minutes of idle time. One-shot embedded runs such as auth checks, slug generation, and active-memory recall request cleanup at run end. Stdio children and Streamable HTTP or SSE streams therefore do not outlive the run.
 
 A fresh CLI session must wait for its predecessor's cleanup. If cleanup fails or
 exceeds its deadline, OpenClaw refuses replacement, including from a later run.
@@ -541,6 +656,10 @@ Oversized incomplete lines are omitted so truncation cannot expose credential
 fragments. Native stdout and MCP input are not included in these diagnostics.
 Stderr is supplemental display text only. It does not change the native error's
 retry, authentication, timeout, or fallback classification.
+
+On macOS and Linux, a broken input pipe preserves the process's exit error when
+the child exits during graceful shutdown. If OpenClaw must terminate the child,
+the original pipe error remains the failure; cancellation retains its own reason.
 
 | Symptom               | Fix                                                                                            |
 | --------------------- | ---------------------------------------------------------------------------------------------- |

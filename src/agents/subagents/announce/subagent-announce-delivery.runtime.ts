@@ -1,42 +1,29 @@
-/**
- * Runtime dependency owner for subagent announcement delivery.
- */
-import "../../../auto-reply/reply/queue.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { loadSessionEntryReadOnly as loadSessionEntry } from "../../../config/sessions/session-accessor.js";
+import type { SessionEntryCurrentFacts } from "../../../config/sessions/session-entry-current.types.js";
+import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionSource } from "../../../config/sessions/session-incognito-binding.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import "../../../infra/outbound/best-effort-delivery.js";
-import "../../../infra/outbound/bound-delivery-router.js";
-import "../../../infra/outbound/conversation-id.js";
-import { sendMessage } from "../../../infra/outbound/message.js";
-import "../../../plugins/hook-runner-global.js";
 import {
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../../../routing/session-key.js";
 import { resolveActiveEmbeddedRunSessionId } from "../../embedded-agent-runner/active-run-projections.js";
-import type { EmbeddedAgentQueueMessageOptions } from "../../embedded-agent-runner/run-state.js";
-import {
-  formatEmbeddedAgentQueueFailureSummary,
-  isEmbeddedAgentRunActive,
-  queueEmbeddedAgentMessageWithOutcomeAsync,
-  queueGuardedEmbeddedAgentMessageWithOutcomeAsync,
-  resolveEmbeddedRunAbandonment,
-  type EmbeddedAgentQueueMessageOutcome,
-} from "../../embedded-agent-runner/runs.js";
-import { dispatchGatewayMethodInProcess } from "./subagent-announce.runtime.js";
+import { isEmbeddedAgentRunActive } from "../../embedded-agent-runner/runs.js";
+import { withSubagentSessionSource } from "../spawn/subagent-session-source.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 export { resolveQueueSettings } from "../../../auto-reply/reply/queue.js";
 export { resolveExternalBestEffortDeliveryTarget } from "../../../infra/outbound/best-effort-delivery.js";
-export { createBoundDeliveryRouter } from "../../../infra/outbound/bound-delivery-router.js";
+export { resolveBoundDeliveryDestination } from "../../../infra/outbound/bound-delivery-router.js";
 export { resolveConversationIdFromTargets } from "../../../infra/outbound/conversation-id.js";
 export { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
-
-export { formatEmbeddedAgentQueueFailureSummary };
+export { getRuntimeConfig as getSubagentAnnounceRuntimeConfig } from "../../../config/config.js";
+export { sendMessage as sendSubagentAnnounceMessage } from "../../../infra/outbound/message.js";
 
 type RequesterSessionEntryResult = {
   cfg: ReturnType<typeof getRuntimeConfig>;
@@ -45,6 +32,14 @@ type RequesterSessionEntryResult = {
   agentId?: string;
   storePath?: string;
 };
+
+export function hasUsableSessionEntry(entry: unknown): entry is Record<string, unknown> {
+  if (!isRecord(entry)) {
+    return false;
+  }
+  const sessionId = entry.sessionId;
+  return typeof sessionId !== "string" || sessionId.trim() !== "";
+}
 
 export function tryResolveSubagentRequesterAgentId(
   cfg: OpenClawConfig,
@@ -77,10 +72,10 @@ export function tryResolveSubagentRequesterAgentId(
   );
 }
 
-export function loadRequesterSessionEntry(
+function resolveRequesterSessionEntryScope(
   requesterSessionKey: string,
   explicitAgentId?: string,
-): RequesterSessionEntryResult {
+): Omit<RequesterSessionEntryResult, "entry"> & { storageKey: string } {
   const cfg = getRuntimeConfig();
   const rawStorageKey = requesterSessionKey.trim();
   const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey, explicitAgentId);
@@ -89,42 +84,125 @@ export function loadRequesterSessionEntry(
     rawStorageKey === "main" || rawStorageKey === configuredMainKey ? canonicalKey : rawStorageKey;
   const agentId = tryResolveSubagentRequesterAgentId(cfg, rawStorageKey, explicitAgentId);
   if (!agentId) {
-    return { cfg, entry: undefined, canonicalKey };
+    return { cfg, canonicalKey, storageKey };
   }
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-  const entry = loadSessionEntry({
-    storePath,
-    sessionKey: storageKey,
-    agentId,
-    clone: false,
-  });
-  return { cfg, entry, canonicalKey, agentId, storePath };
+  return { cfg, canonicalKey, agentId, storePath, storageKey };
 }
 
-export function getSubagentAnnounceRuntimeConfig() {
-  return getRuntimeConfig();
+export async function loadRequesterSessionEntry(
+  requesterSessionKey: string,
+  explicitAgentId?: string,
+): Promise<RequesterSessionEntryResult> {
+  const { storageKey, ...resolved } = resolveRequesterSessionEntryScope(
+    requesterSessionKey,
+    explicitAgentId,
+  );
+  if (!resolved.agentId) {
+    return { ...resolved, entry: undefined };
+  }
+  const scope = {
+    storePath: resolved.storePath,
+    sessionKey: storageKey,
+    agentId: resolved.agentId,
+    clone: false,
+  };
+  return withSubagentSessionSource(
+    { agentId: resolved.agentId, sessionKey: storageKey },
+    async (source) => {
+      // Until activation, unbound requester reads retain their native owner and SQL.
+      const storePath = source
+        ? "kind" in source
+          ? source.path
+          : source.actor.path
+        : resolved.storePath;
+      const target = { ...scope, storePath };
+      const entry = source
+        ? await readSessionEntryReadOnlyInWorker(target)
+        : loadSessionEntry(target);
+      return { ...resolved, storePath, entry };
+    },
+  );
+}
+
+/** Capture exact currency before yielding; later guards never discover another actor. */
+export function captureRequesterSessionEntryCurrent(
+  requesterSessionKey: string,
+  explicitAgentId?: string,
+): () => SessionEntryCurrentFacts | undefined {
+  const source = captureIncognitoSessionSource({
+    sessionKey: requesterSessionKey,
+    agentId: explicitAgentId,
+  });
+  if (source) {
+    if ("kind" in source) {
+      return () => {
+        source.assertCurrent();
+        source.admissionSignal?.throwIfAborted();
+        return undefined;
+      };
+    }
+    const claim = source.actor.sessions.captureCurrent(requesterSessionKey);
+    return () => {
+      source.admissionSignal?.throwIfAborted();
+      source.actor.assertReadable();
+      claim.assertCurrent();
+      return source.actor.sessions.readSharing(requesterSessionKey)?.entry;
+    };
+  }
+  const { storageKey, agentId, storePath } = resolveRequesterSessionEntryScope(
+    requesterSessionKey,
+    explicitAgentId,
+  );
+  return () =>
+    agentId
+      ? loadSessionEntry({ storePath, sessionKey: storageKey, agentId, clone: false })
+      : undefined;
+}
+
+/** Selected requesters retain their actor through all consumers and accepted settlement. */
+export function withSubagentRequesterSource<T>(
+  requesterSessionKey: string,
+  explicitAgentId: string | undefined,
+  consume: (isCurrent?: () => boolean) => Promise<T>,
+): Promise<T> {
+  const agentId = explicitAgentId ?? parseAgentSessionKey(requesterSessionKey)?.agentId;
+  if (!agentId) {
+    return consume();
+  }
+  return withSubagentSessionSource({ agentId, sessionKey: requesterSessionKey }, async (source) => {
+    if (!source) {
+      return consume();
+    }
+    const readCurrent = captureRequesterSessionEntryCurrent(requesterSessionKey, agentId);
+    const isCurrent = () => {
+      try {
+        return readCurrent() !== undefined;
+      } catch {
+        return false;
+      }
+    };
+    return consume(isCurrent);
+  });
 }
 
 export function getSubagentRequesterSessionActivity(
   requesterSessionKey: string,
-  requesterAgentId?: string,
+  requester: Pick<RequesterSessionEntryResult, "agentId" | "entry">,
 ) {
-  const cfg = getRuntimeConfig();
-  const resolvedAgentId = tryResolveSubagentRequesterAgentId(
-    cfg,
-    requesterSessionKey,
-    requesterAgentId,
-  );
-  if (!resolvedAgentId) {
+  if (!requester.agentId) {
     return { isActive: false };
   }
-  const storedSessionId = loadRequesterSessionEntry(requesterSessionKey, resolvedAgentId).entry
-    ?.sessionId;
-  // Unscoped active-run keys are ambiguous across agents. An explicit owner
-  // must use its logical store entry instead of accepting another agent's run.
-  const activeSessionId = parseAgentSessionKey(requesterSessionKey)
-    ? resolveActiveEmbeddedRunSessionId(requesterSessionKey)
-    : undefined;
+  const storedSessionId = requester.entry?.sessionId;
+  // Active-run keys carry no physical root; selected actors use their own session identity.
+  const source = captureIncognitoSessionSource({
+    sessionKey: requesterSessionKey,
+    agentId: requester.agentId,
+  });
+  const activeSessionId =
+    !source && parseAgentSessionKey(requesterSessionKey)
+      ? resolveActiveEmbeddedRunSessionId(requesterSessionKey)
+      : undefined;
   const sessionId = activeSessionId ?? storedSessionId;
   return {
     sessionId,
@@ -132,54 +210,19 @@ export function getSubagentRequesterSessionActivity(
   };
 }
 
-export function resolveSubagentRequesterSessionAbandonment(
-  requesterSessionKey: string,
-  sessionId?: string,
-) {
-  return resolveEmbeddedRunAbandonment({ sessionKey: requesterSessionKey, sessionId });
-}
-
-export function loadSessionEntryByKey(sessionKey: string, explicitAgentId?: string) {
+export async function loadSessionEntryByKey(sessionKey: string, explicitAgentId?: string) {
   const cfg = getRuntimeConfig();
   const agentId = tryResolveSubagentRequesterAgentId(cfg, sessionKey, explicitAgentId);
   if (!agentId) {
     return undefined;
   }
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-  return loadSessionEntry({
-    storePath,
-    sessionKey,
-    agentId,
-    clone: false,
-  });
-}
-
-export async function queueSubagentAnnounceMessage(
-  sessionId: string,
-  text: string,
-  options?: EmbeddedAgentQueueMessageOptions,
-  canInject?: () => boolean,
-): Promise<EmbeddedAgentQueueMessageOutcome> {
-  if (canInject) {
-    return await queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
-      sessionId,
-      text,
-      options,
-      canInject,
-    );
-  }
-  return await queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, text, options);
-}
-
-export async function dispatchSubagentAnnounceAgent(
-  agentParams: Record<string, unknown>,
-  options: Parameters<typeof dispatchGatewayMethodInProcess>[2],
-): Promise<unknown> {
-  return await dispatchGatewayMethodInProcess("agent", agentParams, options);
-}
-
-export async function sendSubagentAnnounceMessage(
-  params: Parameters<typeof sendMessage>[0],
-): ReturnType<typeof sendMessage> {
-  return await sendMessage(params);
+  return withSubagentSessionSource({ agentId, sessionKey }, async (source) =>
+    readSessionEntryReadOnlyInWorker({
+      storePath: source ? ("kind" in source ? source.path : source.actor.path) : storePath,
+      sessionKey,
+      agentId,
+      projection: "list",
+    }),
+  );
 }

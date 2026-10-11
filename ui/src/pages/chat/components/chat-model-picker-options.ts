@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
-import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import { icons } from "../../../components/icons.ts";
+import { renderKbd } from "../../../components/kbd.ts";
 import {
   formatRawProviderLabel,
   providerDisplayLabel,
@@ -11,9 +11,18 @@ import { t } from "../../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import { formatContextTokenCapacity } from "../../../lib/format.ts";
 import type { ModelRuntimeEntry } from "../../../lib/model-runtime-choice.ts";
+import { formatModelRuntimeLabel } from "../../../lib/model-runtime-label.ts";
 import { handleModelOptionMouseEnter } from "./chat-model-picker-search.ts";
 
 registerModelControlsEnglish();
+
+function renderModelShortcut() {
+  return renderKbd("", {
+    ariaHidden: true,
+    hidden: true,
+    ref: (element) => element?.setAttribute("data-chat-model-shortcut", "true"),
+  });
+}
 
 export type ChatModelPickerOption = {
   agentRuntimeId?: string;
@@ -29,6 +38,8 @@ export type ChatModelPickerOption = {
   isDefault: boolean;
   label: string;
   provider: string;
+  /** Hosted-catalog recommendation; the rest of its provider collapses under "All models". */
+  recommended?: boolean;
   supportsTools?: boolean;
   value: string;
 };
@@ -67,24 +78,6 @@ export type ChatModelPickerTargetGroup = {
   options: readonly { label: string; value: string }[];
   status: "loading" | "ready" | "error";
 };
-
-// Known models.list runtime ids; mirrors src/status/agent-runtime-label.ts,
-// which cannot be imported here (it drags terminal sanitizers into the bundle).
-const AGENT_RUNTIME_LABELS: Readonly<Record<string, string>> = {
-  "claude-cli": "Claude CLI",
-  codex: "Codex",
-  "codex-cli": "Codex",
-  "google-gemini-cli": "Gemini CLI",
-  openclaw: "OpenClaw",
-};
-
-function formatAgentRuntimeLabel(id: string): string {
-  const normalized = id.trim().toLowerCase();
-  return (
-    AGENT_RUNTIME_LABELS[normalized] ??
-    `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}`
-  );
-}
 
 function formatModelLabel(option: ChatModelPickerOption): string {
   const prefixes = [
@@ -125,13 +118,10 @@ export function renderChatModelPickerOption(params: {
     params.selectedAgentRuntime,
   );
   const modelLabel = formatModelLabel(params.entry);
-  const route = resolveModelRuntimeRoute(params.entry.provider, params.entry.agentRuntimeId);
-  const runtimeLabel = route
-    ? t(`chat.modelControls.routes.${route}.label`)
-    : params.entry.agentRuntimeId
-      ? formatAgentRuntimeLabel(params.entry.agentRuntimeId)
-      : "";
-  const routeDetail = route ? t(`chat.modelControls.routes.${route}.detail`) : "";
+  const runtime = formatModelRuntimeLabel(params.entry.provider, params.entry.agentRuntimeId);
+  const hasRoute = runtime?.detail !== undefined;
+  const runtimeLabel = runtime?.label ?? "";
+  const routeDetail = runtime?.detail ?? "";
   const chatOnlyHelp =
     params.entry.supportsTools === false ? t("chat.modelControls.chatOnlyHelp") : "";
   const detail = [routeDetail, chatOnlyHelp].filter(Boolean).join(" ");
@@ -146,7 +136,7 @@ export function renderChatModelPickerOption(params: {
       params.entry.unavailableReason === "auth-failed");
   const onModelSetup = needsAuth ? params.onModelSetup : undefined;
   const modelMeta = needsAuth
-    ? route
+    ? hasRoute
       ? runtimeLabel
       : ""
     : [formatModelContextMeta(params.entry), runtimeLabel].filter(Boolean).join(" · ");
@@ -240,7 +230,7 @@ export function renderChatModelPickerOption(params: {
           ? html`<span class="chat-controls__inline-select-check" aria-hidden="true"
               >${icons.check}</span
             >`
-          : html`<kbd data-chat-model-shortcut="true" aria-hidden="true" hidden></kbd>`
+          : renderModelShortcut()
       }
     </span>
   </button>`;
@@ -282,9 +272,7 @@ export function renderChatModelPickerTargetOption(params: {
           <span class="chat-controls__model-option-name">${params.entry.label}</span>
         </span>
       </span>
-      <span class="chat-controls__model-option-action">
-        <kbd data-chat-model-shortcut="true" aria-hidden="true" hidden></kbd>
-      </span>
+      <span class="chat-controls__model-option-action"> ${renderModelShortcut()} </span>
     </button>
   `;
 }

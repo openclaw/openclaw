@@ -1,4 +1,3 @@
-// Matrix plugin module implements the live SDK's SQLite sync store.
 import {
   MemoryStore,
   SyncAccumulator,
@@ -47,11 +46,11 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
   private persistPromise: Promise<void> | null = null;
 
   static async create(storageRootDir: string): Promise<SqliteBackedMatrixSyncStore> {
-    let store: PluginStateKeyedStore<MatrixSyncCacheRecord> | undefined;
+    let store: PluginStateKeyedStore<MatrixSyncCacheRecord, 2> | undefined;
     let persisted: PersistedMatrixSyncStore | null = null;
     let unavailableError: unknown;
     try {
-      store = getMatrixRuntime().state.openKeyedStore<MatrixSyncCacheRecord>(
+      store = getMatrixRuntime().state.openKeyedStoreV2<MatrixSyncCacheRecord>(
         openMatrixSyncCacheStoreOptions(storageRootDir),
       );
       persisted = await readPersistedStoreFromStore({ storageRootDir, store });
@@ -64,7 +63,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
 
   private constructor(
     private readonly storageRootDir: string,
-    private readonly store: PluginStateKeyedStore<MatrixSyncCacheRecord> | undefined,
+    private readonly store: PluginStateKeyedStore<MatrixSyncCacheRecord, 2> | undefined,
     persisted: PersistedMatrixSyncStore | null,
     private readonly storeUnavailableError: unknown,
   ) {
@@ -137,18 +136,9 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
     return Promise.resolve();
   }
 
-  override wantsSave(): boolean {
-    // We persist directly from setSyncData/storeClientOptions so the SDK's
-    // periodic save hook stays disabled. Shutdown uses flush() for a final sync.
-    return false;
-  }
-
   override async deleteAllData(): Promise<void> {
     const store = this.requireStore();
-    if (this.persistTimer) {
-      clearTimeout(this.persistTimer);
-      this.persistTimer = null;
-    }
+    this.clearPersistTimer();
     this.dirty = false;
     await this.enqueuePersistence(async () => {
       await super.deleteAllData();
@@ -170,10 +160,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
 
   async freezeSyncCursorPersistence(): Promise<void> {
     this.frozen = true;
-    if (this.persistTimer) {
-      clearTimeout(this.persistTimer);
-      this.persistTimer = null;
-    }
+    this.clearPersistTimer();
     while (this.persistPromise) {
       await this.persistPromise;
     }
@@ -181,24 +168,25 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
 
   discardPendingSyncCursorPersistence(): void {
     this.frozen = true;
-    if (this.persistTimer) {
-      clearTimeout(this.persistTimer);
-      this.persistTimer = null;
-    }
+    this.clearPersistTimer();
     this.cleanShutdown = false;
     this.dirty = false;
   }
 
   async flush(): Promise<void> {
-    if (this.persistTimer) {
-      clearTimeout(this.persistTimer);
-      this.persistTimer = null;
-    }
+    this.clearPersistTimer();
     while (this.dirty || this.persistPromise) {
       if (this.dirty && !this.persistPromise) {
         void this.enqueuePersistence(() => this.persist());
       }
       await this.persistPromise;
+    }
+  }
+
+  private clearPersistTimer(): void {
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
     }
   }
 
@@ -254,7 +242,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
     return pending;
   }
 
-  private requireStore(): PluginStateKeyedStore<MatrixSyncCacheRecord> {
+  private requireStore(): PluginStateKeyedStore<MatrixSyncCacheRecord, 2> {
     if (this.store && this.storeUnavailableError == null) {
       return this.store;
     }

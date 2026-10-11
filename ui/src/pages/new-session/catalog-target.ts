@@ -1,8 +1,5 @@
 import { html, nothing } from "lit";
-import type {
-  SessionCatalog,
-  SessionsCatalogListResult,
-} from "../../../../packages/gateway-protocol/src/index.ts";
+import type { SessionsCatalogListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { icons } from "../../components/icons.ts";
@@ -81,47 +78,6 @@ export function groupDefaultsKey(data?: NewSessionRouteData): string {
     data?.groupStatus ?? "",
     data?.groupCwd ?? "",
     data?.groupWorktree === true,
-    data?.groupCatalogGeneration ?? -1,
-    data?.groupDefaultsStatus ?? "idle",
-  ]);
-}
-
-function groupRouteNeedsRevalidation(
-  data: NewSessionRouteData | undefined,
-  sessions: SessionCapability,
-): boolean {
-  const groupName = data?.group?.trim();
-  if (!groupName) {
-    return false;
-  }
-  const generation = sessions.groupsGeneration();
-  const status = sessions.groupsStatus();
-  if (data?.groupCatalogGeneration !== generation || data.groupDefaultsStatus !== status) {
-    return true;
-  }
-  if (status !== "ready") {
-    return false;
-  }
-  const current = sessions.state.groupSettings.find((group) => group.name === groupName);
-  return current
-    ? data.groupStatus !== "resolved" ||
-        (data.groupCwd ?? "") !== (current.cwd ?? "") ||
-        data.groupWorktree !== (current.worktree === true)
-    : data.groupStatus === "resolved";
-}
-
-function groupRouteCatalogKey(
-  data: NewSessionRouteData | undefined,
-  sessions: SessionCapability,
-): string {
-  const current = sessions.state.groupSettings.find((group) => group.name === data?.group);
-  return JSON.stringify([
-    data?.group ?? "",
-    sessions.groupsGeneration(),
-    sessions.groupsStatus(),
-    Boolean(current),
-    current?.cwd ?? "",
-    current?.worktree === true,
   ]);
 }
 
@@ -129,7 +85,7 @@ export function isGroupRoutePending(
   data: NewSessionRouteData | undefined,
   sessions: SessionCapability | undefined,
 ): boolean {
-  return Boolean(data?.group && (!sessions || groupRouteNeedsRevalidation(data, sessions)));
+  return Boolean(data?.group && (!sessions || data.groupStatus !== "resolved"));
 }
 
 export function isRoutePending(
@@ -148,52 +104,15 @@ export function resolvedGroupName(
     : undefined;
 }
 
-export class GroupRouteRevalidation {
-  private pending: Promise<unknown> | null = null;
-  private lastKey = "";
-
-  constructor(
-    private readonly readData: () => NewSessionRouteData | undefined,
-    private readonly revalidate: () => Promise<unknown> | undefined,
-  ) {}
-
-  synchronize(sessions: SessionCapability) {
-    if (this.pending) {
-      return;
-    }
-    const data = this.readData();
-    const key = groupRouteCatalogKey(data, sessions);
-    if (this.lastKey === key || !groupRouteNeedsRevalidation(data, sessions)) {
-      return;
-    }
-    const pending = this.revalidate();
-    if (!pending) {
-      return;
-    }
-    this.lastKey = key;
-    this.pending = pending;
-    void pending
-      .catch(() => undefined)
-      .finally(() => {
-        if (this.pending === pending) {
-          this.pending = null;
-          this.synchronize(sessions);
-        }
-      });
-  }
-}
-
 export function resolveAgentId(
-  data: Pick<NewSessionRouteData, "agentId" | "catalogId"> | undefined,
+  data: Pick<NewSessionRouteData, "agentId"> | undefined,
   availableAgents: readonly { id: string }[],
   fallback: string,
 ): string {
   const rawRequested = data?.agentId?.trim();
-  if (!rawRequested) {
-    return fallback && normalizeAgentId(fallback);
-  }
-  const requested = normalizeAgentId(rawRequested);
-  return availableAgents.some((candidate) => normalizeAgentId(candidate.id) === requested)
+  const requested = rawRequested ? normalizeAgentId(rawRequested) : undefined;
+  return requested &&
+    availableAgents.some((candidate) => normalizeAgentId(candidate.id) === requested)
     ? requested
     : fallback && normalizeAgentId(fallback);
 }
@@ -210,8 +129,7 @@ export async function resolveCreateTarget(
   catalogId: string,
   agentId?: string,
 ): Promise<
-  | Pick<NewSessionRouteData, "model" | "catalogLabel" | "startTerminal" | "terminalHosts">
-  | undefined
+  Pick<NewSessionRouteData, "catalogLabel" | "startTerminal" | "terminalHosts"> | undefined
 > {
   try {
     const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
@@ -223,7 +141,6 @@ export async function resolveCreateTarget(
     const terminal = catalog?.capabilities.startTerminal;
     return catalog && terminal === true
       ? {
-          model: "",
           catalogLabel: catalog.label,
           startTerminal: true,
           terminalHosts: catalog.hosts
@@ -236,21 +153,17 @@ export async function resolveCreateTarget(
   }
 }
 
-type CatalogCreateTarget = Pick<SessionCatalog, "id" | "label">;
 type CatalogTargetOwner = { agentId: string; client: GatewayBrowserClient };
 type CatalogTargetDiscoveryState =
   | { status: "idle" }
   | {
       status: "loading";
       owner: CatalogTargetOwner;
-      controller: AbortController;
-      requestId: number;
     }
-  | { status: "ready"; owner: CatalogTargetOwner; targets: CatalogCreateTarget[] }
+  | { status: "ready"; owner: CatalogTargetOwner; targets: ChatModelPickerTargetGroup["options"] }
   | { status: "error"; owner: CatalogTargetOwner };
 
 export class CatalogTargetDiscovery {
-  private requestId = 0;
   private state: CatalogTargetDiscoveryState = { status: "idle" };
 
   constructor(private readonly notify: () => void) {}
@@ -258,30 +171,26 @@ export class CatalogTargetDiscovery {
   clear() {
     const previous = this.state;
     this.state = { status: "idle" };
-    this.requestId += 1;
-    if (previous.status === "loading") {
-      previous.controller.abort();
-    }
     if (previous.status !== "idle") {
       this.notify();
     }
   }
 
   private startRequest(owner: CatalogTargetOwner) {
-    const controller = new AbortController();
-    const requestId = ++this.requestId;
-    this.state = { status: "loading", owner, controller, requestId };
+    this.state = { status: "loading", owner };
     this.notify();
     void owner.client
-      .request<SessionsCatalogListResult>(
-        "sessions.catalog.list",
-        { agentId: owner.agentId, metadataOnly: true },
-        { signal: controller.signal },
-      )
+      .request<SessionsCatalogListResult>("sessions.catalog.list", {
+        agentId: owner.agentId,
+        metadataOnly: true,
+      })
       .then(
         (result) => {
-          const active = this.state;
-          if (active.status !== "loading" || active.requestId !== requestId) {
+          if (
+            this.state.status === "idle" ||
+            this.state.owner.client !== owner.client ||
+            this.state.owner.agentId !== owner.agentId
+          ) {
             return;
           }
           this.state = {
@@ -289,17 +198,15 @@ export class CatalogTargetDiscovery {
             owner,
             targets: result.catalogs
               .filter((catalog) => catalog.capabilities.startTerminal === true)
-              .map(({ id, label }) => ({ id, label })),
+              .map(({ id, label }) => ({ value: id, label })),
           };
           this.notify();
         },
         () => {
-          const active = this.state;
-          if (active.status !== "loading" || active.requestId !== requestId) {
-            return;
+          if (this.state.status !== "idle" && this.state.owner === owner) {
+            this.state = { status: "error", owner };
+            this.notify();
           }
-          this.state = { status: "error", owner };
-          this.notify();
         },
       );
   }
@@ -356,10 +263,7 @@ export class CatalogTargetDiscovery {
         errorLabel: t("newSession.cliAgentsUnavailable"),
         id: "cliAgents",
         label: t("newSession.cliAgentsGroup"),
-        options:
-          discovery.status === "ready"
-            ? discovery.targets.map(({ id, label }) => ({ value: id, label }))
-            : [],
+        options: discovery.status === "ready" ? discovery.targets : [],
         status: discovery.status,
       },
     ];

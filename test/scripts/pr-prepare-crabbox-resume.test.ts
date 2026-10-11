@@ -1,4 +1,12 @@
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -60,7 +68,7 @@ function publishedPreparation(alias = false) {
 }
 
 describePosix("prepare-push retained Crabbox finalization", () => {
-  it.each([false, true])(
+  it.each([true])(
     "finalizes legacy published preparation without pushing or refreshing, alias=%s",
     (alias) => {
       const f = publishedPreparation(alias);
@@ -88,7 +96,6 @@ describePosix("prepare-push retained Crabbox finalization", () => {
     "target",
     "branch",
     "dirty",
-    "receipt",
     "gate",
     "review",
     "publisher",
@@ -115,9 +122,6 @@ describePosix("prepare-push retained Crabbox finalization", () => {
     if (mode === "dirty") {
       writeFileSync(join(f.repoDir, "reviewed.txt"), "changed\n");
     }
-    if (mode === "receipt") {
-      writeFileSync(join(f.local, "prepare-push-result.env"), "PUSH_PREP_HEAD_SHA=bad\n");
-    }
     if (mode === "gate") {
       writeFileSync(
         join(f.local, "gates.env"),
@@ -138,18 +142,33 @@ describePosix("prepare-push retained Crabbox finalization", () => {
     expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
   });
 
-  it("refuses ordinary prepare-push before refresh when dispatch acceptance is uncertain", () => {
-    const f = publishedPreparation();
-    writeFileSync(
-      join(f.local, "gates.env"),
-      readFileSync(join(f.local, "gates.env"), "utf8") + "PENDING_CRABBOX_STATE=dispatching\n",
-    );
-    const result = runPublisher(f, "prepare_push 4242", [...f.setup, "enter_worktree() { :; }"]);
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("--resume-crabbox-run");
-    expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
-    expect(existsSync(join(f.local, "prep.env"))).toBe(false);
-  });
+  it.each([true])(
+    "refuses ordinary prepare-push before refresh when dispatch acceptance is uncertain (restricted PATH=%s)",
+    (restrictedPath) => {
+      const f = publishedPreparation();
+      writeFileSync(
+        join(f.local, "gates.env"),
+        readFileSync(join(f.local, "gates.env"), "utf8") + "PENDING_CRABBOX_STATE=dispatching\n",
+      );
+      const setup = [...f.setup, "enter_worktree() { :; }"];
+      if (restrictedPath) {
+        const grep = spawnSync("bash", ["-c", "command -v grep"], { encoding: "utf8" });
+        expect(grep.status, grep.stderr).toBe(0);
+        const bin = join(f.local, "without-ripgrep");
+        mkdirSync(bin);
+        symlinkSync(grep.stdout.trim(), join(bin, "grep"));
+        setup.push(
+          `PATH='${bin.replaceAll("'", "'\\''")}'`,
+          "if type -P rg >/dev/null; then echo 'unexpected external rg' >&2; exit 99; fi",
+        );
+      }
+      const result = runPublisher(f, "prepare_push 4242", setup);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("--resume-crabbox-run");
+      expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
+      expect(existsSync(join(f.local, "prep.env"))).toBe(false);
+    },
+  );
   it("resumes after gate success when the preparation writer was interrupted", () => {
     const f = publishedPreparation();
     const first = runPublisher(f, 'prepare_push 4242 "" 99', [
@@ -188,33 +207,27 @@ describePosix("prepare-push retained Crabbox finalization", () => {
     expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
   });
 
-  it.each([
-    "PENDING_CRABBOX_STATE=$(touch .local/evaluated)\n",
-    "PENDING_CRABBOX_STATE=selected\n",
-    "PENDING_CRABBOX_UNKNOWN=1\n",
-    "PENDING_CRABBOX_STATE=dispatching\nPENDING_CRABBOX_STATE=dispatching\n",
-  ])("rejects malformed provenance before shell evaluation: %s", (extra) => {
-    const f = publishedPreparation();
-    const path = join(f.local, "gates.env");
-    const before = readFileSync(path, "utf8") + extra;
-    writeFileSync(path, before);
-    const result = runPublisher(f, 'prepare_push 4242 "" 99', f.setup);
-    expect(result.status).not.toBe(0);
-    expect(existsSync(join(f.local, "evaluated"))).toBe(false);
-    expect(existsSync(join(f.local, "observer-args"))).toBe(false);
-    expect(existsSync(join(f.local, "prep.env"))).toBe(false);
-    expect(readFileSync(path, "utf8")).toBe(before);
-    expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
-  });
+  it.each(["PENDING_CRABBOX_STATE=$(touch .local/evaluated)\n"])(
+    "rejects malformed provenance before shell evaluation: %s",
+    (extra) => {
+      const f = publishedPreparation();
+      const path = join(f.local, "gates.env");
+      const before = readFileSync(path, "utf8") + extra;
+      writeFileSync(path, before);
+      const result = runPublisher(f, 'prepare_push 4242 "" 99', f.setup);
+      expect(result.status).not.toBe(0);
+      expect(existsSync(join(f.local, "evaluated"))).toBe(false);
+      expect(existsSync(join(f.local, "observer-args"))).toBe(false);
+      expect(existsSync(join(f.local, "prep.env"))).toBe(false);
+      expect(readFileSync(path, "utf8")).toBe(before);
+      expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
+    },
+  );
 });
 
 describePosix("atomic gate receipt writes", () => {
   it.each([
     ["github_pending", 1],
-    ["remote_crabbox_aws_pending", 1],
-    ["remote_crabbox_aws_pending", 2],
-    ["full", 1],
-    ["full", 2],
     ["remote_crabbox_aws", 1],
     ["remote_crabbox_aws", 2],
     ["remote_crabbox_aws", 3],

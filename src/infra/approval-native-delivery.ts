@@ -1,18 +1,17 @@
 // Native delivery contract for approval prompts and responses.
 import type {
   ChannelApprovalNativeAdapter,
+  ChannelApprovalNativeAdapterAsync,
   ChannelApprovalNativeSurface,
   ChannelApprovalNativeTarget,
 } from "../channels/plugins/approval-native.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { buildChannelApprovalNativeTargetKey } from "./approval-native-target-key.js";
-import type { ChannelApprovalKind } from "./approval-types.js";
-import type { ExecApprovalRequest } from "./exec-approvals-core.js";
-import type { PluginApprovalRequest } from "./plugin-approvals.js";
-import type { SystemAgentApprovalRequest } from "./system-agent-approvals.js";
-
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
+import type {
+  ApprovalRequestInput as ApprovalRequest,
+  ChannelApprovalKind,
+} from "./approval-types.js";
 
 /** One native approval delivery target selected by the channel adapter plan. */
 export type ChannelApprovalNativePlannedTarget = {
@@ -34,48 +33,36 @@ export async function resolveChannelNativeApprovalDeliveryPlan(params: {
   accountId?: string | null;
   approvalKind: ChannelApprovalKind;
   request: ApprovalRequest;
-  adapter?: ChannelApprovalNativeAdapter | null;
+  adapter?: ChannelApprovalNativeAdapter | ChannelApprovalNativeAdapterAsync | null;
 }): Promise<ChannelApprovalNativeDeliveryPlan> {
   const adapter = params.adapter;
+  const emptyPlan: ChannelApprovalNativeDeliveryPlan = {
+    targets: [],
+    originTarget: null,
+    notifyOriginWhenDmOnly: false,
+  };
   if (!adapter) {
-    return {
-      targets: [],
-      originTarget: null,
-      notifyOriginWhenDmOnly: false,
-    };
+    return emptyPlan;
   }
 
-  const capabilities = adapter.describeDeliveryCapabilities({
+  const deliveryContext = () => ({
     cfg: params.cfg,
     accountId: params.accountId,
     approvalKind: params.approvalKind,
     request: params.request,
   });
+  const capabilities = await adapter.describeDeliveryCapabilities(deliveryContext());
   if (!capabilities.enabled) {
-    return {
-      targets: [],
-      originTarget: null,
-      notifyOriginWhenDmOnly: false,
-    };
+    return emptyPlan;
   }
 
   const originTarget =
     capabilities.supportsOriginSurface && adapter.resolveOriginTarget
-      ? ((await adapter.resolveOriginTarget({
-          cfg: params.cfg,
-          accountId: params.accountId,
-          approvalKind: params.approvalKind,
-          request: params.request,
-        })) ?? null)
+      ? ((await adapter.resolveOriginTarget(deliveryContext())) ?? null)
       : null;
   const approverDmTargets =
     capabilities.supportsApproverDmSurface && adapter.resolveApproverDmTargets
-      ? await adapter.resolveApproverDmTargets({
-          cfg: params.cfg,
-          accountId: params.accountId,
-          approvalKind: params.approvalKind,
-          request: params.request,
-        })
+      ? await adapter.resolveApproverDmTargets(deliveryContext())
       : [];
 
   const plannedTargets: ChannelApprovalNativePlannedTarget[] = [];

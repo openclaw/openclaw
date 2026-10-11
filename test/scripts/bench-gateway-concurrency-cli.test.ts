@@ -219,105 +219,88 @@ syncBuiltinESMExports();\n`,
 }
 
 describe.skipIf(process.platform === "win32")("gateway concurrency CLI failure evidence", () => {
-  it("omits private warmup probe errors from diagnostic failure evidence", async () => {
-    await withBenchmark("diagnostic", (report) => {
-      const { errors, partialRun } = report.failedAttempt;
-      expect(partialRun.probeWarmup.samples[0]?.sessionsList).toMatchObject({
-        ok: false,
-        error: expect.any(String),
+  it.each(["diagnostic", "workload", "teardown", "history"] as const)(
+    "retains partial evidence and cleans up after %s failure",
+    async (scenario) => {
+      await withBenchmark(scenario, (report) => {
+        const { errors, partialRun } = report.failedAttempt;
+        expect(errors).toContainEqual({
+          phase: scenario === "teardown" ? "diagnostics" : "workload",
+          error: expect.stringContaining(
+            {
+              diagnostic: "raw output omitted",
+              workload: "agent 1 did not complete",
+              teardown: "Gateway did not exit cleanly",
+              history: "all configured chat.history load probes failed",
+            }[scenario],
+          ),
+        });
+        if (scenario === "diagnostic" || scenario === "workload") {
+          expect(partialRun.turnAccounting).toEqual({ launched: 1, terminalOk: 0, verified: 0 });
+        }
+        if (scenario === "diagnostic") {
+          expect(partialRun.probeWarmup.samples[0]?.sessionsList).toMatchObject({
+            ok: false,
+            error: expect.any(String),
+          });
+          expect(partialRun.probeWarmup.samples.some((sample) => sample.sessionsList.ok)).toBe(
+            true,
+          );
+          return;
+        }
+        expect(partialRun.gatewayExit).toEqual({
+          exitCode: scenario === "teardown" ? 23 : 0,
+          signal: null,
+          exitedBeforeTeardown: false,
+        });
+        if (scenario !== "teardown") {
+          expect(partialRun.readyz.some((sample) => sample.ok)).toBe(true);
+        }
+        if (scenario === "workload") {
+          expect(report.runs).toHaveLength(1);
+          const completed = report.runs[0]!;
+          expect(completed).not.toHaveProperty("failures");
+          expect(completed).not.toHaveProperty("cleanup");
+          expect(completed.freshConnection).toMatchObject({ ok: true });
+          expect(completed.memory).toMatchObject({
+            before: { heapUsedMb: 4, rssMb: 16 },
+            after: { heapUsedMb: 4, rssMb: 16 },
+          });
+          expect(completed.pluginMetadataScans).toEqual({
+            count: 0,
+            durationMs: null,
+            totalDurationMs: 0,
+          });
+          expect(report.summary).toMatchObject({ turnCount: 1, pluginMetadataScanCount: 0 });
+          expect(partialRun.sessionsList.some((sample) => sample.ok)).toBe(true);
+          expect(partialRun.memory.before).toMatchObject({ heapUsedMb: 4, rssMb: 16 });
+          return;
+        }
+        expect(report.runs).toEqual([]);
+        expect(report.summary.turnCount).toBe(0);
+        expect(partialRun.memory.after).toMatchObject({ heapUsedMb: 4, rssMb: 16 });
+        if (scenario === "teardown") {
+          expect(partialRun.turnCount).toBe(1);
+          expect(partialRun.freshConnection).toMatchObject({ ok: true });
+          expect(partialRun).not.toHaveProperty("pluginMetadataScans");
+          expect(partialRun.gatewayProcess?.exitEvent).toMatchObject({
+            exitCode: 23,
+            signal: null,
+          });
+          return;
+        }
+        expect(partialRun.history.length).toBeGreaterThan(0);
+        expect(
+          partialRun.history.every(
+            (sample) => !sample.ok && sample.error?.includes("fixture history failure"),
+          ),
+        ).toBe(true);
+        expect(partialRun.cpuUsage).toMatchObject({
+          process: { totalMs: expect.any(Number) },
+          mainThread: { totalMs: expect.any(Number) },
+        });
+        expect(partialRun.pluginMetadataScans).toMatchObject({ count: 1, totalDurationMs: 7 });
       });
-      expect(partialRun.probeWarmup.samples.some((sample) => sample.sessionsList.ok)).toBe(true);
-      expect(partialRun.turnAccounting).toEqual({ launched: 1, terminalOk: 0, verified: 0 });
-      expect(errors).toContainEqual({
-        phase: "workload",
-        error: expect.stringContaining("raw output omitted"),
-      });
-    });
-  });
-
-  it("retains completed runs and partial probes when a later accepted turn fails", async () => {
-    await withBenchmark("workload", (report) => {
-      expect(report.runs).toHaveLength(1);
-      const completed = report.runs[0]!;
-      expect(completed).not.toHaveProperty("failures");
-      expect(completed).not.toHaveProperty("cleanup");
-      expect(completed.freshConnection).toMatchObject({ ok: true });
-      expect(completed.memory).toMatchObject({
-        before: { heapUsedMb: 4, rssMb: 16 },
-        after: { heapUsedMb: 4, rssMb: 16 },
-      });
-      expect(completed.pluginMetadataScans).toEqual({
-        count: 0,
-        durationMs: null,
-        totalDurationMs: 0,
-      });
-      expect(report.summary).toMatchObject({ turnCount: 1, pluginMetadataScanCount: 0 });
-      const { errors, partialRun } = report.failedAttempt;
-      expect(errors).toContainEqual({
-        phase: "workload",
-        error: expect.stringContaining("agent 1 did not complete"),
-      });
-      expect(partialRun.readyz.some((sample) => sample.ok)).toBe(true);
-      expect(partialRun.sessionsList.some((sample) => sample.ok)).toBe(true);
-      expect(partialRun.memory.before).toMatchObject({ heapUsedMb: 4, rssMb: 16 });
-      expect(partialRun.turnAccounting).toEqual({ launched: 1, terminalOk: 0, verified: 0 });
-      expect(partialRun.gatewayExit).toEqual({
-        exitCode: 0,
-        signal: null,
-        exitedBeforeTeardown: false,
-      });
-    });
-  });
-
-  it("retains completed load when the Gateway exits nonzero during teardown", async () => {
-    await withBenchmark("teardown", (report) => {
-      expect(report.runs).toEqual([]);
-      expect(report.summary.turnCount).toBe(0);
-      const { errors, partialRun } = report.failedAttempt;
-      expect(errors).toContainEqual({
-        phase: "diagnostics",
-        error: expect.stringContaining("Gateway did not exit cleanly"),
-      });
-      expect(partialRun.turnCount).toBe(1);
-      expect(partialRun.freshConnection).toMatchObject({ ok: true });
-      expect(partialRun.memory.after).toMatchObject({ heapUsedMb: 4, rssMb: 16 });
-      expect(partialRun).not.toHaveProperty("pluginMetadataScans");
-      expect(partialRun.gatewayExit).toEqual({
-        exitCode: 23,
-        signal: null,
-        exitedBeforeTeardown: false,
-      });
-      expect(partialRun.gatewayProcess?.exitEvent).toMatchObject({ exitCode: 23, signal: null });
-    });
-  });
-
-  it("retains completed history failures and their load timeline window", async () => {
-    await withBenchmark("history", (report) => {
-      expect(report.runs).toEqual([]);
-      expect(report.summary.turnCount).toBe(0);
-      const { errors, partialRun } = report.failedAttempt;
-      expect(errors).toContainEqual({
-        phase: "workload",
-        error: expect.stringContaining("all configured chat.history load probes failed"),
-      });
-      expect(partialRun.history.length).toBeGreaterThan(0);
-      expect(
-        partialRun.history.every(
-          (sample) => !sample.ok && sample.error?.includes("fixture history failure"),
-        ),
-      ).toBe(true);
-      expect(partialRun.readyz.some((sample) => sample.ok)).toBe(true);
-      expect(partialRun.memory.after).toMatchObject({ heapUsedMb: 4, rssMb: 16 });
-      expect(partialRun.cpuUsage).toMatchObject({
-        process: { totalMs: expect.any(Number) },
-        mainThread: { totalMs: expect.any(Number) },
-      });
-      expect(partialRun.pluginMetadataScans).toMatchObject({ count: 1, totalDurationMs: 7 });
-      expect(partialRun.gatewayExit).toEqual({
-        exitCode: 0,
-        signal: null,
-        exitedBeforeTeardown: false,
-      });
-    });
-  });
+    },
+  );
 });

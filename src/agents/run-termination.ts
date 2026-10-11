@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { createAbortError } from "../infra/abort-signal.js";
+import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
 import {
   type FailoverError,
   findErrorProperty,
@@ -132,13 +133,17 @@ function resolveRunErrorTimeout(error: unknown): FailoverError["timeout"] {
   try {
     // Retry categories include connection failures and HTTP 5xx. Only recorded
     // watchdog facts or an intentional TimeoutError establish a deadline.
-    const timeout = findErrorProperty(error, (candidate) =>
-      isFailoverError(candidate)
-        ? candidate.timeout
-        : isSignalTimeoutReason(candidate)
-          ? { timeoutPhase: "provider" as const }
-          : undefined,
-    );
+    const terminal = findAgentRunTerminalOutcome(error);
+    const timeout =
+      terminal?.status === "timeout"
+        ? terminal
+        : findErrorProperty(error, (candidate) =>
+            isFailoverError(candidate)
+              ? candidate.timeout
+              : isSignalTimeoutReason(candidate)
+                ? { timeoutPhase: "provider" as const }
+                : undefined,
+          );
     if (!timeout) {
       return undefined;
     }

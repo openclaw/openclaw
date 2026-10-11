@@ -10,9 +10,13 @@ import type {
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { runCommandBuffered, withCommandProcessScope } from "openclaw/plugin-sdk/process-runtime";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
@@ -21,7 +25,11 @@ import { resolveCodexAppServerUserHomeDir } from "./app-server/auth-start-option
 import { formatCodexDisplayText } from "./command-formatters.js";
 import { visitJsonlLines } from "./jsonl-lines.js";
 import { codexCatalogHomeId } from "./session-catalog-home-id.js";
-import { MAX_SESSION_ID_LENGTH, readBoundedOptionalString } from "./session-catalog-parsing.js";
+import {
+  MAX_SESSION_ID_LENGTH,
+  readBoundedOptionalString,
+  unwrapNodeInvokePayload,
+} from "./session-catalog-parsing.js";
 import type { CodexSessionCatalogControlFactory } from "./session-catalog-types.js";
 
 const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
@@ -124,11 +132,30 @@ export async function listCodexCliSessionsOnNode(params: {
   filter?: string;
   limit?: number;
 }): Promise<{ node: CodexCliSessionNodeInfo; result: CodexCliSessionsListResult }> {
-  const node = await resolveCodexCliNode({
-    runtime: params.runtime,
-    requestedNode: params.requestedNode,
-    command: CODEX_CLI_SESSIONS_LIST_COMMAND,
-  });
+  const { runtime, requestedNode } = params;
+  const command = CODEX_CLI_SESSIONS_LIST_COMMAND;
+  const list = await runtime.nodes.list(requestedNode ? undefined : { connected: true });
+  const requested = requestedNode?.trim();
+  const candidates = list.nodes.filter((node) =>
+    requested
+      ? [node.nodeId, node.displayName, node.remoteIp].some((value) => value === requested)
+      : node.connected === true && node.commands?.includes(command),
+  );
+  if (candidates.length === 0) {
+    throw new Error(
+      requested
+        ? `Codex CLI node ${requested} was not found.`
+        : "No connected node exposes Codex CLI session commands.",
+    );
+  }
+  const usable = candidates.filter((node) => node.commands?.includes(command));
+  if (usable.length === 0) {
+    throw new Error(`Node ${requested ?? "candidate"} does not expose ${command}.`);
+  }
+  if (usable.length > 1) {
+    throw new Error("Multiple Codex CLI-capable nodes connected. Pass --host <node-id>.");
+  }
+  const node = expectDefined(usable[0], "single usable Codex CLI node");
   const raw = await params.runtime.nodes.invoke({
     nodeId: readNodeId(node),
     command: CODEX_CLI_SESSIONS_LIST_COMMAND,
@@ -170,6 +197,7 @@ export async function resumeCodexCliSessionOnNode(params: {
   sessionId: string;
   agentId?: string;
   sessionKey?: string;
+  storePath?: string;
   prompt: string;
   cwd?: string;
   timeoutMs?: number;
@@ -177,9 +205,14 @@ export async function resumeCodexCliSessionOnNode(params: {
   let catalogAgentId: string | undefined;
   let catalogHomeId: string | undefined;
   if (params.sessionKey) {
+    const storePath =
+      params.storePath ??
+      params.runtime.agent.session.resolveStorePath(undefined, { agentId: params.agentId });
     const { adoptionSessionKeyRest, CODEX_NODE_SESSION_KEY_PREFIX, readNodeSessionMarker } =
       await import("./session-catalog-node-adoption.js");
-    const entry = params.runtime.agent.session.getSessionEntry({
+    const entry = await params.runtime.agent.session.getSessionEntryAsync({
+      agentId: params.agentId,
+      storePath,
       sessionKey: params.sessionKey,
       readConsistency: "latest",
     });
@@ -226,7 +259,10 @@ export async function resumeCodexCliSessionOnNode(params: {
     timeoutMs: (params.timeoutMs ?? DEFAULT_RESUME_TIMEOUT_MS) + 5_000,
     scopes: ["operator.write"],
   });
-  const payload = unwrapNodeInvokePayload(raw);
+  const payload = unwrapNodeInvokePayload(
+    raw,
+    "Codex CLI node command returned malformed payloadJSON.",
+  );
   if (!isRecord(payload) || payload.ok !== true || typeof payload.text !== "string") {
     throw new Error("Codex CLI resume returned an invalid payload.");
   }
@@ -474,16 +510,10 @@ async function readSessionFileSummary(file: string): Promise<CodexCliSessionSumm
   let messageCount = 0;
   const result = await visitJsonlLines(file, (line) => {
     const parsed = parseJsonRecord(line.trim());
-    if (typeof parsed.timestamp === "string" && parsed.timestamp.trim()) {
-      updatedAt = parsed.timestamp.trim();
-    }
+    updatedAt = normalizeOptionalString(parsed.timestamp) ?? updatedAt;
     if (parsed.type === "session_meta" && isRecord(parsed.payload)) {
-      if (typeof parsed.payload.id === "string" && parsed.payload.id.trim()) {
-        sessionId = parsed.payload.id.trim();
-      }
-      if (typeof parsed.payload.cwd === "string" && parsed.payload.cwd.trim()) {
-        cwd = parsed.payload.cwd.trim();
-      }
+      sessionId = normalizeOptionalString(parsed.payload.id) ?? sessionId;
+      cwd = normalizeOptionalString(parsed.payload.cwd) ?? cwd;
       return;
     }
     const messageText = readResponseItemMessageText(parsed);
@@ -563,40 +593,11 @@ function readSessionIdFromFilename(file: string): string | undefined {
   return match?.[0];
 }
 
-async function resolveCodexCliNode(params: {
-  runtime: PluginRuntime;
-  requestedNode?: string;
-  command: string;
-}): Promise<CodexCliSessionNodeInfo> {
-  const list = await params.runtime.nodes.list(
-    params.requestedNode ? undefined : { connected: true },
-  );
-  const requested = params.requestedNode?.trim();
-  const candidates = list.nodes.filter((node) => {
-    if (requested) {
-      return [node.nodeId, node.displayName, node.remoteIp].some((value) => value === requested);
-    }
-    return node.connected === true && node.commands?.includes(params.command);
-  });
-  if (candidates.length === 0) {
-    throw new Error(
-      requested
-        ? `Codex CLI node ${requested} was not found.`
-        : "No connected node exposes Codex CLI session commands.",
-    );
-  }
-  const usable = candidates.filter((node) => node.commands?.includes(params.command));
-  if (usable.length === 0) {
-    throw new Error(`Node ${requested ?? "candidate"} does not expose ${params.command}.`);
-  }
-  if (usable.length > 1) {
-    throw new Error("Multiple Codex CLI-capable nodes connected. Pass --host <node-id>.");
-  }
-  return expectDefined(usable[0], "single usable Codex CLI node");
-}
-
 function parseCodexCliSessionsListResult(raw: unknown): CodexCliSessionsListResult {
-  const payload = unwrapNodeInvokePayload(raw);
+  const payload = unwrapNodeInvokePayload(
+    raw,
+    "Codex CLI node command returned malformed payloadJSON.",
+  );
   if (!isRecord(payload) || !Array.isArray(payload.sessions)) {
     throw new Error("Codex CLI session list returned an invalid payload.");
   }
@@ -623,33 +624,8 @@ function parseCodexCliSessionsListResult(raw: unknown): CodexCliSessionsListResu
   };
 }
 
-function unwrapNodeInvokePayload(raw: unknown): unknown {
-  const record = isRecord(raw) ? raw : {};
-  if (typeof record.payloadJSON === "string" && record.payloadJSON.trim()) {
-    try {
-      return JSON.parse(record.payloadJSON) as unknown;
-    } catch (error) {
-      throw new Error("Codex CLI node command returned malformed payloadJSON.", {
-        cause: error,
-      });
-    }
-  }
-  if ("payload" in record) {
-    return record.payload;
-  }
-  return raw;
-}
-
 function parseJsonRecord(paramsJSON?: string | null): Record<string, unknown> {
-  if (!paramsJSON?.trim()) {
-    return {};
-  }
-  try {
-    const parsed = JSON.parse(paramsJSON) as unknown;
-    return isRecord(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
+  return asNonArrayRecord(safeParseJson(paramsJSON ?? ""));
 }
 
 async function readFileMtimeIso(file: string): Promise<string | undefined> {

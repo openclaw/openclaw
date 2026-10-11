@@ -10,6 +10,19 @@
   --sidebar-session-row-floor: 44px;
 }
 
+/* Keep metadata, but do not charge a title for an empty endcap. */
+.shell--mobile-nav .sidebar-recent-session--single-line:not(.sidebar-recent-session--team) {
+  .sidebar-recent-session__text {
+    gap: var(--sidebar-row-gap);
+  }
+
+  .sidebar-recent-session__details:not(
+    :has(.session-row-badges, .viewer-facepile, .session-row-trail)
+  ) {
+    display: none;
+  }
+}
+
 /* The mobile drawer keeps management actions in its always-reachable menu. */
 .shell--mobile-nav .sidebar-recent-session {
   padding-right: 0;
@@ -31,21 +44,45 @@
   }
 }
 
-.shell--mobile-nav .sidebar-zone-entry .sidebar-recent-session {
-  padding-right: 4px;
-}
+/* The rail consumes a column on phones too. Give ordinary titles the full
+   remaining line and keep the 44px menu on the metadata line below it. The
+   reserved second row stays stable for empty metadata and hover/focus. */
+.shell--mobile-nav
+  .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--team) {
+  &.session-row-host {
+    --session-row-actions-reserve: 0px;
+  }
 
-.shell--mobile-nav .sidebar-recent-session:not(.sidebar-recent-session--child) {
+  > .sidebar-recent-session__link {
+    align-items: flex-start;
+    padding-block: 1px;
+  }
+
+  .sidebar-session-indicator {
+    margin-top: 4px;
+  }
+
   .sidebar-recent-session__text {
-    padding-right: var(--session-row-actions-reserve);
+    display: grid;
+    grid-template-rows: max(24px, var(--sidebar-title-line-height)) 44px;
+    align-items: stretch;
+    gap: 0;
+    padding-right: 0;
   }
 
   > .sidebar-recent-session__aside {
-    top: 50%;
+    /* layout.css owns the horizontal offset beside an in-flow child toggle. */
+    inset-block: auto 1px;
+    transform: none;
   }
 
-  /* The text container already reserves the menu slot, including on hover/focus. */
   .sidebar-recent-session__title-row {
     padding-right: 0;
+  }
+
+  .sidebar-recent-session__details {
+    grid-row: 2;
+    align-self: center;
+    padding-right: 48px;
   }
 }

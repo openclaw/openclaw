@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { withIncognitoSessionBinding } from "../../../config/sessions/session-incognito-binding.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../../state/openclaw-agent-execution.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
@@ -16,6 +19,12 @@ import {
   resetSubagentRegistryForTests,
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+// Capacity under incognito is a P12 prerequisite; this contract needs two actors and durable storage.
+vi.mock("node:os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:os")>()),
+  availableParallelism: () => 32,
+}));
 
 const STALE_UNENDED_SUBAGENT_RUN_MS = 2 * 60 * 60 * 1_000;
 
@@ -35,11 +44,104 @@ afterAll(async () => {
   });
 });
 
-beforeEach(() => {
-  resetSubagentRegistryForTests();
+beforeEach(async () => {
+  await resetSubagentRegistryForTests();
 });
 
 describe("buildSubagentList", () => {
+  it("enriches mixed children from their captured actors and recorded durable owners", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const authority = { assertCurrent() {} };
+      const actors = await Promise.all(
+        ["main", "research"].map((agentId) =>
+          captureOpenClawAgentDatabaseExecution({
+            kind: "ephemeral",
+            agentId,
+            env: state.env,
+            authority,
+          }),
+        ),
+      );
+      const now = Date.now();
+      const runs: SubagentRunRecord[] = [];
+      try {
+        for (const actor of actors) {
+          if (!actor) {
+            throw new Error("Expected test-owned incognito actor");
+          }
+          for (const incognito of [false, true]) {
+            const childSessionKey = incognito
+              ? `agent:${actor.agentId}:subagent:incognito-list`
+              : "global";
+            const runId = `${actor.agentId}-${incognito ? "private" : "durable"}`;
+            const entry: SessionEntry = {
+              sessionId: runId,
+              lifecycleRevision: runId,
+              updatedAt: now,
+              model: `openai/${runId}`,
+              ...(incognito ? { incognito: true } : {}),
+            };
+            if (incognito) {
+              await actor.sessions.create(authority, { sessionKey: childSessionKey, entry });
+            } else {
+              await replaceSessionEntry(
+                { agentId: actor.agentId, sessionKey: childSessionKey },
+                entry,
+              );
+            }
+            runs.push({
+              runId,
+              childSessionKey,
+              childAgentId: actor.agentId,
+              requesterSessionKey: "agent:main:main",
+              requesterDisplayKey: "main",
+              task: runId,
+              cleanup: "keep",
+              createdAt: now,
+              execution: { status: "running", startedAt: now },
+            });
+          }
+        }
+        runs.push({
+          ...runs[0]!,
+          runId: "missing-private",
+          childAgentId: "missing",
+          childSessionKey: "agent:missing:subagent:incognito-list",
+          model: "openai/fallback",
+        });
+        const actor = actors[0]!;
+        if (!actor) {
+          throw new Error("Expected the main actor");
+        }
+        const list = await withIncognitoSessionBinding({ actor }, () =>
+          buildSubagentList({ cfg: {}, runs, recentMinutes: 30, readSnapshot: new Map() }),
+        );
+        expect(new Map(list.active.map((entry) => [entry.runId, entry.model]))).toEqual(
+          new Map([
+            ["main-durable", "openai/main-durable"],
+            ["main-private", "openai/main-private"],
+            ["research-durable", "openai/research-durable"],
+            ["research-private", "openai/research-private"],
+            ["missing-private", "openai/fallback"],
+          ]),
+        );
+        expect(captureOpenClawAgentDatabaseExecution.listIncognito(state.env)).toHaveLength(2);
+        await actor.close();
+        await expect(
+          withIncognitoSessionBinding({ actor }, () =>
+            buildSubagentList({ cfg: {}, runs, recentMinutes: 30, readSnapshot: new Map() }),
+          ),
+        ).rejects.toThrow();
+      } finally {
+        await Promise.all(
+          actors.map(async (actor) => {
+            await actor?.close();
+          }),
+        );
+      }
+    });
+  });
+
   it("reads fresh active and recent metadata from each visible child's store", async () => {
     await withOpenClawTestState({ label: "subagent-list-selection" }, async (state) => {
       const cfg: OpenClawConfig = {
@@ -51,9 +153,12 @@ describe("buildSubagentList", () => {
         { agentId: "main", name: "recent", ended: true },
         { agentId: "research", name: "other-store", ended: false },
         { agentId: "research", name: "missing", ended: false },
-      ].map(({ agentId, name, ended }, index): SubagentRunRecord => ({
+        { agentId: "main", name: "main-global", ended: false, raw: true },
+        { agentId: "research", name: "research-global", ended: false, raw: true },
+      ].map(({ agentId, name, ended, raw }, index): SubagentRunRecord => ({
         runId: `run-${name}`,
-        childSessionKey: `agent:${agentId}:subagent:${name}`,
+        childSessionKey: raw ? "global" : `agent:${agentId}:subagent:${name}`,
+        childAgentId: raw ? agentId : undefined,
         requesterSessionKey: "agent:main:main",
         requesterDisplayKey: "main",
         task: name,
@@ -64,9 +169,9 @@ describe("buildSubagentList", () => {
           ? { status: "terminal", endedAt: now - 100, outcome: { status: "ok" } }
           : { status: "running", startedAt: now - 1000 - index },
       }));
-      for (const run of runs.slice(0, 3)) {
+      for (const run of runs.filter((entry) => entry.task !== "missing")) {
         await replaceSessionEntry(
-          { sessionKey: run.childSessionKey },
+          { sessionKey: run.childSessionKey, agentId: run.childAgentId },
           {
             sessionId: run.runId,
             updatedAt: now,
@@ -82,6 +187,8 @@ describe("buildSubagentList", () => {
           { sessionKey: runs[0]!.childSessionKey, model: "openai/saved-active" },
           { sessionKey: runs[2]!.childSessionKey, model: "openai/saved-other-store" },
           { sessionKey: runs[3]!.childSessionKey, model: "openai/run-fallback" },
+          { sessionKey: "global", model: "openai/saved-main-global" },
+          { sessionKey: "global", model: "openai/saved-research-global" },
         ],
       );
       expect((await list()).recent).toMatchObject([{ model: "openai/saved-recent" }]);
@@ -90,6 +197,37 @@ describe("buildSubagentList", () => {
         { sessionId: runs[0]!.runId, updatedAt: now + 1, model: "openai/replaced" },
       );
       expect((await list()).active[0]?.model).toBe("openai/replaced");
+    });
+  });
+
+  it("reads a raw child's metadata from its recorded owner in a custom store", async () => {
+    await withOpenClawTestState({ label: "subagent-list-custom-store" }, async (state) => {
+      const storePath = state.statePath("custom/sessions.sqlite");
+      const now = Date.now();
+      const run: SubagentRunRecord = {
+        runId: "research-global",
+        childSessionKey: "global",
+        childAgentId: "research",
+        requesterSessionKey: "agent:research:main",
+        requesterDisplayKey: "research",
+        task: "Read the custom store",
+        cleanup: "keep",
+        createdAt: now,
+        execution: { status: "running", startedAt: now },
+      };
+      await replaceSessionEntry(
+        { agentId: "research", storePath, sessionKey: "global" },
+        { sessionId: "research-global", updatedAt: now, model: "openai/research-model" },
+      );
+      const list = await buildSubagentList({
+        cfg: { session: { store: storePath } },
+        runs: [run],
+        recentMinutes: 30,
+        readSnapshot: new Map(),
+      });
+      expect(list.active).toMatchObject([
+        { runId: "research-global", sessionKey: "global", model: "openai/research-model" },
+      ]);
     });
   });
 
@@ -107,7 +245,7 @@ describe("buildSubagentList", () => {
       execution: { status: "terminal", endedAt: now - 3_500_000, outcome: { status: "ok" } },
       delivery: { status: "pending" },
     };
-    addSubagentRunForTests(parent);
+    await addSubagentRunForTests(parent);
     const list = () => buildSubagentList({ cfg: {}, runs: [parent], recentMinutes: 30 });
     expect((await list()).active[0]).toMatchObject({
       status: "waiting for external continuation",
@@ -125,7 +263,7 @@ describe("buildSubagentList", () => {
       execution: { status: "running", startedAt: now },
       expectsCompletionMessage: true,
     };
-    addSubagentRunForTests(child);
+    await addSubagentRunForTests(child);
     expect((await list()).active[0]?.execution).toEqual({
       state: "waiting",
       wait: {
@@ -134,14 +272,14 @@ describe("buildSubagentList", () => {
         dependencies: [{ runId: child.runId, sessionKey: child.childSessionKey }],
       },
     });
-    addSubagentRunForTests({ ...child, expectsCompletionMessage: false });
+    await addSubagentRunForTests({ ...child, expectsCompletionMessage: false });
     expect((await list()).active[0]).toMatchObject({
       status: "waiting for external continuation",
       execution: { state: "waiting", wait: { kind: "external" } },
     });
-    resetSubagentRegistryForTests();
+    await resetSubagentRegistryForTests();
     const killed = { ...parent, endedReason: SUBAGENT_ENDED_REASON_KILLED };
-    addSubagentRunForTests(killed);
+    await addSubagentRunForTests(killed);
     expect(
       (await buildSubagentList({ cfg: {}, runs: [killed], recentMinutes: 30 })).active,
     ).toEqual([]);
@@ -187,7 +325,7 @@ describe("buildSubagentList", () => {
           createdAt: Date.now(),
           execution: { status: "queued" },
         } satisfies SubagentRunRecord;
-        addSubagentRunForTests(run);
+        await addSubagentRunForTests(run);
 
         const parse = vi.spyOn(JSON, "parse");
         try {
@@ -216,7 +354,7 @@ describe("buildSubagentList", () => {
           parse.mockRestore();
         }
       } finally {
-        resetSubagentRegistryForTests();
+        await resetSubagentRegistryForTests();
         await cleanupSessionStateForTest({ stateDir });
         await fs.rm(stateDir, { recursive: true, force: true });
       }
@@ -234,7 +372,7 @@ describe("buildSubagentList", () => {
       createdAt: 1000,
       execution: { status: "running", startedAt: 1000 },
     } satisfies SubagentRunRecord;
-    addSubagentRunForTests(run);
+    await addSubagentRunForTests(run);
     const list = await buildSubagentList({
       cfg: {},
       runs: [run],
@@ -259,7 +397,7 @@ describe("buildSubagentList", () => {
       createdAt: 1000,
       execution: { status: "running", startedAt: 1000 },
     } satisfies SubagentRunRecord;
-    addSubagentRunForTests(run);
+    await addSubagentRunForTests(run);
 
     const list = await buildSubagentList({
       cfg: {},
@@ -288,12 +426,59 @@ describe("buildSubagentList", () => {
         outcome: { status: "error", error: "provider rejected the request" },
       },
     } satisfies SubagentRunRecord;
-    addSubagentRunForTests(run);
+    await addSubagentRunForTests(run);
 
     const list = await buildSubagentList({ cfg: {}, runs: [run], recentMinutes: 30 });
 
     expect(list.recent[0]?.status).toBe("failed");
     expect(list.recent[0]?.line).toContain(" failed");
+  });
+
+  it("shows finished ancestors as done while suspended child results remain available", async () => {
+    const now = Date.now();
+    const parent = {
+      runId: "finished-parent",
+      childSessionKey: "agent:main:subagent:finished-parent",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "orchestrate child workers",
+      cleanup: "keep",
+      createdAt: now - 120_000,
+      execution: { status: "terminal", endedAt: now - 60_000, outcome: { status: "ok" } },
+    } satisfies SubagentRunRecord;
+    const child = {
+      ...parent,
+      runId: "suspended-child",
+      childSessionKey: "agent:main:subagent:suspended-child",
+      requesterSessionKey: parent.childSessionKey,
+      delivery: { status: "suspended", suspendedAt: now, suspendedReason: "expiry" },
+    } satisfies SubagentRunRecord;
+    await addSubagentRunForTests(parent);
+    await addSubagentRunForTests(child);
+    const list = () => buildSubagentList({ cfg: {}, runs: [parent, child], recentMinutes: 30 });
+
+    const finished = await list();
+    expect(finished.active).toEqual([]);
+    expect(finished.recent).toMatchObject([
+      { runId: parent.runId, status: "done", pendingDescendants: 0 },
+      { runId: child.runId, status: "done", deliveryStatus: "suspended" },
+    ]);
+    expect(finished.text).not.toContain("waiting on");
+
+    await addSubagentRunForTests({
+      ...parent,
+      runId: "live-grandchild",
+      childSessionKey: "agent:main:subagent:live-grandchild",
+      requesterSessionKey: child.childSessionKey,
+      createdAt: now,
+      execution: { status: "running", startedAt: now },
+    });
+    const active = await list();
+    expect(active.active).toMatchObject([
+      { runId: parent.runId, status: "active (waiting on 1 child)", pendingDescendants: 1 },
+      { runId: child.runId, status: "active (waiting on 1 child)", pendingDescendants: 1 },
+    ]);
+    expect(active.recent).toEqual([]);
   });
 
   it.each([
@@ -351,9 +536,9 @@ describe("buildSubagentList", () => {
               },
         ...(endedReason ? { endedReason } : {}),
       } satisfies SubagentRunRecord;
-      addSubagentRunForTests(parentRun);
+      await addSubagentRunForTests(parentRun);
       for (let childIndex = 0; childIndex < pendingChildren; childIndex += 1) {
-        addSubagentRunForTests({
+        await addSubagentRunForTests({
           runId: `${parentRun.runId}-child-${childIndex}`,
           childSessionKey: `${parentRun.childSessionKey}:subagent:child-${childIndex}`,
           requesterSessionKey: parentRun.childSessionKey,
@@ -400,8 +585,8 @@ describe("buildSubagentList", () => {
       createdAt: now - 120_000,
       execution: { status: "running", startedAt: now - 120_000 },
     } satisfies SubagentRunRecord;
-    addSubagentRunForTests(parentRun);
-    addSubagentRunForTests({
+    await addSubagentRunForTests(parentRun);
+    await addSubagentRunForTests({
       runId: "run-old-ended-child-summary",
       childSessionKey: `${parentRun.childSessionKey}:subagent:old-ended-child`,
       requesterSessionKey: parentRun.childSessionKey,
@@ -439,7 +624,7 @@ describe("buildSubagentList", () => {
         startedAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
       },
     } satisfies SubagentRunRecord;
-    addSubagentRunForTests(staleRun);
+    await addSubagentRunForTests(staleRun);
 
     const list = await buildSubagentList({
       cfg: {},
@@ -472,8 +657,8 @@ describe("buildSubagentList", () => {
         outcome: { status: "ok" },
       },
     } satisfies SubagentRunRecord;
-    addSubagentRunForTests(parentRun);
-    addSubagentRunForTests({
+    await addSubagentRunForTests(parentRun);
+    await addSubagentRunForTests({
       runId: "run-stale-child",
       childSessionKey: `${parentRun.childSessionKey}:subagent:stale-child`,
       requesterSessionKey: parentRun.childSessionKey,

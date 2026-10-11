@@ -1,5 +1,5 @@
 // Covers runtime detection and version support checks.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import {
   assertSupportedRuntime,
   isSupportedBunVersion,
@@ -12,9 +12,14 @@ const state = vi.hoisted(() => ({
   version: "24.16.0",
   error: vi.fn(),
   run: vi.fn(),
-  drain: vi.fn(),
   diagnosticLoads: 0,
   lossless: true,
+  initializeSqlite: vi.fn(),
+}));
+
+vi.mock("./bun-sqlite-library.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./bun-sqlite-library.js")>()),
+  initializeSqliteRuntimeCapabilities: state.initializeSqlite,
 }));
 
 vi.mock("../../node-sqlite.mjs", async (importOriginal) => {
@@ -36,9 +41,6 @@ vi.mock("node:process", async (importOriginal) => {
         return { ...actual.versions, node: state.version, bun: undefined };
       },
       stderr: { write: state.error },
-      exit: (code: number) => {
-        throw new Error(`runtime exit ${code}`);
-      },
     },
   };
 });
@@ -47,7 +49,6 @@ vi.mock("../logging/json-console-line.js", async (importOriginal) => {
   return await importOriginal<typeof import("../logging/json-console-line.js")>();
 });
 vi.mock("../worker/worker-deploy-runtime.js", () => ({}));
-vi.mock("../process/output-drain.js", () => ({ drainProcessOutput: state.drain }));
 vi.mock("../worker/worker-deploy-browser-runtime.js", () => ({ default: {} }));
 vi.mock("../worker/worker-process.js", () => ({ runWorkerProcess: state.run }));
 
@@ -62,6 +63,13 @@ function createExitingRuntime() {
 }
 
 describe("runtime-guard", () => {
+  it("validates ordinary CLI runtimes without initializing SQLite worker policy", async () => {
+    state.initializeSqlite.mockClear();
+    state.version = "24.16.0";
+    state.lossless = true;
+    await assertSupportedRuntime(createExitingRuntime());
+    expect(state.initializeSqlite).not.toHaveBeenCalled();
+  });
   it("warns once while admitting capable Node 22 diagnostics", async () => {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     const details = {
@@ -439,7 +447,7 @@ describe("runtime failure diagnostics", () => {
           hasNodeSqlite: false,
           sqliteVersion: null,
         }),
-      ).rejects.toThrow("runtime exit 1");
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
       const output = String(state.error.mock.lastCall?.[0]);
       expect(JSON.parse(output)).toMatchObject({
         level: "error",
@@ -453,15 +461,19 @@ describe("runtime failure diagnostics", () => {
 });
 
 describe("sealed worker runtime", () => {
+  let destroyStdin: MockInstance<typeof process.stdin.destroy>;
+  let disconnect: MockInstance<NonNullable<typeof process.disconnect>>;
   const originalArgv = process.argv;
   const originalExitCode = process.exitCode;
   beforeEach(() => {
     vi.resetModules();
     state.error.mockClear();
     state.run.mockClear();
-    state.drain.mockClear();
     process.argv = [process.execPath, "worker.mjs"];
     process.exitCode = undefined;
+    // The executable owns stdin and IPC, not the test runner's real transports.
+    destroyStdin = vi.spyOn(process.stdin, "destroy").mockReturnThis();
+    disconnect = vi.spyOn(process, "disconnect").mockImplementation(() => {});
     vi.stubEnv("OPENCLAW_DEBUG", undefined);
   });
   afterEach(() => {
@@ -481,8 +493,9 @@ describe("sealed worker runtime", () => {
       await expect(import("../worker/worker-deploy-entry.js")).resolves.toBeDefined();
 
       expect(process.exitCode).toBe(1);
-      expect(stderr).toHaveBeenCalledExactlyOnceWith("runtime exit 1\n");
-      expect(state.drain).toHaveBeenCalledExactlyOnceWith(expect.any(Function));
+      expect(stderr).toHaveBeenCalledExactlyOnceWith("exit 1\n");
+      expect(destroyStdin).toHaveBeenCalledOnce();
+      expect(disconnect).toHaveBeenCalledOnce();
       expect(state.run).not.toHaveBeenCalled();
       expect(state.error).toHaveBeenCalledWith(expect.stringContaining("Upgrade Node"));
     },
@@ -493,7 +506,8 @@ describe("sealed worker runtime", () => {
     state.lossless = true;
     await import("../worker/worker-deploy-entry.js");
     expect(process.exitCode).toBeUndefined();
-    expect(state.drain).not.toHaveBeenCalled();
+    expect(destroyStdin).toHaveBeenCalledOnce();
+    expect(disconnect).toHaveBeenCalledOnce();
     expect(state.run).toHaveBeenCalledOnce();
     expect(state.error).not.toHaveBeenCalled();
   });

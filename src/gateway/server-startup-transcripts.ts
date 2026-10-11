@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { findCapabilityProviderEntry } from "../plugins/provider-registry-shared.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { prepareTranscriptCaptureDisable } from "../transcripts/capture-startup.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
 import {
   schedulePostReadySidecarTask,
@@ -10,9 +11,7 @@ import {
 } from "./server-startup-sidecar-scheduler.js";
 import type { GatewayStartupTrace } from "./server-startup-trace.js";
 
-type TranscriptCapturePolicy = ReturnType<
-  typeof import("../transcripts/capture-operations.js").prepareTranscriptCaptureDisable
->;
+type TranscriptCapturePolicy = ReturnType<typeof prepareTranscriptCaptureDisable>;
 
 export function scheduleTranscriptsSidecar(params: {
   cfg: OpenClawConfig;
@@ -68,25 +67,18 @@ export function scheduleTranscriptsSidecar(params: {
   return {
     stop: async () => {
       stopped = true;
-      const results = await Promise.allSettled([
-        sidecar?.stop(),
-        (async () => {
-          if (!shutdownCapturePolicy) {
-            const { prepareTranscriptCaptureDisable } =
-              await import("../transcripts/capture-operations.js");
-            shutdownCapturePolicy = prepareTranscriptCaptureDisable(stateDir);
-            // Keep admission fenced while metadata still owns the closing Gateway.
-            if (params.lifetimeSignal.aborted) {
-              shutdownCapturePolicy.resume();
-            } else {
-              params.lifetimeSignal.addEventListener("abort", shutdownCapturePolicy.resume, {
-                once: true,
-              });
-            }
-          }
-          await shutdownCapturePolicy.drain();
-        })(),
-      ]);
+      if (!shutdownCapturePolicy) {
+        shutdownCapturePolicy = prepareTranscriptCaptureDisable(stateDir);
+        // Keep admission fenced while metadata still owns the closing Gateway.
+        if (params.lifetimeSignal.aborted) {
+          shutdownCapturePolicy.resume();
+        } else {
+          params.lifetimeSignal.addEventListener("abort", shutdownCapturePolicy.resume, {
+            once: true,
+          });
+        }
+      }
+      const results = await Promise.allSettled([sidecar?.stop(), shutdownCapturePolicy.drain()]);
       const failures = results.flatMap((result) =>
         result.status === "rejected" ? [result.reason] : [],
       );
@@ -116,8 +108,6 @@ export function scheduleTranscriptsSidecar(params: {
         drain: () =>
           withPluginRuntimeRegistryScope(previousRegistry, async () => {
             if (nextConfig.transcripts?.enabled === false) {
-              const { prepareTranscriptCaptureDisable } =
-                await import("../transcripts/capture-operations.js");
               capturePolicy = prepareTranscriptCaptureDisable(stateDir);
               await capturePolicy.drain();
             }

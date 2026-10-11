@@ -41,6 +41,7 @@ import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-re
 import { shippedNativeSessionCatalogs } from "./native-session-catalog-config.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
+import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -70,25 +71,6 @@ export type AuthorizedDreamingSidecar = {
   selectedMemoryPluginId: string;
 };
 
-function resolveDreamingSidecarEngineId(params: {
-  cfg: OpenClawConfig;
-  memorySlot: string | null | undefined;
-}): string | null {
-  const normalizedMemorySlot = normalizeLowercaseStringOrEmpty(params.memorySlot);
-  if (
-    !normalizedMemorySlot ||
-    normalizedMemorySlot === "none" ||
-    normalizedMemorySlot === DEFAULT_MEMORY_DREAMING_PLUGIN_ID
-  ) {
-    return null;
-  }
-  const dreamingConfig = resolveMemoryDreamingConfig({
-    pluginConfig: resolveMemoryDreamingPluginConfig(params.cfg),
-    cfg: params.cfg,
-  });
-  return dreamingConfig.enabled ? DEFAULT_MEMORY_DREAMING_PLUGIN_ID : null;
-}
-
 export function resolveAuthorizedDreamingSidecar(params: {
   cfg: OpenClawConfig;
   normalized: NormalizedPluginsConfig;
@@ -96,17 +78,26 @@ export function resolveAuthorizedDreamingSidecar(params: {
   manifestRegistry: PluginManifestRegistry;
   memorySlot: string | null | undefined;
 }): AuthorizedDreamingSidecar | null {
-  const engineId = resolveDreamingSidecarEngineId({
-    cfg: params.cfg,
-    memorySlot: params.memorySlot,
-  });
-  if (!engineId || !params.normalized.enabled || !params.activationSource.plugins.enabled) {
-    return null;
-  }
   const selectedMemoryPluginId = normalizeLowercaseStringOrEmpty(params.memorySlot);
-  if (!selectedMemoryPluginId || selectedMemoryPluginId === engineId) {
+  if (
+    !selectedMemoryPluginId ||
+    selectedMemoryPluginId === "none" ||
+    selectedMemoryPluginId === DEFAULT_MEMORY_DREAMING_PLUGIN_ID
+  ) {
     return null;
   }
+  const dreamingConfig = resolveMemoryDreamingConfig({
+    pluginConfig: resolveMemoryDreamingPluginConfig(params.cfg),
+    cfg: params.cfg,
+  });
+  if (
+    !dreamingConfig.enabled ||
+    !params.normalized.enabled ||
+    !params.activationSource.plugins.enabled
+  ) {
+    return null;
+  }
+  const engineId = DEFAULT_MEMORY_DREAMING_PLUGIN_ID;
   if (
     params.normalized.deny.includes(engineId) ||
     params.activationSource.plugins.deny.includes(engineId) ||
@@ -277,39 +268,23 @@ function createManifestPluginRecord(params: {
 }): PluginRecord {
   const { candidate, manifestRecord } = params;
   const record = createPluginRecord({
-    id: manifestRecord.id,
+    ...manifestRecord,
     nativeSessionCatalog:
       manifestRecord.setup?.nativeSessionCatalog ??
       shippedNativeSessionCatalogs.find(({ pluginId }) => pluginId === manifestRecord.id),
-    name: manifestRecord.name ?? manifestRecord.id,
-    description: manifestRecord.description,
-    packageVersion: manifestRecord.packageVersion,
-    version: manifestRecord.version,
     builtWithOpenClawVersion: normalizeOptionalString(
       candidate.packageManifest?.build?.openclawVersion,
     ),
-    packageName: manifestRecord.packageName,
-    format: manifestRecord.format,
-    bundleFormat: manifestRecord.bundleFormat,
-    bundleCapabilities: manifestRecord.bundleCapabilities,
     source: candidate.source,
     rootDir: candidate.rootDir,
     origin: candidate.origin,
     workspaceDir: candidate.workspaceDir,
-    trustedOfficialInstall: manifestRecord.trustedOfficialInstall,
-    trust: manifestRecord.trust,
     enabled: params.enabled,
     compat: collectPluginManifestCompatCodes(manifestRecord),
     activationState: params.activationState,
-    syntheticAuthRefs: manifestRecord.syntheticAuthRefs,
     channelIds: manifestRecord.channels,
     providerIds: manifestRecord.providers,
     configSchema: Boolean(manifestRecord.configSchema),
-    contracts: manifestRecord.contracts,
-    dashboard: manifestRecord.dashboard,
-    controlUi: manifestRecord.controlUi,
-    uiCapabilities: manifestRecord.uiCapabilities,
-    mcpServers: manifestRecord.mcpServers,
   });
   if (!params.shouldLoadModules) {
     record.cliBackendIds = [
@@ -406,7 +381,7 @@ export function preparePluginLoadRecord(params: {
   record.configJsonSchema = manifestRecord.configSchema;
   // Manifest ownership survives rollback of executable registrations.
   record.commandAliases = manifestRecord.commandAliases;
-  return { pluginId, policyId, isDreamingSidecar, activationState, enableState, entry, record };
+  return { pluginId, isDreamingSidecar, activationState, enableState, entry, record };
 }
 
 export function maybeThrowOnPluginLoadError(
@@ -444,6 +419,7 @@ export function activatePluginRegistry(
   runtimeSubagentMode: PluginRuntimeSubagentMode,
   workspaceDir?: string,
   previousRegistry?: PluginRegistry,
+  trackActivationCleanup?: (completion: Promise<void>) => void,
 ): void {
   const activeSnapshot = captureActivePluginRegistrySnapshot();
   const retainedRegistry = previousRegistry ?? activeSnapshot.activeRegistry;
@@ -464,14 +440,26 @@ export function activatePluginRegistry(
     if (!isCurrentStage()) {
       throw new Error("Plugin registry activation was superseded");
     }
+    const activationAuthority = capturePluginLifecycleAuthority(registry);
     initializeGlobalHookRunner(registry);
-    activateContextEngineRegistrations(registry);
+    void activateContextEngineRegistrations(registry, {
+      trackCleanup: (completion) => trackActivationCleanup?.(completion),
+      assertCurrent: () => {
+        // A peer Gateway can change the process projection while this owner stays live.
+        if (stagedVersion === undefined || !activationAuthority?.()) {
+          throw new Error("Plugin registry activation was superseded");
+        }
+      },
+    });
     commitStagedPluginRegistry(retainedRegistry, registry);
     if (!isCurrentStage()) {
       throw new Error("Plugin registry activation was superseded");
     }
   } catch (error) {
-    if (isCurrentStage()) {
+    const rollbackCurrentStage = isCurrentStage();
+    // Cached registry rollback can keep its epoch; this failed attempt still loses authority.
+    stagedVersion = undefined;
+    if (rollbackCurrentStage) {
       const rollbackVersion = rollbackStagedPluginRegistry(activeSnapshot, retainedRegistry);
       if (
         getActivePluginRegistry() === activeSnapshot.activeRegistry &&

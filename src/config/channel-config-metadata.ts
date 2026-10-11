@@ -200,10 +200,10 @@ function prepareChannelConfigSchema(
     if (schema !== undefined) {
       assertChannelConfigSchemaTraversalDepth(schema);
     }
-    if (origin === "bundled") {
-      return widenOfficialExternalChannelSecretSchema({ channelId, schema });
-    }
-    const coreOwnedSchema = schema === undefined ? schema : normalizeCoreOwnedChannelSchema(schema);
+    const coreOwnedSchema =
+      origin === "bundled" || schema === undefined
+        ? schema
+        : normalizeCoreOwnedChannelSchema(schema);
     return widenOfficialExternalChannelSecretSchema({ channelId, schema: coreOwnedSchema });
   } catch (error) {
     if (origin === "bundled") {

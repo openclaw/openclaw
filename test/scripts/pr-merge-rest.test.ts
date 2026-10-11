@@ -14,6 +14,283 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     return f;
   }
 
+  it.each([false, true])(
+    "reconciles an async UUID without another PUT (REST commit omitted=%s)",
+    (omitCommit) => {
+      const f = restFixture();
+      f.save({
+        ...f.state(),
+        asyncMergeStatus: "pending",
+        restMergeCommit: omitCommit ? "missing" : "",
+      });
+      const submitted = f.run();
+      expect(submitted.status, submitted.output).toBe(0);
+      expect(submitted.output).toContain("ASYNC MERGE PENDING");
+      expect(f.record()).toMatchObject({
+        phase: "intent",
+        accepted: true,
+        asyncMerge: {
+          uuid: "630b9d5e-3f2a-4f7e-8b0c-2d5f9a8c1e42",
+          status: "pending",
+        },
+      });
+      expect(f.state().asyncPolls).toBe(1);
+      const asyncCalls = f
+        .state()
+        .calls.filter((call) =>
+          call.some((arg) => arg.startsWith("repos/fixture/repo/pulls/123/merge-async")),
+        );
+      expect(asyncCalls).toHaveLength(2);
+      for (const call of asyncCalls) {
+        expect(call.slice(1, 4)).toEqual(["api", "-H", "X-Octopool-Require: merge-async-v1"]);
+      }
+      expect(f.state().posts).toBe(0);
+      expect(existsSync(f.worktree)).toBe(true);
+
+      const waiting = f.run();
+      expect(waiting.status, waiting.output).toBe(0);
+      expect(f.state().asyncPolls).toBe(2);
+      const landed = f.advance("after\n", "stable\n");
+      f.save({
+        ...f.state(),
+        asyncMergeStatus: "merged",
+        pr: { ...f.state().pr, state: "MERGED", mergeCommit: { oid: landed } },
+      });
+      const completed = f.run();
+      expect(completed.status, completed.output).toBe(0);
+      expect(f.record()).toMatchObject({
+        phase: "merged",
+        landed,
+        asyncMerge: { status: "merged", sha: landed },
+      });
+      expect(f.state().mutations).toBe(1);
+      expect(f.state().posts).toBe(0);
+      expect(f.state().graphqlMergePayloads).toEqual([]);
+      expect(f.state().observationReads > 0).toBe(omitCommit);
+    },
+  );
+
+  it.each(["null", "empty", "malformed"])(
+    "rejects a present %s REST merge commit instead of hiding it with GraphQL",
+    (restMergeCommit) => {
+      const f = restFixture();
+      f.save({ ...f.state(), asyncMergeStatus: "pending" });
+      expect(f.run().status).toBe(0);
+      const landed = f.advance("after\n", "stable\n");
+      f.save({
+        ...f.state(),
+        restMergeCommit,
+        asyncMergeStatus: "merged",
+        pr: { ...f.state().pr, state: "MERGED", mergeCommit: { oid: landed } },
+      });
+
+      const run = f.run();
+
+      expect(run.status, run.output).toBe(1);
+      expect(run.output).toContain("merged PR has no valid merge commit");
+      expect(f.record()).toMatchObject({ phase: "intent", accepted: true });
+      expect(f.state().observationReads).toBe(0);
+      expect(f.state().mutations).toBe(1);
+      expect(f.state().posts).toBe(0);
+      expect(existsSync(f.worktree)).toBe(true);
+    },
+  );
+
+  it.each(["unavailable", "head-changed"])(
+    "keeps an accepted merge unresolved when the required GraphQL receipt is %s",
+    (fault) => {
+      const f = restFixture();
+      f.save({ ...f.state(), asyncMergeStatus: "pending" });
+      expect(f.run().status).toBe(0);
+      const landed = f.advance("after\n", "stable\n");
+      f.save({
+        ...f.state(),
+        restMergeCommit: "missing",
+        asyncMergeStatus: "merged",
+        unavailable: fault === "unavailable",
+        observations: fault === "head-changed" ? [{ pr: { headRefOid: f.base } }] : [],
+        pr: { ...f.state().pr, state: "MERGED", mergeCommit: { oid: landed } },
+      });
+
+      const run = f.run();
+
+      expect(run.status, run.output).toBe(1);
+      expect(f.record()).toMatchObject({ phase: "intent", accepted: true });
+      expect(f.state().mutations).toBe(1);
+      expect(f.state().posts).toBe(0);
+      expect(existsSync(f.worktree)).toBe(true);
+    },
+  );
+
+  it.each(["failed", "enqueued", "expired", "unknown"])(
+    "keeps async %s results from triggering resubmission or cleanup",
+    (asyncMergeStatus) => {
+      const f = restFixture();
+      f.save({ ...f.state(), asyncMergeStatus });
+      const run = f.run();
+      expect(run.status, run.output).toBe(1);
+      expect(f.record()).toMatchObject({ phase: "intent", accepted: true });
+      expect(f.state().posts).toBe(0);
+      expect(existsSync(f.worktree)).toBe(true);
+      f.recover();
+      expect(f.run().status).toBe(1);
+      expect(f.state().mutations).toBe(1);
+      if (asyncMergeStatus !== "failed") {
+        f.recover();
+        const previous = f.git(["rev-parse", outcomeRef]);
+        expect(f.run(false, f.repo, "squash", previous).status).toBe(1);
+        expect(f.git(["rev-parse", outcomeRef])).toBe(previous);
+        expect(f.state().mutations).toBe(1);
+      }
+    },
+  );
+
+  it("retains complete async captures when an operator authorizes recovery", () => {
+    const f = restFixture();
+    f.save({ ...f.state(), mode: "unapplied" });
+    expect(f.run().status).toBe(1);
+    const previous = f.git(["rev-parse", outcomeRef]);
+    f.recover();
+    // Recovery starts with GraphQL; exhausted quota selects REST before dispatch.
+    f.save({ ...f.state(), mode: "success", asyncMergeStatus: "pending", quotaAt: "checks" });
+
+    const run = f.run(false, f.repo, "squash", previous);
+
+    expect(run.status, run.output).toBe(0);
+    expect(f.record()).toMatchObject({ accepted: true, asyncMerge: { status: "pending" } });
+    expect(f.captures()).toHaveLength(2);
+    for (const [name, contents] of f.captures()) {
+      expect(f.git(["rev-parse", `${outcomeRef}:${name}`])).toBe(
+        f.git(["hash-object", "--stdin"], contents),
+      );
+    }
+    expect(f.run().status).toBe(0);
+    expect(f.state().mutations).toBe(2);
+    expect(f.state().graphqlMergePayloads).toEqual([]);
+  });
+
+  it("recovers an authoritatively failed async merge and retains its ancestry", () => {
+    const f = restFixture();
+    f.save({ ...f.state(), asyncMergeStatus: "failed" });
+    expect(f.run().status).toBe(1);
+    const previous = f.git(["rev-parse", outcomeRef]);
+    const original = f.record();
+    expect(original).toMatchObject({ accepted: true, asyncMerge: { status: "failed", sha: null } });
+    expect(f.recover()).toBe(true);
+
+    const run = f.run(false, f.repo, "squash", previous);
+
+    expect(run.status, run.output).toBe(0);
+    expect(f.state().asyncPolls).toBe(2);
+    expect(f.state().mutations).toBe(2);
+    expect(f.record()).toMatchObject({
+      phase: expect.stringMatching(/^(commented|complete)$/u),
+      head: f.head,
+      method: "squash",
+      recovery: {
+        outcome: previous,
+        attempt: original.attempt,
+        asyncFailure: original.asyncMerge,
+      },
+    });
+    expect(JSON.parse(f.git(["show", `${previous}:outcome.json`]))).toEqual(original);
+    expect(f.git(["merge-base", "--is-ancestor", previous, outcomeRef])).toBe("");
+    expect(f.run().status).toBe(0);
+    expect(f.state().mutations).toBe(2);
+  });
+
+  it.each(["pending", "enqueued", "expired", "unknown", "sha", "head", "closed", "checks"])(
+    "refuses async failure recovery after %s drift without consuming the intent",
+    (fault) => {
+      const f = restFixture();
+      f.save({ ...f.state(), asyncMergeStatus: "failed" });
+      expect(f.run().status).toBe(1);
+      const previous = f.git(["rev-parse", outcomeRef]);
+      expect(f.recover()).toBe(true);
+      f.save({
+        ...f.state(),
+        asyncMergeStatus: ["pending", "enqueued", "expired", "unknown"].includes(fault)
+          ? fault
+          : "failed",
+        asyncMergeFault: fault === "sha" ? "sha" : "",
+        gates: fault === "checks" ? "fail" : "pass",
+        pr: {
+          ...f.state().pr,
+          ...(fault === "head" ? { headRefOid: f.base } : {}),
+          ...(fault === "closed" ? { state: "CLOSED" } : {}),
+        },
+      });
+
+      const run = f.run(false, f.repo, "squash", previous);
+
+      expect(run.status, run.output).toBe(1);
+      if (!["head", "closed", "checks"].includes(fault)) {
+        expect(f.state().asyncPolls).toBe(2);
+      }
+      expect(f.state().mutations).toBe(1);
+      expect(f.git(["rev-parse", outcomeRef])).toBe(previous);
+    },
+  );
+
+  it.each(["uuid", "head", "conflict"])(
+    "preserves an uncertain async %s response without fallback",
+    (asyncMergeFault) => {
+      const f = restFixture();
+      f.save({ ...f.state(), asyncMergeStatus: "pending", asyncMergeFault });
+      const run = f.run();
+      expect(run.status, run.output).toBe(1);
+      expect(run.output).not.toContain("use GraphQL");
+      expect(f.state().mutations).toBe(1);
+      expect(f.state().posts).toBe(0);
+      f.recover();
+      expect(f.run().status).toBe(1);
+      expect(f.state().mutations).toBe(1);
+    },
+  );
+
+  it("still verifies the PR tree after the async result expires", () => {
+    const f = restFixture();
+    f.save({ ...f.state(), asyncMergeStatus: "pending" });
+    expect(f.run().status).toBe(0);
+    const landed = f.advance("after\n", "stable\n");
+    f.save({
+      ...f.state(),
+      asyncMergeStatus: "expired",
+      pr: { ...f.state().pr, state: "MERGED", mergeCommit: { oid: landed } },
+    });
+    const run = f.run();
+    expect(run.status, run.output).toBe(0);
+    expect(f.record()).toMatchObject({ phase: "merged", landed });
+    expect(f.state().mutations).toBe(1);
+  });
+
+  it("rejects an async commit that differs from the authoritative PR receipt", () => {
+    const f = restFixture();
+    f.save({ ...f.state(), asyncMergeStatus: "pending" });
+    expect(f.run().status).toBe(0);
+    const landed = f.advance("after\n", "stable\n");
+    f.save({
+      ...f.state(),
+      asyncMergeStatus: "merged",
+      asyncMergeFault: "sha",
+      pr: { ...f.state().pr, state: "MERGED", mergeCommit: { oid: landed } },
+    });
+    const run = f.run();
+    expect(run.status, run.output).toBe(1);
+    expect(run.output).toContain("async merge commit differs");
+    expect(f.record().phase).toBe("intent");
+    expect(f.state().posts).toBe(0);
+  });
+
+  it("refuses a stack before the single-PR async submission", () => {
+    const f = restFixture();
+    f.save({ ...f.state(), stack: { number: 7 } });
+    const run = f.run();
+    expect(run.status, run.output).toBe(1);
+    expect(run.output).toContain("stacked PRs require review");
+    expect(f.state().mutations).toBe(0);
+  });
+
   it("uses one pinned REST PUT without GraphQL reads when only the pooled viewer is blocked", () => {
     const f = restFixture();
     f.save({ ...f.state(), pooledMergeBlocked: true });
@@ -251,82 +528,72 @@ describePosix("native merge with exhausted GraphQL quota", () => {
       expect(f.git(["show", `${f.record().landed}:sibling.txt`])).toBe("advanced");
     },
   );
-  it("keeps the prepared squash message when GraphQL depletes during final stability verification", () => {
-    const credit = "Co-authored-by: Contributor <contributor@example.com>";
-    const f = restFixture(`Repair\n\n${credit}`);
-    f.save({
-      ...f.state(),
-      quotaAt: "observe",
-      quotaAfterObservations: 1,
-      restReadFailure: "core",
-      restReadFailuresRemaining: 1,
-    });
-
-    const run = f.run();
-
-    expect(run.status, run.output).toBe(0);
-    expect(f.record()).toMatchObject({ phase: "complete", transport: "rest", head: f.head });
-    expect(f.state().observationReads).toBe(1);
-    expect(f.state().mergeBody).toBe(`Fixture body\n\n${credit}\n`);
-    expect(f.state().restMergePayload).toMatchObject({ sha: f.head, merge_method: "squash" });
-    expect(f.state().mutations).toBe(1);
-  });
-
-  it("keeps the recomposed body when reads switch from GraphQL through REST and back", () => {
-    const credit = "Co-authored-by: Contributor <contributor@example.com>";
-    const f = restFixture(`Repair\n\n${credit}`);
-    f.save({
-      ...f.state(),
-      quotaAt: "observe",
-      quotaFailuresRemaining: 1,
-      restReadFailure: "core",
-      restReadFailureAtMainReads: [1, 6],
-    });
-
-    const run = f.run();
-
-    expect(run.status, run.output).toBe(0);
-    expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
-    expect(f.record()).not.toHaveProperty("transport");
-    expect(f.state().restReadFailureAtMainReads).toEqual([]);
-    expect(f.state().mergeBody).toBe(`Fixture body\n\n${credit}\n`);
-    expect(f.state().restMergePayload).toBeNull();
-    expect(f.state().mutations).toBe(1);
-  });
-
-  it.each(["merge", "rebase", "auto", "admin"])(
-    "rejects %s routing when GraphQL depletes only during final stability verification",
-    (route) => {
-      const f = restFixture();
-      const observationsBeforeFinal = route === "auto" ? 1 : 2;
+  it.each([false, true])(
+    "keeps the prepared body across transport fallback (round trip=%s)",
+    (roundTrip) => {
+      const credit = "Co-authored-by: Contributor <contributor@example.com>";
+      const f = restFixture(`Repair\n\n${credit}`);
       f.save({
         ...f.state(),
         quotaAt: "observe",
-        quotaAfterObservations: observationsBeforeFinal,
-        admin: route === "admin",
-        gates: route === "admin" ? "fail" : "pass",
-        restObservation: { gates: "pass" },
+        restReadFailure: "core",
+        ...(roundTrip
+          ? { quotaFailuresRemaining: 1, restReadFailureAtMainReads: [1, 6] }
+          : { quotaAfterObservations: 1, restReadFailuresRemaining: 1 }),
       });
-      if (route === "admin") {
-        const gates = join(f.worktree, ".local/gates.env");
-        writeFileSync(
-          gates,
-          readFileSync(gates, "utf8").replace("GATES_MODE=full", "GATES_MODE=remote_crabbox_aws"),
-        );
+      const run = f.run();
+      expect(run.status, run.output).toBe(0);
+      expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
+      expect(f.state().mergeBody).toBe(`Fixture body\n\n${credit}\n`);
+      expect(f.state().mutations).toBe(1);
+      if (roundTrip) {
+        expect(f.record()).not.toHaveProperty("transport");
+        expect(f.state().restReadFailureAtMainReads).toEqual([]);
+        expect(f.state().restMergePayload).toBeNull();
+      } else {
+        expect(f.record()).toMatchObject({ transport: "rest" });
+        expect(f.state().observationReads).toBe(1);
+        expect(f.state().restMergePayload).toMatchObject({ sha: f.head, merge_method: "squash" });
       }
-
-      const run = f.run(
-        route === "auto",
-        f.repo,
-        route === "merge" || route === "rebase" ? route : "squash",
-      );
-
-      expect(run.status, run.output).toBe(1);
-      expect(f.state().observationReads).toBe(observationsBeforeFinal);
-      expect(f.state().mutations).toBe(0);
-      expect(() => f.record()).toThrow();
     },
   );
+
+  it.each(
+    ["checks", "observe"].flatMap((quotaAt) =>
+      ["merge", "rebase", "auto", "admin"].map((route) => ({ quotaAt, route })),
+    ),
+  )("rejects $route routing when GraphQL depletes during $quotaAt", ({ route, quotaAt }) => {
+    const f = restFixture();
+    const observationsBeforeFinal = quotaAt === "checks" ? 0 : route === "auto" ? 1 : 2;
+    f.save({
+      ...f.state(),
+      quotaAt,
+      quotaAfterObservations: observationsBeforeFinal,
+      admin: route === "admin",
+      gates: route === "admin" ? "fail" : "pass",
+      ...(quotaAt === "observe" ? { restObservation: { gates: "pass" } } : {}),
+    });
+    if (route === "admin") {
+      const gates = join(f.worktree, ".local/gates.env");
+      writeFileSync(
+        gates,
+        readFileSync(gates, "utf8").replace("GATES_MODE=full", "GATES_MODE=remote_crabbox_aws"),
+      );
+    }
+
+    const run = f.run(
+      route === "auto",
+      f.repo,
+      route === "merge" || route === "rebase" ? route : "squash",
+    );
+
+    expect(run.status, run.output).toBe(1);
+    if (quotaAt === "observe") {
+      expect(f.state().observationReads).toBe(observationsBeforeFinal);
+    }
+    expect(f.state().mutations).toBe(0);
+    expect(() => f.record()).toThrow();
+  });
 
   it.each(["missing", "classic", "queue", "unsupported", "no-admin"])(
     "rejects %s branch policy before recording a REST merge intent",
@@ -420,148 +687,84 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     },
   );
 
-  it("accepts an app-bound required check alongside a successful same-name legacy status", () => {
-    const f = restFixture();
-    f.save({ ...f.state(), quotaAt: "checks", restChecks: "bound-status" });
-
-    const run = f.run();
-
-    expect(run.status, run.output).toBe(0);
-    expect(f.record()).toMatchObject({ phase: "complete", transport: "rest", head: f.head });
-    expect(f.state().mutations).toBe(1);
-  });
-
-  it.each([
-    "missing",
-    "status-only",
-    "wrong-app",
-    "wrong-app-status",
-    "failed",
-    "failed-status",
-    "inconsistent-status",
-  ])("does not admit REST merge with %s required-check evidence", (fault) => {
-    const f = restFixture();
-    f.save({
-      ...f.state(),
-      quotaAt: "checks",
-      restChecks: fault,
-      restCheckApp: fault.startsWith("wrong-app") ? 999 : 15368,
-      gates: fault === "failed" ? "fail" : "pass",
-    });
-
-    const run = f.run();
-
-    expect(run.status, run.output).not.toBe(0);
-    expect(f.state().mutations).toBe(0);
-    expect(() => f.record()).toThrow();
-  });
-
-  it.each([
-    { restDuplicate: "same-workflow", admitted: true },
-    { restDuplicate: "other-workflow", admitted: false },
-    { restDuplicate: "other-event", admitted: false },
-    { restDuplicate: "missing-mapping", admitted: false },
-    { restDuplicate: "ambiguous-mapping", admitted: false },
-    { restDuplicate: "same-time", admitted: false },
-    { restDuplicate: "missing-time", admitted: false },
-  ])(
-    "preserves required-check rerun identity for $restDuplicate",
-    ({ restDuplicate, admitted }) => {
-      const f = restFixture();
-      f.save({ ...f.state(), quotaAt: "checks", restDuplicate });
-
-      const run = f.run();
-
-      expect(run.status, run.output).toBe(admitted ? 0 : 1);
-      expect(f.state().mutations).toBe(admitted ? 1 : 0);
-      if (admitted) {
-        expect(f.record()).toMatchObject({ phase: "complete", transport: "rest", head: f.head });
-      } else {
-        expect(() => f.record()).toThrow();
-      }
+  it.each<{
+    name: string;
+    state: Partial<ReturnType<ReturnType<typeof restFixture>["state"]>>;
+    admitted: boolean;
+  }>([
+    {
+      name: "app-bound check with same-name legacy status",
+      state: { restChecks: "bound-status" },
+      admitted: true,
     },
-  );
-
-  it("rejects a successful required check while its suite is rerunning", () => {
-    const f = restFixture();
-    f.save({ ...f.state(), quotaAt: "checks", restSuite: "rerunning" });
-
-    const run = f.run();
-
-    expect(run.status, run.output).toBe(1);
-    expect(f.state().mutations).toBe(0);
-    expect(() => f.record()).toThrow();
-  });
-
-  it.each([
-    { restUnseenSuite: "pending", admitted: false },
-    { restUnseenSuite: "failed", admitted: false },
-    { restUnseenSuite: "partial-pending", admitted: false },
-    { restUnseenSuite: "other-app", admitted: true },
-    { restUnseenSuite: "labeler", admitted: true },
-    { restUnseenSuite: "hidden-skipped", admitted: false },
-    { restUnseenSuite: "irrelevant-failure", admitted: true },
-    { restUnseenSuite: "changed-suite", admitted: false },
-    { restUnseenSuite: "incomplete-suite", admitted: false },
-    { restUnseenSuite: "missing-version", admitted: false },
-    { restUnseenSuite: "missing-count", admitted: false },
-    { restUnseenSuite: "changed-count", admitted: false },
-    { restUnseenSuite: "queued-empty-unbound", restRequiredApp: null, admitted: true },
-    { restUnseenSuite: "queued-empty-custom", restRequiredApp: 45678, admitted: true },
-    { restUnseenSuite: "queued-empty-drift", admitted: false },
-  ])(
-    "checks fresh $restUnseenSuite suites missing from the earlier check-run snapshot",
-    ({ restUnseenSuite, admitted, restRequiredApp = 15368 }) => {
-      const f = restFixture();
-      f.save({
-        ...f.state(),
-        quotaAt: "checks",
-        restUnseenSuite,
-        restRequiredApp,
-        restCheckApp: restRequiredApp ?? 15368,
-      });
-
-      const run = f.run();
-
-      expect(run.status, run.output).toBe(admitted ? 0 : 1);
-      expect(f.state().mutations).toBe(admitted ? 1 : 0);
-      if (admitted) {
-        expect(f.record()).toMatchObject({ phase: "complete", transport: "rest", head: f.head });
-      } else {
-        expect(() => f.record()).toThrow();
-      }
+    ...[
+      "missing",
+      "status-only",
+      "wrong-app",
+      "wrong-app-status",
+      "failed",
+      "failed-status",
+      "inconsistent-status",
+    ].map((fault) => ({
+      name: `required check ${fault}`,
+      state: {
+        restChecks: fault,
+        restCheckApp: fault.startsWith("wrong-app") ? 999 : 15368,
+        gates: fault === "failed" ? "fail" : "pass",
+      },
+      admitted: false,
+    })),
+    ...[
+      "same-workflow",
+      "other-workflow",
+      "other-event",
+      "missing-mapping",
+      "ambiguous-mapping",
+      "same-time",
+      "missing-time",
+    ].map((restDuplicate) => ({
+      name: `rerun identity ${restDuplicate}`,
+      state: { restDuplicate },
+      admitted: restDuplicate === "same-workflow",
+    })),
+    {
+      name: "successful check with rerunning suite",
+      state: { restSuite: "rerunning" },
+      admitted: false,
     },
-  );
-
-  it.each(["auto", "merge", "rebase", "admin"])(
-    "does not silently change the requested %s route to REST squash",
-    (route) => {
-      const f = restFixture();
-      f.save({
-        ...f.state(),
-        quotaAt: "checks",
-        admin: route === "admin",
-        gates: route === "admin" ? "fail" : "pass",
-      });
-      if (route === "admin") {
-        const gates = join(f.worktree, ".local/gates.env");
-        writeFileSync(
-          gates,
-          readFileSync(gates, "utf8").replace("GATES_MODE=full", "GATES_MODE=remote_crabbox_aws"),
-        );
-      }
-
-      const run = f.run(
-        route === "auto",
-        f.repo,
-        route === "merge" || route === "rebase" ? route : "squash",
-      );
-
-      expect(run.status, run.output).not.toBe(0);
-      expect(f.state().mutations).toBe(0);
+    ...[
+      { restUnseenSuite: "pending", admitted: false },
+      { restUnseenSuite: "failed", admitted: false },
+      { restUnseenSuite: "partial-pending", admitted: false },
+      { restUnseenSuite: "other-app", admitted: true },
+      { restUnseenSuite: "labeler", admitted: true },
+      { restUnseenSuite: "hidden-skipped", admitted: false },
+      { restUnseenSuite: "irrelevant-failure", admitted: true },
+      { restUnseenSuite: "changed-suite", admitted: false },
+      { restUnseenSuite: "incomplete-suite", admitted: false },
+      { restUnseenSuite: "missing-version", admitted: false },
+      { restUnseenSuite: "missing-count", admitted: false },
+      { restUnseenSuite: "changed-count", admitted: false },
+      { restUnseenSuite: "queued-empty-unbound", restRequiredApp: null, admitted: true },
+      { restUnseenSuite: "queued-empty-custom", restRequiredApp: 45678, admitted: true },
+      { restUnseenSuite: "queued-empty-drift", admitted: false },
+    ].map(({ restUnseenSuite, restRequiredApp = 15368, admitted }) => ({
+      name: `fresh suite ${restUnseenSuite}`,
+      state: { restUnseenSuite, restRequiredApp, restCheckApp: restRequiredApp ?? 15368 },
+      admitted,
+    })),
+  ])("admits REST merge only with complete check evidence: $name", ({ state, admitted }) => {
+    const f = restFixture();
+    f.save({ ...f.state(), quotaAt: "checks", ...state });
+    const run = f.run();
+    expect(run.status, run.output).toBe(admitted ? 0 : 1);
+    expect(f.state().mutations).toBe(admitted ? 1 : 0);
+    if (admitted) {
+      expect(f.record()).toMatchObject({ phase: "complete", transport: "rest", head: f.head });
+    } else {
       expect(() => f.record()).toThrow();
-    },
-  );
+    }
+  });
 
   it.each([
     "supported",

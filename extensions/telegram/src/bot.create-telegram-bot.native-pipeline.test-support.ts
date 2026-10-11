@@ -17,10 +17,10 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, vi, type Mock } from "vitest";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { resolveTelegramAccount } from "./accounts.js";
-import { defaultTelegramBotDeps } from "./bot-deps.js";
+import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
 import {
   enqueueTelegramMenuSync,
   resolveTelegramMenuRemoteOwner,
@@ -68,7 +68,14 @@ async function settleUpdates(): Promise<void> {
   }
 }
 
-export const harness = {
+export const harness: {
+  readonly state: OpenClawTestState;
+  replySpy: Mock<ReplyResolver>;
+  transcribeFirstAudio: typeof transcribeFirstAudio;
+  settleUpdates: typeof settleUpdates;
+  listSkillCommandsForAgents: typeof listSkillCommandsForAgents;
+  telegramBotDepsForTest: TelegramBotDeps;
+} = {
   get state() {
     return state;
   },
@@ -222,6 +229,17 @@ export async function admitSpooledUpdate(
 
 let messageId = 10000;
 
+/**
+ * Deliver Telegram's JSON form of an update through the same `handleUpdate` path the durable
+ * ingress drain uses. grammY's webhook adapter adds a 10 s wall-clock deadline that cold worker
+ * preparation can exceed on loaded CI, so only webhook-contract tests should use it.
+ */
+export async function deliverTelegramUpdate(bot: Bot, update: object): Promise<void> {
+  // Round-trip the wire body: Telegram JSON omits undefined-only fields, and like the webhook
+  // adapter it is trusted as an Update without runtime validation.
+  await bot.handleUpdate(await new Response(JSON.stringify(update)).json());
+}
+
 export function nextTelegramTestMessageId(): number {
   return ++messageId;
 }
@@ -316,6 +334,7 @@ afterEach(async () => {
   clearRuntimeConfigSnapshot();
   clearTelegramRuntimeForTest();
   resetPluginRuntimeStateForTest();
-  resetPluginStateStoreForTests();
+  // The state owner drains agent workers before retiring their shared-state admission.
+  resetPluginStateStoreForTests({ closeDatabase: false });
   await state.cleanup();
 });

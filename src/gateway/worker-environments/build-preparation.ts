@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import type { WorkerExecutionMode } from "../../plugins/types.js";
+import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
 import type { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
 import type { WorkerProviderLifecycleInputOptions } from "./provider-lifecycle.types.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
@@ -20,15 +21,6 @@ type BuildPreparationOptions = Pick<
   configuredProfileProviderId: (profileId: string) => string;
   requireProviderExecutionMode: (providerId: string, mode: WorkerExecutionMode) => void;
   schedulePreparedRefill: () => void;
-  serviceError: (
-    code:
-      | "profile_not_found"
-      | "invalid_profile"
-      | "invalid_project"
-      | "invalid_state"
-      | "capacity",
-    message: string,
-  ) => Error;
 };
 
 export function createWorkerEnvironmentBuildPreparation(options: BuildPreparationOptions) {
@@ -38,7 +30,6 @@ export function createWorkerEnvironmentBuildPreparation(options: BuildPreparatio
       providerLifecycle,
       now,
       store,
-      serviceError,
       configuredProfileProviderId,
       requireProviderExecutionMode,
       schedulePreparedRefill,
@@ -51,11 +42,7 @@ export function createWorkerEnvironmentBuildPreparation(options: BuildPreparatio
       normalizeCapabilityProviderId(providerId) ?? providerId,
     );
     const profile = options.getConfig().cloudWorkers!.profiles![profileId]!;
-    if (
-      !provider?.supportsProjectPreparation?.(
-        requireWorkerProfile(profile.settings ?? {}, serviceError),
-      )
-    ) {
+    if (!provider?.supportsProjectPreparation?.(requireWorkerProfile(profile.settings ?? {}))) {
       throw serviceError("invalid_profile", "Worker profile does not support project preparation");
     }
     const namespace = options.projectNamespace;
@@ -78,7 +65,7 @@ export function createWorkerEnvironmentBuildPreparation(options: BuildPreparatio
     if (!project) {
       throw serviceError(
         "invalid_project",
-        "Project must be an accessible local Git checkout root with a HEAD commit",
+        "Project must be an accessible local Git checkout root with committed files",
       );
     }
     authorize?.();
@@ -99,9 +86,7 @@ export function createWorkerEnvironmentBuildPreparation(options: BuildPreparatio
     requireProviderExecutionMode(intent.providerId, executionMode);
     const timeout = providerLifecycle
       .providerFor(intent.providerId)
-      .resolvePreparedIdleTimeoutMs?.(
-        requireWorkerProfile(intent.profileSnapshot.settings, serviceError),
-      );
+      .resolvePreparedIdleTimeoutMs?.(requireWorkerProfile(intent.profileSnapshot.settings));
     if (!intent.preparationKey || !Number.isSafeInteger(timeout) || !timeout || timeout <= 0) {
       throw serviceError(
         "invalid_profile",

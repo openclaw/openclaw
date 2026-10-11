@@ -1,9 +1,12 @@
 import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
+import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ChatInputReceipts,
   ChatPendingInputsPage,
   ChatHistoryActivity,
+  ChatHistoryDeltaResult as ProtocolChatHistoryDeltaResult,
+  ChatHistoryResetResult,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { GatewaySessionRow, GatewaySessionsDefaults } from "../../api/types.ts";
 import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-cache.ts";
@@ -19,6 +22,7 @@ import {
   readChatSessionSnapshot,
   readChatHistoryCursor,
   setChatHistoryCursor,
+  projectChatTranscriptMetadata,
 } from "./session-message-cache.ts";
 import type { AgentEventPayload } from "./tool-stream-contract.ts";
 
@@ -50,19 +54,16 @@ export type ChatHistoryResult = {
   };
 };
 
-export type ChatHistoryDeltaResult = {
-  activity?: ChatHistoryActivity[];
-  pendingInputs?: ChatPendingInputsPage;
-  inputReceipts?: ChatInputReceipts;
-  kind: "delta";
-  messages: unknown[];
-  deltaCursor: string;
+export type ChatHistoryDeltaResult = Omit<
+  ProtocolChatHistoryDeltaResult,
+  "sessionInfo" | "inFlightRun" | "metadata"
+> & {
   sessionInfo: GatewaySessionRow;
   inFlightRun?: ChatHistoryResult["inFlightRun"];
   metadata?: ChatMetadataResult;
 };
 
-export type ChatHistoryResetResult = { kind: "reset" };
+export type { ChatHistoryResetResult };
 
 export type ChatHistoryResponse =
   | ChatHistoryResult
@@ -92,18 +93,9 @@ export function isHistoryCursor(
 export function resolveChatHistoryPagination(
   result: ChatHistoryResult | undefined,
 ): ChatHistoryPagination {
-  const totalMessages = result?.totalMessages;
-  const validTotal =
-    typeof totalMessages === "number" && Number.isSafeInteger(totalMessages) && totalMessages >= 0
-      ? totalMessages
-      : undefined;
-  const nextOffset = result?.nextOffset;
-  if (
-    result?.hasMore === true &&
-    typeof nextOffset === "number" &&
-    Number.isSafeInteger(nextOffset) &&
-    nextOffset > 0
-  ) {
+  const validTotal = asSafeIntegerInRange(result?.totalMessages, { min: 0 });
+  const nextOffset = asSafeIntegerInRange(result?.nextOffset, { min: 1 });
+  if (result?.hasMore === true && nextOffset !== undefined) {
     return {
       hasMore: true,
       nextOffset,
@@ -125,17 +117,13 @@ export function historySessionId(result: ChatHistoryResult): string | null {
 }
 
 function retainedRawHistoryStart(pagination: ChatHistoryPagination): number | null {
-  const totalMessages = pagination.totalMessages;
-  if (
-    typeof totalMessages !== "number" ||
-    !Number.isSafeInteger(totalMessages) ||
-    totalMessages < 0
-  ) {
+  const totalMessages = asSafeIntegerInRange(pagination.totalMessages, { min: 0 });
+  if (totalMessages === undefined) {
     return null;
   }
   const retainedDepth = pagination.hasMore ? pagination.nextOffset : totalMessages;
   const start = totalMessages - retainedDepth + 1;
-  return Number.isSafeInteger(start) && start > 0 ? start : null;
+  return asSafeIntegerInRange(start, { min: 1 }) ?? null;
 }
 
 export function reconcileHistoryTail(options: {
@@ -188,6 +176,7 @@ export function reconcileHistoryTail(options: {
 export function commitCurrentChatHistorySnapshot(
   state: ChatState,
   deltaCursor?: string | null,
+  sessionInfo?: GatewaySessionRow,
 ): void {
   if (deltaCursor !== undefined) {
     setChatHistoryCursor(state, deltaCursor ?? undefined);
@@ -200,6 +189,11 @@ export function commitCurrentChatHistorySnapshot(
   const agentId = isUiSelectedGlobalSessionKey(state, sessionKey)
     ? resolveUiSelectedSessionAgentId(state)
     : undefined;
+  const previous = readChatSessionSnapshot(state.chatMessagesBySession, state, {
+    sessionKey,
+    agentId,
+  });
+  const retained = previous?.sessionId === (state.currentSessionId ?? null) ? previous : undefined;
   cacheChatSessionSnapshot(
     state.chatMessagesBySession,
     state,
@@ -209,6 +203,10 @@ export function commitCurrentChatHistorySnapshot(
       ...(state.chatDisplayedLeafEntryId !== undefined
         ? { displayedLeafEntryId: state.chatDisplayedLeafEntryId }
         : {}),
+      transcriptMetadata: sessionInfo
+        ? projectChatTranscriptMetadata(sessionInfo)
+        : retained?.transcriptMetadata,
+      progressCard: retained?.progressCard,
       messages: state.chatMessages,
       pagination: state.chatHistoryPagination,
       sessionId: state.currentSessionId ?? null,

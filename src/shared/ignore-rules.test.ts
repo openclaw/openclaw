@@ -30,6 +30,17 @@ describe("addIgnoreRules", () => {
     expect(ig.ignores("src/main.ts")).toBe(false);
   });
 
+  it("keeps root-anchored patterns and negations at the top level", () => {
+    fs.writeFileSync(path.join(tempDir, ".gitignore"), "/build\nkeep\n!/keep\n", "utf-8");
+
+    const ig = addIgnoreRules(tempDir, tempDir);
+
+    expect(ig.ignores("build/")).toBe(true);
+    expect(ig.ignores("skills/build/")).toBe(false);
+    expect(ig.ignores("keep")).toBe(false);
+    expect(ig.ignores("skills/keep")).toBe(true);
+  });
+
   it("parses a large ignore file under the byte cap", () => {
     const huge = `#${"x".repeat(2 * 1024 * 1024)}\nignored-file\n`;
     fs.writeFileSync(path.join(tempDir, ".gitignore"), huge, "utf-8");

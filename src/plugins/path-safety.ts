@@ -4,6 +4,7 @@ import path from "node:path";
 import { isPathInside as isPathInsideLexical } from "@openclaw/fs-safe/path";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { FsSafeError } from "../infra/fs-safe.js";
+import { normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
 
 export { formatPosixMode } from "@openclaw/fs-safe/advanced";
 export { safeRealpathSync, safeStatSync } from "@openclaw/fs-safe/path";
@@ -14,6 +15,21 @@ export type PhysicalPathInsideRoot = {
   rootIdentity: Readonly<{ dev: bigint; ino: bigint }>;
 };
 
+function canProbeWindowsPhysicalAlias(rootPath: string, targetPath: string): boolean {
+  const driveRoot = /^(?:[\\/]{2}[?.][\\/])?[A-Za-z]:[\\/]/.exec(targetPath)?.[0];
+  if (driveRoot) {
+    return isPathInsideLexical(driveRoot, targetPath);
+  }
+  const normalizedRoot = normalizeWindowsPathPreservingCase(rootPath);
+  // Lexical compatibility permits share-level alias searches, but must not
+  // widen an ambiguous namespace into authority over another host or device.
+  const probeRoot =
+    isPathInsideLexical(rootPath, normalizedRoot) && isPathInsideLexical(normalizedRoot, rootPath)
+      ? path.win32.parse(normalizedRoot).root || normalizedRoot
+      : rootPath;
+  return isPathInsideLexical(probeRoot, targetPath);
+}
+
 /** Resolves matching physical spellings when Windows presents one tree through different aliases. */
 function resolvePhysicalPathInsideRootSync(
   rootPath: string,
@@ -23,6 +39,12 @@ function resolvePhysicalPathInsideRootSync(
     return undefined;
   }
   try {
+    if (
+      !canProbeWindowsPhysicalAlias(rootPath, targetPath) &&
+      !canProbeWindowsPhysicalAlias(fs.realpathSync(rootPath), targetPath)
+    ) {
+      return undefined;
+    }
     const root = fs.statSync(rootPath, { bigint: true });
     if (!root.isDirectory() || root.ino === 0n) {
       return undefined;
@@ -33,12 +55,9 @@ function resolvePhysicalPathInsideRootSync(
     while (true) {
       const candidate = fs.statSync(current, { bigint: true });
       if (candidate.dev === root.dev && candidate.ino === root.ino) {
-        // Prefer the matching observed spelling unless it is itself a link.
-        // Windows 8.3 aliases are ordinary directory paths; junction roots retain
-        // their already-admitted canonical spelling.
-        const physicalRoot = fs.lstatSync(current).isSymbolicLink()
-          ? path.resolve(rootPath)
-          : current;
+        // Resolve ancestor junctions too; ordinary realpath preserves 8.3 names.
+        // The descriptor boundary revalidates this spelling against rootIdentity.
+        const physicalRoot = fs.realpathSync(current);
         return {
           rootPath: physicalRoot,
           targetPath: path.resolve(physicalRoot, path.relative(current, targetPath)),
@@ -69,6 +88,12 @@ export function relativePluginPathInsideRootSync(
   targetPath: string,
 ): string | undefined {
   if (isPathInsideLexical(rootPath, targetPath)) {
+    if (process.platform === "win32") {
+      return path.win32.relative(
+        normalizeWindowsPathPreservingCase(rootPath),
+        normalizeWindowsPathPreservingCase(targetPath),
+      );
+    }
     return path.relative(path.resolve(rootPath), path.resolve(targetPath));
   }
   const physical = resolvePhysicalPathInsideRootSync(rootPath, targetPath);

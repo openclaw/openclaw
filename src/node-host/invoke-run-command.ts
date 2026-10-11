@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import path from "node:path";
+import { prependShellPath } from "../infra/node-shell.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RunResult } from "./invoke-types.js";
 
@@ -38,6 +40,33 @@ function clarifyNodeExecCwdSpawnError(
   return `node exec working directory ${reason} on the node host: ${cwd} (os reported: ${message})`;
 }
 
+type CommandLaunch = {
+  argv: string[];
+  windowsVerbatimArguments?: true;
+};
+
+// cmd.exe /s strips the outer quotes; verbatim argv avoids Node's MSVCRT escaping.
+function resolveCommandLaunch(argv: string[]): CommandLaunch {
+  if (process.platform !== "win32" || argv.length !== 5) {
+    return { argv };
+  }
+  const [shell, noAutoRun, stripQuotes, runAndExit, command] = argv;
+  if (
+    shell === undefined ||
+    command === undefined ||
+    path.win32.basename(shell).toLowerCase() !== "cmd.exe" ||
+    noAutoRun !== "/d" ||
+    stripQuotes !== "/s" ||
+    runAndExit !== "/c"
+  ) {
+    return { argv };
+  }
+  return {
+    argv: [shell, noAutoRun, stripQuotes, runAndExit, `"${command}"`],
+    windowsVerbatimArguments: true,
+  };
+}
+
 export async function runCommand(
   argv: string[],
   cwd: string | undefined,
@@ -48,7 +77,15 @@ export async function runCommand(
 ): Promise<RunResult> {
   assertCurrent?.();
   try {
-    const result = await runCommandWithTimeout(argv, {
+    const launch = resolveCommandLaunch(argv);
+    // Only OpenClaw's generated login-shell envelope needs service PATH restoration.
+    const servicePath = env?.PATH;
+    if (servicePath && argv.length === 3 && argv[0] === "/bin/sh" && argv[1] === "-lc") {
+      env = { ...env };
+      launch.argv = [argv[0], argv[1], prependShellPath(argv[2] ?? "", env, servicePath)];
+    }
+    const result = await runCommandWithTimeout(launch.argv, {
+      ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
       baseEnv: env,
       cwd,
       killProcessTree: true,
@@ -67,7 +104,10 @@ export async function runCommand(
       success: exitCode === 0 && !timedOut,
       stdout: result.stdout,
       stderr: result.stderr,
-      error: null,
+      error:
+        result.termination === "signal" && result.signal
+          ? `Command terminated by signal ${result.signal}`
+          : null,
       truncated: Boolean(result.stdoutTruncatedBytes || result.stderrTruncatedBytes),
     };
   } catch (err) {

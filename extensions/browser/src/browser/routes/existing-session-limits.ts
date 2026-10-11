@@ -1,12 +1,5 @@
 import type { BrowserActRequest } from "../client-actions.types.js";
 
-/**
- * Existing-session browser capability-limit messages.
- *
- * Centralizes unsupported-operation text so route responses and tests stay
- * stable while Chrome MCP support grows incrementally.
- */
-/** User-facing messages for existing-session route limitations. */
 export const EXISTING_SESSION_LIMITS = {
   act: {
     clickSelector: "existing-session click does not support selector targeting yet; use ref.",
@@ -108,17 +101,14 @@ export function admitExistingSessionAction(
       error = action.delayMs ? EXISTING_SESSION_LIMITS.act.pressDelay : undefined;
       break;
     case "hover":
+    case "scrollIntoView": {
+      const messagePrefix = action.kind === "hover" ? "hover" : "scroll";
       if (action.selector) {
-        return { ok: false, error: EXISTING_SESSION_LIMITS.act.hoverSelector };
+        return { ok: false, error: EXISTING_SESSION_LIMITS.act[`${messagePrefix}Selector`] };
       }
-      error = action.timeoutMs ? EXISTING_SESSION_LIMITS.act.hoverTimeout : undefined;
+      error = action.timeoutMs ? EXISTING_SESSION_LIMITS.act[`${messagePrefix}Timeout`] : undefined;
       break;
-    case "scrollIntoView":
-      if (action.selector) {
-        return { ok: false, error: EXISTING_SESSION_LIMITS.act.scrollSelector };
-      }
-      error = action.timeoutMs ? EXISTING_SESSION_LIMITS.act.scrollTimeout : undefined;
-      break;
+    }
     case "drag":
       if (action.startSelector || action.endSelector) {
         return { ok: false, error: EXISTING_SESSION_LIMITS.act.dragSelector };

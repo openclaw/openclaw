@@ -38,7 +38,7 @@ without mutating the host auth store:
 - Gateway + dev agent: `pnpm test:docker:live-gateway` (script: `scripts/test-live-gateway-models-docker.sh`)
 - Observability smokes: `pnpm qa:otel:smoke`, `pnpm qa:prometheus:smoke`, and `pnpm qa:observability:smoke` are private QA source-checkout lanes. They are intentionally not part of package Docker release lanes because the npm tarball omits QA Lab.
 - Open WebUI live smoke: `pnpm test:docker:openwebui` (script: `scripts/e2e/openwebui-docker.sh`)
-- Onboarding wizard (TTY, full scaffolding): `pnpm test:docker:onboard` (script: `scripts/e2e/onboard-docker.sh`)
+- Onboarding wizard (TTY, full workspace setup): `pnpm test:docker:onboard` (script: `scripts/e2e/onboard-docker.sh`)
 - Npm tarball onboarding/channel/agent smoke: `pnpm test:docker:npm-onboard-channel-agent` installs the packed OpenClaw tarball globally in Docker, configures OpenAI via env-ref onboarding plus Telegram by default, runs doctor, and runs one mocked OpenAI agent turn. Reuse a prebuilt tarball with `OPENCLAW_CURRENT_PACKAGE_TGZ=/path/to/openclaw-*.tgz`, skip the host rebuild with `OPENCLAW_NPM_ONBOARD_HOST_BUILD=0`, or switch channel with `OPENCLAW_NPM_ONBOARD_CHANNEL=discord` or `OPENCLAW_NPM_ONBOARD_CHANNEL=slack`.
 
 - Release user journey smoke: `pnpm test:docker:release-user-journey` installs the packed OpenClaw tarball globally in a clean Docker home, runs onboarding, configures a mocked OpenAI provider, runs an agent turn, installs/uninstalls external plugins, configures ClickClack against a local fixture, verifies outbound/inbound messaging, restarts Gateway, and runs doctor.
@@ -57,6 +57,7 @@ without mutating the host auth store:
 
 - Session runtime context smoke: `pnpm test:docker:session-runtime-context` verifies hidden runtime context transcript persistence, Doctor repair of affected duplicated prompt-rewrite branches, and automatic transcript cold storage through a real Gateway running the installed package. Small, dated synthetic histories exercise the maintenance worker, changes to `session.maintenance.coldStorage.afterDays` without a Gateway restart, exact transcript restoration, explicit errors for missing archive files, Activity listing without rehydration, and history preservation across restart and portable backup recovery.
 - Bun global install and runtime smoke: `bash scripts/e2e/bun-global-install-smoke.sh` packs the current tree, installs it with `bun install -g --trust` in an isolated home, verifies OpenClaw's lifecycle scripts ran, and executes the installed package with Bun 1.4 or newer. It checks representative CLI state, bundled image providers, a mocked local agent turn, Gateway readiness and health, and a mocked agent turn through the Bun-hosted Gateway. Reuse a prebuilt tarball with `OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ=/path/to/openclaw-*.tgz`, skip the host build with `OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD=0`, or copy `dist/` from a built Docker image with `OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE=openclaw-dockerfile-smoke:local`.
+- Bun-only runtime smoke (Linux x64): run `bash scripts/e2e/bun-only-runtime-smoke.sh` with `OPENCLAW_BUN_ONLY_SMOKE_PACKAGE_TGZ=/path/to/openclaw-candidate.tgz`, `BUN_BIN=/path/to/pinned-fork/bun` (the fork pinned in `.github/actions/setup-test-bun/action.yml`), and `OPENCLAW_BUN_ONLY_SMOKE_ARTIFACT_DIR=/path/to/artifacts`. Set `OPENCLAW_BUN_ONLY_SMOKE_HIDE_SYSTEM_NODE=1` to mask system Node with recording sentinels inside the smoke's private mount namespace; this requires passwordless `sudo`, `unshare`, and `setpriv`. It only affects the smoke's process tree, leaves host Node unchanged, and drops back to the invoking user before running the harness. Node must be available before the smoke for payload preparation. The harness then makes one Node-free install attempt with the documented Bun launcher marker; an install failure fails the lane without retrying with Node. Without the flag, runtime preconditions fail if real Node remains reachable.
 - Installer Docker smoke: `bash scripts/test-install-sh-docker.sh` shares one npm cache across its root, update, and direct-npm containers. Update smoke defaults to npm `latest` as the stable baseline before upgrading to the candidate tarball. Override with `OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE=2026.9.5` locally, or with the Install Smoke workflow's `update_baseline_version` input on GitHub. Non-root installer checks keep an isolated npm cache so root-owned cache entries do not mask user-local install behavior. Set `OPENCLAW_INSTALL_SMOKE_NPM_CACHE_DIR=/path/to/cache` to reuse the root/update/direct-npm cache across local reruns.
 - Install Smoke CI skips the duplicate direct-npm global update with `OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL=1`; run the script locally without that env when direct `npm install -g` coverage is needed.
 - Agents delete shared workspace CLI smoke: `pnpm test:docker:agents-delete-shared-workspace` (script: `scripts/e2e/agents-delete-shared-workspace-docker.sh`) builds the root Dockerfile image by default, seeds two agents with one workspace in an isolated container home, runs `agents delete --json`, and verifies valid JSON plus retained workspace behavior. Reuse the install-smoke image with `OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_IMAGE=openclaw-dockerfile-smoke:local OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_SKIP_BUILD=1`.
@@ -103,7 +104,7 @@ source/config. The staging step skips large local-only caches and app build
 outputs such as `.pnpm-store`, `.worktrees`, `__openclaw_vitest__`, and
 app-local `.build` or Gradle output directories so Docker live runs do not
 spend minutes copying machine-specific artifacts. They also set
-`OPENCLAW_SKIP_CHANNELS=1` so gateway live probes do not start real
+`OPENCLAW_SKIP_CHANNELS=1` so gateway live checks do not start real
 Telegram/Discord/etc. channel workers inside the container.
 `test:docker:live-models` still runs `pnpm test:live`, so pass through
 `OPENCLAW_LIVE_GATEWAY_*` as well when you need to narrow or exclude gateway
@@ -123,7 +124,7 @@ the process environment, staged auth profiles, or an explicit
 `OPENCLAW_PROFILE_FILE`. Successful runs print a small JSON payload like
 `{ "ok": true, "model": "openclaw/default", ... }`.
 
-`test:docker:mcp-channels` is intentionally deterministic and does not need a
+`test:docker:mcp-channels` uses fixed responses and does not need a
 real Telegram, Discord, or iMessage account. It boots a seeded Gateway
 container, starts a second container that spawns `openclaw mcp serve`, then
 verifies routed conversation discovery, transcript reads, attachment
@@ -133,15 +134,15 @@ notification check inspects the raw stdio MCP frames directly so the smoke
 validates what the bridge actually emits, not just what a specific client SDK
 happens to surface.
 
-`test:docker:agent-bundle-mcp-tools` is deterministic and does not need a
+`test:docker:agent-bundle-mcp-tools` uses fixed responses and does not need a
 live model key. It builds the repo Docker image, starts a real stdio MCP
-probe server inside the container, materializes that server through the
+check server inside the container, materializes that server through the
 embedded OpenClaw bundle MCP runtime, executes the tool, then verifies
 `coding` and `messaging` keep `bundle-mcp` tools while `minimal` and
 `tools.deny: ["bundle-mcp"]` filter them.
 
-`test:docker:cron-mcp-cleanup` is deterministic and does not need a live
-model key. It starts a seeded Gateway with a real stdio MCP probe server,
+`test:docker:cron-mcp-cleanup` uses fixed responses and does not need a live
+model key. It starts a seeded Gateway with a real stdio MCP check server,
 runs an isolated cron turn and a `sessions_spawn` one-shot child turn, then
 verifies the MCP child process exits after each run.
 
@@ -165,7 +166,7 @@ Useful env vars:
 - `OPENCLAW_LIVE_GATEWAY_MODELS=...` / `OPENCLAW_LIVE_MODELS=...` to narrow the run
 - `OPENCLAW_LIVE_GATEWAY_PROVIDERS=...` / `OPENCLAW_LIVE_PROVIDERS=...` to filter providers in-container
 - `OPENCLAW_SKIP_DOCKER_BUILD=1` to reuse an existing `openclaw:local-live` image for reruns that do not need a rebuild
-- `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to ensure creds come from the profile store (not env)
+- `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to require credentials to come from the profile store (not env)
 - `OPENCLAW_OPENWEBUI_MODEL=...` to choose the model exposed by the gateway for the Open WebUI smoke
 - `OPENCLAW_OPENWEBUI_PROMPT=...` to override the nonce-check prompt used by the Open WebUI smoke
 - `OPENWEBUI_IMAGE=...` to override the pinned Open WebUI image tag

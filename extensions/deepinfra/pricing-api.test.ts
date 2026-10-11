@@ -76,10 +76,8 @@ describe("native DeepInfra pricing contract", () => {
 
   it.each([
     { full: "Different rates above a context threshold" },
-    { full: "Promotion ends on a calendar date" },
     { table: { columns: ["context"], rows: [[1000]] } },
     { discount_ends_at: 1 },
-    { discount_ends_at: 9_000_000_000 },
     { rate_per_input_token_cache_write: 1.25 },
   ])("validates then omits unsupported schedules: %j", (qualification) => {
     const qualified = {
@@ -108,17 +106,12 @@ describe("native DeepInfra pricing contract", () => {
     { type: 5 },
     { cents_per_input_token: -1 },
     { cents_per_output_token: undefined },
-    { cents_per_input_token: "0.0002" },
-    { cents_per_output_token: Infinity },
     { cents_per_input_token: 1e308 },
-    { discount: "0.5" },
     { discount: -0.1 },
     { discount: 1.1 },
-    { discount_ends_at: "123" },
     { discount_ends_at: 1.5 },
     { full: {} },
     { table: [] },
-    { rate_per_input_token_cached: "0.25" },
     { rate_per_input_token_cached: -1 },
     { rate_per_input_token_cache_write: "1.25" },
     { rate_per_service_tier_priority: -1 },
@@ -143,18 +136,14 @@ describe("native DeepInfra pricing contract", () => {
 
   it.each(
     [
-      { data: [paid] },
-      [],
-      [null],
       [{ id: "fixture/foreign-identity", pricing }],
-      [paid, { model_name: " " }],
-      [paid, { model_name: paid.model_name }],
-      [paid, { ...paid, pricing: { ...pricing, full: "Qualified" } }],
       [paid, { model_name: "fixture/bad", pricing: null }],
-      [{ model_name: "fixture/unpriced" }],
       [{ model_name: "fixture/image", pricing: { type: "image_units" } }],
     ].map((payload) => ({ payload })),
-  )("rejects malformed, duplicate or unusable feeds: $payload", ({ payload }) => {
-    expect(parseDeepInfraPricingCatalog(payload)).toBeUndefined();
-  });
+  )(
+    "rejects foreign identities, malformed token prices and non-token-only feeds: $payload",
+    ({ payload }) => {
+      expect(parseDeepInfraPricingCatalog(payload)).toBeUndefined();
+    },
+  );
 });

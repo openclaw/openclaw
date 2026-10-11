@@ -2,6 +2,46 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { runSystemAgentWithInference } from "./system-agent-with-inference.js";
 
+const inferenceMocks = vi.hoisted(() => ({
+  verifySetupInference: vi.fn(),
+  runSystemAgent: vi.fn(),
+  runGuidedOnboarding: vi.fn(),
+}));
+vi.mock("../system-agent/setup-inference.js", () => ({
+  verifySetupInference: inferenceMocks.verifySetupInference,
+}));
+vi.mock("../system-agent/system-agent.js", () => ({
+  runSystemAgent: inferenceMocks.runSystemAgent,
+}));
+vi.mock("./onboard-guided.js", () => ({
+  runGuidedOnboarding: inferenceMocks.runGuidedOnboarding,
+}));
+
+async function runWithInferenceMocks(
+  opts: Parameters<typeof runSystemAgentWithInference>[0],
+  currentRuntime: RuntimeEnv,
+  onboardingOptions: Parameters<typeof runSystemAgentWithInference>[2] = {},
+  mocks: {
+    verifyInference?: (...args: unknown[]) => unknown;
+    runSystemAgent?: (...args: unknown[]) => unknown;
+    runGuidedOnboarding?: (...args: unknown[]) => unknown;
+  } = {},
+) {
+  inferenceMocks.verifySetupInference.mockReset();
+  inferenceMocks.runSystemAgent.mockReset();
+  inferenceMocks.runGuidedOnboarding.mockReset();
+  if (mocks.verifyInference) {
+    inferenceMocks.verifySetupInference.mockImplementation(mocks.verifyInference);
+  }
+  if (mocks.runSystemAgent) {
+    inferenceMocks.runSystemAgent.mockImplementation(mocks.runSystemAgent);
+  }
+  if (mocks.runGuidedOnboarding) {
+    inferenceMocks.runGuidedOnboarding.mockImplementation(mocks.runGuidedOnboarding);
+  }
+  await runSystemAgentWithInference(opts, currentRuntime, onboardingOptions);
+}
+
 const exitMocks = vi.hoisted(() => ({
   requestExitAfterOneShotOutput: vi.fn(),
 }));
@@ -42,7 +82,7 @@ describe("runSystemAgentWithInference", () => {
     const verifyInference = vi.fn(async () => workingInference());
     const currentRuntime = runtime();
 
-    await runSystemAgentWithInference(
+    await runWithInferenceMocks(
       { input: tty, output: tty },
       currentRuntime,
       {},
@@ -74,7 +114,7 @@ describe("runSystemAgentWithInference", () => {
     const runSystemAgent = vi.fn(async () => {});
     const currentRuntime = runtime();
 
-    await runSystemAgentWithInference(
+    await runWithInferenceMocks(
       options,
       currentRuntime,
       {},
@@ -96,7 +136,7 @@ describe("runSystemAgentWithInference", () => {
       throw new Error("Plugin install spec is invalid.");
     });
 
-    await runSystemAgentWithInference(
+    await runWithInferenceMocks(
       { message: "install plugin https://example.test/plugin.tgz", yes: true },
       currentRuntime,
       {},
@@ -117,7 +157,7 @@ describe("runSystemAgentWithInference", () => {
     exitMocks.requestExitAfterOneShotOutput.mockReturnValueOnce(true);
     const currentRuntime = runtime();
 
-    await runSystemAgentWithInference(
+    await runWithInferenceMocks(
       { message: "broken request" },
       currentRuntime,
       {},
@@ -138,7 +178,7 @@ describe("runSystemAgentWithInference", () => {
     const currentRuntime = runtime();
     const runSystemAgent = vi.fn(async () => {});
 
-    await runSystemAgentWithInference(
+    await runWithInferenceMocks(
       { json: true },
       currentRuntime,
       {},
@@ -165,7 +205,7 @@ describe("runSystemAgentWithInference", () => {
     const currentRuntime = runtime();
 
     await expect(
-      runSystemAgentWithInference(
+      runWithInferenceMocks(
         { input: tty, output: tty },
         currentRuntime,
         {},
@@ -187,7 +227,7 @@ describe("runSystemAgentWithInference", () => {
     const runSystemAgent = vi.fn(async () => {});
     const currentRuntime = runtime();
 
-    await runSystemAgentWithInference(
+    await runWithInferenceMocks(
       { input: tty, output: tty },
       currentRuntime,
       { workspace: "/tmp/work", acceptRisk: true },
@@ -214,7 +254,7 @@ describe("runSystemAgentWithInference", () => {
     const currentRuntime = runtime();
     const verifyInference = vi.fn();
 
-    await runSystemAgentWithInference(
+    await runWithInferenceMocks(
       { input: pipe, output: pipe },
       currentRuntime,
       {},
@@ -232,7 +272,7 @@ describe("runSystemAgentWithInference", () => {
     const currentRuntime = runtime();
     const verifyInference = vi.fn();
 
-    await runSystemAgentWithInference(
+    await runWithInferenceMocks(
       { input: tty, output: tty, yes: true },
       currentRuntime,
       {},
@@ -249,7 +289,7 @@ describe("runSystemAgentWithInference", () => {
   it("returns one structured error for --json --yes without a message", async () => {
     const currentRuntime = runtime();
 
-    await runSystemAgentWithInference({ json: true, yes: true }, currentRuntime);
+    await runWithInferenceMocks({ json: true, yes: true }, currentRuntime);
 
     expect(currentRuntime.log).toHaveBeenCalledWith(
       expect.stringContaining('"error": "OpenClaw --yes requires --message'),
@@ -263,7 +303,7 @@ describe("runSystemAgentWithInference", () => {
     const currentRuntime = runtime();
     const runGuidedOnboarding = vi.fn(async () => {});
 
-    await runSystemAgentWithInference(
+    await runWithInferenceMocks(
       { message: "status" },
       currentRuntime,
       {},
@@ -286,7 +326,7 @@ describe("runSystemAgentWithInference", () => {
   it("returns a structured JSON error when inference is unavailable", async () => {
     const currentRuntime = runtime();
 
-    await runSystemAgentWithInference(
+    await runWithInferenceMocks(
       { json: true },
       currentRuntime,
       {},
@@ -311,7 +351,7 @@ describe("runSystemAgentWithInference", () => {
     exitMocks.requestExitAfterOneShotOutput.mockReturnValueOnce(true);
     const currentRuntime = runtime();
 
-    await runSystemAgentWithInference(
+    await runWithInferenceMocks(
       { json: true },
       currentRuntime,
       {},

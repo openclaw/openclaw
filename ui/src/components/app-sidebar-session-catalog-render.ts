@@ -40,10 +40,10 @@ import { renderNewSessionLink } from "./new-session-link.ts";
 import { hasProviderBrandIcon, renderProviderBrandIcon } from "./provider-icon.ts";
 import { renderSessionGlyph } from "./session-glyph.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
+import { sessionRunVisibility } from "./session-run-visibility.ts";
 
 type SessionCatalogGroupsParams = {
   catalogs: readonly SidebarSessionCatalog[];
-  connected: boolean;
   basePath: string;
   routeSessionKey: string;
   newSessionAgentId: string;
@@ -362,18 +362,6 @@ function renderCatalogHostGroup(
       : params.projectGrouping === "person"
         ? groupCatalogSessionsByPerson(host.sessions)
         : null;
-  const renderRows = (sessions: readonly SessionCatalogSession[], projectChild = false) =>
-    repeat(
-      sessions,
-      (session) =>
-        buildCatalogSessionKey({
-          catalogId: catalog.id,
-          hostId: host.hostId,
-          threadId: session.threadId,
-        }),
-      (session) =>
-        renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params, projectChild),
-    );
   const renderVisibleRows = (
     sessions: readonly SessionCatalogSession[],
     sectionId: string,
@@ -382,9 +370,16 @@ function renderCatalogHostGroup(
     const expanded =
       (params.visibleSessionLimits.get(sectionId) ?? CATALOG_SESSION_GROUP_LIMIT) >
       CATALOG_SESSION_GROUP_LIMIT;
-    return renderRows(
+    return repeat(
       expanded ? sessions : sessions.slice(0, CATALOG_SESSION_GROUP_LIMIT),
-      projectChild,
+      (session) =>
+        buildCatalogSessionKey({
+          catalogId: catalog.id,
+          hostId: host.hostId,
+          threadId: session.threadId,
+        }),
+      (session) =>
+        renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params, projectChild),
     );
   };
   const renderPagination = (sessions: readonly SessionCatalogSession[], sectionId: string) => {
@@ -441,7 +436,7 @@ function renderCatalogHostGroup(
       <div class="sidebar-session-catalog-host__sessions" role="list" aria-label=${host.label}>
         ${
           projectGroups
-            ? html`${repeat(
+            ? repeat(
                 projectGroups.groups,
                 (group) => group.key,
                 (group) => {
@@ -488,10 +483,10 @@ function renderCatalogHostGroup(
                     </div>
                   `;
                 },
-              )}
-              ${renderVisibleRows(flatSessions, flatSectionId)}`
-            : renderVisibleRows(flatSessions, flatSectionId)
+              )
+            : nothing
         }
+        ${renderVisibleRows(flatSessions, flatSectionId)}
       </div>
       ${renderPagination(flatSessions, flatSectionId)}
     </section>
@@ -536,6 +531,7 @@ function renderCatalogSessionRow(
     canOpenTerminal: session.canOpenTerminal === true,
     canDelete: session.canArchive && catalog.capabilities.archive,
     name: session.name ?? session.threadId,
+    displayName: session.name,
     meta,
   };
   const menuOpen = params.isMenuOpen(catalogKey);
@@ -601,7 +597,7 @@ function renderCatalogSessionRow(
         }}
       >
         <span class="sidebar-session-indicator">
-          ${running ? renderSessionGlyph({ content: nothing, running }) : nothing}
+          ${running ? renderSessionGlyph({ content: nothing, running, runVisibility: sessionRunVisibility() }) : nothing}
         </span>
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__title-row"> ${marqueeLabel} </span>

@@ -28,11 +28,9 @@ function renderSessionFilterSummary(host: SessionListHost) {
   const parts = [
     ...(ownerId ? [owner?.label ?? ownerId] : []),
     ...(host.sessionInvolvingMeFilterActive ? [t("sessionsView.involvingMe")] : []),
-    ...(host.sessionsStatusFilter === "archived"
-      ? [t("sessionsView.archived")]
-      : host.sessionsStatusFilter === "all"
-        ? [t("sessionsView.all")]
-        : []),
+    ...(host.sessionsStatusFilter === "active"
+      ? []
+      : [t(`sessionsView.${host.sessionsStatusFilter}`)]),
   ];
   const summaryText = parts.join(" · ");
   const showAll = t("chat.sidebar.showAllSessions");
@@ -67,30 +65,35 @@ function renderSessionFilterSummary(host: SessionListHost) {
   </button>`;
 }
 
+type SessionFilterHost = Pick<
+  SessionListHost,
+  "sessionOwnerFilterActive" | "sessionInvolvingMeFilterActive" | "sessionsStatusFilter"
+>;
+
+/** Only Owners and Status filter sessions; the other panel rows are display choices. */
+export function countSidebarSessionFilters(host: SessionFilterHost) {
+  return (
+    Number(host.sessionOwnerFilterActive || host.sessionInvolvingMeFilterActive) +
+    Number(host.sessionsStatusFilter !== "active")
+  );
+}
+
 export function renderSidebarSessionFilter(
-  host: Pick<
-    SessionListHost,
-    | "sidebarMenus"
-    | "sessionOwnerFilterActive"
-    | "sessionInvolvingMeFilterActive"
-    | "sessionsStatusFilter"
-  >,
+  host: SessionFilterHost & Pick<SessionListHost, "sidebarMenus">,
   className: string,
 ) {
-  const filtered =
-    host.sessionOwnerFilterActive ||
-    host.sessionInvolvingMeFilterActive ||
-    host.sessionsStatusFilter !== "active";
+  const count = countSidebarSessionFilters(host);
   return html`<button
     type="button"
-    class="${className} sidebar-session-sort ${filtered ? "sidebar-session-sort--filtered" : ""}"
+    class="${className} sidebar-session-sort ${count > 0 ? "sidebar-session-sort--filtered" : ""}"
     title=${t("chat.sidebar.sortSessions")}
     aria-label=${t("chat.sidebar.sortSessions")}
-    aria-haspopup="menu"
+    aria-description=${count > 0 ? t("chat.sidebar.activeFilterCount", { count: String(count) }) : nothing}
+    aria-haspopup="dialog"
     aria-expanded=${String(host.sidebarMenus.sessionSortMenuPosition !== null)}
     @click=${(event: MouseEvent) => {
       if (event.currentTarget instanceof HTMLElement) {
-        host.sidebarMenus.toggleSessionSortMenu(event.currentTarget);
+        host.sidebarMenus.togglePositionedMenu("sessionSort", event.currentTarget);
       }
     }}
   >
@@ -100,14 +103,10 @@ export function renderSidebarSessionFilter(
 
 export function renderSessionListToolbar(host: SessionListHost) {
   const newSessionAccess = host.readNewSessionAccess();
-  const filtered =
-    host.sessionOwnerFilterActive ||
-    host.sessionInvolvingMeFilterActive ||
-    host.sessionsStatusFilter !== "active";
   return html`
     <div class="sidebar-session-toolbar">
       <span class="sidebar-recent-sessions__label-text">${t("chat.sidebar.threads")}</span>
-      ${filtered ? renderSessionFilterSummary(host) : nothing}
+      ${countSidebarSessionFilters(host) > 0 ? renderSessionFilterSummary(host) : nothing}
       ${renderSidebarSessionFilter(host, "sidebar-session-toolbar__button")}
       ${renderNewSessionLink({
         basePath: host.basePath,

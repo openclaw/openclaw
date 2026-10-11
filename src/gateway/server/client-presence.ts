@@ -1,3 +1,4 @@
+import type { PresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
 import { upsertPresence } from "../../infra/system-presence.js";
 import { presenceUserKey } from "../../shared/presence-user.js";
 import { buildAuthenticatedPresenceUser } from "../authenticated-presence-user.js";
@@ -20,6 +21,39 @@ function presenceIdentity(client: GatewayWsClient): string | undefined {
     : client.authenticatedUserId && !client.authenticatedGitHubIdentitySync
       ? presenceUserKey({ id: client.authenticatedUserId })
       : undefined;
+}
+
+/** Current transport facts are complete even when the legacy beacon cache evicts a row. */
+export function snapshotClientPresence(
+  clients: ReadonlySet<GatewayWsClient>,
+  observedAt = Date.now(),
+): PresenceEntry[] {
+  return [...clients]
+    .filter((client) => client.presenceKey && isLiveClient(client))
+    .map((client) => {
+      const entry: PresenceEntry = {
+        connectionId: client.connId,
+        deviceId: client.connect.device?.id,
+        instanceId: client.connect.client.instanceId,
+        host: client.connect.client.displayName ?? client.connect.client.id,
+        clientId: client.connect.client.id,
+        platform: client.connect.client.platform,
+        deviceFamily: client.connect.client.deviceFamily,
+        timeZone: client.connect.client.timeZone,
+        ip: client.internal?.isLocalClient ? undefined : client.clientIp,
+        roles: [client.connect.role ?? "operator"],
+        user: presenceIdentity(client) ? buildAuthenticatedPresenceUser(client) : undefined,
+        connectionLastActivityAt: client.connectionLastActivityAt,
+        ts: observedAt,
+      };
+      if (client.personPresence) {
+        entry.onlineSince = client.personPresence.onlineSince;
+        if (client.personPresence.lastActivityAt !== undefined) {
+          entry.lastActivityAt = client.personPresence.lastActivityAt;
+        }
+      }
+      return entry;
+    });
 }
 
 /** Reconciles live identity/timing and returns whether a presence snapshot is needed. */
@@ -61,6 +95,7 @@ export function refreshClientPresence(
     activityAt - publication.at >= ACTIVITY_BROADCAST_INTERVAL_MS;
   if (timing && activityAt !== undefined) {
     timing.lastActivityAt = activityAt;
+    client.connectionLastActivityAt = activityAt;
   }
   // Keep exact activity in the store; only publication is coalesced. Share the
   // window across live peers, with weak keys so a full reconnect starts fresh.
@@ -77,10 +112,12 @@ export function refreshClientPresence(
       activityPublications.set(peer, nextPublication);
     }
     upsertPresence(peer.presenceKey!, {
+      connectionId: peer.connId,
       clientId: peer.connect.client.id,
       mode: peer.connect.client.mode,
       user: buildAuthenticatedPresenceUser(peer),
       ...peer.personPresence,
+      connectionLastActivityAt: peer.connectionLastActivityAt,
     });
   }
   return publish;

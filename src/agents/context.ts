@@ -1,9 +1,7 @@
-// Load session runtime model metadata so we can infer context windows when the
-// agent reports a model id. This includes custom models.json entries.
-
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
+import { settlesWithin } from "../shared/settle-within.js";
 import {
   applyConfiguredContextWindows,
   prepareContextWindowCaches,
@@ -20,7 +18,6 @@ import {
 import {
   type ContextTokenResolutionParams,
   type ModelContextTokenProjection,
-  type ModelsConfig,
   resolveModelContextTokenProjectionFromCache,
 } from "./context-resolution.js";
 import {
@@ -28,19 +25,6 @@ import {
   CONTEXT_WINDOW_RUNTIME_STATE,
 } from "./context-runtime-state.js";
 
-export {
-  ANTHROPIC_CONTEXT_1M_TOKENS,
-  ANTHROPIC_FABLE_CONTEXT_TOKENS,
-  ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS,
-  ANTHROPIC_OPUS_5_CONTEXT_TOKENS,
-  ANTHROPIC_SONNET_5_CONTEXT_TOKENS,
-  ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS,
-} from "./context-resolution.js";
-export { resetContextWindowCacheForTest } from "./context-runtime-state.js";
-export {
-  applyConfiguredContextWindows,
-  applyDiscoveredContextWindows,
-} from "./context-cache-projection.js";
 const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   initialMs: 1_000,
   maxMs: 60_000,
@@ -54,7 +38,7 @@ function primeConfiguredContextWindowsFromConfig(cfg: OpenClawConfig): OpenClawC
   applyConfiguredContextWindows({
     cache: caches.configuredTokenCache,
     windowCache: caches.contextWindowCache,
-    modelsConfig: cfg.models as ModelsConfig | undefined,
+    modelsConfig: cfg.models,
   });
   CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig = cfg;
   CONTEXT_WINDOW_RUNTIME_STATE.configLoadFailures = 0;
@@ -225,20 +209,7 @@ export async function waitForContextWindowCacheLoad(options?: {
     return "timeout";
   }
 
-  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-  try {
-    return await Promise.race([
-      promise.then(() => "loaded" as const),
-      new Promise<"timeout">((resolve) => {
-        timeoutHandle = setTimeout(() => resolve("timeout"), timeoutMs);
-        (timeoutHandle as ReturnType<typeof setTimeout> & { unref?: () => void }).unref?.();
-      }),
-    ]);
-  } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
-  }
+  return (await settlesWithin(promise, timeoutMs)) ? "loaded" : "timeout";
 }
 
 /** Restore configured context limits without acquiring a model catalog. */
@@ -296,10 +267,9 @@ export function resolveContextTokensForModel(
 export function resolveModelContextTokenProjection(
   params: ContextTokenResolutionParams,
 ): ModelContextTokenProjection {
-  const lookupOptions = {
+  prepareContextWindowCache({
     allowAsyncLoad: params.allowAsyncLoad,
     skipRuntimeConfigLoad: Boolean(params.cfg),
-  };
-  prepareContextWindowCache(lookupOptions);
+  });
   return resolveModelContextTokenProjectionFromCache(params);
 }

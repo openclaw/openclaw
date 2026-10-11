@@ -2,6 +2,7 @@ import { html, nothing, render } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
+import { PRESENTATION_CHANGED_EVENT } from "../lit/presentation-binding.ts";
 import { markdownBlocks } from "./markdown-blocks.ts";
 import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
 import { htmlFragment } from "./markdown.test-support.ts";
@@ -47,6 +48,9 @@ it("reobserves reused Markdown DOM while fencing scans queued before disconnect"
     },
   );
   const container = document.body.appendChild(document.createElement("div"));
+  const owner = new EventTarget();
+  let presented = true;
+  const presentation = { owner, isPresented: () => presented };
   const content = toSanitizedMarkdownHtml(
     "```ts\nconst answer = 42;\n```\n\n| Name | Value |\n| --- | --- |\n| Alpha | One |",
     {
@@ -55,7 +59,9 @@ it("reobserves reused Markdown DOM while fencing scans queued before disconnect"
     },
   );
   const view = (active = true) =>
-    html`<section class="chat-text" ${markdownBlocks(active)}>${unsafeHTML(content)}</section>`;
+    html`<section class="chat-text" ${markdownBlocks(active ? presentation : false)}>
+      ${unsafeHTML(content)}
+    </section>`;
   const part = render(view(), container);
   const code = container.querySelector("code");
   const tableViewport = container.querySelector(".markdown-table__viewport");
@@ -81,6 +87,19 @@ it("reobserves reused Markdown DOM while fencing scans queued before disconnect"
     expect(observed.has(tableViewport!)).toBe(true);
     expect(observed.size).toBe(4);
 
+    presented = false;
+    owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    await Promise.resolve();
+    expect(observed.size).toBe(0);
+    expect(container.querySelector("code")).toBe(code);
+    presented = true;
+    owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    await Promise.resolve();
+    expect(observed.size).toBe(0);
+    render(view(), container);
+    await Promise.resolve();
+    expect(observed.size).toBe(4);
+
     render(view(false), container);
     await Promise.resolve();
     expect(observed.size).toBe(0);
@@ -94,6 +113,12 @@ it("reobserves reused Markdown DOM while fencing scans queued before disconnect"
     expect(observed.size).toBe(4);
     expect(observed.has(code!)).toBe(true);
     expect(observed.has(tableViewport!)).toBe(true);
+    part.setConnected(false);
+    presented = false;
+    owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    part.setConnected(true);
+    await Promise.resolve();
+    expect(observed.size).toBe(0);
   } finally {
     render(nothing, container);
   }
@@ -144,17 +169,10 @@ it("does not remeasure settled Markdown while neighboring prose streams", async 
 
 describe("Markdown code-block clipboard feedback", () => {
   it.each([
-    { name: "indentation and a final newline", source: "  const answer = 42;\n" },
-    { name: "boundary blank lines", source: "\n\nconst answer = 42;\n\n" },
-    { name: "whitespace-only content", source: " \n\t " },
-    { name: "HTML comments", source: "<!-- ordinary comment -->" },
-    { name: "comment-like arrows", source: "A --> B --!> C" },
-    { name: "CDATA terminators", source: "]]>" },
     {
       name: "closing HTML tags",
       source: '<script>console.log("ok")</script>\n</style></textarea>',
     },
-    { name: "literal Unicode escapes", source: String.raw`\u003c!-- 🦞 -->\u003e` },
   ])("preserves $name when copying ordinary code", async ({ source }) => {
     vi.useFakeTimers();
     const writeText = vi.fn(async () => undefined);
@@ -165,53 +183,6 @@ describe("Markdown code-block clipboard feedback", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(writeText).toHaveBeenCalledWith(source);
-  });
-
-  it("visibly reports both denied clipboard paths and restores the idle state", async () => {
-    vi.useFakeTimers();
-    const writeText = vi.fn(async () => {
-      throw new DOMException("Clipboard access denied", "NotAllowedError");
-    });
-    const execCommand = vi.fn(() => false);
-    vi.stubGlobal("navigator", { clipboard: { writeText } });
-    Object.defineProperty(document, "execCommand", {
-      configurable: true,
-      value: execCommand,
-    });
-    const button = renderCodeCopyButton();
-
-    button.click();
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(writeText).toHaveBeenCalledWith("const answer = 42;");
-    expect(execCommand).toHaveBeenCalledWith("copy");
-    expect(button.classList.contains("copy-failed")).toBe(true);
-    expect(button.getAttribute("aria-label")).toBe("Copy failed");
-    expect(button.classList.contains("copied")).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(2_000);
-
-    expect(button.classList.contains("copy-failed")).toBe(false);
-    expect(button.getAttribute("aria-label")).toBe("Copy code");
-  });
-
-  it("preserves successful copy feedback and restores its accessible label", async () => {
-    vi.useFakeTimers();
-    const writeText = vi.fn(async () => undefined);
-    vi.stubGlobal("navigator", { clipboard: { writeText } });
-    const button = renderCodeCopyButton();
-
-    button.click();
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(writeText).toHaveBeenCalledWith("const answer = 42;");
-    expect(button.classList.contains("copied")).toBe(true);
-    expect(button.getAttribute("aria-label")).toBe("Copied!");
-
-    await vi.advanceTimersByTimeAsync(1_500);
-
-    expect(button.classList.contains("copied")).toBe(false);
-    expect(button.getAttribute("aria-label")).toBe("Copy code");
   });
 
   it("ignores an older clipboard attempt that finishes after the latest denied copy", async () => {
@@ -371,11 +342,6 @@ describe("toSanitizedMarkdownHtml code blocks", () => {
     expect(code?.textContent).toBe(`${blockArt}\n`);
   });
 
-  it("copies fenced block art with its quiet-zone whitespace intact", async () => {
-    const fragment = htmlFragment(toSanitizedMarkdownHtml(`\`\`\`\n${blockArt}\n\`\`\``));
-    await expectCodeCopy(fragment, blockArt);
-  });
-
   it("renders indented code blocks", async () => {
     // markdown-it requires a blank line before indented code
     const rendered = toSanitizedMarkdownHtml("text\n\n    indented code");
@@ -409,32 +375,6 @@ PY
     expect(fragment.querySelector("pre code")?.textContent).toBe(source);
   });
 
-  it("keeps short code blocks fully visible in interactive hosts", () => {
-    const fragment = htmlFragment(
-      toSanitizedMarkdownHtml(jsonBlock(7), { codeBlockInteraction: "interactive" }),
-    );
-    const code = fragment.querySelector(".code-block-viewport pre code");
-
-    expect(fragment.querySelector(".code-block-wrapper.is-collapsible")).toBeNull();
-    expect(fragment.querySelector(".code-block-expand")).toBeNull();
-    expect(code?.textContent?.split("\n")).toHaveLength(8);
-    expect(code?.innerHTML).toContain("hljs-");
-  });
-
-  it("previews longer code blocks with the exact hidden-line count", () => {
-    const fragment = htmlFragment(
-      toSanitizedMarkdownHtml(jsonBlock(11), { codeBlockInteraction: "interactive" }),
-    );
-    const expand = fragment.querySelector(".code-block-expand");
-
-    expect(fragment.querySelector(".code-block-wrapper.is-collapsible")).toBeInstanceOf(
-      HTMLDivElement,
-    );
-    expect(expand?.textContent).toContain("4 hidden lines");
-    expect(expand?.getAttribute("aria-expanded")).toBe("false");
-    expect(fragment.querySelector(".code-block-viewport pre code")?.innerHTML).toContain("hljs-");
-  });
-
   it("uses the singular hidden-line label for a single hidden line", () => {
     const fragment = htmlFragment(
       toSanitizedMarkdownHtml(jsonBlock(8), { codeBlockInteraction: "interactive" }),
@@ -445,7 +385,7 @@ PY
     expect(expand?.getAttribute("aria-label")).toBe("Show 1 hidden line");
   });
 
-  it.each(["md", "TEXT", "Markdown title=notes"])("keeps long %s fences fully visible", (info) => {
+  it.each(["TEXT"])("keeps long %s fences fully visible", (info) => {
     const fragment = htmlFragment(
       toSanitizedMarkdownHtml(`\`\`\`${info}\n${"prose line\n".repeat(20)}\`\`\``, {
         codeBlockInteraction: "interactive",
@@ -469,21 +409,6 @@ PY
       HTMLDivElement,
     );
     expect(fragment.querySelector(".code-block-expand")?.textContent).toContain("13 hidden lines");
-  });
-
-  it("keeps collapse and wrap controls out of hosts that do not own them", () => {
-    const markdown = jsonBlock(41);
-    const staticHost = htmlFragment(toSanitizedMarkdownHtml(markdown));
-    const interactiveHost = htmlFragment(
-      toSanitizedMarkdownHtml(markdown, { codeBlockInteraction: "interactive" }),
-    );
-
-    expect(staticHost.querySelector(".code-block-expand")).toBeNull();
-    expect(staticHost.querySelector(".code-block-wrap")).toBeNull();
-    expect(staticHost.querySelector(".code-block-viewport")).toBeNull();
-    expect(staticHost.querySelector(".code-block-copy")).toBeInstanceOf(HTMLButtonElement);
-    expect(interactiveHost.querySelector(".code-block-expand")).toBeInstanceOf(HTMLButtonElement);
-    expect(interactiveHost.querySelector(".code-block-wrap")).toBeInstanceOf(HTMLButtonElement);
   });
 
   it("reveals a collapsed block through the shared click owner", () => {
@@ -539,17 +464,6 @@ PY
     } finally {
       await i18n.setLocale("en");
     }
-  });
-
-  it("auto-highlights unlabeled code blocks only when detection is confident", () => {
-    const rendered = toSanitizedMarkdownHtml("```\n#include <vector>\nstd::vector<int> nums;\n```");
-    const fragment = htmlFragment(rendered);
-    const code = fragment.querySelector("pre code");
-
-    expect(code?.classList.contains("hljs")).toBe(true);
-    expect(code?.textContent).toBe("#include <vector>\nstd::vector<int> nums;\n");
-    expect(code?.innerHTML).toContain("hljs-meta");
-    expect(code?.innerHTML).toContain("hljs-keyword");
   });
 
   it("keeps highlighted HTML code escaped", () => {

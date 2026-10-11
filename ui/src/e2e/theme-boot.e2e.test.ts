@@ -134,6 +134,8 @@ suite.define(() => {
               entries: saved ? { "ui.theme": theme, "ui.themeMode": mode } : {},
             };
             const gateway = await installMockGateway(page, {
+              // App scripts stay held while this fixture inspects pre-module paint.
+              awaitInitialRoster: false,
               presenceUsers: saved ? [{ id: profileId, name: "Theme Reader", self: true }] : [],
               sessions: [
                 { key: "agent:main:main", kind: "direct", label: "Home", updatedAt: 2 },
@@ -142,6 +144,7 @@ suite.define(() => {
                   kind: "direct",
                   label: "Second conversation",
                   updatedAt: 1,
+                  owner: { actor: { type: "human", id: profileId, label: "Theme Reader" } },
                 },
               ],
               deferredMethods: saved ? ["users.prefs.get"] : [],

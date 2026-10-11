@@ -1,3 +1,5 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { z } from "zod";
 
 export function createResponseParser(createError: () => Error) {
@@ -26,30 +28,22 @@ export async function wait(
   const deadline = Date.now() + ms;
   do {
     checkAbort(signal, label);
-    await new Promise<void>((resolve, reject) => {
-      const onAbort = () => {
-        clearTimeout(timer);
-        signal?.removeEventListener("abort", onAbort);
-        reject(new DOMException(label, "AbortError"));
-      };
-      const timer = setTimeout(
-        () => {
-          signal?.removeEventListener("abort", onAbort);
-          resolve();
-        },
-        Math.min(Math.max(0, deadline - Date.now()), 2_147_483_647),
+    try {
+      await sleepWithAbort(
+        Math.min(Math.max(1, deadline - Date.now()), MAX_TIMER_TIMEOUT_MS),
+        signal,
       );
-      signal?.addEventListener("abort", onAbort, { once: true });
-    });
+    } catch (error) {
+      checkAbort(signal, label);
+      throw error;
+    }
   } while (Date.now() < deadline);
   checkAbort(signal, label);
 }
 
 export function parseApiBase(raw: string, label: string): URL {
-  let base: URL;
-  try {
-    base = new URL(`${raw.replace(/\/+$/, "")}/`);
-  } catch {
+  const base = URL.parse(`${raw.replace(/\/+$/, "")}/`);
+  if (!base) {
     throw new Error(`${label} API base URL is invalid.`);
   }
   if (base.protocol !== "https:" || base.username || base.password || base.search || base.hash) {

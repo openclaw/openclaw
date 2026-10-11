@@ -14,10 +14,7 @@ import {
   isValidFileSecretRefId,
   resolveDefaultSecretProviderAlias,
 } from "../secrets/ref-contract.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-
-const secretResolveLoader = createLazyImportLoader(() => import("../secrets/resolve.js"));
 
 const ENV_SOURCE_LABEL_RE = /(?:^|:\s)([A-Z][A-Z0-9_]*)$/;
 
@@ -54,10 +51,6 @@ function resolveDefaultProviderEnvVar(
     includeUntrustedWorkspacePlugins: false,
   });
   return envVars?.find((candidate) => normalizeOptionalString(candidate) !== undefined);
-}
-
-function resolveDefaultFilePointerId(provider: string): string {
-  return `/providers/${encodeJsonPointerToken(provider)}/apiKey`;
 }
 
 export function resolveRefFallbackInput(params: {
@@ -203,58 +196,48 @@ async function promptProviderSecretRefForSetup(params: {
     throw new Error("retry");
   }
 
-  const idPrompt =
+  const idInput =
     providerEntry.source === "file"
-      ? "Secret id (JSON pointer for json mode, or 'value' for singleValue mode)"
+      ? {
+          message: "Secret id (JSON pointer for json mode, or 'value' for singleValue mode)",
+          initialValue: providerEntry.mode === "singleValue" ? "value" : params.defaultFilePointer,
+          placeholder: "/providers/openai/apiKey",
+          validate: (candidate: string) =>
+            providerEntry.mode === "singleValue"
+              ? candidate === "value"
+                ? undefined
+                : 'singleValue mode expects id "value".'
+              : isValidFileSecretRefId(candidate)
+                ? undefined
+                : 'Use an absolute JSON pointer like "/providers/openai/apiKey".',
+        }
       : providerEntry.source === "store"
-        ? "Secret store name"
-        : "Secret id for the exec provider";
-  const idDefault =
-    providerEntry.source === "file"
-      ? providerEntry.mode === "singleValue"
-        ? "value"
-        : params.defaultFilePointer
-      : providerEntry.source === "store"
-        ? (resolveDefaultProviderEnvVar(params.provider, params.config) ?? "")
-        : `${params.provider}/apiKey`;
+        ? {
+            message: "Secret store name",
+            initialValue: resolveDefaultProviderEnvVar(params.provider, params.config) ?? "",
+            placeholder: "OPENAI_API_KEY",
+            validate: (candidate: string) =>
+              isValidEnvSecretRefId(candidate)
+                ? undefined
+                : 'Use a store name like "OPENAI_API_KEY" (uppercase letters, numbers, underscores).',
+          }
+        : {
+            message: "Secret id for the exec provider",
+            initialValue: `${params.provider}/apiKey`,
+            placeholder: "openai/api-key",
+            validate: (candidate: string) =>
+              isValidExecSecretRefId(candidate)
+                ? undefined
+                : formatExecSecretRefIdValidationMessage(),
+          };
   const idRaw = await params.prompter.text({
-    message: idPrompt,
-    initialValue: idDefault,
-    placeholder:
-      providerEntry.source === "file"
-        ? "/providers/openai/apiKey"
-        : providerEntry.source === "store"
-          ? "OPENAI_API_KEY"
-          : "openai/api-key",
+    ...idInput,
     validate: (value) => {
       const candidate = value.trim();
-      if (!candidate) {
-        return "Secret id cannot be empty.";
-      }
-      if (
-        providerEntry.source === "file" &&
-        providerEntry.mode !== "singleValue" &&
-        !isValidFileSecretRefId(candidate)
-      ) {
-        return 'Use an absolute JSON pointer like "/providers/openai/apiKey".';
-      }
-      if (
-        providerEntry.source === "file" &&
-        providerEntry.mode === "singleValue" &&
-        candidate !== "value"
-      ) {
-        return 'singleValue mode expects id "value".';
-      }
-      if (providerEntry.source === "exec" && !isValidExecSecretRefId(candidate)) {
-        return formatExecSecretRefIdValidationMessage();
-      }
-      if (providerEntry.source === "store" && !isValidEnvSecretRefId(candidate)) {
-        return 'Use a store name like "OPENAI_API_KEY" (uppercase letters, numbers, underscores).';
-      }
-      return undefined;
+      return candidate ? idInput.validate(candidate) : "Secret id cannot be empty.";
     },
   });
-  const id = normalizeStringifiedOptionalString(idRaw) || idDefault;
+  const id = normalizeStringifiedOptionalString(idRaw) || idInput.initialValue;
   const ref: SecretRef = {
     source: providerEntry.source,
     provider: selectedProvider,
@@ -262,7 +245,7 @@ async function promptProviderSecretRefForSetup(params: {
   };
 
   try {
-    const { resolveSecretRefString } = await secretResolveLoader.load();
+    const { resolveSecretRefString } = await import("../secrets/resolve.js");
     const resolvedValue = await resolveSecretRefString(ref, {
       config: params.config,
       env: params.env ?? process.env,
@@ -296,7 +279,7 @@ export async function promptSecretRefForSetup(params: {
 }): Promise<{ ref: SecretRef; resolvedValue: string }> {
   const defaultEnvVar =
     params.preferredEnvVar ?? resolveDefaultProviderEnvVar(params.provider, params.config) ?? "";
-  const defaultFilePointer = resolveDefaultFilePointerId(params.provider);
+  const defaultFilePointer = `/providers/${encodeJsonPointerToken(params.provider)}/apiKey`;
   let sourceChoice: SecretRefChoice = "env"; // pragma: allowlist secret
 
   while (true) {
@@ -327,12 +310,8 @@ export async function promptSecretRefForSetup(params: {
 
     if (source === "env") {
       return await promptEnvSecretRefForSetup({
-        provider: params.provider,
-        config: params.config,
-        prompter: params.prompter,
+        ...params,
         defaultEnvVar,
-        copy: params.copy,
-        env: params.env,
       });
     }
 
@@ -354,7 +333,7 @@ export async function promptSecretRefForSetup(params: {
         }),
         id,
       };
-      const { resolveSecretRefString } = await secretResolveLoader.load();
+      const { resolveSecretRefString } = await import("../secrets/resolve.js");
       const resolvedValue = await resolveSecretRefString(ref, {
         config: params.config,
         env: params.env ?? process.env,
@@ -368,12 +347,8 @@ export async function promptSecretRefForSetup(params: {
 
     try {
       return await promptProviderSecretRefForSetup({
-        provider: params.provider,
-        config: params.config,
-        prompter: params.prompter,
+        ...params,
         defaultFilePointer,
-        copy: params.copy,
-        env: params.env,
       });
     } catch (error) {
       if (error instanceof Error && error.message === "retry") {

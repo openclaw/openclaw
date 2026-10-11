@@ -80,7 +80,7 @@ function mountLifecycleHost(
   return host;
 }
 
-function createGatewayHarness() {
+function createGatewayHarness(scopes = ["operator.read"]) {
   const request = vi.fn().mockResolvedValue({ subscribed: true });
   const eventListeners = new Set<GatewayEventListener>();
   const client = { request } as unknown as GatewayBrowserClient;
@@ -89,7 +89,10 @@ function createGatewayHarness() {
       client,
       phase: "connected",
       offlineStable: false,
-      hello: { features: { methods: [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD] } },
+      hello: {
+        auth: { role: "operator", scopes },
+        features: { methods: [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD] },
+      },
       canvasPluginSurfaceUrl: null,
       assistantAgentId: "main",
       sessionKey: "agent:main:main",
@@ -137,6 +140,20 @@ afterEach(() => {
 });
 
 describe("SessionPullRequestIndicatorsController", () => {
+  it("does not subscribe to PR status for session-only sidebar viewers", async () => {
+    vi.useFakeTimers();
+    const harness = createGatewayHarness(["operator.sessions.read", "operator.sessions.write"]);
+    const row = {
+      key: "agent:main:demo",
+      isChild: false,
+      worktreeId: "wt-demo",
+    } as SidebarRecentSession;
+    const host = mountLifecycleHost(harness.gateway, () => [row]);
+    await host.updateComplete;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(harness.request).not.toHaveBeenCalled();
+    expect(host.controller.summary(row.key, row.worktreeId ?? "")).toBeUndefined();
+  });
   it("does not invalidate the host when no rows are eligible", async () => {
     vi.useFakeTimers();
     const harness = createGatewayHarness();
@@ -157,7 +174,7 @@ describe("SessionPullRequestIndicatorsController", () => {
   });
 
   it.each(["open", "draft", "merged", "closed"] as const)(
-    "subscribes visible rows and keeps the %s summary through backoff",
+    "observes visible rows and keeps the pushed %s summary through backoff",
     async (state) => {
       vi.useFakeTimers();
       const host = new TestHost();
@@ -183,7 +200,7 @@ describe("SessionPullRequestIndicatorsController", () => {
       expect(harness.request).toHaveBeenCalledWith(
         SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
         {
-          sessionKeys: [row.key],
+          sessionKeys: [],
         },
         { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
       );
@@ -335,24 +352,91 @@ describe("SessionPullRequestIndicatorsController", () => {
 });
 
 describe("SessionPullRequestIndicatorsController Lit lifecycle", () => {
-  it("synchronizes visible subscriptions by updateComplete without advancing timers", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  it("hides the row's saved PR summary after a same-client read-scope revocation", async () => {
     const harness = createGatewayHarness();
     const row = {
       key: "agent:main:demo",
       isChild: false,
       worktreeId: "wt-demo",
+      pullRequest: { numbers: [42], state: "open" },
     } as SidebarRecentSession;
     const host = mountLifecycleHost(harness.gateway, () => [row]);
+    await host.updateComplete;
+    expect(host.shadowRoot?.textContent).toContain("42");
+
+    const snapshot = harness.gateway.snapshot;
+    snapshot.hello = {
+      ...snapshot.hello!,
+      auth: { role: "operator", scopes: ["operator.sessions.read", "operator.sessions.write"] },
+    };
+    host.requestUpdate();
+    await host.updateComplete;
+    expect(host.shadowRoot?.textContent).not.toContain("42");
+    expect(host.controller.summary(row.key, row.worktreeId!, row.pullRequest)).toBeUndefined();
+
+    snapshot.hello = {
+      ...snapshot.hello,
+      auth: { role: "operator", scopes: ["operator.read"] },
+    };
+    host.requestUpdate();
+    await host.updateComplete;
+    expect(host.shadowRoot?.textContent).toContain("42");
+  });
+
+  it("retains sidebar snapshots while only the viewed checkout drives subscriptions", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const harness = createGatewayHarness();
+    const rows = Array.from({ length: 40 }, (_, index) => ({
+      key: `agent:main:demo-${index}`,
+      isChild: false,
+      worktreeId: `wt-demo-${index}`,
+    })) as SidebarRecentSession[];
+    const host = mountLifecycleHost(harness.gateway, () => rows);
 
     await host.updateComplete;
     await Promise.resolve();
 
     expect(harness.request).toHaveBeenCalledExactlyOnceWith(
       SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-      { sessionKeys: [row.key] },
+      { sessionKeys: [] },
       { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
     );
+
+    const viewer = {};
+    const store = sessionPullRequestsForGateway(harness.gateway);
+    const key = rows[0]!.key;
+    store.watch(viewer, [key], { foreground: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      { sessionKeys: [key] },
+      { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+    );
+    harness.emit({
+      sessions: {
+        [key]: {
+          pullRequests: [{ number: 7, state: "open" }],
+          rateLimited: false,
+          status: "ready",
+        },
+      },
+    });
+    store.unwatch(viewer);
+    await vi.advanceTimersByTimeAsync(0);
+    await host.updateComplete;
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      { sessionKeys: [] },
+      { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+    );
+    expect(host.shadowRoot?.textContent?.trim()).toBe("7");
+
+    harness.request.mockClear();
+    harness.emit({ sessionKey: key, agentId: "main", reason: "rewind" }, "sessions.changed");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await host.updateComplete;
+    expect(host.shadowRoot?.textContent?.trim()).toBe("");
+    expect(harness.request).not.toHaveBeenCalled();
   });
 
   it("clears a rendered fallback after the visible snapshot leaves the bounded watch union", async () => {
@@ -421,7 +505,7 @@ describe("SessionPullRequestIndicatorsController Lit lifecycle", () => {
     }
   });
 
-  it("does not restore a watch from an update pending at disconnect and resumes on reconnect", async () => {
+  it("keeps sidebar watches passive across disconnect and reconnect", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const harness = createGatewayHarness();
     const row = {
@@ -435,7 +519,7 @@ describe("SessionPullRequestIndicatorsController Lit lifecycle", () => {
     expect(harness.request).toHaveBeenLastCalledWith(
       SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
       {
-        sessionKeys: [row.key],
+        sessionKeys: [],
       },
       { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
     );
@@ -461,7 +545,7 @@ describe("SessionPullRequestIndicatorsController Lit lifecycle", () => {
     expect(harness.request).toHaveBeenLastCalledWith(
       SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
       {
-        sessionKeys: [row.key],
+        sessionKeys: [],
       },
       { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
     );

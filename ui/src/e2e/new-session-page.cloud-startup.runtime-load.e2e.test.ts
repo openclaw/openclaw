@@ -6,10 +6,12 @@ import type { ApplicationContext } from "../app/context.ts";
 import { sessionPlacementRecoveryExactStorageKey } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import type { SessionPlacementPendingRecovery } from "../lib/sessions/session-placement-recovery.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   navigateToControlUiSession,
   startProductionControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureUiProofEnabled,
@@ -22,12 +24,16 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const buildId = "startup-recovery-proof";
+let buildRoot: string;
 const suite = createControlUiE2eSuite({
   name: "Control UI startup recovery production E2E",
   startServer: async () => {
     const outDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-startup-recovery-"));
+    buildRoot = outDir;
     try {
-      const server = await startProductionControlUiE2eServer(outDir, buildId);
+      const server = await startProductionControlUiE2eServer(outDir, buildId, undefined, {
+        includeBootGroups: false,
+      });
       return {
         ...server,
         close: async () => {
@@ -138,7 +144,10 @@ suite.define(() => {
           }
         });
         await page.route(
-          /\/assets\/session-placement-startup\.runtime-[^/?]+\.js(?:\?.*)?$/,
+          controlUiE2eBuiltModuleRequest(
+            "ui/src/app/session-placement-startup.runtime.ts",
+            buildRoot,
+          ),
           async (route) => {
             moduleRequests += 1;
             if (moduleRequests === 1) {
@@ -189,7 +198,8 @@ suite.define(() => {
           await state.handleSendChat();
           return { draft: state.chatMessage, queued: state.chatQueue.map((item) => item.text) };
         });
-        expect(held).toEqual({ draft: "later ordinary turn", queued: [] });
+        expect(held).toEqual({ draft: "", queued: ["later ordinary turn"] });
+        await composer.fill("unfinished later draft");
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
         if (incognito) {
@@ -296,12 +306,15 @@ suite.define(() => {
             await page.locator(".sidebar-brand__new-thread").click();
             const privacy = page.getByRole("switch", { name: "Incognito" });
             await privacy.waitFor();
-            if ((await privacy.getAttribute("aria-checked")) !== "true") {
+            if (!(await privacy.isChecked())) {
               await privacy.click();
             }
             await page.locator(".new-session-page__message").fill(separateDraft);
           }
-          const configRuntime = /\/assets\/config-page-[^/?]+\.js(?:\?.*)?$/;
+          const configRuntime = controlUiE2eBuiltModuleRequest(
+            "ui/src/pages/config/config-page.ts",
+            buildRoot,
+          );
           await page.route(configRuntime, (route) => route.abort("failed"));
           await navigateInApp(page, "appearance");
           const reload = page
@@ -370,16 +383,26 @@ suite.define(() => {
           params: { key: sessionKey, message, idempotencyKey: messageId },
         });
         if (escape === "toast") {
+          // Retained requests do not establish readiness in the reloaded document.
+          await waitForControlUiGatewayReady(page);
           await navigateToControlUiSession(page, sessionKey);
         }
         await expect
           .poll(() => page.evaluate((key) => sessionStorage.getItem(key), storageKey))
           .toBeNull();
         await page.locator(".chat-group.user", { hasText: message }).waitFor();
-        expect(await composer.inputValue()).toBe("later ordinary turn");
+        expect(await composer.inputValue()).toBe("unfinished later draft");
+        await gateway.emitChatFinal({
+          sessionKey,
+          runId: messageId,
+          text: "Initial turn finished.",
+        });
+        expect(await gateway.waitForRequest("chat.send")).toMatchObject({
+          params: { sessionKey, message: "later ordinary turn" },
+        });
         expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.send")).toHaveLength(1);
-        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(1);
         expect(moduleRequests).toBe(2);
         if (incognito) {
           expect(

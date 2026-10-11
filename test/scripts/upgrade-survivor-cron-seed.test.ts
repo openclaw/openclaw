@@ -49,8 +49,9 @@ if (args[0] === "fixture-systemctl") {
   if (args[2] === "is-active") process.exit(fs.existsSync(live) ? 0 : 3);
   if (args[2] === "stop") {
     assert.equal(fs.existsSync(boot), true);
-    fs.unlinkSync(live);
-    fs.unlinkSync(process.env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE);
+    // Like systemd, stopping an inactive unit succeeds.
+    fs.rmSync(live, { force: true });
+    fs.rmSync(process.env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE, { force: true });
   } else {
     assert.equal(args[2], "start");
     assert.equal(fs.existsSync(live), false);
@@ -121,7 +122,7 @@ if (args[0] === "config") {
     assert.equal(fs.existsSync(path.join(state, relative)), false,
       "synthetic legacy auth state must not exist during baseline bootstrap: " + relative);
   }
-  assert.equal(fs.existsSync(path.join(state, "sessions", "sessions.json")), false,
+  assert.equal(fs.existsSync(path.join(state, "agents", "main", "sessions", "sessions.json")), false,
     "legacy session specimens must not exist during baseline bootstrap");
   assert.equal(fs.existsSync(path.join(state, "cron", "jobs.json")), false,
     "legacy cron specimens must not exist during baseline bootstrap");
@@ -143,7 +144,7 @@ if (args[0] === "config") {
   assert.equal(fs.existsSync(live), false, "legacy migration specimens require an offline baseline");
   assert.equal(config, original, "the updater must receive the authored config bytes");
   assert.equal(fs.existsSync(boot), process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE === "auto-auth");
-  const sessions = read(path.join(state, "sessions", "sessions.json"));
+  const sessions = read(path.join(state, "agents", "main", "sessions", "sessions.json"));
   assert.deepEqual(Object.values(sessions).map((entry) => entry.sessionId),
     ["upgrade-main-session", "upgrade-direct-session", "upgrade-group-session"]);
   for (const entry of Object.values(sessions)) assert.equal(read(entry.sessionFile).id, entry.sessionId);
@@ -197,6 +198,7 @@ install_update_restart_systemctl_shim() { :; }
 openclaw_e2e_wait_gateway_ready() { node "$FIXTURE_PROBE" fixture-ready "\${5:-strict}"; }
 openclaw_e2e_probe_tcp() { [ -f "$FIXTURE_ROOT/live" ]; }
 update_candidate() { node "$FIXTURE_PROBE" fixture-update "\${1:-0}" "\${2:-}" "\${3:-}"; }
+assert_managed_membership_warning() { [ -f "$FIXTURE_ROOT/restarted" ]; }
 assert_survival() { printf 'passed' > "$FIXTURE_ROOT/survival"; }
 ${source.slice(phaseStart, phaseEnd)}
 assert_survival
@@ -275,6 +277,12 @@ describe("legacy operator cron acceptance", () => {
     expect(() => assertLegacyOperatorCronOwners({ jobs }, { jobs: baselineJobs })).toThrow(
       "cron owner unresolved or changed: survivor-default-owner",
     );
+  });
+
+  it("accepts Doctor pinning an ownerless job to its historical owner", () => {
+    const jobs = migratedJobs();
+    jobs[0]!.agentId = "main";
+    expect(() => assertLegacyOperatorCronOwners({ jobs }, { jobs: baselineJobs })).not.toThrow();
   });
 
   it("rejects a missing job and an explicit owner rewritten behind a correct projection", () => {

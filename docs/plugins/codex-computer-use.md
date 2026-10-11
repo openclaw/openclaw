@@ -14,13 +14,14 @@ Codex permissions. The bundled `codex` plugin only prepares Codex app-server:
 it enables Codex plugin support, finds or installs the configured Computer Use
 plugin, checks that the configured MCP server is available, and then lets Codex
 own the native MCP tool calls during Codex-mode turns. Ordinary non-strict
-turns check installation and tool availability without running a live probe.
+turns check installation and tool availability without running a live check.
 Explicit status/install commands, strict-readiness startup, and enabled periodic
-health checks run live probes. These use
+health checks test the live connection. These use
 `list_apps` when the server exposes the legacy Computer Use surface. A newer
-server that exposes `js` instead is probed with one `await cua.getState();`
-call. An MCP response with `isError: true` fails readiness instead of counting
-as a successful response.
+server that exposes `js` instead is checked with one `await cua.listApps();`
+call. Both checks verify native app control without inventorying browser surfaces.
+An MCP response with `isError: true` fails readiness instead of counting as a
+successful response.
 
 Use this page when OpenClaw is already using the native Codex harness. For the
 runtime setup itself, see [Codex harness](/plugins/codex-harness).
@@ -146,9 +147,15 @@ server available, the turn fails before the thread starts.
 The legacy default plugin/server pair follows this replacement automatically,
 including an explicitly configured `pluginName: "computer-use"` with the default
 server name. Custom plugin, server, or marketplace selections remain unchanged.
-An explicit native `mcp_servers.computer-use` entry or legacy plugin MCP tool
-policy keeps the legacy identity, so a renamed server cannot bypass those
-restrictions. Update that native policy explicitly before selecting the unified
+An explicit native disable for `computer-use@openai-bundled` blocks automatic
+replacement before feature enablement. Automatic installation rechecks that disable
+immediately before sending the native install request, after marketplace discovery
+and plugin inspection. Disabled status reports installation as unchecked because
+policy blocks inspection; it does not imply that the plugin is absent.
+Startup cache preparation
+keeps the requested identity until native effective policy is available. An
+explicit native `mcp_servers.computer-use` entry or legacy plugin MCP tool policy
+keeps the legacy identity, so a renamed server cannot bypass those restrictions. Update that native policy explicitly before selecting the unified
 server. Native `cua_repl` overrides continue to take precedence over the plugin.
 The managed unified runtime enables its **computer** surface, preserving desktop
 app discovery and control. It does not attach the agent to the desktop app's
@@ -156,10 +163,10 @@ browser sessions or advertise the unified browser surface. Native MCP policy,
 tool restrictions, and macOS permissions still apply. Desktop updates refresh
 the prepared source and client generation together.
 With the default `strictReadiness: false`, startup does not create a temporary
-probe thread or wait for a readiness tool call. Use `/codex computer-use status`
+check thread or wait for a readiness tool call. Use `/codex computer-use status`
 to verify live desktop access, or enable `healthCheckEnabled` for periodic
 checks owned by the active app-server client. Set `strictReadiness: true` when
-every turn must wait for a successful live probe before its thread starts.
+every turn must wait for a successful live check before its thread starts.
 Strict readiness failures are harness preflight failures, so model fallback
 does not repeat the same local readiness sequence for every Codex candidate.
 A candidate resolved to another harness remains eligible and enters that
@@ -211,7 +218,7 @@ retry promise for unrelated Computer Use transport failures. A watcher failure
 or an unsupported out-of-band path can still require a Gateway restart.
 `autoInstall: false` continues to prohibit automatic native-service and
 marketplace provisioning. `autoRepair` controls only the one-time stale MCP
-child repair after a failed readiness probe; it does not control desktop
+child repair after a failed readiness check; it does not control desktop
 generation convergence.
 
 ## Commands
@@ -241,6 +248,13 @@ only an owner or an `operator.admin` Gateway client can run `install`. Other
 authorized senders can continue to use the read-only `status` command,
 including with overrides.
 
+The explicit owner-authorized `install` command can recover the managed unified
+replacement even when the legacy `computer-use@openai-bundled` plugin is disabled.
+It installs or re-enables the selected replacement without clearing that legacy
+setting. Automatic readiness and installation continue to honor the legacy disable;
+to resume automatic replacement, enable `computer-use@openai-bundled` in native
+Codex config. Explicit installation still respects native server and tool policies.
+
 Older releases accepted one-off `--plugin`, `--server`, and `--mcp-server`
 identity overrides. Configure `computerUse.pluginName` and
 `computerUse.mcpServerName` persistently instead. When a legacy identity flag
@@ -265,8 +279,8 @@ marketplaces. During install, OpenClaw polls `plugin/list` for up to
 When Codex reports `features.plugins` as disabled, OpenClaw skips this discovery wait.
 
 If multiple known marketplaces contain Computer Use, OpenClaw prefers
-`openai-bundled`, then `openai-curated`, then `local`. Unknown ambiguous
-matches fail closed and ask you to set `marketplaceName` or
+`openai-bundled`, then `openai-curated`, then `local`. OpenClaw rejects unknown ambiguous
+matches and asks you to set `marketplaceName` or
 `marketplacePath`.
 
 ## Bundled macOS marketplace
@@ -302,16 +316,25 @@ marketplace JSON file path, not the bundled marketplace root.
 The default `pluginCacheMode: "independent"` leaves each Codex home and its
 plugin cache unmanaged. Set `pluginCacheMode: "shared"` to copy the bundled
 Computer Use plugin into the active Codex home's discoverable plugin cache
-before app-server startup. Shared mode preserves older cached versions because
+before app-server startup. The cached version is a real directory even when the
+bundled source is symlinked, and repeated startup in the same desktop generation
+leaves an up-to-date copy unchanged. Shared mode preserves older cached versions because
 running Codex clients can still reference their versioned plugin directories; a
 failed replacement copy also preserves the active cache. Explicit
 `marketplaceName` or `marketplacePath` configuration disables this
 reconciliation so OpenClaw does not override that selection.
 
+When the desktop replaces legacy Computer Use with Unified Computer Use,
+automatic readiness refreshes the unified shared cache only after native policy
+permits the replacement. This also repairs stale generated launcher paths when
+the unified plugin is already installed and enabled at the same version, without
+reinstalling it. An already-current copy is unchanged; a disabled legacy plugin
+or legacy MCP/tool restrictions prevent automatic replacement and cache refresh.
+
 ## Remote marketplaces
 
 Remote marketplace support was introduced in Codex 0.146.1 and remains
-available in OpenClaw's pinned Codex 0.155.1. OpenClaw passes the opaque remote
+available in OpenClaw's pinned Codex 0.160.0. OpenClaw passes the opaque remote
 plugin ID returned by Codex to `plugin/read` and `plugin/install`; a
 human-readable plugin name is not a valid substitute.
 
@@ -329,11 +352,11 @@ install plugins or modify Codex configuration.
 | `marketplaceDiscoveryTimeoutMs` | 60000          | How long install waits for Codex app-server marketplace discovery.             |
 | `liveTestTimeoutMs`             | 60000          | Timeout for the temporary readiness thread and its cleanup requests.           |
 | `toolCallTimeoutMs`             | 60000          | Timeout for the capability-matched Computer Use readiness tool call.           |
-| `healthCheckEnabled`            | false          | Run periodic readiness probes while the owning app-server client is active.    |
-| `healthCheckIntervalMinutes`    | 60             | Probe cadence; accepted values are 30, 60, 120, or 240 minutes.                |
+| `healthCheckEnabled`            | false          | Run periodic readiness checks while the owning app-server client is active.    |
+| `healthCheckIntervalMinutes`    | 60             | Check cadence; accepted values are 30, 60, 120, or 240 minutes.                |
 | `pluginCacheMode`               | `independent`  | Use `shared` to refresh the Codex-home cache from the bundled desktop plugin.  |
-| `strictReadiness`               | false          | Run a live probe at startup and stop startup if it fails.                      |
-| `autoRepair`                    | false          | Reload the Codex-owned MCP runtime and retry a failed probe once.              |
+| `strictReadiness`               | false          | Run a live check at startup and stop startup if it fails.                      |
+| `autoRepair`                    | false          | Reload the Codex-owned MCP runtime and retry a failed check once.              |
 | `marketplaceSource`             | unset          | Source string passed to Codex app-server `marketplace/add`.                    |
 | `marketplacePath`               | unset          | Local Codex marketplace file path containing the plugin.                       |
 | `marketplaceName`               | unset          | Registered Codex marketplace name to select.                                   |
@@ -374,16 +397,16 @@ matching config key is unset:
 OpenClaw reports a stable setup reason internally and formats the
 user-facing status for chat:
 
-| Reason                 | Meaning                                                | Next step                                    |
-| ---------------------- | ------------------------------------------------------ | -------------------------------------------- |
-| `disabled`             | `computerUse.enabled` resolved to false.               | Set `enabled` or another Computer Use field. |
-| `marketplace_missing`  | No matching marketplace was available.                 | Configure source, path, or marketplace name. |
-| `plugin_not_installed` | Marketplace exists, but the plugin is not installed.   | Run install or enable `autoInstall`.         |
-| `plugin_disabled`      | Plugin is installed but disabled in Codex config.      | Run install to re-enable it.                 |
-| `mcp_missing`          | Plugin is enabled, but the MCP server is unavailable.  | Check Codex Computer Use and OS permissions. |
-| `ready`                | Plugin and MCP tools are available.                    | Start the Codex-mode turn.                   |
-| `check_failed`         | A Codex app-server request failed during status check. | Check app-server connectivity and logs.      |
-| `auto_install_blocked` | Turn-start setup would need to add a new source.       | Run explicit install first.                  |
+| Reason                 | Meaning                                                                                        | Next step                                                                                                      |
+| ---------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `disabled`             | `computerUse.enabled` resolved to false.                                                       | Set `enabled` or another Computer Use field.                                                                   |
+| `marketplace_missing`  | No matching marketplace was available.                                                         | Configure source, path, or marketplace name.                                                                   |
+| `plugin_not_installed` | Marketplace exists, but the plugin is not installed.                                           | Run install or enable `autoInstall`.                                                                           |
+| `plugin_disabled`      | Native policy disables the plugin or its automatic replacement; installation may be unchecked. | Run owner-only install for explicit recovery. Enable the legacy native plugin to resume automatic replacement. |
+| `mcp_missing`          | Plugin is enabled, but the MCP server is unavailable.                                          | Check Codex Computer Use and OS permissions.                                                                   |
+| `ready`                | Plugin and MCP tools are available.                                                            | Start the Codex-mode turn.                                                                                     |
+| `check_failed`         | A Codex app-server request failed during status check.                                         | Check app-server connectivity and logs.                                                                        |
+| `auto_install_blocked` | Turn-start setup would need to add a new source.                                               | Run explicit install first.                                                                                    |
 
 The chat output includes the plugin state, MCP server state, marketplace,
 tools when available, and the specific message for the failing setup step.
@@ -404,7 +427,7 @@ verify the Codex-side Computer Use setup first:
 - macOS has granted the required permissions for the desktop-control app.
 - The current host session can access the desktop being controlled.
 
-When `computerUse.enabled` is true, OpenClaw fails closed if the plugin or its
+When `computerUse.enabled` is true, OpenClaw stops with an error if the plugin or its
 MCP tools are missing. Live desktop readiness gates startup only when
 `computerUse.strictReadiness` is true. Non-strict startup does not guarantee that
 the desktop bridge will answer; actual tool calls still report failures.
@@ -426,7 +449,7 @@ install`. Add a new `marketplaceSource` only through explicit install; turn-star
 servers reload. If it remains unavailable, fix the Codex Computer Use app,
 Codex app-server MCP status, or macOS permissions.
 
-**Status or a probe times out on `computer-use.list_apps` or `cua_repl.js`.**
+**Status or a check times out on `computer-use.list_apps` or `cua_repl.js`.**
 The plugin and MCP server are present, but the local Computer Use bridge did not answer.
 Quit or restart Codex Computer Use, relaunch Codex Desktop if needed, then
 retry in a fresh OpenClaw session. If the host previously ran Computer Use

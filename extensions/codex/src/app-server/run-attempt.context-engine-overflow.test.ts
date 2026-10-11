@@ -22,6 +22,7 @@ import {
   getRequestInputText,
   getRequestInputTextAt,
   makeThreadBootstrapBinding,
+  requestMethodsExcludingSkillDiscovery,
   requireRecord,
   runCodexAppServerAttempt,
   writeCodexAppServerBinding,
@@ -32,6 +33,44 @@ import {
   createCodexTestBindingStateStore,
   readCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
+
+const contextEnginePolicyFingerprint =
+  '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}';
+
+function bootstrapBinding(cwd: string) {
+  return {
+    ...makeThreadBootstrapBinding({
+      threadId: "thread-old",
+      cwd,
+      policyFingerprint: contextEnginePolicyFingerprint,
+      epoch: "epoch-before",
+    }),
+    webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
+  };
+}
+
+function createOverflowFixture() {
+  const sessionFile = path.join(tempDir, "session.jsonl");
+  const workspaceDir = path.join(tempDir, "workspace");
+  openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
+    assistantMessage("pre-compaction context", 10) as never,
+  );
+  const params = createParams(sessionFile, workspaceDir);
+  params.contextTokenBudget = 400_000;
+  return { sessionFile, workspaceDir, params };
+}
+
+function createProjectedContextEngine(overrides: Partial<ContextEngine> = {}) {
+  return createContextEngine({
+    assemble: async ({ messages, prompt }) => ({
+      messages: [...messages, userMessage(prompt ?? "", 11)],
+      estimatedTokens: 42,
+      systemPromptAddition: "context-engine system",
+      contextProjection: { mode: "thread_bootstrap", epoch: "epoch-before" },
+    }),
+    ...overrides,
+  });
+}
 
 function toolResultMessage(payload: unknown, timestamp: number): AgentMessage {
   return {
@@ -63,12 +102,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
       await withOpenClawTestState(
         { label: "codex-overflow-binding-birth", layout: "state-only", applyEnv: false },
         async (fixture) => {
-          const sessionFile = path.join(tempDir, "session.jsonl");
-          const workspaceDir = path.join(tempDir, "workspace");
-          openFileBackedSessionManagerForTest(sessionFile, {
-            sessionId: "session-1",
-          }).appendMessage(assistantMessage("pre-compaction context", 10) as never);
-          const params = createParams(sessionFile, workspaceDir);
+          const { workspaceDir, params } = createOverflowFixture();
           const identity = {
             kind: "session" as const,
             agentId: "main",
@@ -83,15 +117,10 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
           });
           const bindingStore = createCodexAppServerBindingStore(stateStore);
           const nativeModel = threadStartResult("thread-old");
-          const contextEnginePolicyFingerprint =
-            '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}';
           await bindingStore.mutate(identity, {
             kind: "set",
             binding: {
-              threadId: "thread-old",
-              cwd: workspaceDir,
-              dynamicToolsFingerprint: "[]",
-              webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
+              ...bootstrapBinding(workspaceDir),
               ...(nativeOwned
                 ? {
                     preserveNativeModel: true,
@@ -99,28 +128,9 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
                     modelProvider: nativeModel.modelProvider,
                   }
                 : {}),
-              contextEngine: {
-                schemaVersion: 1,
-                engineId: "lossless-claw",
-                policyFingerprint: contextEnginePolicyFingerprint,
-                projection: {
-                  schemaVersion: 1,
-                  mode: "thread_bootstrap",
-                  epoch: "epoch-before",
-                },
-              },
             },
           });
-          const compact = vi.fn(async () => ({
-            ok: true,
-            compacted: true,
-            result: {
-              summary: "summary",
-              firstKeptEntryId: "entry-1",
-              tokensBefore: 10,
-              sessionId: "session-1-compacted",
-            },
-          }));
+          const compact = vi.fn<ContextEngine["compact"]>();
           const assemble = vi.fn(
             async ({ messages, prompt }: Parameters<ContextEngine["assemble"]>[0]) => ({
               messages: [
@@ -134,7 +144,6 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
             }),
           );
           params.contextEngine = createContextEngine({ assemble, compact });
-          params.contextTokenBudget = 400_000;
           const revoked = new Error("overflow host authority revoked after fresh binding commit");
           const originalAssertActive = params.hostCapabilities.assertActive;
           let hostActive = true;
@@ -194,6 +203,8 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
             },
             { persistedThreads: ["thread-old"] },
           );
+          // Binding ownership is independent of real worker preparation time.
+          vi.useFakeTimers({ toFake: ["Date"] });
           const run = runCodexAppServerAttempt(params, {
             bindingStore: { ...bindingStore, mutate: observedMutate },
           });
@@ -227,7 +238,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
                   });
                 }),
               ]);
-              expect(harness.requests.map((request) => request.method)).toEqual([
+              expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
                 "config/read",
                 "configRequirements/read",
                 "thread/read",
@@ -260,6 +271,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
             expect(bornBindings).toHaveLength(1);
             expect(bornBindings[0]).toMatchObject({
               threadId: "thread-fresh",
+              clientId: harness.client.getInstanceId(),
               contextEngine: {
                 engineId: "lossless-claw",
                 policyFingerprint: contextEnginePolicyFingerprint,
@@ -273,12 +285,14 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
                     {
                       kind: "patch",
                       threadId: "thread-fresh",
+                      clientId: harness.client.getInstanceId(),
                       patch: { historyCoveredThrough: expect.any(String) },
                     },
                   ],
             );
             const savedBinding = bindingStore.read(identity);
             expect(savedBinding?.threadId).toBe("thread-fresh");
+            expect(savedBinding?.clientId).toBe(harness.client.getInstanceId());
             expect(savedBinding?.contextEngine?.engineId).toBe("lossless-claw");
             expect(savedBinding?.contextEngine?.projection).toBeUndefined();
           } finally {
@@ -291,12 +305,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
   );
 
   it("preserves the binding when host authority expires while overflow recovery waits", async () => {
-    const sessionFile = path.join(tempDir, "overflow-revoked.jsonl");
-    const workspaceDir = path.join(tempDir, "overflow-revoked-workspace");
-    openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
-      assistantMessage("pre-compaction context", 10) as never,
-    );
-    const params = createParams(sessionFile, workspaceDir);
+    const { workspaceDir, params } = createOverflowFixture();
     const identity = {
       kind: "session" as const,
       agentId: "main",
@@ -332,26 +341,9 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
     const bindingStore = createCodexAppServerBindingStore(stateStore);
     await bindingStore.mutate(identity, {
       kind: "set",
-      binding: {
-        ...makeThreadBootstrapBinding({
-          threadId: "thread-old",
-          cwd: workspaceDir,
-          policyFingerprint:
-            '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
-          epoch: "epoch-before",
-        }),
-        webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
-      },
+      binding: bootstrapBinding(workspaceDir),
     });
-    params.contextEngine = createContextEngine({
-      assemble: async ({ messages, prompt }) => ({
-        messages: [...messages, userMessage(prompt ?? "", 11)],
-        estimatedTokens: 42,
-        systemPromptAddition: "context-engine system",
-        contextProjection: { mode: "thread_bootstrap", epoch: "epoch-before" },
-      }),
-    });
-    params.contextTokenBudget = 400_000;
+    params.contextEngine = createProjectedContextEngine();
     const revoked = new Error("overflow recovery host authority revoked");
     const originalAssertActive = params.hostCapabilities.assertActive;
     let hostActive = true;
@@ -402,29 +394,9 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
   });
 
   it("returns a replay-safe recovery result when the executable owner changes during overflow retry", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
-      assistantMessage("pre-compaction context", Date.now()) as never,
-    );
-    await writeCodexAppServerBinding(
-      sessionFile,
-      makeThreadBootstrapBinding({
-        threadId: "thread-old",
-        cwd: workspaceDir,
-        policyFingerprint:
-          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
-        epoch: "epoch-before",
-      }),
-    );
-    const contextEngine = createContextEngine({
-      assemble: async ({ messages, prompt }) => ({
-        messages: [...messages, userMessage(prompt ?? "", 11)],
-        estimatedTokens: 42,
-        systemPromptAddition: "context-engine system",
-        contextProjection: { mode: "thread_bootstrap", epoch: "epoch-before" },
-      }),
-    });
+    const { sessionFile, workspaceDir, params } = createOverflowFixture();
+    await writeCodexAppServerBinding(sessionFile, bootstrapBinding(workspaceDir));
+    const contextEngine = createProjectedContextEngine();
     const successorStart = vi.fn(() => threadStartResult("thread-fresh"));
     const harness = createStartedThreadHarness(
       async (method, requestParams) => {
@@ -453,9 +425,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
       },
       { persistedThreads: ["thread-old"] },
     );
-    const params = createParams(sessionFile, workspaceDir);
     params.contextEngine = contextEngine;
-    params.contextTokenBudget = 400_000;
 
     const result = await runCodexAppServerAttempt(params);
 
@@ -466,7 +436,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
       threadId: "thread-old",
       replaySafe: true,
     });
-    expect(harness.requests.map((request) => request.method)).toEqual([
+    expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
       "config/read",
       "configRequirements/read",
       "thread/read",
@@ -483,35 +453,10 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
   });
 
   it("preserves a newer context-engine binding when a stale resumed thread overflows", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
-      assistantMessage("pre-compaction context", Date.now()) as never,
-    );
-    await writeCodexAppServerBinding(
-      sessionFile,
-      makeThreadBootstrapBinding({
-        threadId: "thread-old",
-        cwd: workspaceDir,
-        policyFingerprint:
-          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
-        epoch: "epoch-before",
-      }),
-    );
-    const compact = vi.fn<ContextEngine["compact"]>(async () => ({
-      ok: true,
-      compacted: true,
-      result: { summary: "summary", firstKeptEntryId: "entry-1", tokensBefore: 100_000 },
-    }));
-    const assemble = vi.fn(
-      async ({ messages, prompt }: Parameters<ContextEngine["assemble"]>[0]) => ({
-        messages: [...messages, userMessage(prompt ?? "", 11)],
-        estimatedTokens: 42,
-        systemPromptAddition: "context-engine system",
-        contextProjection: { mode: "thread_bootstrap" as const, epoch: "epoch-before" },
-      }),
-    );
-    const contextEngine = createContextEngine({ assemble, compact });
+    const { sessionFile, workspaceDir, params } = createOverflowFixture();
+    await writeCodexAppServerBinding(sessionFile, bootstrapBinding(workspaceDir));
+    const compact = vi.fn<ContextEngine["compact"]>();
+    const contextEngine = createProjectedContextEngine({ compact });
     const harness = createStartedThreadHarness(
       async (method, requestParams) => {
         if (method === "thread/resume") {
@@ -535,16 +480,14 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
       },
       { persistedThreads: ["thread-old"] },
     );
-    const params = createParams(sessionFile, workspaceDir);
     params.contextEngine = contextEngine;
-    params.contextTokenBudget = 400_000;
 
     await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
       "Codex ran out of room in the model's context window",
     );
 
     expect(compact).not.toHaveBeenCalled();
-    expect(harness.requests.map((request) => request.method)).toEqual([
+    expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
       "config/read",
       "configRequirements/read",
       "thread/read",
@@ -557,11 +500,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
     expect(savedBinding?.threadId).toBe("thread-new");
   });
   it("does not pre-compact over-budget rendered context-engine prompts before Codex turn/start", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
-      assistantMessage("pre-compaction context", Date.now()) as never,
-    );
+    const { params } = createOverflowFixture();
     const hugePayload = {
       rows: Array.from({ length: 10 }, (_, index) => ({
         id: index,
@@ -580,7 +519,6 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
     });
     const contextEngine = createContextEngine({ assemble, compact });
     const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
     params.contextEngine = contextEngine;
     params.contextTokenBudget = 16_000;
 
@@ -589,7 +527,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
 
     expect(compact).not.toHaveBeenCalled();
     expect(assemble).toHaveBeenCalledTimes(1);
-    expect(harness.requests.map((request) => request.method)).toEqual([
+    expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
       "config/read",
       "configRequirements/read",
       "thread/start",
@@ -606,11 +544,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
   it("fails first-turn Codex context overflow instead of falling back to OpenClaw compaction", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    const compact = vi.fn<ContextEngine["compact"]>(async () => ({
-      ok: true,
-      compacted: true,
-      result: { summary: "summary", firstKeptEntryId: "entry-1", tokensBefore: 100_000 },
-    }));
+    const compact = vi.fn<ContextEngine["compact"]>();
     const assemble = vi.fn<ContextEngine["assemble"]>().mockResolvedValue({
       messages: [assistantMessage("large projected context", 10)],
       estimatedTokens: 100_000,
@@ -633,98 +567,12 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
 
     expect(compact).not.toHaveBeenCalled();
     expect(assemble).toHaveBeenCalledTimes(1);
-    expect(harness.requests.map((request) => request.method)).toEqual([
+    expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
       "config/read",
       "configRequirements/read",
       "thread/start",
       "turn/start",
       "thread/unsubscribe",
     ]);
-  });
-
-  it("does not call hung owning context-engine compaction during Codex overflow recovery", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
-      assistantMessage("pre-compaction context", Date.now()) as never,
-    );
-    await writeCodexAppServerBinding(
-      sessionFile,
-      makeThreadBootstrapBinding({
-        threadId: "thread-old",
-        cwd: workspaceDir,
-        policyFingerprint:
-          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
-        epoch: "epoch-before",
-      }),
-    );
-    const compact = vi.fn<ContextEngine["compact"]>(() => new Promise(() => {}));
-    const assemble = vi.fn(
-      async ({ messages, prompt }: Parameters<ContextEngine["assemble"]>[0]) => ({
-        messages: [...messages, userMessage(prompt ?? "", 11)],
-        estimatedTokens: 42,
-        systemPromptAddition: "context-engine system",
-        contextProjection: { mode: "thread_bootstrap" as const, epoch: "epoch-before" },
-      }),
-    );
-    const contextEngine = createContextEngine({ assemble, compact });
-    const harness = createStartedThreadHarness(
-      async (method, requestParams) => {
-        if (method === "thread/resume") {
-          return threadStartResult("thread-old");
-        }
-        if (method === "thread/start") {
-          return threadStartResult("thread-fresh");
-        }
-        if (method === "turn/start") {
-          const request = requireRecord(requestParams, `${method} params`);
-          if (request.threadId === "thread-old") {
-            throw new Error("Codex ran out of room in the model's context window");
-          }
-          if (request.threadId === "thread-fresh") {
-            return turnStartResult("turn-fresh");
-          }
-        }
-        return undefined;
-      },
-      { persistedThreads: ["thread-old"] },
-    );
-    const params = createParams(sessionFile, workspaceDir);
-    params.contextEngine = contextEngine;
-    params.contextTokenBudget = 400_000;
-
-    const run = runCodexAppServerAttempt(params);
-    await vi.waitFor(
-      () =>
-        expect(harness.requests.map((request) => request.method)).toEqual([
-          "config/read",
-          "configRequirements/read",
-          "thread/read",
-          "thread/resume",
-          "thread/inject_items",
-          "turn/start",
-          "config/read",
-          "configRequirements/read",
-          "thread/start",
-          "turn/start",
-        ]),
-      { timeout: 4_000 },
-    );
-    await harness.notify({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-fresh",
-        turnId: "turn-fresh",
-        turn: {
-          id: "turn-fresh",
-          status: "completed",
-          items: [{ type: "agentMessage", id: "msg-1", text: "fresh answer" }],
-        },
-      },
-    });
-    const result = await run;
-
-    expect(result.assistantTexts).toContain("fresh answer");
-    expect(compact).not.toHaveBeenCalled();
   });
 });

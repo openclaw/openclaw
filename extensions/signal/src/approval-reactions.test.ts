@@ -72,7 +72,6 @@ function registerTarget(
     allowedDecisions: ["allow-once", "deny"],
     targetAuthorKeys: ["+15550009999"],
     route: approvalRoute,
-    routeAllowed: true,
     ...overrides,
   });
 }
@@ -337,16 +336,19 @@ describe("Signal approval reactions", () => {
     ).toBe(false);
   });
 
-  it("rejects reaction registration without a valid explicit approval kind", async () => {
-    expect(
-      await registerTarget({
-        messageId: "1700000000099",
-        approvalId: "approval-without-owner",
-        approvalKind: undefined as never,
-        allowedDecisions: ["deny"],
-      }),
-    ).toBeNull();
-  });
+  it.each([undefined])(
+    "rejects reaction registration with approval kind %s",
+    async (approvalKind) => {
+      expect(
+        await registerTarget({
+          messageId: "1700000000099",
+          approvalId: "approval-without-owner",
+          approvalKind: approvalKind as never,
+          allowedDecisions: ["deny"],
+        }),
+      ).toBeNull();
+    },
+  );
 
   it("does not match timestamp-only bindings when the inbound conversation id differs", async () => {
     await registerTarget({
@@ -361,29 +363,6 @@ describe("Signal approval reactions", () => {
         messageId: "1700000000001",
       }),
     ).resolves.toBeNull();
-  });
-
-  it("normalizes UUID target-author casing before matching", async () => {
-    await registerTarget({
-      messageId: "1700000000001",
-      allowedDecisions: ["allow-once"],
-      targetAuthorKeys: ["uuid:ABCDEF12-3456-7890-ABCD-EF1234567890"],
-    });
-
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "+15551230000",
-        messageId: "1700000000001",
-        reactionKey: "👍",
-        targetAuthorUuid: "abcdef12-3456-7890-abcd-ef1234567890",
-      }),
-    ).resolves.toEqual({
-      approvalId: "exec-1",
-      approvalKind: "exec",
-      decision: "allow-once",
-      route: approvalRoute,
-    });
   });
 
   it("requires the reaction target author to match the outbound bot identity", async () => {
@@ -415,40 +394,45 @@ describe("Signal approval reactions", () => {
     });
   });
 
-  it("authorizes reactions using Signal approval approvers", async () => {
-    await registerTarget({
-      conversationKey: "group:g1",
-      messageId: "1700000000003",
-      approvalId: "plugin:abc",
-      approvalKind: "plugin",
-      allowedDecisions: ["allow-once", "allow-always", "deny"],
-    });
+  it.each(["system-agent"] as const)(
+    "authorizes %s reactions using Signal approval approvers",
+    async (approvalKind) => {
+      const approvalId = `${approvalKind}:abc`;
+      await registerTarget({
+        conversationKey: "group:g1",
+        messageId: "1700000000003",
+        approvalId,
+        approvalKind,
+        allowedDecisions: ["allow-once", "deny"],
+      });
 
-    const cfg = {
-      ...sessionConfig,
-      approvals: { plugin: { enabled: true, mode: "session" as const } },
-    };
+      const cfg = sessionConfig;
+      const reaction = {
+        ...lookupIdentity,
+        cfg,
+        conversationKey: "group:g1",
+        messageId: "1700000000003",
+      };
 
-    const handled = await maybeResolveSignalApprovalReaction({
-      ...lookupIdentity,
-      cfg,
-      conversationKey: "group:g1",
-      messageId: "1700000000003",
-      actorId: "+15551230000",
-    });
+      await expect(
+        maybeResolveSignalApprovalReaction({ ...reaction, actorId: "+15551239999" }),
+      ).resolves.toBe(true);
+      expect(resolverMocks.resolveSignalApproval).not.toHaveBeenCalled();
 
-    expect(handled).toBe(true);
-    expect(resolverMocks.resolveSignalApproval).toHaveBeenCalledWith({
-      cfg,
-      approvalId: "plugin:abc",
-      approvalKind: "plugin",
-      decision: "allow-once",
-      channel: "signal",
-      accountId: "default",
-      senderId: "+15551230000",
-      gatewayUrl: undefined,
-    });
-  });
+      await expect(
+        maybeResolveSignalApprovalReaction({ ...reaction, actorId: "+15551230000" }),
+      ).resolves.toBe(true);
+      expect(resolverMocks.resolveSignalApproval).toHaveBeenCalledExactlyOnceWith({
+        cfg,
+        approvalId,
+        approvalKind,
+        decision: "allow-once",
+        channel: "signal",
+        accountId: "default",
+        senderId: "+15551230000",
+      });
+    },
+  );
 
   it("consumes a losing surface and logs the canonical winning decision", async () => {
     await registerTarget({

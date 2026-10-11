@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createGatewayHttpServer } from "./server-http.js";
@@ -82,35 +83,6 @@ describe("node worker bundle transfer HTTP routing", () => {
         expect(missing.headers.get("cache-control")).toBe("no-store");
         expect(callback).toHaveBeenCalledOnce();
         expect(hooks).not.toHaveBeenCalled();
-      },
-    });
-  });
-
-  it("lets an authenticated exact bundle route own its response", async () => {
-    const callback: ArtifactTransferHttpCallback = async ({ bearer, artifactKey, res }) => {
-      if (bearer !== "valid-bundle-token") {
-        return { kind: "unauthorized" };
-      }
-      return {
-        kind: "authorized",
-        handle: () => {
-          res.writeHead(200, { "content-type": "text/plain" });
-          res.end(artifactKey);
-        },
-      };
-    };
-    await withTransferServer({
-      bundleCallback: callback,
-      run: async (origin) => {
-        const bundleHash = "b".repeat(64);
-        const response = await fetch(
-          `${origin}/__openclaw__/worker-bundle/v1/bundles/${bundleHash}`,
-          { headers: { authorization: "Bearer valid-bundle-token" } },
-        );
-
-        expect(response.status).toBe(200);
-        expect(response.headers.get("cache-control")).toBe("no-store");
-        await expect(response.text()).resolves.toBe(bundleHash);
       },
     });
   });
@@ -259,12 +231,10 @@ describe("node workspace transfer HTTP routing", () => {
   });
 
   it("rate-limits invalid transfer auth before invoking the callback again", async () => {
-    const limiter = createGatewayAuthRateLimiter({
-      maxAttempts: 1,
-      windowMs: 60_000,
-      lockoutMs: 60_000,
-      exemptLoopback: false,
-    });
+    const limiter = createGatewayAuthRateLimiter(
+      { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000, exemptLoopback: false },
+      { scheduler: createTestGatewayScheduler() },
+    );
     activeLimiters.push(limiter);
     const callback = vi.fn<NodeWorkspaceTransferHttpCallback>(async () => ({
       kind: "unauthorized",

@@ -9,106 +9,82 @@ import type {
   TelegramGroupMembershipAudit,
   TelegramGroupMembershipAuditEntry,
 } from "./audit.types.js";
-import { resolveTelegramApiBase, resolveTelegramFetch } from "./fetch.js";
+import { resolveTelegramApiBase, resolveTelegramTransport } from "./fetch.js";
 
-type TelegramApiOk<T> = { ok: true; result: T };
-type TelegramApiErr = { ok: false; description?: string };
 type TelegramGroupMembershipAuditData = Omit<TelegramGroupMembershipAudit, "elapsedMs">;
 // Telegram getChatMember responses are tiny (< 1 KiB). 4 MiB guards against hostile endpoints.
 const TELEGRAM_BOT_API_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
-type TelegramChatMemberResult = { status?: string };
-
-async function readTelegramMembershipAuditBody(
-  response: Response,
-  timeoutMs: number,
-): Promise<Buffer> {
-  return await readResponseWithLimit(response, TELEGRAM_BOT_API_MAX_RESPONSE_BYTES, {
-    timeoutMs,
-    chunkTimeoutMs: timeoutMs / 2,
-    onIdleTimeout: ({ chunkTimeoutMs }) =>
-      new Error(`Telegram membership audit response body stalled for ${chunkTimeoutMs}ms`),
-    onTimeout: ({ timeoutMs: resolvedTimeoutMs }) =>
-      new Error(`Telegram membership audit response body timed out after ${resolvedTimeoutMs}ms`),
-  });
-}
 
 export async function auditTelegramGroupMembershipImpl(
   params: AuditTelegramGroupMembershipParams,
 ): Promise<TelegramGroupMembershipAuditData> {
   const proxyFetch = params.proxyUrl ? makeProxyFetch(params.proxyUrl) : undefined;
-  const fetcher = resolveTelegramFetch(proxyFetch, {
+  const transport = resolveTelegramTransport(proxyFetch, {
     network: params.network,
   });
-  const apiBase = resolveTelegramApiBase(params.apiRoot);
-  const base = `${apiBase}/bot${params.token}`;
-  const groups: TelegramGroupMembershipAuditEntry[] = [];
-  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
-  const deadlineMs = Date.now() + timeoutMs;
+  try {
+    const apiBase = resolveTelegramApiBase(params.apiRoot);
+    const base = `${apiBase}/bot${params.token}`;
+    const groups: TelegramGroupMembershipAuditEntry[] = [];
+    const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
+    const deadlineMs = Date.now() + timeoutMs;
 
-  for (const chatId of params.groupIds) {
-    const requestTimeoutMs = Math.max(0, deadlineMs - Date.now());
-    if (requestTimeoutMs === 0) {
-      groups.push({
+    for (const chatId of params.groupIds) {
+      const entry: TelegramGroupMembershipAuditEntry = {
         chatId,
         ok: false,
         status: null,
-        error: `Telegram membership audit timed out after ${timeoutMs}ms`,
+        error: null,
         matchKey: chatId,
         matchSource: "id",
-      });
-      continue;
-    }
-    try {
-      const url = `${base}/getChatMember?chat_id=${encodeURIComponent(chatId)}&user_id=${encodeURIComponent(String(params.botId))}`;
-      const res = await fetchWithTimeout(url, {}, requestTimeoutMs, fetcher);
-      const json = JSON.parse(
-        (await readTelegramMembershipAuditBody(res, Math.max(1, deadlineMs - Date.now()))).toString(
-          "utf8",
-        ),
-      ) as TelegramApiOk<TelegramChatMemberResult> | TelegramApiErr;
-      if (!res.ok || !isRecord(json) || !json.ok) {
-        const desc =
-          isRecord(json) && !json.ok && typeof json.description === "string"
-            ? json.description
-            : `getChatMember failed (${res.status})`;
-        groups.push({
-          chatId,
-          ok: false,
-          status: null,
-          error: desc,
-          matchKey: chatId,
-          matchSource: "id",
-        });
+      };
+      groups.push(entry);
+      const requestTimeoutMs = Math.max(0, deadlineMs - Date.now());
+      if (requestTimeoutMs === 0) {
+        entry.error = `Telegram membership audit timed out after ${timeoutMs}ms`;
         continue;
       }
-      const status =
-        isRecord(json.result) && typeof json.result.status === "string" ? json.result.status : null;
-      const ok = status === "creator" || status === "administrator" || status === "member";
-      groups.push({
-        chatId,
-        ok,
-        status,
-        error: ok ? null : "bot not in group",
-        matchKey: chatId,
-        matchSource: "id",
-      });
-    } catch (err) {
-      groups.push({
-        chatId,
-        ok: false,
-        status: null,
-        error: formatErrorMessage(err),
-        matchKey: chatId,
-        matchSource: "id",
-      });
+      try {
+        const url = `${base}/getChatMember?chat_id=${encodeURIComponent(chatId)}&user_id=${encodeURIComponent(String(params.botId))}`;
+        const res = await fetchWithTimeout(url, {}, requestTimeoutMs, transport.fetch);
+        const bodyTimeoutMs = Math.max(1, deadlineMs - Date.now());
+        const body = await readResponseWithLimit(res, TELEGRAM_BOT_API_MAX_RESPONSE_BYTES, {
+          timeoutMs: bodyTimeoutMs,
+          chunkTimeoutMs: bodyTimeoutMs / 2,
+          onIdleTimeout: ({ chunkTimeoutMs }) =>
+            new Error(`Telegram membership audit response body stalled for ${chunkTimeoutMs}ms`),
+          onTimeout: ({ timeoutMs: resolvedTimeoutMs }) =>
+            new Error(
+              `Telegram membership audit response body timed out after ${resolvedTimeoutMs}ms`,
+            ),
+        });
+        const json: unknown = JSON.parse(body.toString("utf8"));
+        if (!res.ok || !isRecord(json) || !json.ok) {
+          entry.error =
+            isRecord(json) && !json.ok && typeof json.description === "string"
+              ? json.description
+              : `getChatMember failed (${res.status})`;
+          continue;
+        }
+        const status =
+          isRecord(json.result) && typeof json.result.status === "string"
+            ? json.result.status
+            : null;
+        const ok = status === "creator" || status === "administrator" || status === "member";
+        Object.assign(entry, { ok, status, error: ok ? null : "bot not in group" });
+      } catch (err) {
+        entry.error = formatErrorMessage(err);
+      }
     }
-  }
 
-  return {
-    ok: groups.every((g) => g.ok),
-    checkedGroups: groups.length,
-    unresolvedGroups: 0,
-    hasWildcardUnmentionedGroups: false,
-    groups,
-  };
+    return {
+      ok: groups.every((g) => g.ok),
+      checkedGroups: groups.length,
+      unresolvedGroups: 0,
+      hasWildcardUnmentionedGroups: false,
+      groups,
+    };
+  } finally {
+    await transport.close();
+  }
 }

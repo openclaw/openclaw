@@ -1,5 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
+import { jsonResult } from "../../agents/tools/common.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { createMessageActionClientForTests } from "./send.test-helpers.js";
 import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
@@ -124,12 +131,120 @@ export function createMessageMethodTestDriver(getHandlers: () => GatewayRequestH
     return { respond };
   }
 
+  async function runTelegramTerminalAction(params: {
+    sessionId: string;
+    idempotencyKey: string;
+    sourceTurnId: string;
+    toolCallId: string;
+    message: string;
+    sessionKey?: string;
+    sourceReplySessionKey?: string;
+    sourceReplyFinal?: boolean;
+    context?: GatewayRequestContext;
+  }) {
+    const sessionKey = params.sessionKey ?? "agent:main:telegram:direct:chat-123";
+    return runMessageActionRequest(
+      {
+        channel: "telegram",
+        action: "send",
+        params: {
+          to: "chat-123",
+          message: params.message,
+        },
+        sessionKey,
+        sessionId: params.sessionId,
+        agentId: "main",
+        idempotencyKey: params.idempotencyKey,
+      },
+      {
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey,
+            messageActionContext: {
+              expiresAtMs: Date.now() + 60_000,
+              sessionId: params.sessionId,
+              sourceReplySessionKey: params.sourceReplySessionKey,
+              sourceReplyFinal: params.sourceReplyFinal ?? true,
+              sourceReplyToolCallId: params.toolCallId,
+              toolContext: {
+                currentChannelProvider: "telegram",
+                currentChannelId: "chat-123",
+                currentSourceTurnId: params.sourceTurnId,
+              },
+            },
+          },
+        },
+      },
+      params.context,
+    );
+  }
+
   return {
     invokeGatewayMessageMethod,
+    runTelegramTerminalAction,
     runSend,
     runSendWithClient,
     runPoll,
     runPollWithClient,
     runMessageActionRequest,
   };
+}
+
+export function createMessageMethodPluginFixtures(mocks: {
+  getChannelPlugin: ReturnType<typeof vi.fn>;
+}) {
+  function registerMessageThreadAddressingPlugin(id: ChannelPlugin["id"]): void {
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id }),
+      threading: { threadAddressing: "message" },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: id, source: "test", plugin }]),
+      `send-test-${id}-message-thread-addressing`,
+    );
+    mocks.getChannelPlugin.mockImplementation((channel: string) =>
+      channel === id ? plugin : undefined,
+    );
+  }
+
+  function registerMessageActionPlugin(params: {
+    id?: ChannelPlugin["id"];
+    action?: "send" | "sendAttachment";
+    messageId?: string;
+    chatType?: "direct" | "group";
+    threading?: ChannelPlugin["threading"];
+    registrySuffix: string;
+  }): ChannelPlugin {
+    const {
+      id = "telegram",
+      action = "send",
+      messageId,
+      chatType = "direct",
+      threading,
+      registrySuffix,
+    } = params;
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id,
+        capabilities: { chatTypes: [chatType] },
+        config: { resolveAccount: () => ({ enabled: true }), isConfigured: () => true },
+      }),
+      actions: {
+        describeMessageTool: () => ({ actions: [action] }),
+        supportsAction: ({ action: requestedAction }) => requestedAction === action,
+        handleAction: async () => jsonResult({ ok: true, ...(messageId ? { messageId } : {}) }),
+      },
+      ...(threading ? { threading } : {}),
+    };
+    mocks.getChannelPlugin.mockReturnValue(plugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: id, source: "test", plugin }]),
+      `send-test-${registrySuffix}`,
+    );
+    return plugin;
+  }
+
+  return { registerMessageThreadAddressingPlugin, registerMessageActionPlugin };
 }

@@ -1,5 +1,6 @@
-import { updateSessionEntry } from "./session-accessor.js";
-import type { AmbientTranscriptWatermark, SessionEntry } from "./types.js";
+import { applySessionEntryOperation } from "./session-accessor.sqlite-entry.js";
+import type { SessionEntry } from "./types.js";
+export { readAmbientTranscriptWatermarkFromEntry } from "./ambient-transcript-watermark-projection.js";
 
 export type AmbientTranscriptWatermarkScope = {
   channel: string;
@@ -19,49 +20,6 @@ export function resolveAmbientTranscriptWatermarkKey(
   ]);
 }
 
-function numericMessageId(value: string): number | undefined {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function isAmbientTranscriptWatermarkAfter(
-  next: Pick<AmbientTranscriptWatermark, "messageId" | "timestampMs">,
-  current: AmbientTranscriptWatermark | undefined,
-): boolean {
-  if (!current) {
-    return true;
-  }
-  if (next.timestampMs !== undefined && current.timestampMs !== undefined) {
-    if (next.timestampMs !== current.timestampMs) {
-      return next.timestampMs > current.timestampMs;
-    }
-    const nextMessageId = numericMessageId(next.messageId);
-    const currentMessageId = numericMessageId(current.messageId);
-    return (
-      nextMessageId !== undefined &&
-      currentMessageId !== undefined &&
-      nextMessageId > currentMessageId
-    );
-  }
-  const nextMessageId = numericMessageId(next.messageId);
-  const currentMessageId = numericMessageId(current.messageId);
-  if (nextMessageId !== undefined && currentMessageId !== undefined) {
-    return nextMessageId > currentMessageId;
-  }
-  return next.messageId !== current.messageId;
-}
-
-export function readAmbientTranscriptWatermarkFromEntry(
-  entry: Pick<SessionEntry, "ambientTranscriptWatermarks" | "sessionId"> | undefined,
-  key: string,
-): AmbientTranscriptWatermark | undefined {
-  const watermark = entry?.ambientTranscriptWatermarks?.[key];
-  // A watermark only vouches for rows in the transcript it was written against.
-  // After a session reset those rows live in an archived file the model never
-  // reads, so a cross-session (or legacy sessionId-less) watermark must not hide them.
-  return watermark?.sessionId === entry?.sessionId ? watermark : undefined;
-}
-
 export async function updateAmbientTranscriptWatermark(params: {
   storePath: string;
   sessionKey: string;
@@ -70,45 +28,9 @@ export async function updateAmbientTranscriptWatermark(params: {
   timestampMs?: number;
   expectedSessionId?: string;
 }): Promise<SessionEntry | null> {
-  return await updateSessionEntry(
-    {
-      storePath: params.storePath,
-      sessionKey: params.sessionKey,
-    },
-    (entry) => {
-      // onMessagePersisted fires after the durable row write; if the session was
-      // reset in between, stamping the new sessionId would hide rows that only
-      // exist in the archived transcript. Skip the advance instead.
-      if (!entry.sessionId) {
-        return null;
-      }
-      if (params.expectedSessionId !== undefined && entry.sessionId !== params.expectedSessionId) {
-        return null;
-      }
-      const current = readAmbientTranscriptWatermarkFromEntry(entry, params.key);
-      if (
-        !isAmbientTranscriptWatermarkAfter(
-          { messageId: params.messageId, timestampMs: params.timestampMs },
-          current,
-        )
-      ) {
-        return null;
-      }
-      return {
-        ambientTranscriptWatermarks: {
-          ...entry.ambientTranscriptWatermarks,
-          [params.key]: {
-            sessionId: entry.sessionId,
-            messageId: params.messageId,
-            ...(params.timestampMs !== undefined ? { timestampMs: params.timestampMs } : {}),
-            updatedAt: Date.now(),
-          },
-        },
-      };
-    },
-    {
-      skipMaintenance: true,
-      takeCacheOwnership: true,
-    },
+  return await applySessionEntryOperation(
+    { storePath: params.storePath, sessionKey: params.sessionKey },
+    { kind: "ambient-transcript-watermark", watermark: { ...params, now: Date.now() } },
+    { skipMaintenance: true, takeCacheOwnership: true },
   );
 }

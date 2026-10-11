@@ -8,7 +8,10 @@ import {
   type MatrixClient as MatrixJsClient,
 } from "matrix-js-sdk/lib/matrix.js";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
-import { captureChannelReadAuthority } from "openclaw/plugin-sdk/fetch-runtime";
+import {
+  captureChannelReadAuthority,
+  withEffectAuthority,
+} from "openclaw/plugin-sdk/fetch-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
@@ -32,6 +35,7 @@ import type { MatrixDecryptBridge } from "./decrypt-bridge.js";
 import { matrixEventToRaw } from "./event-helpers.js";
 import { MatrixAuthedHttpClient } from "./http-client.js";
 import { MATRIX_IDB_PERSIST_INTERVAL_MS } from "./idb-persistence-lock.js";
+import { withMatrixLiveEncryptedRoom } from "./live-room-readiness.js";
 import { LogService, noop } from "./logger.js";
 import { MatrixMessageWireDispatchGuards } from "./message-wire-dispatch.js";
 import { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
@@ -39,7 +43,6 @@ import { captureMatrixSendCurrentness, withoutMatrixSendCurrentness } from "./se
 import { MatrixSendScheduler } from "./send-scheduler.js";
 import { createMatrixGuardedFetch } from "./transport.js";
 import type { MatrixClientEventMap, MatrixCryptoBootstrapApi, MatrixRawEvent } from "./types.js";
-import type { MatrixVerificationSummary } from "./verification-manager.js";
 
 type MatrixCryptoRuntime = typeof import("./crypto-runtime.js");
 
@@ -56,7 +59,6 @@ export const loadMatrixCryptoRuntime = createLazyRuntimeModule(() =>
 
 export abstract class MatrixClientBase {
   abstract getUserId(): Promise<string>;
-  abstract getJoinedRooms(): Promise<string[]>;
   abstract listOwnDevices(): Promise<MatrixOwnDeviceInfo[]>;
   abstract getOwnDeviceVerificationStatus(): Promise<MatrixOwnDeviceVerificationStatus>;
   abstract getRoomStateEvent(
@@ -102,9 +104,9 @@ export abstract class MatrixClientBase {
   protected readonly autoBootstrapCrypto: boolean;
   protected syncQuiescePromise: Promise<void> | null = null;
   protected stopPersistPromise: Promise<void> | null = null;
-  protected verificationSummaryListenerBound = false;
   protected currentSyncState: MatrixSyncState | null = null;
   protected currentSyncError: unknown = undefined;
+  protected currentSyncFromCache = false;
   protected readonly transactionScopeHomeserver: string;
   protected readonly transactionScopeAccessTokenHash: string;
   protected transactionScopeDeviceId: string | null;
@@ -118,6 +120,7 @@ export abstract class MatrixClientBase {
   }>();
   private startupPromise: Promise<void> | null = null;
   private cryptoInitializationPromise: Promise<void> | null = null;
+  private readonly liveRoomReadinessOperations = new Set<Promise<() => void>>();
   private sdkStopped = false;
   private stopDiscardPromise: Promise<void> | null = null;
   private idbPersistPromise: Promise<void> | null = null;
@@ -141,7 +144,7 @@ export abstract class MatrixClientBase {
     return withoutMatrixSendCurrentness(() =>
       this.cryptoRequestOwner.run(
         { callerAuthority: captureChannelReadAuthority(), requestSignal },
-        run,
+        () => withEffectAuthority(undefined, run),
       ),
     );
   }
@@ -192,8 +195,7 @@ export abstract class MatrixClientBase {
     this.initialSyncLimit = opts.initialSyncLimit;
     this.syncFilter = opts.syncFilter;
     this.encryptionEnabled = opts.encryption === true;
-    const { password: loginPassword } = opts;
-    this.password = loginPassword;
+    this.password = opts.password;
     this.syncStore = opts.syncStore;
     this.idbSnapshotPath = opts.idbSnapshotPath;
     this.cryptoDatabasePrefix = opts.cryptoDatabasePrefix;
@@ -234,7 +236,7 @@ export abstract class MatrixClientBase {
         this.messageWireDispatchGuards.wasCurrentnessRejected(event.getTxnId()),
       ),
       store: this.syncStore,
-      cryptoCallbacks: cryptoCallbacks as never,
+      cryptoCallbacks,
       verificationMethods: [
         VerificationMethod.Sas,
         VerificationMethod.ShowQrCode,
@@ -257,7 +259,7 @@ export abstract class MatrixClientBase {
   ): this;
   on(eventName: string, listener: (...args: unknown[]) => void): this;
   on(eventName: string, listener: (...args: unknown[]) => void): this {
-    this.emitter.on(eventName, listener as (...args: unknown[]) => void);
+    this.emitter.on(eventName, listener);
     return this;
   }
 
@@ -267,7 +269,7 @@ export abstract class MatrixClientBase {
   ): this;
   off(eventName: string, listener: (...args: unknown[]) => void): this;
   off(eventName: string, listener: (...args: unknown[]) => void): this {
-    this.emitter.off(eventName, listener as (...args: unknown[]) => void);
+    this.emitter.off(eventName, listener);
     return this;
   }
 
@@ -301,50 +303,15 @@ export abstract class MatrixClientBase {
     }
 
     this.verificationManager ??= new runtime.MatrixVerificationManager({
+      onSummaryChanged: (summary) => this.emitter.emit("verification.summary", summary),
       trustOwnDeviceAfterSas: async (deviceId: string) => {
-        const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
-        if (typeof crypto?.crossSignDevice !== "function") {
-          return;
-        }
-        await crypto.crossSignDevice(deviceId);
+        await this.client.getCrypto()?.crossSignDevice(deviceId);
       },
     });
     this.cryptoBootstrapper ??= new runtime.MatrixCryptoBootstrapper<MatrixRawEvent>({
       getUserId: () => this.getUserId(),
       getPassword: () => this.password,
-      canUnlockSecretStorage: async () => {
-        const secretStorage = (
-          this.client as {
-            secretStorage?: Partial<
-              Pick<MatrixJsClient["secretStorage"], "checkKey" | "getDefaultKeyId" | "getKey">
-            >;
-          }
-        ).secretStorage;
-        // Partial test/runtime facades can omit secretStorage; forced reset must fail closed
-        // without turning missing recovery access into a noisy caught TypeError.
-        if (
-          !secretStorage ||
-          typeof secretStorage.getDefaultKeyId !== "function" ||
-          typeof secretStorage.getKey !== "function" ||
-          typeof secretStorage.checkKey !== "function"
-        ) {
-          return false;
-        }
-        const defaultKeyId = await secretStorage.getDefaultKeyId();
-        if (!defaultKeyId) {
-          return false;
-        }
-        const keyTuple = await secretStorage.getKey(defaultKeyId);
-        const key = await this.recoveryKeyStore.getSecretStorageKeyCandidate(defaultKeyId);
-        if (!keyTuple || !key) {
-          return false;
-        }
-        const keyInfo = keyTuple[1];
-        if (!keyInfo.iv?.trim() || !keyInfo.mac?.trim()) {
-          return false;
-        }
-        return await secretStorage.checkKey(key, keyInfo);
-      },
+      canUnlockSecretStorage: async () => (await this.checkSecretStorageKey()) === true,
       getDeviceId: () => this.client.getDeviceId(),
       verificationManager: this.verificationManager,
       recoveryKeyStore: this.recoveryKeyStore,
@@ -360,12 +327,29 @@ export abstract class MatrixClientBase {
         downloadContent: (mxcUrl, opts) => this.downloadContent(mxcUrl, opts),
       });
     }
-    if (!this.verificationSummaryListenerBound) {
-      this.verificationSummaryListenerBound = true;
-      this.verificationManager.onSummaryChanged((summary: MatrixVerificationSummary) => {
-        this.emitter.emit("verification.summary", summary);
-      });
+  }
+
+  protected async checkSecretStorageKey(expectedKeyId?: string): Promise<boolean | undefined> {
+    const secretStorage = this.client.secretStorage;
+    const defaultKeyId = await secretStorage.getDefaultKeyId();
+    if (expectedKeyId !== undefined && defaultKeyId !== expectedKeyId) {
+      return false;
     }
+    if (!defaultKeyId) {
+      return undefined;
+    }
+    const keyTuple = await secretStorage.getKey(defaultKeyId);
+    const key = await this.recoveryKeyStore.getSecretStorageKeyCandidate(defaultKeyId);
+    if (!keyTuple || !key) {
+      return undefined;
+    }
+    const keyInfo = keyTuple[1];
+    // The SDK accepts metadata without a MAC; only authenticated metadata proves this key.
+    if (!keyInfo.iv?.trim() || !keyInfo.mac?.trim()) {
+      return undefined;
+    }
+    const valid = await secretStorage.checkKey(key, keyInfo);
+    return (await secretStorage.getDefaultKeyId()) === defaultKeyId && valid;
   }
 
   async start(opts: { abortSignal?: AbortSignal; readyTimeoutMs?: number } = {}): Promise<void> {
@@ -489,6 +473,37 @@ export abstract class MatrixClientBase {
     // startSyncSession, after sync has created real Room objects.
   }
 
+  abortPendingRequests(): void {
+    this.requestAbortController.abort(new Error("Matrix client generation is no longer active."));
+  }
+
+  async withLiveEncryptedRoom<T>(
+    roomId: string,
+    run: (assertCurrent: () => void) => Promise<T>,
+    opts: { abortSignal?: AbortSignal; assertCurrent?: () => void } = {},
+  ): Promise<T> {
+    return await withMatrixLiveEncryptedRoom(this, run, {
+      client: this.client,
+      emitter: this.emitter,
+      roomId,
+      generationSignal: this.requestAbortController.signal,
+      abortSignal: opts.abortSignal,
+      operations: this.liveRoomReadinessOperations,
+      initializeCrypto: () => this.withClientCryptoWork(() => this.prepareForOneOff()),
+      assertActive: () => {
+        this.assertClientActive();
+        opts.assertCurrent?.();
+        if (this.sdkStopped || this.syncQuiescePromise) {
+          throw new Error("Matrix client is stopping; acquire a new client before sending");
+        }
+      },
+      getSync: () => ({
+        state: this.currentSyncState,
+        fromCache: this.currentSyncFromCache,
+      }),
+    });
+  }
+
   hasPersistedSyncState(): boolean {
     // Only trust restart replay when the previous process completed a final
     // sync-store persist. A stale cursor can make Matrix re-surface old events.
@@ -546,11 +561,12 @@ export abstract class MatrixClientBase {
         await this.quiesceSync().catch(noop);
         this.syncStore?.discardPendingSyncCursorPersistence();
       }
-      this.requestAbortController.abort(new Error("Matrix client generation is no longer active."));
+      this.abortPendingRequests();
       // A one-off read can still be preparing crypto when its owner closes.
       // Join that initialization before stopping the backend it may publish.
       await this.startupPromise?.catch(noop);
       await this.cryptoInitializationPromise?.catch(noop);
+      await Promise.allSettled(this.liveRoomReadinessOperations);
       clearInterval(this.idbPersistTimer ?? undefined);
       this.idbPersistTimer = null;
       this.idbPersistAbortController?.abort();

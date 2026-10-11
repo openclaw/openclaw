@@ -40,6 +40,26 @@ function installLocalTransport(bridge: ReturnType<typeof createSandboxFsBridge>)
   return { write, create, remove, list };
 }
 
+function createSandboxCodingTools(
+  sandbox: ReturnType<typeof createSandbox>,
+  options: Partial<Parameters<typeof createCoreCodingTools>[0]>,
+) {
+  return createCoreCodingTools({
+    codingRoot: sandbox.workspaceDir,
+    containmentRoot: sandbox.workspaceDir,
+    includeBaseCodingTools: true,
+    shellTools: "disabled",
+    readOnly: false,
+    applyPatchEnabled: false,
+    applyPatchWorkspaceOnly: true,
+    workspaceOnly: true,
+    execDefaults: {},
+    processDefaults: {},
+    ...options,
+    sandbox,
+  });
+}
+
 describe("workspace-only coding tools with effective sandbox mounts", () => {
   installFsBridgeTestHarness();
 
@@ -58,18 +78,11 @@ describe("workspace-only coding tools with effective sandbox mounts", () => {
         const bridge = createSandboxFsBridge({ sandbox });
         sandbox.fsBridge = bridge;
         installLocalTransport(bridge);
-        const tools = createCoreCodingTools({
-          codingRoot: workspaceDir,
-          containmentRoot: workspaceDir,
-          includeBaseCodingTools: true,
+        const tools = createSandboxCodingTools(sandbox, {
           shellTools: "full",
           workspaceOnly,
-          readOnly: false,
-          sandbox,
           applyPatchEnabled: true,
           applyPatchWorkspaceOnly: workspaceOnly,
-          execDefaults: {},
-          processDefaults: {},
         });
         const tool = (name: string) => tools.find((entry) => entry.name === name)!;
         for (const filePath of ["a\\b", "/workspace/a\\b"]) {
@@ -132,19 +145,7 @@ describe("workspace-only coding tools with effective sandbox mounts", () => {
           "/workspace/alias": "/workspace/cache/hop",
           "/workspace/absolute-alias": "/data/hop",
         });
-        const tools = createCoreCodingTools({
-          codingRoot: workspaceDir,
-          containmentRoot: workspaceDir,
-          includeBaseCodingTools: true,
-          shellTools: "disabled",
-          workspaceOnly,
-          readOnly: false,
-          sandbox,
-          applyPatchEnabled: false,
-          applyPatchWorkspaceOnly: true,
-          execDefaults: {},
-          processDefaults: {},
-        });
+        const tools = createSandboxCodingTools(sandbox, { workspaceOnly });
         const read = tools.find((tool) => tool.name === "read")!;
         for (const filePath of ["alias", "absolute-alias", "/data/hop"]) {
           const text = getTextContent(await read.execute("read-alias", { path: filePath }));
@@ -225,19 +226,7 @@ describe("workspace-only coding tools with effective sandbox mounts", () => {
         const bridge = createSandboxFsBridge({ sandbox });
         sandbox.fsBridge = bridge;
         const { write, list } = installLocalTransport(bridge);
-        const tools = createCoreCodingTools({
-          codingRoot: workspaceDir,
-          containmentRoot: workspaceDir,
-          includeBaseCodingTools: true,
-          shellTools: "disabled",
-          workspaceOnly,
-          readOnly: false,
-          sandbox,
-          applyPatchEnabled: false,
-          applyPatchWorkspaceOnly: true,
-          execDefaults: {},
-          processDefaults: {},
-        });
+        const tools = createSandboxCodingTools(sandbox, { workspaceOnly });
         const tool = (name: string) => {
           const found = tools.find((entry) => entry.name === name);
           if (!found) {
@@ -396,18 +385,12 @@ describe("workspace-only coding tools with effective sandbox mounts", () => {
       sandbox.fsBridge = bridge;
       const { write, create, remove } = installLocalTransport(bridge);
       const patchTool = (workspaceOnly: boolean) => {
-        const tool = createCoreCodingTools({
-          codingRoot: workspaceDir,
-          containmentRoot: workspaceDir,
+        const tool = createSandboxCodingTools(sandbox, {
           includeBaseCodingTools: false,
           shellTools: "full",
           workspaceOnly: false,
-          readOnly: false,
-          sandbox,
           applyPatchEnabled: true,
           applyPatchWorkspaceOnly: workspaceOnly,
-          execDefaults: {},
-          processDefaults: {},
         }).find((entry) => entry.name === "apply_patch");
         if (!tool) {
           throw new Error("Missing apply_patch tool");

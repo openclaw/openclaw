@@ -7,6 +7,7 @@ import {
   registerSignalExitBarrier,
   registerSignalExitFinalizer,
   waitForSignalExitBarriers,
+  waitForCliSignalExit,
 } from "./signal-exit-barrier.js";
 
 export function makeProxyHandle() {
@@ -28,23 +29,13 @@ export function registerRunMainProxyExitTests({
   stopProxyMock: Mock<(handle: unknown) => Promise<void>>;
   tryRouteCliMock: Mock;
 }): void {
-  it("stops the managed proxy after normal gateway runtime completion", async () => {
-    const handle = makeProxyHandle();
-    startProxyMock.mockResolvedValueOnce(handle);
-
-    await runCli(["node", "openclaw", "gateway", "run"]);
-
-    expect(startProxyMock).toHaveBeenCalledWith(undefined);
-    expect(stopProxyMock).toHaveBeenCalledOnce();
-    expect(stopProxyMock).toHaveBeenCalledWith(handle);
-  });
-
   it.each([
     { signal: "SIGINT" as const, exitCode: 130 },
     { signal: "SIGTERM" as const, exitCode: 143 },
   ])(
     "stops the managed proxy and drains capture before $signal exit",
     async ({ signal, exitCode }) => {
+      const previousExitCode = process.exitCode;
       const handle = makeProxyHandle();
       startProxyMock.mockResolvedValueOnce(handle);
       let resolveRoute: (value: boolean) => void = () => {};
@@ -108,9 +99,9 @@ export function registerRunMainProxyExitTests({
         expect(exitSpy).not.toHaveBeenCalled();
         expect(retireWorkerSource).not.toHaveBeenCalled();
         captureFinished.resolve();
-        await vi.waitFor(() => {
-          expect(exitSpy).toHaveBeenCalledWith(exitCode);
-        });
+        expect(await waitForCliSignalExit()).toBe(exitCode);
+        expect(process.exitCode).toBe(exitCode);
+        expect(exitSpy).not.toHaveBeenCalled();
         expect(cleanupOrder).toEqual(["capture", "worker-source"]);
 
         resolveRoute(true);
@@ -128,6 +119,8 @@ export function registerRunMainProxyExitTests({
           unregisterCapture();
           unregisterWorkerSource();
           await waitForSignalExitBarriers();
+          await waitForCliSignalExit();
+          process.exitCode = previousExitCode;
           exitSpy.mockRestore();
           processOnceSpy.mockRestore();
         }

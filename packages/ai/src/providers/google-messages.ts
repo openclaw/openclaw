@@ -59,21 +59,10 @@ export function requiresGoogleToolCallId(modelId: string): boolean {
   return modelId.startsWith("claude-") || modelId.startsWith("gpt-oss-");
 }
 
-function getGeminiMajorVersion(modelId: string): number | undefined {
-  const match = modelId.toLowerCase().match(/(?:^|\/)gemini(?:-live)?-(\d+)/);
-  if (!match) {
-    return undefined;
-  }
-  const majorVersion = match.at(1);
-  return majorVersion === undefined ? undefined : Number.parseInt(majorVersion, 10);
-}
-
 function supportsMultimodalFunctionResponse(modelId: string): boolean {
-  const geminiMajorVersion = getGeminiMajorVersion(modelId);
-  if (geminiMajorVersion !== undefined) {
-    return geminiMajorVersion >= 3;
-  }
-  return true;
+  const match = modelId.toLowerCase().match(/(?:^|\/)gemini(?:-live)?-(\d+)/);
+  const majorVersion = match?.at(1);
+  return majorVersion === undefined || Number.parseInt(majorVersion, 10) >= 3;
 }
 
 /** Project a prepared transcript; route repair and trusted video admission remain caller-owned. */
@@ -106,40 +95,34 @@ export function projectGoogleMessages(params: {
       flushToolResultRun();
     }
     if (msg.role === "user") {
-      if (typeof msg.content === "string") {
-        contents.push({
-          role: "user",
-          parts: [{ text: sanitizeText(msg.content) || " " }],
-        });
-      } else {
-        const parts: GoogleContentPart[] = msg.content.map((item) => {
-          if (item.type === "text") {
-            return { text: sanitizeText(item.text) || " " };
-          }
-          if (managed && item.type === "video") {
-            return (
-              params.videoPart?.(item) ?? { text: "(video omitted: native video slot unavailable)" }
-            );
-          }
-          return {
-            inlineData: {
-              mimeType: item.mimeType,
-              data: item.data,
-            },
-          };
-        });
-        const visibleParts =
-          managed && !model.input.includes("image")
-            ? parts.filter((part) => !part.inlineData)
-            : parts;
-        if (visibleParts.length === 0) {
-          visibleParts.push({ text: " " });
+      const sourceContent =
+        typeof msg.content === "string"
+          ? [{ type: "text" as const, text: msg.content }]
+          : msg.content;
+      const parts: GoogleContentPart[] = sourceContent.map((item) => {
+        if (item.type === "text") {
+          return { text: sanitizeText(item.text) || " " };
         }
-        contents.push({
-          role: "user",
-          parts: visibleParts,
-        });
+        if (managed && item.type === "video") {
+          return (
+            params.videoPart?.(item) ?? { text: "(video omitted: native video slot unavailable)" }
+          );
+        }
+        return {
+          inlineData: {
+            mimeType: item.mimeType,
+            data: item.data,
+          },
+        };
+      });
+      const visibleParts =
+        managed && !model.input.includes("image")
+          ? parts.filter((part) => !part.inlineData)
+          : parts;
+      if (visibleParts.length === 0) {
+        visibleParts.push({ text: " " });
       }
+      contents.push({ role: "user", parts: visibleParts });
     } else if (msg.role === "assistant") {
       const parts: GoogleContentPart[] = [];
       let sawFunctionCall = false;
@@ -231,7 +214,7 @@ export function projectGoogleMessages(params: {
 
       const modelSupportsMultimodalFunctionResponse = supportsMultimodalFunctionResponse(model.id);
 
-      const responseValue = hasText ? sanitizeText(textResult) : (mediaPlaceholder ?? "");
+      const responseValue = hasText ? textResult : (mediaPlaceholder ?? "");
 
       const imageParts: GoogleContentPart[] = imageContent.map((imageBlock) => ({
         inlineData: {

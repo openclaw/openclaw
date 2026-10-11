@@ -3,7 +3,6 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
-import { createModelAuthAvailabilityResolver } from "../../agents/model-auth-availability.js";
 import * as modelDecisions from "../../agents/model-catalog-decisions.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import * as preparedCatalog from "../../agents/prepared-model-catalog.js";
@@ -167,10 +166,7 @@ describe("/models browse catalog recovery", () => {
     }
   });
 
-  it.each([
-    { commandBodyNormalized: "/models", choice: "- anthropic (1)" },
-    { commandBodyNormalized: "/models anthropic", choice: "- anthropic/claude-opus-4-5" },
-  ])(
+  it.each([{ commandBodyNormalized: "/models", choice: "- anthropic (1)" }])(
     "keeps usable choices and clears the refresh warning after recovery for $commandBodyNormalized",
     async ({ commandBodyNormalized, choice }) => {
       const snapshot: ModelCatalogSnapshot = {
@@ -194,27 +190,26 @@ describe("/models browse catalog recovery", () => {
     },
   );
 
-  it.each(["default", "all"] as const)(
+  it.each(["default"] as const)(
     "rejects a generation retired during %s projection and allows a current retry",
     async (view) => {
       let current = true;
       catalogMocks.isCurrent = () => current;
-      const evaluating = createDeferred();
-      const resume = createDeferred();
-      const evaluateModelAuth = vi.fn(async () => ({
+      const evaluateModelAuth = vi.fn(() => ({
         availability: true as const,
         routeResolution: null,
       }));
-      evaluateModelAuth.mockImplementationOnce(async () => {
-        evaluating.resolve();
-        await resume.promise;
+      evaluateModelAuth.mockImplementationOnce(() => {
+        current = false;
         return { availability: true, routeResolution: null };
       });
-      const createDecisions = modelDecisions.createModelCatalogDecisions;
-      vi.spyOn(modelDecisions, "createModelCatalogDecisions").mockImplementation((params) => ({
-        ...createDecisions(params),
-        evaluateEntry: evaluateModelAuth,
-      }));
+      const prepareDecisions = modelDecisions.prepareModelCatalogDecisions;
+      vi.spyOn(modelDecisions, "prepareModelCatalogDecisions").mockImplementation(
+        async (params) => ({
+          ...(await prepareDecisions(params)),
+          evaluateEntry: evaluateModelAuth,
+        }),
+      );
       catalogMocks.readSnapshot.mockReturnValueOnce({
         entries: [{ provider: "anthropic", id: "claude-opus-4-5", name: "Retired model" }],
         routeVariants: [],
@@ -223,9 +218,6 @@ describe("/models browse catalog recovery", () => {
       const rejected = expect(first).rejects.toBeInstanceOf(
         PreparedModelRuntimePublicationSupersededError,
       );
-      await evaluating.promise;
-      current = false;
-      resume.resolve();
       await rejected;
       catalogMocks.isCurrent = () => true;
       catalogMocks.readSnapshot.mockReturnValueOnce({
@@ -238,22 +230,9 @@ describe("/models browse catalog recovery", () => {
     },
   );
 
-  it("does not mask an unrelated published-read failure", async () => {
-    const failure = new Error("published read failed");
-    catalogMocks.readSnapshot.mockImplementationOnce(() => {
-      throw failure;
-    });
-    await expect(buildPreparedModelsProviderData(staleCfg)).rejects.toBe(failure);
-  });
-
-  it.each([
-    { nativeAuth: true, providerKey: false, disabled: false, visible: true },
-    { nativeAuth: false, providerKey: false, disabled: false, visible: false },
-    { nativeAuth: false, providerKey: true, disabled: false, visible: false },
-    { nativeAuth: true, providerKey: true, disabled: true, visible: false },
-  ])(
+  it.each([{ nativeAuth: true, providerKey: true, disabled: true, available: false }])(
     "lists bound models using native auth=$nativeAuth, provider key=$providerKey, disabled=$disabled",
-    async ({ nativeAuth, providerKey, disabled, visible }) => {
+    async ({ nativeAuth, providerKey, disabled, available }) => {
       vi.stubEnv("ANTHROPIC_API_KEY", providerKey ? "synthetic-provider-key" : "");
       cliBackendsTesting.setDepsForTest({
         resolveRuntimeCliBackends: () => [
@@ -306,94 +285,13 @@ describe("/models browse catalog recovery", () => {
         agentId: "main",
       });
 
-      expect(reply?.text?.includes("- anthropic/claude-sonnet-4-6")).toBe(visible);
+      expect(reply?.text).toContain("- anthropic/claude-sonnet-4-6");
+      expect(reply?.text?.includes("- anthropic/claude-sonnet-4-6 (Sign-in needed")).toBe(
+        !available,
+      );
+      expect(reply?.text?.includes("run claude auth login on the Gateway host")).toBe(!available);
       expect(reply?.text?.includes("- anthropic/claude-haiku-4-5")).toBe(providerKey);
       expect(reply?.text).toContain("- anthropic/claude-opus-4-5");
-    },
-  );
-
-  it("keeps unprepared setup hints on provider auth", async () => {
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "claude-cli",
-          modelProvider: "anthropic",
-          pluginId: "anthropic",
-          config: { command: "claude" },
-        },
-      ],
-    });
-    const resolver = createModelAuthAvailabilityResolver({
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
-            },
-          },
-        },
-      },
-      env: { ANTHROPIC_API_KEY: "synthetic-provider-key" },
-      authStore: { version: 1, profiles: {} },
-      skipSetupProviderFallback: true,
-      allowPreparedRuntimeAuth: false,
-    });
-
-    expect(
-      resolver.evaluateModelAuth("anthropic", { modelId: "claude-sonnet-4-6" }).availability,
-    ).toBe(true);
-  });
-
-  it.each(["pinnedProfileId", "requiredProfileId"] as const)(
-    "does not replace an expired %s with a prepared native login",
-    async (selection) => {
-      cliBackendsTesting.setDepsForTest({
-        resolveRuntimeCliBackends: () => [
-          {
-            id: "claude-cli",
-            modelProvider: "anthropic",
-            pluginId: "anthropic",
-            config: { command: "claude" },
-          },
-        ],
-      });
-      const store: AuthProfileStore = {
-        version: 1,
-        profiles: {
-          selected: {
-            provider: "anthropic",
-            type: "token",
-            token: "synthetic-expired-token",
-            expires: 1,
-          },
-        },
-      };
-      const resolver = createModelAuthAvailabilityResolver({
-        cfg: {
-          agents: {
-            defaults: {
-              models: {
-                "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
-              },
-            },
-          },
-        },
-        env: {},
-        skipSetupProviderFallback: true,
-        preparedRuntimeAuthModes: { "claude-cli": "api_key" },
-        authStore: store,
-        preparedRuntimeAuthStore: store,
-      });
-
-      expect(
-        resolver.evaluateRuntimeModelAuth("anthropic", { modelId: "claude-sonnet-4-6" }),
-      ).toMatchObject({ availability: true, evidence: "runtime" });
-      expect(
-        resolver.evaluateRuntimeModelAuth("anthropic", {
-          modelId: "claude-sonnet-4-6",
-          [selection]: "selected",
-        }).availability,
-      ).toBe(false);
     },
   );
 

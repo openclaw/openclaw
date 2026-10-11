@@ -11,7 +11,7 @@ defineDiscordVoiceTests(
     resolveAgentRouteMock,
     agentCommandMock,
     loggerWarnMock,
-    resolveRealtimeBootstrapContextInstructionsMock,
+    resolveRealtimeVoiceAgentContextInstructionsMock,
     realtimeSessionMock,
     beginSpeakerTurn,
     lastRealtimeBridge,
@@ -611,30 +611,56 @@ defineDiscordVoiceTests(
       ]);
     });
 
-    it("adds default bootstrap profile context to realtime voice instructions", async () => {
-      resolveAgentRouteMock.mockReturnValue({
-        agentId: "main",
-        sessionKey: "agent:main:discord:channel:1001",
-      });
-      resolveRealtimeBootstrapContextInstructionsMock.mockResolvedValue(
-        "OpenClaw realtime voice profile context:\n\n### IDENTITY.md\nName: Wilfred",
-      );
-      const { bridgeParams } = await createJoinedBidiFixture({
-        voice: { realtime: { consultPolicy: "always" } },
-      });
+    it.each([
+      { mode: "bidi", files: undefined },
+      { mode: "agent-proxy", files: undefined },
+      { mode: "bidi", files: [] },
+      { mode: "agent-proxy", files: [] },
+    ] as const)(
+      "includes shared agent context once in $mode with files $files",
+      async ({ mode, files }) => {
+        resolveAgentRouteMock.mockReturnValue({
+          agentId: "main",
+          sessionKey: "agent:main:discord:channel:1001",
+        });
+        resolveRealtimeVoiceAgentContextInstructionsMock.mockResolvedValue(
+          files
+            ? "Agent context: shared voice agent context."
+            : "Agent context: shared voice agent context.\n\nOpenClaw realtime voice profile context:\n\n### IDENTITY.md\nName: Wilfred",
+        );
+        const config = {
+          voice: {
+            realtime: {
+              consultPolicy: "always" as const,
+              bootstrapContextFiles: files ? [...files] : undefined,
+            },
+          },
+        };
+        const { bridgeParams } =
+          mode === "agent-proxy"
+            ? await createJoinedAgentProxyFixture({ config })
+            : await createJoinedBidiFixture(config);
 
-      expect(resolveRealtimeBootstrapContextInstructionsMock).toHaveBeenCalledWith({
-        config: {},
-        agentId: "main",
-        sessionKey: "agent:main:discord:channel:1001",
-        files: undefined,
-        warn: expect.any(Function),
-      });
-      expect(bridgeParams?.instructions).toContain("OpenClaw realtime voice profile context");
-      expect(bridgeParams?.instructions).toContain("Name: Wilfred");
-      expect(bridgeParams?.instructions).toContain("short natural backchannel");
-      expect(bridgeParams?.instructions).toContain("Call openclaw_agent_consult");
-    });
+        expect(resolveRealtimeVoiceAgentContextInstructionsMock).toHaveBeenCalledWith({
+          config: {},
+          agentId: "main",
+          sessionKey: "agent:main:discord:channel:1001",
+          files,
+          warn: expect.any(Function),
+        });
+        expect(bridgeParams?.instructions?.match(/Agent context:/g)).toHaveLength(1);
+        if (files) {
+          expect(bridgeParams?.instructions).not.toContain(
+            "OpenClaw realtime voice profile context",
+          );
+        } else {
+          expect(bridgeParams?.instructions).toContain("OpenClaw realtime voice profile context");
+          expect(bridgeParams?.instructions).toContain("Name: Wilfred");
+        }
+        expect(bridgeParams?.instructions).toContain("short natural backchannel");
+        expect(bridgeParams?.instructions).toContain("Call openclaw_agent_consult");
+      },
+    );
 
     it("routes bidi realtime consults through a configured voice agent session target", async () => {
       resolveAgentRouteMock.mockImplementation((params?: { peer?: { id?: string } }) => {

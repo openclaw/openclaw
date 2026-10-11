@@ -2,7 +2,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelId } from "../../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
-import { createAgentDatabaseInspectionRefusal } from "../../state/agent-database-admission.js";
+import {
+  createAgentDatabaseInspectionRefusal,
+  type AgentDatabaseAdmissionRefusal,
+} from "../../state/agent-database-admission.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { ChannelManager } from "../server-channels.js";
 import type { GatewayPluginReloadStatus } from "../server-plugin-runtime-generation.js";
@@ -39,7 +42,7 @@ function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
     releaseChannelRouteHandoffs: vi.fn(),
     setAutostartSuppression: vi.fn(),
     getAutostartSuppression: vi.fn(() => null),
-    recoverAutostartSuppression: vi.fn(async () => false),
+    recoverAutostartSuppression: vi.fn(() => undefined),
     setAmbientAutostartSuppressedChannelIds: vi.fn(),
     isAmbientAutostartSuppressed: vi.fn(() => false),
     markChannelLoggedOut: vi.fn(),
@@ -255,33 +258,54 @@ describe("createReadinessChecker", () => {
     });
   });
 
-  it.each([false, true])(
-    "reports core agent refusal and recovery immediately (skip channels: %s)",
-    (skipChannels) => {
+  it.each([
+    { skipChannels: false, channelFailed: false, allowPending: true },
+    { skipChannels: true, channelFailed: false, allowPending: true },
+    { skipChannels: false, channelFailed: true, allowPending: true },
+    { skipChannels: true, channelFailed: false, allowPending: false },
+  ])(
+    "reports warming, failed, and recovered core agents (skip channels: $skipChannels, channel failed: $channelFailed, allow pending: $allowPending)",
+    ({ skipChannels, channelFailed, allowPending }) => {
       withReadinessClock(() => {
+        const pending = createAgentDatabaseInspectionRefusal({
+          agentId: "main",
+          paths: ["/isolated/agents/main/openclaw-agent.sqlite"],
+          reason: "Startup inspection and preparation are still running.",
+          pending: true,
+        });
         const refusal = createAgentDatabaseInspectionRefusal({
           agentId: "main",
           paths: ["/isolated/agents/main/openclaw-agent.sqlite"],
           reason: "Session identities require migration before this agent can run.",
         });
-        let refused = false;
+        let refusals: AgentDatabaseAdmissionRefusal[] = [];
         const readiness = createReadinessChecker({
-          channelManager: createManager(snapshotWith({})),
+          channelManager: createManager(
+            snapshotWith(channelFailed ? { discord: stoppedAccount({ connected: false }) } : {}),
+          ),
           startedAt: Date.now() - FIVE_MIN_MS,
           cacheTtlMs: 1_000,
           shouldSkipChannelReadiness: () => skipChannels,
-          getAgentDatabaseAdmissionRefusals: () => (refused ? [refusal] : []),
+          allowPendingAgentDatabases: allowPending,
+          getAgentDatabaseAdmissionRefusals: () => refusals,
         });
-        expect(readiness()).toEqual(readySnapshot());
+        const channelReadiness = channelFailed ? failingSnapshot(["discord"]) : readySnapshot();
+        expect(readiness()).toEqual(channelReadiness);
 
-        refused = true;
+        refusals = [pending];
+        expect(readiness()).toEqual({
+          ...(allowPending ? channelReadiness : failingSnapshot(["agent-database:main"])),
+          agentDatabases: [pending],
+        });
+
+        refusals = [refusal];
         expect(readiness()).toEqual({
           ...failingSnapshot(["agent-database:main"]),
           agentDatabases: [refusal],
         });
 
-        refused = false;
-        expect(readiness()).toEqual(readySnapshot());
+        refusals = [];
+        expect(readiness()).toEqual(channelReadiness);
       });
     },
   );
@@ -375,7 +399,12 @@ describe("createReadinessChecker", () => {
     withReadinessClock(() => {
       const { readiness } = createReadinessHarness({
         accounts: {
-          slack: managedAccount({ lifecycle: "blocked" }),
+          slack: stoppedAccount({
+            lifecycle: "blocked",
+            linked: false,
+            ingressUnavailable: true,
+            restartPending: true,
+          }),
         },
       });
       expect(readiness()).toEqual(failingSnapshot(["slack"]));

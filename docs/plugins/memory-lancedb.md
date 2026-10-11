@@ -115,10 +115,11 @@ dimensions. Automatic plugin reload creates a new instance with the changed
 identity; it does not re-embed existing rows.
 </Warning>
 
-OpenAI Codex / ChatGPT OAuth is not an OpenAI Platform embeddings credential.
-For OpenAI embeddings use an OpenAI API key auth profile, `OPENAI_API_KEY`, or
-`models.providers.openai.apiKey`. OAuth-only users should pick another
-embedding-capable provider such as `github-copilot` or `ollama`.
+The OpenAI provider adapter can use a stored Codex OAuth profile when the account
+grants embedding access. The separate Sign in with ChatGPT token-sharing grant
+does not authorize embeddings. API-key auth remains available through a profile,
+`OPENAI_API_KEY`, or `models.providers.openai.apiKey`. Other embedding-capable
+providers include `github-copilot` and `ollama`.
 
 ```json5
 {
@@ -300,7 +301,17 @@ Agents get three tools from the active memory plugin:
 
 ## Storage
 
-LanceDB data defaults to `~/.openclaw/memory/lancedb`. Override with `dbPath`:
+LanceDB data defaults to `memory/lancedb` under the active OpenClaw state
+directory: `~/.openclaw/memory/lancedb` for the default profile.
+`OPENCLAW_STATE_DIR` or `--profile <name>` (`~/.openclaw-<name>`) move it with
+the state directory. See [Paths and instances](/help/environment#paths-and-instances).
+
+Earlier releases ignored the state directory, so named profiles and custom
+state directories shared `~/.openclaw/memory/lancedb`. Those setups now start
+with their own store. Set `dbPath: "~/.openclaw/memory/lancedb"` to keep using
+the old shared store.
+
+Override the path with `dbPath`:
 
 ```json5
 {
@@ -309,7 +320,7 @@ LanceDB data defaults to `~/.openclaw/memory/lancedb`. Override with `dbPath`:
       "memory-lancedb": {
         enabled: true,
         config: {
-          dbPath: "~/.openclaw/memory/lancedb",
+          dbPath: "/srv/openclaw/memory/lancedb",
           embedding: {
             apiKey: "${OPENAI_API_KEY}",
             model: "text-embedding-3-small",
@@ -331,7 +342,7 @@ agent.
 
 Databases created before per-agent ownership have no reliable row provenance.
 On upgrade, `openclaw doctor --fix` assigns those legacy rows once to the
-configured default agent. Runtime access fails closed until that migration has
+configured default agent. Runtime access is blocked until that migration has
 completed; other agents never inherit the old shared rows.
 
 `storageOptions` accepts string key/value pairs for LanceDB storage backends

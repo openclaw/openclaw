@@ -24,7 +24,6 @@ type FormatTimeAgoOptions = {
 
 type FormatRelativeTimestampOptions = {
   dateFallback?: boolean;
-  timezone?: string;
   fallback?: string;
   suffix?: boolean;
 };
@@ -32,7 +31,7 @@ type FormatRelativeTimestampOptions = {
 let localeFormatters:
   | {
       locale: string;
-      units: Partial<Record<DurationPart["unit"], Intl.NumberFormat>>;
+      units: Partial<Record<`${DurationPart["unit"]}:${"narrow" | "long"}`, Intl.NumberFormat>>;
       relative?: Intl.RelativeTimeFormat;
     }
   | undefined;
@@ -47,12 +46,17 @@ function getLocaleFormatters() {
   return localeFormatters;
 }
 
-export function formatUnit({ value, unit }: DurationPart): string {
+export function formatUnit({
+  value,
+  unit,
+  unitDisplay = "narrow",
+}: DurationPart & { unitDisplay?: "narrow" | "long" }): string {
   const formatters = getLocaleFormatters();
-  return (formatters.units[unit] ??= new Intl.NumberFormat(formatters.locale, {
+  const key = `${unit}:${unitDisplay}` as const;
+  return (formatters.units[key] ??= new Intl.NumberFormat(formatters.locale, {
     style: "unit",
     unit,
-    unitDisplay: "narrow",
+    unitDisplay,
     maximumFractionDigits: 0,
   })).format(value);
 }
@@ -105,10 +109,9 @@ export function formatRelativeTimestamp(
       return new Intl.DateTimeFormat(i18n.getLocale(), {
         month: "short",
         day: "numeric",
-        ...(options.timezone ? { timeZone: options.timezone } : {}),
       }).format(new Date(timestampMs));
     } catch {
-      // Invalid time zones should still leave a useful localized relative value.
+      // Finite timestamps can still be outside JavaScript's date range.
     }
   }
 
@@ -176,38 +179,28 @@ export function createMsFormatter(
   };
 }
 
-export function formatDateMs(
-  ms?: number | null,
-  options?: Intl.DateTimeFormatOptions,
-  fallback = t("common.na"),
-): string {
-  const timestampMs = asDateTimestampMs(ms);
-  return timestampMs === undefined
-    ? fallback
-    : new Date(timestampMs).toLocaleDateString(i18n.getLocale(), options);
+function calendarFormatter(
+  method: "toLocaleDateString" | "toLocaleTimeString" | "toLocaleString",
+  defaultOptions?: () => Intl.DateTimeFormatOptions,
+) {
+  return (
+    ms?: number | null,
+    options?: Intl.DateTimeFormatOptions,
+    fallback = t("common.na"),
+  ): string => {
+    const timestampMs = asDateTimestampMs(ms);
+    return timestampMs === undefined
+      ? fallback
+      : new Date(timestampMs)[method](
+          i18n.getLocale(),
+          defaultOptions && options == null ? defaultOptions() : options,
+        );
+  };
 }
 
-export function formatTimeMs(
-  ms?: number | null,
-  options?: Intl.DateTimeFormatOptions,
-  fallback = t("common.na"),
-): string {
-  const timestampMs = asDateTimestampMs(ms);
-  return timestampMs === undefined
-    ? fallback
-    : new Date(timestampMs).toLocaleTimeString(i18n.getLocale(), options ?? { timeStyle: "short" });
-}
-
-export function formatDateTimeMs(
-  ms?: number | null,
-  options?: Intl.DateTimeFormatOptions,
-  fallback = t("common.na"),
-): string {
-  const timestampMs = asDateTimestampMs(ms);
-  return timestampMs === undefined
-    ? fallback
-    : new Date(timestampMs).toLocaleString(i18n.getLocale(), options);
-}
+export const formatDateMs = calendarFormatter("toLocaleDateString");
+export const formatTimeMs = calendarFormatter("toLocaleTimeString", () => ({ timeStyle: "short" }));
+export const formatDateTimeMs = calendarFormatter("toLocaleString");
 
 export function formatList(values?: Array<string | null | undefined>): string {
   if (!values || values.length === 0) {
@@ -253,26 +246,20 @@ export function formatCost(cost: number | null | undefined, fallback = "$0.00"):
   if (cost === 0) {
     return "$0.00";
   }
-  if (cost < 0.01) {
-    return `$${cost.toFixed(4)}`;
-  }
-  if (cost < 1) {
-    return `$${cost.toFixed(3)}`;
-  }
-  return `$${cost.toFixed(2)}`;
+  return `$${cost.toFixed(cost < 0.01 ? 4 : cost < 1 ? 3 : 2)}`;
 }
 
 // Keep token presentation consistent across UI session and usage surfaces.
 export function formatCompactTokenCount(
   tokens: number | null | undefined,
-  options: { thousandsSuffix?: string; millionsSuffix?: string; trimTrailingZero?: boolean } = {},
+  options: { thousandsSuffix?: string; trimTrailingZero?: boolean } = {},
 ): string {
   if (tokens == null || !Number.isFinite(tokens)) {
     return "0";
   }
   return formatTokenUnits(tokens, {
     thousandsSuffix: options.thousandsSuffix,
-    millionsSuffix: options.millionsSuffix ?? "M",
+    millionsSuffix: "M",
     trimTrailingZero: options.trimTrailingZero ?? true,
     maxUnit: "billion",
   });

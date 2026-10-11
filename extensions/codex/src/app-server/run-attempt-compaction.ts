@@ -1,6 +1,7 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { invalidateCodexComputerFrame } from "./computer-context.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
-import { restoreCodexThreadSkillsCatalogAfterCompaction } from "./thread-policy.js";
+import { restoreCodexThreadInstructionsAfterCompaction } from "./thread-policy.js";
 
 /** Restore host-owned context after native compaction rebuilds a live thread. */
 export async function restoreCodexAttemptCompactionContext(
@@ -20,9 +21,7 @@ export async function restoreCodexAttemptCompactionContext(
       throw new Error("Codex compaction thread ownership changed");
     }
   };
-  computerContextEpoch.value += 1;
-  delete computerContextEpoch.frameToolCallId;
-  delete computerContextEpoch.frameImageIdentity;
+  invalidateCodexComputerFrame(computerContextEpoch);
   try {
     await compactionPlanState.restore({
       client,
@@ -37,12 +36,13 @@ export async function restoreCodexAttemptCompactionContext(
       error: formatErrorMessage(error),
     });
   }
-  thread.liveThreadEphemeralPolicy = await restoreCodexThreadSkillsCatalogAfterCompaction({
+  thread.liveThreadEphemeralPolicy = await restoreCodexThreadInstructionsAfterCompaction({
     client,
     threadId: thread.threadId,
     ephemeralPolicy: thread.liveThreadEphemeralPolicy,
     timeoutMs: connection.appServer.requestTimeoutMs,
     signal: runAbortController.signal,
     assertCurrent,
+    withCurrent: connection.withCurrent,
   });
 }

@@ -105,6 +105,18 @@ describe("plugin-owned channel hint paths", () => {
   });
 });
 
+describe("inherited defaults", () => {
+  it("describes omitted settings without adding them to authored config", () => {
+    const { uiHints } = buildConfigSchemaCore();
+    expect(uiHints["cron.enabled"]?.placeholder).toBe("Default: On");
+    expect(uiHints["plugins.enabled"]?.placeholder).toBe("Default: On");
+
+    const config = OpenClawSchema.parse({ cron: {}, plugins: {} });
+    expect(config.cron).not.toHaveProperty("enabled");
+    expect(config.plugins).not.toHaveProperty("enabled");
+  });
+});
+
 describe("mapSensitivePaths", () => {
   it("should detect sensitive fields nested inside all structural Zod types", () => {
     const GrandSchema = z.object({

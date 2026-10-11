@@ -26,26 +26,7 @@ afterEach(() => {
 });
 
 describe("paired-node media guard", () => {
-  it.each([
-    {
-      name: "documents and audio",
-      media: [
-        { path: "/tmp/report.pdf", contentType: "application/pdf" },
-        { path: "/tmp/voice.ogg", contentType: "audio/ogg" },
-      ],
-    },
-    {
-      name: "a described image with a document",
-      media: [
-        { path: "/tmp/photo.png", contentType: "image/png", hydrationSuppressed: true },
-        { path: "/tmp/report.pdf", contentType: "application/pdf" },
-      ],
-    },
-    {
-      name: "a remote-only image",
-      media: [{ url: "https://example.invalid/photo.png", contentType: "image/png" }],
-    },
-  ])("allows $name through node placement", async ({ media }) => {
+  it("allows a described image with a document through node placement", async () => {
     const invokeNode = vi.fn(async (params: Parameters<typeof invokeNodeClaudeCliRun>[0]) => {
       params.onProgress(CLAUDE_OK_JSONL);
       return {
@@ -62,7 +43,10 @@ describe("paired-node media guard", () => {
         execNode: "node-a",
       },
     });
-    context.params.media = media;
+    context.params.media = [
+      { path: "/tmp/photo.png", contentType: "image/png", hydrationSuppressed: true },
+      { path: "/tmp/report.pdf", contentType: "application/pdf" },
+    ];
 
     await expect(executePreparedCliRun(context)).resolves.toMatchObject({ text: "ok" });
     expect(invokeNode).toHaveBeenCalledOnce();

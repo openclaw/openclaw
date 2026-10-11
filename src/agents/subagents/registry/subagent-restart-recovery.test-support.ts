@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import "./subagent-registry.persistence.mocks.test-support.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
@@ -10,11 +11,11 @@ import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-ru
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
-import { captureTaskDeliveryWork } from "../../../tasks/task-registry-delivery.test-support.js";
 import {
-  resetTaskFlowRegistryForTests,
-  resetTaskRegistryForTests,
-} from "../../../tasks/task-runtime.test-helpers.js";
+  closeOpenClawStateDatabaseByPathAsync,
+  registerOpenClawStateDatabaseAsyncResource,
+} from "../../../state/openclaw-state-db-cache.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { captureEnv } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import {
@@ -22,6 +23,7 @@ import {
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
+import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import {
   createCanonicalSubagentRunFixture,
   settleSubagentRegistryPersistenceWork,
@@ -32,17 +34,13 @@ import {
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-vi.mock("../announce/subagent-announce.js", async (importOriginal) => {
-  const { hasUsableSessionEntry } =
-    await importOriginal<typeof import("../announce/subagent-announce.js")>();
-  return {
-    hasUsableSessionEntry,
-    captureSubagentCompletionReply: vi.fn(async () => undefined),
-    runSubagentAnnounceFlow: vi.fn<
-      typeof import("../announce/subagent-announce.js").runSubagentAnnounceFlow
-    >(async () => "delivered"),
-  };
-});
+vi.mock("../announce/subagent-announce.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../announce/subagent-announce.js")>()),
+  captureSubagentCompletionReply: vi.fn(async () => undefined),
+  runSubagentAnnounceFlow: vi.fn<
+    typeof import("../announce/subagent-announce.js").runSubagentAnnounceFlow
+  >(async () => "delivered"),
+}));
 vi.mock("../../../infra/agent-events.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../infra/agent-events.js")>();
   return { ...actual, onAgentEvent: vi.fn(actual.onAgentEvent) };
@@ -69,6 +67,7 @@ export function makeRestartRecoveryRun(
 export function useSubagentRestartRecoveryFixture() {
   const dispatchAgent = vi.fn();
   const gatewayRuntime: GatewayRecoveryRuntime = {
+    prepareRestartRecovery: () => undefined,
     dispatchSessionMethod: vi.fn(),
     dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
     waitForAgent: vi.fn(async () => ({
@@ -76,52 +75,50 @@ export function useSubagentRestartRecoveryFixture() {
     })) as GatewayRecoveryRuntime["waitForAgent"],
     sendRecoveryNotice: vi.fn(),
   };
-  const activateGatewayRuntime = () => {
+  const activateGatewayRuntime = async () => {
     const gatewayContext = {
       recoveryRuntime: gatewayRuntime,
+      chatAbortControllers: new Map(),
       resolveGatewayContext: () => gatewayContext as never,
     };
     bindGatewayContextResolver(gatewayRuntime, gatewayContext.resolveGatewayContext);
-    activateSubagentRegistry(gatewayContext.resolveGatewayContext);
+    await activateSubagentRegistry(gatewayContext.resolveGatewayContext);
   };
 
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
   let tempStateDir: string | null = null;
-  let deliveries: ReturnType<typeof captureTaskDeliveryWork> | undefined;
-  const settle = () => settleSubagentRegistryPersistenceWork(deliveries);
+  let settleRootWork: ReturnType<typeof observeRootWork>;
+  const settle = (keepObserving = true) =>
+    settleSubagentRegistryPersistenceWork(() => settleRootWork(keepObserving));
 
   beforeEach(async () => {
     // Retained stores still belong to the previous case until its cleanup succeeds.
     if (tempStateDir !== null) {
       throw new Error("Previous restart recovery fixture cleanup is incomplete");
     }
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-orphan-integ-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
     setRuntimeConfigSnapshot({ session: { store: undefined } } as never);
     vi.mocked(runSubagentAnnounceFlow).mockReset();
     vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockReset();
     vi.mocked(onAgentEvent).mockImplementation(() => () => undefined);
-    deliveries = captureTaskDeliveryWork();
-    activateGatewayRuntime();
+    settleRootWork = observeRootWork();
+    await activateGatewayRuntime();
     dispatchAgent.mockReset();
   });
 
   afterEach(async () => {
     const failures: unknown[] = [];
     try {
-      await settle();
+      await settle(false);
     } catch (error) {
       failures.push(error);
     }
     // Preserve stores and their environment while detached delivery still owns them.
     if (getActiveGatewayRootWorkCount() === 0) {
       try {
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
         await cleanupSessionStateForTest({ stateDir: tempStateDir ?? undefined });
-        resetTaskRegistryForTests({ persist: false });
-        resetTaskFlowRegistryForTests({ persist: false });
         clearRuntimeConfigSnapshot();
         if (tempStateDir) {
           // Resource cleanup finished; removal failure must not retain a retired owner.
@@ -137,8 +134,6 @@ export function useSubagentRestartRecoveryFixture() {
           }
         }
         envSnapshot.restore();
-        deliveries?.[Symbol.dispose]();
-        deliveries = undefined;
         vi.restoreAllMocks();
         tempStateDir = null;
       } catch (error) {
@@ -154,6 +149,26 @@ export function useSubagentRestartRecoveryFixture() {
   });
 
   return {
+    async withStateReadAdmissionClosed(run: () => Promise<void>) {
+      const context = captureOpenClawStateWorkerContext();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const unregister = registerOpenClawStateDatabaseAsyncResource({
+        close: () => {
+          entered.resolve();
+          return release.promise;
+        },
+      });
+      const closing = closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
+      try {
+        await entered.promise;
+        await run();
+      } finally {
+        release.resolve();
+        await closing;
+        unregister();
+      }
+    },
     settle,
     activateGatewayRuntime,
     dispatchAgent,

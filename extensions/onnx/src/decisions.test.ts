@@ -39,17 +39,11 @@ describe("ONNX decision contract", () => {
       choice: "holiday",
       probabilities: { holiday: expect.closeTo(0.75, 14), finance: expect.closeTo(0.25, 14) },
     });
-    expect(result.result.answers.rating).toMatchObject({ type: "score" });
-    const rating = result.result.answers.rating;
-    if (rating?.type !== "score") {
-      throw new Error("Expected score result");
-    }
-    expect(rating.score).toBeCloseTo(1.6);
-    expect(rating.probabilities).toEqual([
-      expect.closeTo(0.1),
-      expect.closeTo(0.2),
-      expect.closeTo(0.7),
-    ]);
+    expect(result.result.answers.rating).toEqual({
+      type: "score",
+      score: expect.closeTo(1.6),
+      probabilities: [expect.closeTo(0.1), expect.closeTo(0.2), expect.closeTo(0.7)],
+    });
     expect(result.result.answers.mentioned).toEqual({ type: "boolean", probabilityTrue: 0.8 });
     expect(result.result.usage).toEqual({ inputTokens: 41 });
     expect(classify.mock.calls[0]?.[0]).toBe(model);
@@ -75,18 +69,12 @@ describe("ONNX decision contract", () => {
     const classify = vi
       .fn<InferenceWorkerClient["classify"]>()
       .mockResolvedValue([{ logits: [1000, -1000], inputTokens: 3 }]);
-    const questions = Object.fromEntries([
-      [
-        "__proto__",
-        {
-          type: "choice" as const,
-          criteria: Object.fromEntries([
-            ["__proto__", "first"],
-            ["constructor", "second"],
-          ]),
-        },
-      ],
-    ]);
+    const questions = {
+      ["__proto__"]: {
+        type: "choice" as const,
+        criteria: { ["__proto__"]: "first", constructor: "second" },
+      },
+    };
     const result = await createOnnxProvider({ classify }, vi.fn()).evaluate(
       { state: "text", questions },
       context(),
@@ -98,10 +86,7 @@ describe("ONNX decision contract", () => {
     expect(Object.getOwnPropertyDescriptor(result.result.answers, "__proto__")?.value).toEqual({
       type: "choice",
       choice: "__proto__",
-      probabilities: Object.fromEntries([
-        ["__proto__", 1],
-        ["constructor", 0],
-      ]),
+      probabilities: { ["__proto__"]: 1, constructor: 0 },
     });
   });
 

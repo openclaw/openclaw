@@ -1,8 +1,5 @@
 import path from "node:path";
-import {
-  LOGIN_SHELL_PATH_CARRIER_ENV,
-  prependCarrierPathToShellPayload,
-} from "../infra/login-shell-path-carrier.js";
+import { prependShellPath } from "../infra/node-shell.js";
 import { findPathKey, removePathPrepend } from "../infra/path-prepend.js";
 
 /**
@@ -34,8 +31,5 @@ export function wrapPosixCommandWithPathPrepend(
     }
   }
 
-  // Pass the prepend string safely via a temporary environment variable.
-  env[LOGIN_SHELL_PATH_CARRIER_ENV] = pathPrepend.join(path.delimiter);
-
-  return prependCarrierPathToShellPayload(command);
+  return prependShellPath(command, env, pathPrepend.join(path.delimiter));
 }

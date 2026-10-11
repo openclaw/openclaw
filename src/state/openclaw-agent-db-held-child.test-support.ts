@@ -1,10 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import {
-  closeOpenClawAgentDatabases,
-  openOpenClawAgentDatabase,
-  resolveOpenClawAgentSqlitePath,
-} from "./openclaw-agent-db.js";
+import { closeOpenClawAgentDatabases } from "./openclaw-agent-db-lifecycle.js";
+import { openOpenClawAgentDatabase, resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const options = {
@@ -28,9 +25,16 @@ if (fixtureRoot) {
     throw new Error("Held database fixture must stay inside its private state root");
   }
 }
-openOpenClawAgentDatabase(options);
+const database = openOpenClawAgentDatabase(options);
 process.send?.("ready");
-process.once("message", () => {
+process.on("message", (message) => {
+  if (message === "begin-write") {
+    database.db.exec(
+      "BEGIN IMMEDIATE; INSERT INTO auth_profile_state VALUES ('killed-write', '{}', 1)",
+    );
+    process.send?.("writing");
+    return;
+  }
   closeOpenClawAgentDatabases();
   closeOpenClawStateDatabaseForTest();
   process.disconnect?.();

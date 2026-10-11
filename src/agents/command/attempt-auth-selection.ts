@@ -1,3 +1,5 @@
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
@@ -11,19 +13,21 @@ type HarnessAuthProfileSelection = {
   authProfileMode?: string;
 };
 
-function resolveProfileAuthFromStore(params: { agentDir: string; profileId: string | undefined }): {
-  provider?: string;
-  mode?: string;
-} {
-  const profileId = params.profileId?.trim();
-  if (!profileId) {
-    return {};
-  }
-  const credential = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-    externalCliProfileIds: [profileId],
-  }).profiles[profileId];
-  return { provider: credential?.provider, mode: credential?.type };
+export function resolveCommandAuthProfileSelection(params: {
+  sessionEntry?: SessionEntry;
+  configuredAuthProfileId?: string;
+}): { id: string; source: "auto" | "user" | undefined } | undefined {
+  const sessionAuthProfileId = params.sessionEntry?.authProfileOverride?.trim();
+  const sessionAuthProfileSource = resolveCollapsedSessionAuthPinSource(params.sessionEntry);
+  // An explicit session choice owns the conversation. Otherwise the profile
+  // bound to the configured model replaces a stale automatic session choice.
+  return sessionAuthProfileId && sessionAuthProfileSource !== "auto"
+    ? { id: sessionAuthProfileId, source: sessionAuthProfileSource }
+    : params.configuredAuthProfileId?.trim()
+      ? { id: params.configuredAuthProfileId.trim(), source: "user" }
+      : sessionAuthProfileId
+        ? { id: sessionAuthProfileId, source: sessionAuthProfileSource }
+        : undefined;
 }
 
 export function resolveHarnessAuthProfileSelection(params: {
@@ -42,15 +46,15 @@ export function resolveHarnessAuthProfileSelection(params: {
 }): HarnessAuthProfileSelection {
   const sessionAuthProfileId = params.sessionAuthProfileId?.trim();
   if (sessionAuthProfileId) {
-    const profileAuth = resolveProfileAuthFromStore({
-      agentDir: params.agentDir,
-      profileId: sessionAuthProfileId,
-    });
+    const credential = ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: false,
+      externalCliProfileIds: [sessionAuthProfileId],
+    }).profiles[sessionAuthProfileId];
     return {
       authProfileId: sessionAuthProfileId,
       authProfileIdSource: params.sessionAuthProfileSource,
-      authProfileProvider: profileAuth.provider ?? params.authProfileProvider,
-      authProfileMode: profileAuth.mode,
+      authProfileProvider: credential?.provider ?? params.authProfileProvider,
+      authProfileMode: credential?.type,
     };
   }
 

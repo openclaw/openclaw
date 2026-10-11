@@ -1,7 +1,6 @@
-// Channels page renders Nostr status.
 import { html, nothing } from "lit";
-import type { ChannelAccountSnapshot, NostrStatus } from "../../api/types.ts";
-import { renderSettingsSection } from "../../components/settings-ui.ts";
+import type { ChannelAccountSnapshot, NostrProfile, NostrStatus } from "../../api/types.ts";
+import { renderSettingsRow, renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { renderChannelConfigSection } from "./view.config.ts";
@@ -23,10 +22,7 @@ function truncatePubkey(pubkey: string | null | undefined): string {
   if (!pubkey) {
     return t("common.na");
   }
-  if (pubkey.length <= 20) {
-    return pubkey;
-  }
-  return `${pubkey.slice(0, 8)}...${pubkey.slice(-8)}`;
+  return pubkey.length <= 20 ? pubkey : `${pubkey.slice(0, 8)}...${pubkey.slice(-8)}`;
 }
 
 export function renderNostrCard(params: {
@@ -59,7 +55,7 @@ export function renderNostrCard(params: {
 
   const renderAccountRow = (account: ChannelAccountSnapshot) => {
     const publicKey = (account as { publicKey?: string }).publicKey;
-    const profile = (account as { profile?: { name?: string; displayName?: string } }).profile;
+    const profile = (account as { profile?: NostrProfile }).profile;
     const displayName = profile?.displayName ?? profile?.name ?? account.name ?? account.accountId;
 
     return renderChannelAccountRow({
@@ -88,46 +84,22 @@ export function renderNostrCard(params: {
     }
 
     const profile =
-      (
-        primaryAccount as
-          | {
-              profile?: {
-                name?: string;
-                displayName?: string;
-                about?: string;
-                picture?: string;
-                nip05?: string;
-              };
-            }
-          | undefined
-      )?.profile ?? nostr?.profile;
+      (primaryAccount as { profile?: NostrProfile } | undefined)?.profile ?? nostr?.profile;
     const { name, displayName, about, picture, nip05 } = profile ?? {};
     const hasAnyProfileData = name || displayName || about || picture || nip05;
 
     return html`
-      <div class="settings-row">
-        <div class="settings-row__text">
-          <span class="settings-row__title">${t("channels.nostr.profile")}</span>
-          ${
-            hasAnyProfileData
-              ? nothing
-              : html`<span class="settings-row__desc"
-                  >${t("channels.nostr.noProfile")} ${t("channels.nostr.noProfileHint")}</span
-                >`
-          }
-        </div>
-        ${
-          summaryConfigured
-            ? html`
-                <div class="settings-row__control">
-                  <button class="btn btn--sm" @click=${onEditProfile}>
-                    ${t("channels.nostr.editProfile")}
-                  </button>
-                </div>
-              `
-            : nothing
-        }
-      </div>
+      ${renderSettingsRow({
+        title: t("channels.nostr.profile"),
+        description: hasAnyProfileData
+          ? undefined
+          : html`${t("channels.nostr.noProfile")} ${t("channels.nostr.noProfileHint")}`,
+        control: summaryConfigured
+          ? html`<button class="btn btn--sm" @click=${onEditProfile}>
+              ${t("channels.nostr.editProfile")}
+            </button>`
+          : nothing,
+      })}
       ${
         hasAnyProfileData
           ? html`

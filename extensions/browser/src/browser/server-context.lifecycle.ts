@@ -2,8 +2,7 @@
  * Per-profile Browser lifecycle actor.
  *
  * Starts and destructive transitions share one settled serial tail. Ordinary
- * tab/action work uses generation leases, so it remains concurrent while a
- * transition can still abort and drain all previously admitted work.
+ * Tab/action work stays concurrent; transitions cancel it and wait for settlement.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -21,8 +20,6 @@ import type { BrowserServerState, ProfileRuntimeState } from "./server-context.t
 type ProfileLifecycleTerminal = "deleted" | "config-removed";
 
 type ProfileLifecycleActor = {
-  generation: number;
-  configRevision: number;
   controller: AbortController;
   /** Settled-only tail: failed starts/transitions never poison later work. */
   tail: Promise<void>;
@@ -42,7 +39,6 @@ type ProfileTransitionOptions = {
   runtime: ProfileRuntimeState;
   reason: string;
   terminal?: ProfileLifecycleTerminal;
-  advanceConfigRevision?: boolean;
   closeRelay?: boolean;
   captureProfileResources?: boolean;
   /** Bridge runtimes must not retire process-global adapters shared by another runtime. */
@@ -58,7 +54,6 @@ type ProfileTransitionResult = {
 };
 
 type ProfileLeaseContext = {
-  generation: number;
   signal: AbortSignal;
 };
 
@@ -68,8 +63,6 @@ const stoppingBrowserRuntimes = new WeakSet<BrowserServerState>();
 
 function createProfileLifecycleActor(): ProfileLifecycleActor {
   return {
-    generation: 0,
-    configRevision: 0,
     controller: new AbortController(),
     tail: Promise.resolve(),
     starts: new Map(),
@@ -137,8 +130,6 @@ function assertRuntimeAdmission(state: BrowserServerState): void {
 function assertProfileCurrent(params: {
   state: BrowserServerState;
   runtime: ProfileRuntimeState;
-  configRevision: number;
-  generation?: number;
   allowBlocked?: boolean;
 }): void {
   assertRuntimeAdmission(params.state);
@@ -149,19 +140,12 @@ function assertProfileCurrent(params: {
   if (actor.blockedReason && !params.allowBlocked) {
     throw lifecycleError(params.runtime.profile.name, actor.blockedReason);
   }
-  if (actor.configRevision !== params.configRevision) {
-    throw lifecycleError(params.runtime.profile.name, "profile config changed");
-  }
-  if (params.generation != null && actor.generation !== params.generation) {
-    throw lifecycleError(params.runtime.profile.name, "operation superseded");
-  }
 }
 
-/** Allow a lifecycle retry to repair a failed cleanup while fencing stale config. */
+/** Allow explicit lifecycle operations to repair a failed cleanup. */
 export function assertProfileLifecycleContext(params: {
   state: BrowserServerState;
   runtime: ProfileRuntimeState;
-  configRevision: number;
 }): void {
   assertProfileCurrent({ ...params, allowBlocked: true });
 }
@@ -236,25 +220,23 @@ export function releaseProfileHandle(runtime: ProfileRuntimeState, running: Runn
   }
 }
 
-/** True only while a captured start still owns the current profile generation. */
-export function isProfileGenerationCurrent(params: {
+/** Check the captured lifecycle signal at resource effect boundaries. */
+export function isProfileOperationCurrent(params: {
   state: BrowserServerState;
   runtime: ProfileRuntimeState;
-  configRevision: number;
-  generation: number;
+  signal: AbortSignal;
 }): boolean {
   const actor = getProfileLifecycle(params.runtime);
   return (
     isBrowserRuntimeRunning(params.state) &&
     !actor.terminal &&
     !actor.blockedReason &&
-    actor.configRevision === params.configRevision &&
-    actor.generation === params.generation
+    !params.signal.aborted
   );
 }
 
 /**
- * Run ordinary profile work under a concurrent generation lease.
+ * Run ordinary profile work under a concurrent settlement lease.
  *
  * Passing the current lifecycle signal denotes nested work already covered by
  * an outer lease; this avoids self-deadlock while preserving cancellation.
@@ -262,7 +244,6 @@ export function isProfileGenerationCurrent(params: {
 export async function withProfileOperationLease<T>(params: {
   state: BrowserServerState;
   runtime: ProfileRuntimeState;
-  configRevision: number;
   signal?: AbortSignal;
   /** Shared producers belong to the lifecycle, never to their first caller. */
   ownership?: "caller" | "lifecycle";
@@ -276,29 +257,17 @@ export async function withProfileOperationLease<T>(params: {
   if (parent) {
     const signal = combineSignals(parent.signal, params.signal);
     signal.throwIfAborted();
-    assertProfileCurrent({ ...params, generation: parent.generation });
+    assertProfileCurrent(params);
     const result = await params.run(signal);
     signal.throwIfAborted();
-    assertProfileCurrent({ ...params, generation: parent.generation });
+    assertProfileCurrent(params);
     await params.commit?.(result);
     return result;
   }
 
-  const requestedGeneration = actor.generation;
-  assertProfileCurrent({ ...params, generation: requestedGeneration });
-  // The settled actor tail is the readiness barrier for new ordinary work.
-  // Re-read after every await so a synchronously-started transition cannot be
-  // skipped between observing an old settled tail and lease admission.
-  for (;;) {
-    const ready = actor.tail;
-    await waitForProfileOperation(ready, params.signal);
-    if (actor.tail === ready) {
-      break;
-    }
-  }
-  assertProfileCurrent({ ...params, generation: requestedGeneration });
-  const generation = requestedGeneration;
   const lifecycleSignal = actor.controller.signal;
+  assertProfileCurrent(params);
+  await waitForProfileOperation(actor.tail, params.signal);
   const signal =
     params.ownership === "lifecycle"
       ? lifecycleSignal
@@ -307,10 +276,10 @@ export async function withProfileOperationLease<T>(params: {
   const release = createLease(actor);
   try {
     const leases = new Map(inherited);
-    leases.set(params.runtime, { generation, signal });
+    leases.set(params.runtime, { signal });
     const result = await profileLeaseStorage.run(leases, async () => await params.run(signal));
     signal.throwIfAborted();
-    assertProfileCurrent({ ...params, generation });
+    assertProfileCurrent(params);
     // This assertion is the operation's linearization point. Once admitted,
     // an async persistent commit keeps its lease until complete; a later
     // reset/delete/stop drains behind it instead of partially cancelling it.
@@ -325,10 +294,9 @@ export async function withProfileOperationLease<T>(params: {
 export function enqueueProfileStart(params: {
   state: BrowserServerState;
   runtime: ProfileRuntimeState;
-  configRevision: number;
   key: string;
   signal?: AbortSignal;
-  run: (signal: AbortSignal, generation: number) => Promise<void>;
+  run: (signal: AbortSignal) => Promise<void>;
 }): Promise<void> {
   assertProfileCurrent(params);
   params.signal?.throwIfAborted();
@@ -338,15 +306,14 @@ export function enqueueProfileStart(params: {
     return waitForProfileOperation(existing, params.signal);
   }
 
-  const generation = actor.generation;
   const signal = actor.controller.signal;
   const promise = actor.tail.then(async () => {
-    assertProfileCurrent({ ...params, generation });
+    assertProfileCurrent(params);
     signal.throwIfAborted();
     const owned = new Map(profileLeaseStorage.getStore());
-    owned.set(params.runtime, { generation, signal });
-    await profileLeaseStorage.run(owned, async () => await params.run(signal, generation));
-    assertProfileCurrent({ ...params, generation });
+    owned.set(params.runtime, { signal });
+    await profileLeaseStorage.run(owned, async () => await params.run(signal));
+    assertProfileCurrent(params);
     signal.throwIfAborted();
   });
   actor.starts.set(params.key, promise);
@@ -412,9 +379,9 @@ async function cleanupProfileResources(params: {
 
   if (actor.cleanupChromeMcp.size > 0) {
     try {
-      const { closeChromeMcpSession } = await getChromeMcpModule();
+      const chromeMcp = await getChromeMcpModule.peek();
       for (const profileName of actor.cleanupChromeMcp) {
-        stopped = (await closeChromeMcpSession(profileName)) || stopped;
+        stopped = (await chromeMcp?.closeChromeMcpSession(profileName)) || stopped;
         actor.cleanupChromeMcp.delete(profileName);
       }
     } catch (err) {
@@ -462,7 +429,7 @@ async function cleanupProfileResources(params: {
 }
 
 /**
- * Synchronously invalidate the current generation, eagerly begin owned adapter
+ * Synchronously cancel current work, eagerly begin owned adapter
  * teardown, then serialize exact-handle cleanup behind older starts and leases.
  */
 export function beginProfileTransition(
@@ -480,11 +447,7 @@ export function beginProfileTransition(
   const hadPendingWork = actor.starts.size > 0 || actor.leases.size > 0 || actor.handles.size > 0;
   const reason = lifecycleError(params.runtime.profile.name, params.reason);
 
-  actor.generation += 1;
   params.runtime.externalBrowserMode = undefined;
-  if (params.advanceConfigRevision) {
-    actor.configRevision += 1;
-  }
   actor.controller.abort(reason);
   actor.controller = new AbortController();
   actor.starts.clear();
@@ -503,21 +466,23 @@ export function beginProfileTransition(
   const eagerPlaywrightRetirement = shouldClosePlaywright
     ? capturePlaywrightRetirement(actor, ownerProfile.cdpUrl)
     : null;
-  if (params.closeRelay) {
-    const relay = params.state.extensionRelays?.get(params.runtime.profile.name);
+  const captureRelay = () => {
+    const relay =
+      params.closeRelay && params.state.extensionRelays?.get(params.runtime.profile.name);
     if (relay) {
       actor.cleanupRelays.add(relay);
     }
-  }
+  };
+  captureRelay();
 
   // Start closing MCP before waiting for a start, lease, or older transition.
   const eagerMcpClose =
     closeSharedAdapters && usesChromeMcp
-      ? getChromeMcpModule()
-          .then(({ closeChromeMcpSession }) => closeChromeMcpSession(ownerProfile.name))
-          .catch(() => false)
+      ? (getChromeMcpModule
+          .peek()
+          ?.then(({ closeChromeMcpSession }) => closeChromeMcpSession(ownerProfile.name))
+          .catch(() => false) ?? null)
       : null;
-  const transitionGeneration = actor.generation;
   let cleanupCompleted = false;
   const transition = actor.tail
     .then(async () => {
@@ -525,12 +490,7 @@ export function beginProfileTransition(
       if (shouldClosePlaywright && hadPendingWork) {
         capturePlaywrightRetirement(actor, ownerProfile.cdpUrl);
       }
-      if (params.closeRelay) {
-        const relay = params.state.extensionRelays?.get(params.runtime.profile.name);
-        if (relay) {
-          actor.cleanupRelays.add(relay);
-        }
-      }
+      captureRelay();
       const result = await cleanupProfileResources({
         state: params.state,
         runtime: params.runtime,
@@ -540,28 +500,22 @@ export function beginProfileTransition(
       });
       cleanupCompleted = true;
       await params.afterCleanup?.();
-      if (actor.generation === transitionGeneration) {
-        actor.blockedReason = null;
-      }
+      actor.blockedReason = null;
       return result;
     })
     .catch((err: unknown) => {
-      if (actor.generation === transitionGeneration) {
-        if (cleanupCompleted) {
-          if (params.rollbackTerminalOnFailure) {
-            actor.terminal = null;
-          }
-          actor.blockedReason = null;
-        } else {
-          actor.blockedReason = `${params.reason} cleanup failed`;
+      if (cleanupCompleted) {
+        if (params.rollbackTerminalOnFailure) {
+          actor.terminal = null;
         }
+        actor.blockedReason = null;
+      } else {
+        actor.blockedReason = `${params.reason} cleanup failed`;
       }
       throw err;
     });
   const settleTransition = () => {
-    if (actor.generation === transitionGeneration) {
-      actor.transitionReason = null;
-    }
+    actor.transitionReason = null;
   };
   actor.tail = transition.then(settleTransition, settleTransition);
   return transition;

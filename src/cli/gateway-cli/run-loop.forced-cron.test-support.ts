@@ -2,11 +2,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { CronService } from "../../cron/service.js";
-import {
-  abortActiveCronTaskRuns,
-  waitForActiveCronTaskRuns,
-} from "../../cron/service/active-run-cancellation.js";
 import { GatewayConnectionWork } from "../../gateway/server-connection-work.js";
+import { drainGatewayCron } from "../../gateway/server-cron-drain.js";
 import { runGatewayCloseSteps } from "../../gateway/server-shutdown.js";
 import { writeGatewayRestartIntentSync } from "../../infra/restart-intent.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
@@ -60,7 +57,7 @@ const cron = new CronService({
     }),
 });
 
-await runGatewayLoop({
+const code = await runGatewayLoop({
   ownsProcessLifecycle: true,
   start: async () => {
     starts += 1;
@@ -107,8 +104,10 @@ await runGatewayLoop({
           },
           close: async () => {
             cron.stop();
-            abortActiveCronTaskRuns("Gateway shutting down.");
-            assert((await waitForActiveCronTaskRuns(10_000)).drained);
+            await drainGatewayCron({
+              settlements: [cron.waitForIdle()],
+              logger: { warn: (...args) => assert.fail(JSON.stringify(args)) },
+            });
             trace("close-completed");
           },
           onError: (message) => {
@@ -118,12 +117,7 @@ await runGatewayLoop({
       },
     };
   },
-  runtime: {
-    log() {},
-    error: console.error,
-    exit: (code) => {
-      trace(`exit:${code}`);
-      process.exit(code);
-    },
-  },
 });
+trace(`exit:${code}`);
+process.disconnect?.();
+process.exitCode = code;

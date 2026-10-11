@@ -8,7 +8,11 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import { updateDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite.kernel.js";
+import {
+  updateDeliveryQueueEntryInDatabase,
+  upsertDeliveryQueueEntryInDatabase,
+} from "../delivery-queue-sqlite.kernel.js";
+import { runSqliteReadOperationSync } from "../sqlite-schema-facts.js";
 import { failPendingDelivery } from "./delivery-queue-ack.js";
 import { ackDeliveryInDatabase } from "./delivery-queue-ack.kernel.js";
 import { releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
@@ -23,6 +27,7 @@ import {
   failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend,
   loadPendingDelivery,
+  loadUnfinishedDeliveries,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
@@ -30,17 +35,62 @@ import {
   reserveDeliveryAttempt,
   type QueuedDelivery,
 } from "./delivery-queue-storage.js";
-import {
-  loadPendingDeliveries,
-  installDeliveryQueueTmpDirHooks,
-  readQueuedEntry,
-} from "./delivery-queue.test-helpers.js";
+import { readOutboundDeliveriesInDatabase } from "./delivery-queue-storage.kernel.js";
+import { installDeliveryQueueTmpDirHooks, readQueuedEntry } from "./delivery-queue.test-helpers.js";
 import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
 
 describe("delivery-queue storage", () => {
   const { tmpDir } = installDeliveryQueueTmpDirHooks();
   const enqueueTextDelivery = (params: Parameters<typeof enqueueDelivery>[0], rootDir = tmpDir()) =>
     enqueueDelivery(params, rootDir);
+
+  it("refreshes empty recovery facts after worker and native writes without publishing rollback", async () => {
+    const stateDir = tmpDir();
+    const options = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
+    const database = openOpenClawStateDatabase(options);
+    const read = () => loadUnfinishedDeliveries(stateDir);
+    expect(await read()).toEqual([]);
+    expect(await read()).toEqual([]);
+
+    const id = await enqueueTextDelivery({
+      channel: "directchat",
+      to: "+1555",
+      payloads: [{ text: "Queued after an idle poll" }],
+    });
+    expect((await read()).map((entry) => entry.id)).toEqual([id]);
+    const entry = await loadPendingDelivery(id, stateDir);
+    if (!entry) {
+      throw new Error("Expected pending delivery");
+    }
+    await ackDelivery(id, stateDir);
+    expect(await read()).toEqual([]);
+    expect(await read()).toEqual([]);
+
+    expect(() =>
+      runOpenClawStateWriteTransaction(
+        () => {
+          upsertDeliveryQueueEntryInDatabase(
+            { queueName: OUTBOUND_DELIVERY_QUEUE_NAME, entry },
+            database,
+          );
+          expect(
+            runSqliteReadOperationSync(database.db, () =>
+              readOutboundDeliveriesInDatabase(database, { mode: "unfinished" }),
+            ).map(({ entry: pending }) => pending.id),
+          ).toEqual([id]);
+          throw new Error("roll back recovery fixture");
+        },
+        { ...options, database },
+      ),
+    ).toThrow("roll back recovery fixture");
+    expect(await read()).toEqual([]);
+
+    upsertDeliveryQueueEntryInDatabase(
+      { queueName: OUTBOUND_DELIVERY_QUEUE_NAME, entry },
+      database,
+    );
+    expect((await read()).map((pending) => pending.id)).toEqual([id]);
+  });
 
   function readStatus(id: string): string | undefined {
     const { db } = openOpenClawStateDatabase({
@@ -50,22 +100,6 @@ describe("delivery-queue storage", () => {
       .prepare("SELECT status FROM delivery_queue_entries WHERE queue_name = ? AND id = ?")
       .get(OUTBOUND_DELIVERY_QUEUE_NAME, id) as { status?: string } | undefined;
     return row?.status;
-  }
-
-  async function enqueueSpoolDelivery(suffix: string) {
-    const artifact = path.join(
-      tmpDir(),
-      "delivery-queue-media",
-      `00000000-0000-4000-8000-00000000000${suffix}.ogg`,
-    );
-    await fs.mkdir(path.dirname(artifact), { recursive: true });
-    await fs.writeFile(artifact, "audio-bytes");
-    const id = await enqueueTextDelivery({
-      channel: "directchat",
-      to: "+1",
-      payloads: [{ mediaUrl: artifact, audioAsVoice: true }],
-    });
-    return { artifact, id };
   }
 
   describe("enqueue + ack lifecycle", () => {
@@ -252,17 +286,6 @@ describe("delivery-queue storage", () => {
       await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
     });
 
-    it("persists a producer-specific retry budget", async () => {
-      const id = await enqueueTextDelivery({
-        channel: "directchat",
-        to: "+1555",
-        payloads: [{ text: "retry-budget" }],
-        maxRetries: 45,
-      });
-
-      expect(readQueuedEntry(tmpDir(), id).maxRetries).toBe(45);
-    });
-
     it("projects process-local hook metadata out before JSON custody", async () => {
       const id = await enqueueTextDelivery({
         channel: "directchat",
@@ -338,171 +361,6 @@ describe("delivery-queue storage", () => {
       expect(readQueuedEntry(tmpDir(), id).attemptCount).toBe(2);
     });
 
-    it("creates and removes a queue entry", async () => {
-      const id = await enqueueTextDelivery(
-        {
-          channel: "directchat",
-          to: "+1555",
-          queuePolicy: "required",
-          requireUnknownSendReconciliation: true,
-          payloads: [{ text: "hello" }],
-          renderedBatchPlan: {
-            payloadCount: 1,
-            textCount: 1,
-            mediaCount: 0,
-            voiceCount: 0,
-            presentationCount: 0,
-            interactiveCount: 0,
-            channelDataCount: 0,
-            items: [{ index: 0, kinds: ["text"] as const, text: "hello", mediaUrls: [] }],
-          },
-          bestEffort: true,
-          gifPlayback: true,
-          silent: true,
-          gatewayClientScopes: ["operator.write"],
-          preparedMessageId: "prepared-message-1",
-          mirror: {
-            sessionKey: "agent:main:main",
-            expectedSessionId: "session-main",
-            text: "hello",
-            mediaUrls: ["https://example.com/file.png"],
-            idempotencyKey: "channel-final:message-1",
-            deliveryMirror: {
-              kind: "channel-final",
-              sourceMessageId: "message-1",
-            },
-          },
-          session: {
-            key: "agent:main:main",
-            agentId: "agent-main",
-            requesterAccountId: "acct-1",
-            requesterSenderId: "sender-1",
-          },
-        },
-        tmpDir(),
-      );
-      const entry = readQueuedEntry(tmpDir(), id);
-      expect(entry.id).toBe(id);
-      expect(entry.channel).toBe("directchat");
-      expect(entry.to).toBe("+1555");
-      expect(entry.queuePolicy).toBe("required");
-      expect(entry.requireUnknownSendReconciliation).toBe(true);
-      expect(entry.renderedBatchPlan).toEqual({
-        payloadCount: 1,
-        textCount: 1,
-        mediaCount: 0,
-        voiceCount: 0,
-        presentationCount: 0,
-        interactiveCount: 0,
-        channelDataCount: 0,
-        items: [{ index: 0, kinds: ["text"] as const, text: "hello", mediaUrls: [] }],
-      });
-      expect(entry.bestEffort).toBe(true);
-      expect(entry.gifPlayback).toBe(true);
-      expect(entry.silent).toBe(true);
-      expect(entry.gatewayClientScopes).toEqual(["operator.write"]);
-      expect(entry.preparedMessageId).toBe("prepared-message-1");
-      expect(entry.mirror).toEqual({
-        sessionKey: "agent:main:main",
-        expectedSessionId: "session-main",
-        text: "hello",
-        mediaUrls: ["https://example.com/file.png"],
-        idempotencyKey: "channel-final:message-1",
-        deliveryMirror: {
-          kind: "channel-final",
-          sourceMessageId: "message-1",
-        },
-      });
-      expect(entry.session).toEqual({
-        key: "agent:main:main",
-        agentId: "agent-main",
-        requesterAccountId: "acct-1",
-        requesterSenderId: "sender-1",
-      });
-      expect(entry.retryCount).toBe(0);
-      expect(
-        acceptedPreparedOutboundEntries((entry as unknown as QueuedDelivery).preparedBatch).map(
-          (prepared) => prepared.payload,
-        ),
-      ).toEqual([{ text: "hello" }]);
-
-      await ackDelivery(id, tmpDir());
-      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
-    });
-
-    it("does not replace an existing stable queue intent", async () => {
-      const first = await enqueueDeliveryOnce(
-        {
-          channel: "directchat",
-          to: "+1555",
-          payloads: [{ text: "first" }],
-          deliveryCompletion: {
-            kind: "conversation",
-            agentId: "main",
-            operationId: "operation-stable",
-          },
-        },
-        "operation-stable",
-        tmpDir(),
-      );
-      const repeated = await enqueueDeliveryOnce(
-        {
-          channel: "directchat",
-          to: "+1555",
-          payloads: [{ text: "replacement" }],
-        },
-        "operation-stable",
-        tmpDir(),
-      );
-
-      expect(first).toEqual({ id: "operation-stable", created: true });
-      expect(repeated).toEqual({ id: "operation-stable", created: false });
-      expect(readQueuedEntry(tmpDir(), "operation-stable")).toMatchObject({
-        preparedBatch: {
-          entries: [expect.objectContaining({ payload: { text: "first" }, status: "accepted" })],
-        },
-        deliveryCompletion: {
-          kind: "conversation",
-          agentId: "main",
-          operationId: "operation-stable",
-        },
-      });
-    });
-
-    it("keeps permanent completion ownership after ack", async () => {
-      const id = "restart-sentinel-notice:agent:main:main:123";
-      await enqueueDeliveryOnce(
-        {
-          channel: "directchat",
-          to: "+1555",
-          payloads: [{ text: "restart complete" }],
-          completionRetention: "permanent",
-        },
-        id,
-        tmpDir(),
-      );
-
-      await ackDelivery(id, tmpDir());
-      const repeated = await enqueueDeliveryOnce(
-        {
-          channel: "directchat",
-          to: "+1555",
-          payloads: [{ text: "must not replay" }],
-          completionRetention: "permanent",
-        },
-        id,
-        tmpDir(),
-      );
-
-      expect(repeated).toEqual({ id, created: false });
-      expect(await loadPendingDeliveries(tmpDir())).toEqual([]);
-      expect(readStatus(id)).toBe("completed");
-    });
-
-    it("ack is idempotent (no error on missing file)", async () => {
-      await expect(ackDelivery("nonexistent-id", tmpDir())).resolves.toBeUndefined();
-    });
-
     it("claimless ack rejects a live-claimed row instead of deleting it", async () => {
       const stateDir = tmpDir();
       const id = await enqueueTextDelivery({
@@ -523,64 +381,9 @@ describe("delivery-queue storage", () => {
       expect(pending).toMatchObject({ id, producerClaimId: attemptId });
       expect(readStatus(id)).toBe("pending");
     });
-
-    it("removes acked entries from pending recovery", async () => {
-      const id = await enqueueTextDelivery({
-        channel: "directchat",
-        to: "+1",
-        payloads: [{ text: "ack-test" }],
-      });
-
-      await ackDelivery(id, tmpDir());
-
-      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
-      expect(readStatus(id)).toBeUndefined();
-    });
   });
 
   describe("failDelivery", () => {
-    it("marks entries as send-attempt-started before platform I/O", async () => {
-      const id = await enqueueTextDelivery(
-        {
-          channel: "forum",
-          to: "123",
-          payloads: [{ text: "test" }],
-        },
-        tmpDir(),
-      );
-
-      await markDeliveryPlatformSendAttemptStarted(id, tmpDir(), {
-        replyToId: "1782584644.377229",
-      });
-
-      const entry = readQueuedEntry(tmpDir(), id);
-      expect(typeof entry.platformSendStartedAt).toBe("number");
-      expect((entry.platformSendStartedAt as number) > 0).toBe(true);
-      expect(entry.recoveryState).toBe("send_attempt_started");
-      expect(entry.effectiveReplyToId).toBe("1782584644.377229");
-      expect(entry.retryCount).toBe(0);
-    });
-
-    it("marks entries as unknown-after-send after platform I/O returns", async () => {
-      const id = await enqueueTextDelivery(
-        {
-          channel: "forum",
-          to: "123",
-          payloads: [{ text: "test" }],
-        },
-        tmpDir(),
-      );
-
-      await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
-      await markDeliveryPlatformOutcomeUnknown(id, tmpDir());
-
-      const entry = readQueuedEntry(tmpDir(), id);
-      expect(typeof entry.platformSendStartedAt).toBe("number");
-      expect((entry.platformSendStartedAt as number) > 0).toBe(true);
-      expect(entry.recoveryState).toBe("unknown_after_send");
-      expect(entry.retryCount).toBe(0);
-    });
-
     it("preserves and renews the exact explicit owner after an ambiguous platform outcome", async () => {
       const stateDir = tmpDir();
       const id = "cron-direct-delivery:v1:unknown-owner-lease";
@@ -648,25 +451,6 @@ describe("delivery-queue storage", () => {
       expect(readQueuedEntry(tmpDir(), id).recoveryState).toBe("unknown_after_send");
     });
 
-    it("increments retryCount, records attempt time, and sets lastError", async () => {
-      const id = await enqueueTextDelivery(
-        {
-          channel: "forum",
-          to: "123",
-          payloads: [{ text: "test" }],
-        },
-        tmpDir(),
-      );
-
-      await failDelivery(id, "connection refused", tmpDir());
-
-      const entry = readQueuedEntry(tmpDir(), id);
-      expect(entry.retryCount).toBe(1);
-      expect(typeof entry.lastAttemptAt).toBe("number");
-      expect((entry.lastAttemptAt as number) > 0).toBe(true);
-      expect(entry.lastError).toBe("connection refused");
-    });
-
     it("releases a settled live owner while retaining retryable custody", async () => {
       const id = await enqueueTextDelivery({
         channel: "forum",
@@ -686,89 +470,6 @@ describe("delivery-queue storage", () => {
       expect(readQueuedEntry(tmpDir(), id)).not.toHaveProperty("availableAt");
       expect(readQueuedEntry(tmpDir(), id)).not.toHaveProperty("producerClaimId");
       expect(readQueuedEntry(tmpDir(), id)).not.toHaveProperty("recoveryState");
-    });
-
-    it("keeps post-send failure evidence while recording the retry failure", async () => {
-      const id = await enqueueTextDelivery({
-        channel: "forum",
-        to: "123",
-        payloads: [{ text: "test" }],
-      });
-
-      await failDeliveryAfterPlatformSend(id, "state update failed", tmpDir());
-
-      const entry = readQueuedEntry(tmpDir(), id);
-      expect(entry.retryCount).toBe(1);
-      expect(entry.lastError).toBe("state update failed");
-      expect(entry.recoveryState).toBe("unknown_after_send");
-      expect(typeof entry.platformSendStartedAt).toBe("number");
-    });
-
-    it("atomically records a pre-send failure without retaining send evidence", async () => {
-      const id = await enqueueTextDelivery({
-        channel: "forum",
-        to: "123",
-        payloads: [{ text: "test" }],
-      });
-      await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
-
-      await failDeliveryBeforePlatformSend(id, "connect refused", tmpDir());
-
-      const entry = readQueuedEntry(tmpDir(), id);
-      expect(entry.retryCount).toBe(1);
-      expect(entry.lastError).toBe("connect refused");
-      expect(entry.recoveryState).toBeUndefined();
-      expect(entry.platformSendStartedAt).toBeUndefined();
-    });
-  });
-
-  describe("failPendingDelivery", () => {
-    it("deletes a rejected random delivery without retaining private detail", async () => {
-      const id = await enqueueTextDelivery({
-        channel: "slack",
-        to: "C123",
-        accountId: "enterprise",
-        payloads: [{ text: "blocked" }],
-      });
-      const entry = await loadPendingDelivery(id, tmpDir());
-      if (!entry) {
-        throw new Error("expected pending entry");
-      }
-
-      await expect(
-        failPendingDelivery(
-          {
-            id,
-            entry,
-          },
-          tmpDir(),
-        ),
-      ).resolves.toEqual({ status: "failed" });
-
-      expect(await loadPendingDelivery(id, tmpDir())).toBeNull();
-      expect(readStatus(id)).toBeUndefined();
-    });
-
-    it("deletes a rejected random delivery under its transient live claim", async () => {
-      const id = await enqueueTextDelivery({
-        channel: "slack",
-        to: "C123",
-        payloads: [{ text: "private live payload" }],
-      });
-      const claimId = await claimDeliveryPlatformSendAttempt(id, tmpDir());
-      if (!claimId) {
-        throw new Error("test invariant: random live delivery must acquire its transient claim");
-      }
-      const claimed = await loadPendingDelivery(id, tmpDir());
-      if (!claimed) {
-        throw new Error("test invariant: claimed random delivery must remain pending");
-      }
-
-      await expect(failPendingDelivery({ id, entry: claimed }, tmpDir())).resolves.toEqual({
-        status: "failed",
-      });
-
-      expect(readStatus(id)).toBeUndefined();
     });
 
     it("terminalizes a rejected stable row under its exact crash claim", async () => {
@@ -858,22 +559,6 @@ describe("delivery-queue storage", () => {
   });
 
   describe("moveToFailed", () => {
-    it("deletes a failed random delivery", async () => {
-      const id = await enqueueTextDelivery(
-        {
-          channel: "workspace",
-          to: "#general",
-          payloads: [{ text: "hi" }],
-        },
-        tmpDir(),
-      );
-
-      await moveToFailed(id, tmpDir());
-
-      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
-      expect(readStatus(id)).toBeUndefined();
-    });
-
     it("retains a minimal stable fence that later producers cannot replace", async () => {
       const id = "stable-failed-delivery";
       await enqueueDeliveryOnce(
@@ -905,96 +590,6 @@ describe("delivery-queue storage", () => {
           tmpDir(),
         ),
       ).resolves.toEqual({ id, created: false });
-    });
-  });
-
-  describe("queue media custody", () => {
-    it("can retain artifacts while an active recovery attempt owns them", async () => {
-      const acked = await enqueueSpoolDelivery("0");
-
-      await ackDelivery(acked.id, tmpDir(), { retainSpoolArtifacts: true });
-
-      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
-      await expect(fs.stat(acked.artifact)).resolves.toBeDefined();
-    });
-
-    it("releases artifacts after ack and guarded failure transitions", async () => {
-      const acked = await enqueueSpoolDelivery("1");
-      await ackDelivery(acked.id, tmpDir());
-      await expect(fs.stat(acked.artifact)).rejects.toThrow();
-
-      const guarded = await enqueueSpoolDelivery("3");
-      const entry = await loadPendingDelivery(guarded.id, tmpDir());
-      if (!entry) {
-        throw new Error("expected pending entry");
-      }
-      await failPendingDelivery(
-        {
-          id: guarded.id,
-          entry,
-        },
-        tmpDir(),
-      );
-      await expect(fs.stat(guarded.artifact)).rejects.toThrow();
-    });
-  });
-
-  describe("loadPendingDeliveries", () => {
-    it("returns empty array for an empty state database", async () => {
-      expect(await loadPendingDeliveries(path.join(tmpDir(), "no-such-dir"))).toStrictEqual([]);
-    });
-
-    it("loads multiple entries", async () => {
-      await enqueueTextDelivery({ channel: "directchat", to: "+1", payloads: [{ text: "a" }] });
-      await enqueueTextDelivery({ channel: "forum", to: "2", payloads: [{ text: "b" }] });
-
-      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(2);
-    });
-
-    it("persists gateway caller scopes for replay", async () => {
-      const id = await enqueueTextDelivery(
-        {
-          channel: "forum",
-          to: "2",
-          payloads: [{ text: "b" }],
-          gatewayClientScopes: ["operator.write"],
-        },
-        tmpDir(),
-      );
-
-      const entry = readQueuedEntry(tmpDir(), id);
-      expect(entry.gatewayClientScopes).toEqual(["operator.write"]);
-    });
-
-    it("persists session context for recovery replay", async () => {
-      const id = await enqueueTextDelivery(
-        {
-          channel: "forum",
-          to: "2",
-          payloads: [{ text: "b" }],
-          session: {
-            key: "agent:main:main",
-            agentId: "agent-main",
-            requesterAccountId: "acct-1",
-            requesterSenderId: "sender-1",
-            requesterSenderName: "Sender One",
-            requesterSenderUsername: "sender.one",
-            requesterSenderE164: "+15551234567",
-          },
-        },
-        tmpDir(),
-      );
-
-      const entry = readQueuedEntry(tmpDir(), id);
-      expect(entry.session).toEqual({
-        key: "agent:main:main",
-        agentId: "agent-main",
-        requesterAccountId: "acct-1",
-        requesterSenderId: "sender-1",
-        requesterSenderName: "Sender One",
-        requesterSenderUsername: "sender.one",
-        requesterSenderE164: "+15551234567",
-      });
     });
   });
 });

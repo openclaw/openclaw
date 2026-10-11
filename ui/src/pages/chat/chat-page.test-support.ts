@@ -95,6 +95,7 @@ export function setViewerPresenceContext(page: ChatPage) {
     connectionRevision: 0,
     eventLog: [],
     eventLogRevision: 0,
+    loadSelfProfile: async () => null,
     connect: vi.fn(),
     setSessionKey: vi.fn(),
     start: vi.fn(),
@@ -183,7 +184,7 @@ export function createChatPageStateContext() {
         embedSandboxMode: "scripts",
       },
     },
-    gateway,
+    gateway: { ...gateway, connection: { gatewayUrl: "ws://gateway.example.test" } },
     chatSubmissions: createChatSubmissions(),
     sessions: {},
   } as unknown as ApplicationContext;

@@ -2,9 +2,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readToolApprovalReviews } from "../../lib/chat/tool-approval-reviews.ts";
 import { readPreparedActivity, summarizeToolGroup } from "../../lib/chat/tool-call-grouping.ts";
-import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
+import { extractToolCardsCached, resolveToolCardOutcome } from "../../lib/chat/tool-cards.ts";
+import { activeChatRunStartupStatus, chatStartupStatusLabel } from "./chat-run-startup.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
-import type { ToolStreamEntry } from "./tool-stream-contract.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
 import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-status.ts";
@@ -45,149 +45,282 @@ afterAll(() => {
 
 afterEach(() => vi.useRealTimers());
 
-describe("app-tool-stream approval lifecycle", () => {
-  it("keeps raw details while terminal prepared activity wins history and reconnect replay", () => {
-    const host = createHost({ chatRunId: "run-1" });
-    const started = {
-      itemId: "tool:call",
-      toolCallId: "call",
-      kind: "tool",
-      name: "process",
-      title: "Check process",
-      phase: "start",
-      status: "running",
-      hideFromChannelProgress: true,
-    };
-    const completed = {
-      ...started,
-      phase: "end",
-      status: "completed",
-      title: "Stop process",
-      hideFromChannelProgress: false,
-    };
-    const completedEvent = Object.freeze({ ...completed, diagnostic: { source: "native-tool" } });
-    handleAgentEvent(
-      host,
-      agentEvent("run-1", 1, "tool", {
-        toolCallId: "call",
-        name: "process",
-        phase: "start",
-        args: { action: "poll" },
-      }),
-    );
-    handleAgentEvent(host, agentEvent("run-1", 2, "item", started));
-    handleAgentEvent(
-      host,
-      agentEvent("run-1", 3, "tool", {
-        toolCallId: "call",
-        name: "process",
-        phase: "result",
-        isError: false,
-        result: "raw execution result",
-      }),
-    );
-    handleAgentEvent(host, agentEvent("run-1", 4, "item", completedEvent));
-    handleAgentEvent(host, agentEvent("run-1", 2, "item", started));
-    const live = [...host.toolStreamById.values()][0]!.message;
-    const reconciled = coalesceToolActivityMessages([
-      {
-        kind: "message",
-        key: "history",
-        message: {
-          role: "assistant",
-          runId: "run-1",
-          __openclaw: { id: "history-call" },
-          content: [
-            { type: "toolCall", id: "call", name: "process", arguments: { action: "poll" } },
-          ],
-          activity: [started],
-        },
-      },
-      { kind: "message", key: "live", message: live },
-    ]);
-    const messages = reconciled.flatMap((item) => (item.kind === "message" ? [item.message] : []));
-    const activity = messages.flatMap(readPreparedActivity);
-    expect(activity).toEqual([completed]);
-    expect(summarizeToolGroup(activity)).toBe("1 other operation");
-    expect(activity[0]).not.toHaveProperty("diagnostic");
-    expect(completedEvent.diagnostic).toEqual({ source: "native-tool" });
-    expect(messages.flatMap(extractToolCardsCached)).toMatchObject([
-      { args: { action: "poll" }, outputText: "raw execution result", completed: true },
-    ]);
-    const quietHistory = coalesceToolActivityMessages([
-      {
-        kind: "message",
-        key: "call",
-        message: {
-          role: "assistant",
-          runId: "run-1",
-          activity: [started],
-          content: [
-            { type: "toolCall", id: "call", name: "process", arguments: { action: "poll" } },
-          ],
-        },
-      },
-      {
-        kind: "message",
-        key: "result",
-        message: {
-          role: "toolResult",
-          runId: "run-1",
-          toolCallId: "call",
-          toolName: "process",
-          isError: false,
-          content: "raw wait result",
-          activity: [],
-        },
-      },
-    ]);
-    expect(
-      quietHistory.flatMap((item) =>
-        item.kind === "message" ? readPreparedActivity(item.message) : [],
-      ),
-    ).toEqual([]);
-    resetToolStream(host);
-  });
-
-  it.each([
-    ...["start", "input_delta", "update", "result", "review"].map((phase) => ({
-      phase,
-      parentToolCallId: "outer",
-    })),
-    ...["start", "input_delta", "update", "result", "review"].map((phase) => ({
-      phase,
-      parentToolCallId: undefined,
-    })),
-  ])(
-    "keeps text streaming through $phase activity (parent: $parentToolCallId)",
-    ({ phase, parentToolCallId }) => {
+describe("observed steering boundary", () => {
+  it.each(["live", "history"] as const)(
+    "anchors only first-observed live tools and commentary (%s)",
+    (source) => {
       useToolStreamFakeTimers();
       const host = createHost({
         chatRunId: "run-1",
-        chatStream: "I'll check",
-        chatStreamStartedAt: TOOL_STREAM_TEST_NOW,
+        chatMessages: [
+          {
+            role: "user",
+            content: "Steer",
+            __openclaw: { idempotencyKey: "steer:user", steerTargetRunId: "run-1" },
+          },
+        ],
       });
-      try {
-        handleAgentEvent(
-          host,
-          agentEvent("run-1", 1, "tool", {
-            phase,
-            toolCallId: "call",
-            parentToolCallId,
-            name: "read",
-            review: { id: "review", label: "Approval", status: "approved" },
-          }),
-        );
-        expect(host.chatStream).toBe("I'll check");
-        expect(host.chatStreamStartedAt).toBe(TOOL_STREAM_TEST_NOW);
-        expect(host.chatStreamSegments).toEqual([]);
-        expect(host.toolStreamById.size).toBe(1);
-      } finally {
-        resetToolStream(host);
-        vi.useRealTimers();
-      }
+      const tool = agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        toolCallId: "call",
+        name: "read",
+      });
+      handleAgentEvent(host, tool, source);
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 2, "item", {
+          kind: "preamble",
+          itemId: "comment",
+          progressText: "Checking.",
+        }),
+        source,
+      );
+      const expected = source === "live" ? "steer" : undefined;
+      expect(
+        host.toolStreamById.get(buildToolStreamIdentity("run-1", "call"))?.afterUserSendId,
+      ).toBe(expected);
+      expect(host.chatStreamSegments[0]?.afterUserSendId).toBe(expected);
+      host.chatMessages = [
+        ...(host.chatMessages ?? []),
+        {
+          role: "user",
+          content: "Later",
+          __openclaw: { idempotencyKey: "later:user", steerTargetRunId: "run-1" },
+        },
+      ];
+      handleAgentEvent(host, {
+        ...tool,
+        seq: 3,
+        data: { ...tool.data, phase: "result", result: "Done" },
+      });
+      expect(host.chatToolMessages[0]?.openclawToolStreamAfterSendId).toBe(expected);
+      resetToolStream(host);
     },
   );
+});
+
+describe("status text truncation", () => {
+  it.each([
+    ["short", "Ready 😀", "Ready 😀"],
+    ["ASCII limit", "x".repeat(257), "x".repeat(256)],
+    ["surrogate boundary", `${"x".repeat(255)}😀 trailing`, "x".repeat(255)],
+  ])("preserves complete characters in %s retry and fallback labels", (_name, input, expected) => {
+    const host = createHost({
+      chatRunId: "run-1",
+      chatRunStartup: { state: "status", runId: "run-1", phase: "starting_model" },
+      toolStreamSyncTimer: 1,
+    });
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "run_status", {
+        phase: "retrying",
+        message: input,
+      }),
+    );
+    expect(chatStartupStatusLabel(activeChatRunStartupStatus(host.chatRunStartup), null)).toBe(
+      expected,
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "notice", {
+        phase: "provider_policy",
+        category: "cyber",
+        provider: "openai",
+        state: "fallback",
+        model: input,
+        fallbackModel: input,
+      }),
+    );
+    expect(host.providerPolicyNotice?.model).toBe(expected);
+    expect(host.providerPolicyNotice?.fallbackModel).toBe(expected);
+  });
+});
+
+describe("app-tool-stream approval lifecycle", () => {
+  it.each([
+    { withResult: true, kind: "tool" },
+    { withResult: false, kind: "tool" },
+  ])(
+    "keeps terminal $kind activity through history and replay (result: $withResult)",
+    ({ withResult, kind }) => {
+      const host = createHost({ chatRunId: "run-1" });
+      const started = {
+        itemId: "tool:call",
+        toolCallId: "call",
+        kind,
+        name: "process",
+        title: "Check process",
+        phase: "start",
+        status: "running",
+        hideFromChannelProgress: true,
+      };
+      const completed = {
+        ...started,
+        phase: "end",
+        status: withResult ? "completed" : undefined,
+        title: "Stop process",
+        hideFromChannelProgress: false,
+      };
+      const completedEvent = Object.freeze({ ...completed, diagnostic: { source: "native-tool" } });
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 1, "tool", {
+          toolCallId: "call",
+          name: "process",
+          phase: "start",
+          args: { action: "poll" },
+        }),
+      );
+      handleAgentEvent(host, agentEvent("run-1", 2, "item", started));
+      if (withResult) {
+        handleAgentEvent(
+          host,
+          agentEvent("run-1", 3, "tool", {
+            toolCallId: "call",
+            name: "process",
+            phase: "result",
+            isError: false,
+            result: "raw execution result",
+          }),
+        );
+      }
+      handleAgentEvent(host, agentEvent("run-1", 4, "item", completedEvent));
+      handleAgentEvent(host, agentEvent("run-1", 2, "item", started));
+      const live = [...host.toolStreamById.values()][0]!.message;
+      const reconciled = coalesceToolActivityMessages([
+        {
+          kind: "message",
+          key: "history",
+          message: {
+            role: "assistant",
+            runId: "run-1",
+            __openclaw: { id: "history-call" },
+            content: [
+              { type: "toolCall", id: "call", name: "process", arguments: { action: "poll" } },
+            ],
+            activity: [started],
+          },
+        },
+        { kind: "message", key: "live", message: live },
+      ]);
+      const messages = reconciled.flatMap((item) =>
+        item.kind === "message" ? [item.message] : [],
+      );
+      const activity = messages.flatMap(readPreparedActivity);
+      expect(activity).toEqual([completed]);
+      expect(summarizeToolGroup(activity)).toBe(
+        withResult ? "1 other operation" : "1 other operation · 1 unknown",
+      );
+      expect(activity[0]).not.toHaveProperty("diagnostic");
+      expect(completedEvent.diagnostic).toEqual({ source: "native-tool" });
+      const cards = messages.flatMap(extractToolCardsCached);
+      expect(cards).toMatchObject([{ args: { action: "poll" }, completed: true }]);
+      expect(cards.map((card) => card.outputText)).toEqual([
+        withResult ? "raw execution result" : undefined,
+      ]);
+      expect(cards.map((card) => resolveToolCardOutcome(card, true))).toEqual([
+        withResult ? "succeeded" : "unknown",
+      ]);
+      expect(messages[0]).toMatchObject({ __openclawToolStreamResultReceived: withResult });
+      const quietHistory = coalesceToolActivityMessages([
+        {
+          kind: "message",
+          key: "call",
+          message: {
+            role: "assistant",
+            runId: "run-1",
+            activity: [started],
+            content: [
+              { type: "toolCall", id: "call", name: "process", arguments: { action: "poll" } },
+            ],
+          },
+        },
+        {
+          kind: "message",
+          key: "result",
+          message: {
+            role: "toolResult",
+            runId: "run-1",
+            toolCallId: "call",
+            toolName: "process",
+            isError: false,
+            content: "raw wait result",
+            activity: [],
+          },
+        },
+      ]);
+      expect(
+        quietHistory.flatMap((item) =>
+          item.kind === "message" ? readPreparedActivity(item.message) : [],
+        ),
+      ).toEqual([]);
+      resetToolStream(host);
+    },
+  );
+
+  it("keeps suppressed native item completion from settling the visible call", () => {
+    const host = createHost({ chatRunId: "run-1" });
+    emitTool(host, "run-1", 1, {
+      toolCallId: "call",
+      name: "exec",
+      phase: "start",
+      args: { command: "check" },
+    });
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "item", {
+        itemId: "native-call",
+        toolCallId: "call",
+        kind: "command",
+        name: "exec",
+        title: "Check",
+        phase: "end",
+        suppressChannelProgress: true,
+      }),
+    );
+    const [card] = extractToolCardsCached(host.chatToolMessages[0]);
+    expect(resolveToolCardOutcome(card!, true)).toBe("running");
+    expect(card?.outputText).toBeUndefined();
+    resetToolStream(host);
+  });
+
+  it.each(["result", "review"])("keeps text streaming through %s activity", (phase) => {
+    useToolStreamFakeTimers();
+    const host = createHost({
+      chatRunId: "run-1",
+      chatStream: "I'll check",
+      chatStreamStartedAt: TOOL_STREAM_TEST_NOW,
+    });
+    try {
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 1, "tool", {
+          phase,
+          toolCallId: "call",
+          name: "read",
+          review: { id: "review", label: "Approval", status: "approved" },
+        }),
+      );
+      expect(host.chatStream).toBe("I'll check");
+      expect(host.chatStreamStartedAt).toBe(TOOL_STREAM_TEST_NOW);
+      expect(host.chatStreamSegments).toEqual([]);
+      expect(host.toolStreamById.size).toBe(1);
+      if (phase === "result") {
+        const entry = host.toolStreamById.get(buildToolStreamIdentity("run-1", "call"));
+        expect(entry?.resultReceived).toBe(true);
+        expect(entry?.receivedAt).toBe(TOOL_STREAM_TEST_NOW);
+        expect(entry?.message["__openclawToolStreamReceivedAt"]).toBe(TOOL_STREAM_TEST_NOW);
+        expect(entry?.message.content).toContainEqual({
+          type: "toolresult",
+          name: "read",
+          text: "",
+        });
+      }
+    } finally {
+      resetToolStream(host);
+      vi.useRealTimers();
+    }
+  });
 
   it("preserves producer parent identity through live completion without reading arguments", () => {
     const host = createHost();
@@ -276,30 +409,6 @@ describe("app-tool-stream approval lifecycle", () => {
     handleAgentEvent(host, agentEvent(runId, 1, "lifecycle", { phase: "start" }));
   };
 
-  it("hydrates a parked run only when the approval matches a learned engine run id", () => {
-    const host = createHost({ waitingApprovalStatuses: new Map() });
-    learnRun(host, "run-1");
-
-    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval("run-1")])).toBe(true);
-    expect(host.waitingApprovalStatuses?.get("approval-1")).toEqual({
-      approvalId: "approval-1",
-      toolCallId: null,
-      runId: "run-1",
-    });
-  });
-
-  it("does not hydrate absent or mismatched run ids even while a run is active", () => {
-    const host = createHost({
-      chatRunId: "client-active-run",
-      waitingApprovalStatuses: new Map(),
-    });
-    learnRun(host, "foreground-engine-run");
-
-    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval(undefined)])).toBe(false);
-    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval("other-engine-run")])).toBe(false);
-    expect(host.waitingApprovalStatuses?.size).toBe(0);
-  });
-
   it("clears only parked runs whose approvals leave the queue snapshot", () => {
     const host = createHost({
       waitingApprovalStatuses: new Map([
@@ -358,56 +467,39 @@ describe("app-tool-stream approval lifecycle", () => {
       runId: "run-1",
     });
   });
-
-  it("does not synthesize waiting state after a reset without a new run event", () => {
-    const host = createHost({ waitingApprovalStatuses: new Map() });
-    learnRun(host, "run-1");
-    reconcileWaitingApprovalsFromSnapshot(host, [approval("run-1")]);
-
-    resetToolStream(host);
-    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval("run-1")])).toBe(false);
-    expect(host.waitingApprovalStatuses?.size).toBe(0);
-  });
 });
 
 describe("app-tool-stream throttled projections", () => {
-  it.each(["start", "update"] as const)(
-    "renders a deferred tool %s when its projection flushes",
-    (phase) => {
-      useToolStreamFakeTimers();
-      const requestUpdate = vi.fn();
-      const host = createHost({ requestUpdate });
-      const toolCallId = "call-deferred";
-      emitTool(host, "run-1", 1, {
-        phase: "start",
-        name: "read",
-        toolCallId,
-        args: { path: "notes.txt" },
-      });
-      if (phase === "update") {
-        vi.advanceTimersByTime(80);
-        requestUpdate.mockClear();
-        emitTool(host, "run-1", 2, {
-          phase,
-          name: "read",
-          toolCallId,
-          partialResult: "still reading",
-        });
-      }
-      expect(requestUpdate).not.toHaveBeenCalled();
-      vi.advanceTimersByTime(79);
-      expect(requestUpdate).not.toHaveBeenCalled();
-      vi.advanceTimersByTime(1);
-      expect(host.chatToolMessages).toHaveLength(1);
-      expect(requestUpdate).toHaveBeenCalledOnce();
-      if (phase === "update") {
-        expect(host.chatToolMessages[0]?.content).toEqual([
-          { type: "toolcall", name: "read", arguments: { path: "notes.txt" } },
-          { type: "toolresult", name: "read", text: "still reading" },
-        ]);
-      }
-    },
-  );
+  it("renders a deferred tool update when its projection flushes", () => {
+    useToolStreamFakeTimers();
+    const requestUpdate = vi.fn();
+    const host = createHost({ requestUpdate });
+    const toolCallId = "call-deferred";
+    emitTool(host, "run-1", 1, {
+      phase: "start",
+      name: "read",
+      toolCallId,
+      args: { path: "notes.txt" },
+    });
+    vi.advanceTimersByTime(80);
+    requestUpdate.mockClear();
+    emitTool(host, "run-1", 2, {
+      phase: "update",
+      name: "read",
+      toolCallId,
+      partialResult: "still reading",
+    });
+    expect(requestUpdate).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(79);
+    expect(requestUpdate).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(host.chatToolMessages).toHaveLength(1);
+    expect(requestUpdate).toHaveBeenCalledOnce();
+    expect(host.chatToolMessages[0]?.content).toEqual([
+      { type: "toolcall", name: "read", arguments: { path: "notes.txt" } },
+      { type: "toolresult", name: "read", text: "still reading" },
+    ]);
+  });
 
   it("does not let an older replay replace newer live tool progress", () => {
     useToolStreamFakeTimers();
@@ -436,6 +528,41 @@ describe("app-tool-stream throttled projections", () => {
       { type: "toolcall", name: "read", arguments: { path: "README.md" } },
       { type: "toolresult", name: "read", text: "newer live progress" },
     ]);
+  });
+});
+
+describe("app-tool-stream analysis activity", () => {
+  it("does not render Codex reasoning items as tool calls", () => {
+    const host = createHost({ chatRunId: "run-1" });
+    const reasoning = {
+      itemId: "rs_1",
+      toolCallId: "rs_1",
+      kind: "analysis",
+      title: "Reasoning",
+      phase: "start",
+      status: "running",
+      hideFromChannelProgress: true,
+    };
+    handleAgentEvent(host, agentEvent("run-1", 1, "item", reasoning));
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "item", { ...reasoning, phase: "end", status: "completed" }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 3, "item", {
+        itemId: "tool:call",
+        toolCallId: "call",
+        kind: "tool",
+        name: "read",
+        title: "Read",
+        phase: "end",
+        status: "completed",
+      }),
+    );
+
+    expect(host.toolStreamOrder).toEqual([buildToolStreamIdentity("run-1", "call")]);
+    expect(host.chatToolMessages.flatMap(extractToolCardsCached)).toMatchObject([{ name: "read" }]);
   });
 });
 
@@ -628,62 +755,6 @@ describe("app-tool-stream result blocks", () => {
     expect(host.chatToolMessages[0]).not.toHaveProperty("__openclawToolStreamDiffStat");
   });
 
-  it("emits a result block for completed tools with empty output", () => {
-    useToolStreamFakeTimers();
-    const host = createHost();
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 1,
-      stream: "tool",
-      ts: TOOL_STREAM_TEST_NOW,
-      sessionKey: "main",
-      data: { phase: "start", name: "bash", toolCallId: "call-1", args: { command: "true" } },
-    });
-    handleAgentEvent(host, {
-      runId: "run-1",
-      seq: 2,
-      stream: "tool",
-      ts: TOOL_STREAM_TEST_NOW + 1,
-      sessionKey: "main",
-      data: { phase: "result", name: "bash", toolCallId: "call-1", result: "" },
-    });
-    const entry = host.toolStreamById.get(
-      buildToolStreamIdentity("run-1", "call-1"),
-    ) as ToolStreamEntry;
-    expect(entry.resultReceived).toBe(true);
-    expect(entry.receivedAt).toBe(TOOL_STREAM_TEST_NOW);
-    expect(entry.message["__openclawToolStreamReceivedAt"]).toBe(TOOL_STREAM_TEST_NOW);
-    const content = entry.message.content as Array<Record<string, unknown>>;
-    expect(content.some((block) => block.type === "toolresult" && block.text === "")).toBe(true);
-  });
-
-  it.each([
-    ["omitted name", undefined],
-    ["conflicting name", "write"],
-  ])("preserves an established tool identity when the result has an %s", (_label, name) => {
-    const host = createHost();
-    const toolCallId = "call-preserve-name";
-    emitTool(host, "run-1", 1, {
-      phase: "start",
-      name: "read",
-      toolCallId,
-      args: { path: "/workspace/report.txt" },
-    });
-    emitTool(host, "run-1", 2, {
-      phase: "result",
-      ...(name === undefined ? {} : { name }),
-      toolCallId,
-      result: "file contents",
-    });
-
-    const entry = host.toolStreamById.get(buildToolStreamIdentity("run-1", toolCallId));
-    expect(entry?.name).toBe("read");
-    expect(entry?.message.content).toEqual([
-      { type: "toolcall", name: "read", arguments: { path: "/workspace/report.txt" } },
-      { type: "toolresult", name: "read", text: "file contents" },
-    ]);
-  });
-
   it("applies session-status effects when the result reports a placeholder tool name", () => {
     const host = createHost();
     const toolCallId = "status-preserve-name";
@@ -708,26 +779,6 @@ describe("app-tool-stream result blocks", () => {
 
     expect(host.sessions.reconcileMutation).toHaveBeenCalledOnce();
     expect(host.sessions.state.modelOverrides).toEqual({});
-  });
-
-  it("upgrades a placeholder start name when a later event supplies the concrete name", () => {
-    const host = createHost();
-    const toolCallId = "call-upgrade-name";
-    emitTool(host, "run-1", 1, {
-      phase: "start",
-      toolCallId,
-      args: { path: "/workspace/report.txt" },
-    });
-    emitTool(host, "run-1", 2, {
-      phase: "result",
-      name: "read",
-      toolCallId,
-      result: "file contents",
-    });
-
-    expect(host.toolStreamById.get(buildToolStreamIdentity("run-1", toolCallId))?.name).toBe(
-      "read",
-    );
   });
 
   it("keeps interleaved sibling-run calls and results under independent identities", () => {

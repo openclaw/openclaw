@@ -4,6 +4,7 @@ public enum OpenClawGatewayClientCapability {
     public static let agentKind = "agent-kind"
     public static let inlineWidgets = "inline-widgets"
     public static let modelSelectionPolicy = "model-selection-policy"
+    public static let ultrafast = "ultrafast"
     public static let usageRefreshing = "usage-refreshing"
 }
 
@@ -95,6 +96,8 @@ public enum GatewayAuthSource: String, Sendable {
 public struct GatewayAuthBinding: Equatable, Sendable {
     public let source: GatewayAuthSource
     public let credentialFingerprint: String?
+    /// Identity signed by this socket's connect, not whichever identity is stored later.
+    public let deviceId: String?
 }
 
 extension GatewayConnectOptions {
@@ -112,9 +115,7 @@ extension GatewayConnectOptions {
         if let computerUse = self.computerUse {
             params["computerUse"] = computerUse
         }
-        if let pathEnv = self.pathEnv?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !pathEnv.isEmpty
-        {
+        if let pathEnv = self.pathEnv?.trimmedNonEmpty {
             params["pathEnv"] = OpenClawProtocol.AnyCodable(pathEnv)
         }
         if !self.permissions.isEmpty {

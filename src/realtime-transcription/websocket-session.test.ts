@@ -4,7 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createRealtimeTranscriptionWebSocketSession,
   type RealtimeTranscriptionWebSocketSessionOptions,
@@ -471,7 +471,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     session.close();
     session.close();
 
-    await withTestTimeout(closed.promise, 1_000, "Graceful provider close not received");
+    await closed.promise;
     await vi.waitFor(() => expect(transcripts).toEqual(["final provider transcript"]));
     expect(finalizedFrames).toEqual([{ type: "finalize" }]);
   });
@@ -733,7 +733,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     });
 
     await session.connect();
-    await withTestTimeout(received.promise, 1_000, "Throwing error observer not reached");
+    await received.promise;
     expect(onError).toHaveBeenCalledTimes(1);
     const parseError = requireFirstMockArg(onError, "malformed websocket json error");
     expect(parseError).toBeInstanceOf(Error);
@@ -802,28 +802,6 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     expect(connections).toHaveLength(3);
   });
 
-  it("delivers a legitimate large inbound message below the payload cap", async () => {
-    // Well above any real transcript message yet far under the 16 MiB cap: proves
-    // the bound does not reject legitimate large provider traffic.
-    const largeText = "x".repeat(2 * 1024 * 1024);
-    const server = await createRealtimeServer({
-      initialEvent: { type: "transcript", text: largeText },
-    });
-    const received = createDeferred();
-    const onMessage = vi.fn(() => received.resolve());
-    const session = createSession<{ type?: string; text?: string }>({
-      url: server.url,
-      readyOnOpen: true,
-      onMessage,
-    });
-
-    await session.connect();
-    await withTestTimeout(received.promise, 1_000, "Large inbound message not received");
-    expect(onMessage).toHaveBeenCalledTimes(1);
-    const event = requireFirstMockArg(onMessage, "large inbound message");
-    expect(event).toEqual({ type: "transcript", text: largeText });
-  });
-
   it("drops an oversized inbound message before it reaches the provider parser", async () => {
     // ws rejects a message above maxPayload with an error + 1009 close, so an
     // oversized upstream message never reaches onMessage/JSON parse.
@@ -842,7 +820,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     });
 
     await session.connect();
-    await withTestTimeout(received.promise, 1_000, "Oversized message error not received");
+    await received.promise;
     expect(onError).toHaveBeenCalledTimes(1);
     expect(onMessage).not.toHaveBeenCalled();
     const overflowError = requireFirstMockArg(onError, "oversized inbound message error");

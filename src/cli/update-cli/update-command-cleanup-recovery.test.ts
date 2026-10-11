@@ -51,6 +51,7 @@ it.each(["forced", "uncertain"] as const)(
           complete,
           suspended: Promise.resolve(true),
           beginMutation: () => {},
+          assertRecoveryCurrent: () => {},
           handoff: () => {},
           interrupted: () => false,
         },

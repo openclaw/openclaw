@@ -1,9 +1,12 @@
 import { vi } from "vitest";
+import { WebSocket } from "ws";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import type { DurableMessageBatchSendResult } from "../channels/message/runtime.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 import type { loadSessionEntry as loadSessionEntryType } from "./session-utils.js";
 
 export const buildSessionLookup = (
@@ -24,7 +27,7 @@ export const buildSessionLookup = (
     parentSessionKey?: string;
   } = {},
 ): ReturnType<typeof loadSessionEntryType> => ({
-  cfg: { session: { mainKey: "agent:main:main" } } as OpenClawConfig,
+  cfg: { session: { mainKey: "main" } } as OpenClawConfig,
   agentId: resolveAgentIdFromSessionKey(sessionKey, "main"),
   storePath: "/tmp/sessions.json",
   store: {} as ReturnType<typeof loadSessionEntryType>["store"],
@@ -77,14 +80,13 @@ const runtimeMocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(async () => {}),
   enqueueSystemEvent: vi.fn(),
   formatForLog: vi.fn((err: unknown) => (err instanceof Error ? err.message : String(err))),
-  getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
+  getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "main" } })),
   INLINE_IMAGE_DURABLE_OMISSION_MARKER:
     "[image attachment omitted: durable managed media claim unavailable]",
   loadOrCreateProcessDeviceIdentity: loadOrCreateProcessDeviceIdentityMock,
   loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
   upsertSessionEntryCore: vi.fn(),
   normalizeChannelId: normalizeChannelIdMock,
-  normalizeMainKey: vi.fn((key?: string | null) => key?.trim() || "agent:main:main"),
   parseMessageWithAttachments: parseMessageWithAttachmentsMock,
   registerApnsRegistration: registerApnsRegistrationMock,
   requestHeartbeat: vi.fn(),
@@ -165,9 +167,9 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
   upsertSessionEntryCore: runtimeMocks.upsertSessionEntryCore,
 }));
 
-vi.mock("../infra/device-identity.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/device-identity.js")>()),
-  loadOrCreateProcessDeviceIdentity: runtimeMocks.loadOrCreateProcessDeviceIdentity,
+vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-identity-async.js")>()),
+  loadOrCreateProcessDeviceIdentityAsync: runtimeMocks.loadOrCreateProcessDeviceIdentity,
 }));
 
 vi.mock("../infra/device-pairing.js", async (importOriginal) => ({
@@ -194,11 +196,6 @@ vi.mock("../infra/system-events.js", async (importOriginal) => ({
 vi.mock("../media/store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../media/store.js")>()),
   deleteMediaBuffer: runtimeMocks.deleteMediaBuffer,
-}));
-
-vi.mock("../routing/session-key.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../routing/session-key.js")>()),
-  normalizeMainKey: runtimeMocks.normalizeMainKey,
 }));
 
 vi.mock("./chat-attachment-policy.js", async (importOriginal) => ({
@@ -232,3 +229,31 @@ export {
   updatePairedDevicePresenceMock,
   runtimeMocks,
 };
+
+export function makeNodeClient(connId: string, nodeId: string): GatewayWsClient {
+  return {
+    connId,
+    usesSharedGatewayAuth: false,
+    socket: {
+      readyState: WebSocket.OPEN,
+      send: () => {},
+    } as unknown as GatewayWsClient["socket"],
+    connect: {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "node-host",
+        version: "1.0.0",
+        platform: "linux",
+        mode: "node",
+      },
+      device: {
+        id: nodeId,
+        publicKey: "public-key",
+        signature: "signature",
+        signedAt: 1,
+        nonce: "nonce",
+      },
+    } as GatewayWsClient["connect"],
+  };
+}

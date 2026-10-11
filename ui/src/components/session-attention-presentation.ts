@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import type { DirectiveResult } from "lit/directive.js";
 import { t } from "../i18n/index.ts";
 import {
   summarizeSidebarSessionAttention,
@@ -7,7 +8,7 @@ import {
 } from "./app-sidebar-session-types.ts";
 import { formatWebUiIconErrorText } from "./error-presentation.ts";
 import { icons } from "./icons.ts";
-import { resolveSessionAttentionIcon } from "./session-attention-icon-registry.ts";
+import { SESSION_ATTENTION_ICONS } from "./session-attention-icon-registry.ts";
 import { renderSessionGlyph } from "./session-glyph.ts";
 
 function keepAttentionFocusOnTooltip(event: FocusEvent) {
@@ -20,21 +21,18 @@ function revealAttentionWithoutNavigation(event: MouseEvent) {
   event.stopPropagation();
 }
 
-export function renderSessionAttentionIcon(
-  attention: SidebarSessionAttention,
-  showTooltip = false,
-) {
+export function renderSessionAttentionIcon(attention: SidebarSessionAttention) {
   if (attention.kind === "none") {
     return nothing;
   }
-  const label = showTooltip ? sessionAttentionTooltipLabel(attention) : undefined;
+  const label = sessionAttentionTooltipLabel(attention);
   const icon =
     attention.kind === "question"
       ? icons.hand
       : attention.kind === "approval"
         ? icons.shieldQuestion
         : attention.kind === "agent"
-          ? resolveSessionAttentionIcon(attention.icon)
+          ? SESSION_ATTENTION_ICONS[attention.icon]
           : icons.alertTriangle;
   const content = html`<span
     class="sidebar-session-attention__icon sidebar-session-attention__icon--${attention.kind}"
@@ -47,7 +45,7 @@ export function renderSessionAttentionIcon(
     @click=${label ? revealAttentionWithoutNavigation : nothing}
     >${icon}</span
   >`;
-  return showTooltip && label ? renderSessionAttentionTooltip(attention, content) : content;
+  return label ? renderSessionAttentionTooltip(attention, content) : content;
 }
 
 export function sessionAttentionSubtitle(attention: SidebarSessionAttention): string | undefined {
@@ -97,9 +95,7 @@ function sessionAttentionTooltipParts(attention: SidebarSessionAttention) {
   };
 }
 
-export function sessionAttentionTooltipLabel(
-  attention: SidebarSessionAttention,
-): string | undefined {
+function sessionAttentionTooltipLabel(attention: SidebarSessionAttention): string | undefined {
   const { status, preview, more } = sessionAttentionTooltipParts(attention);
   return [status, preview, more].filter(Boolean).join("\n") || undefined;
 }
@@ -144,9 +140,11 @@ export function renderSessionIdleState(session: SidebarRecentSession) {
         ? { icon: icons.stop, label: t("sessionsView.statusKilled") }
         : status === "timeout"
           ? { icon: icons.alertTriangle, label: t("sessionsView.statusTimeout") }
-          : status === "failed"
-            ? { icon: icons.alertTriangle, label: t("sessionsView.statusFailed") }
-            : null;
+          : status === "interrupted"
+            ? { icon: icons.pause, label: t("sessionsView.statusInterrupted") }
+            : status === "failed"
+              ? { icon: icons.alertTriangle, label: t("sessionsView.statusFailed") }
+              : null;
   return statusBadge
     ? html`<span
         class="sidebar-child-session__status sidebar-child-session__status--${status}"
@@ -164,6 +162,7 @@ export function renderTeamSessionSlots(
   includeChildren: boolean,
   childCount: number,
   groupConflicts = 0,
+  runVisibility?: DirectiveResult,
 ) {
   const attention = summarizeSidebarSessionAttention(
     rows.flatMap((row) =>
@@ -189,8 +188,8 @@ export function renderTeamSessionSlots(
       row.status === "failed" || row.status === "timeout" || (children?.failedChildCount ?? 0) > 0;
   }
   const state =
-    attention && attention.kind !== "none"
-      ? renderSessionAttentionIcon(attention, true)
+    attention.kind !== "none"
+      ? renderSessionAttentionIcon(attention)
       : failed
         ? html`<span
             class="sidebar-child-session__status--failed"
@@ -205,7 +204,12 @@ export function renderTeamSessionSlots(
               >${icons.globe}</span
             >`
           : active
-            ? renderSessionGlyph({ content: nothing, running: true, queued: active === queued })
+            ? renderSessionGlyph({
+                content: nothing,
+                running: true,
+                queued: active === queued,
+                runVisibility,
+              })
             : rows.length === 1 && rows[0]?.isChild
               ? renderSessionIdleState(rows[0])
               : nothing;

@@ -75,20 +75,9 @@ type GroundedRemCandidate = GroundedRemPreviewItem & {
   lean: "likely_durable" | "unclear" | "likely_situational";
 };
 
-type GroundedRemFilePreview = {
-  path: string;
-  facts: GroundedRemPreviewItem[];
-  reflections: GroundedRemPreviewItem[];
-  memoryImplications: GroundedRemPreviewItem[];
-  candidates: GroundedRemCandidate[];
-  renderedMarkdown: string;
-};
+type GroundedRemFilePreview = ReturnType<typeof previewGroundedRemForFile>;
 
-export type GroundedRemPreviewResult = {
-  workspaceDir: string;
-  scannedFiles: number;
-  files: GroundedRemFilePreview[];
-};
+export type GroundedRemPreviewResult = Awaited<ReturnType<typeof previewGroundedRemMarkdown>>;
 
 type CandidateSnippetSummary = GroundedRemCandidate & {
   score: number;
@@ -106,32 +95,14 @@ type ParsedMarkdownSection = {
   lines: ParsedSectionLine[];
 };
 
-type SectionSnippet = ParsedSectionLine;
-
-type SectionSummary = {
-  title: string;
-  text: string;
-  refs: string[];
-  scores: {
-    preference: number;
-    build: number;
-    incident: number;
-    logistics: number;
-    tasks: number;
-    routing: number;
-    externalization: number;
-    retries: number;
-    overall: number;
-  };
-};
+type SectionSummary = NonNullable<ReturnType<typeof summarizeSection>>;
 
 function stripMarkdown(text: string): string {
   return normalizeWhitespace(
     text
       .replace(/!\[[^\]]*]\([^)]*\)/g, "")
       .replace(/\[([^\]]+)]\([^)]*\)/g, "$1")
-      .replace(/[`*_~>#]/g, "")
-      .replace(/\s+/g, " "),
+      .replace(/[`*_~>#]/g, ""),
   );
 }
 
@@ -155,12 +126,9 @@ function parseMarkdownSections(content: string): ParsedMarkdownSection[] {
     if (!current) {
       return;
     }
-    const meaningfulLines = current.lines.filter(
-      (entry) => normalizeWhitespace(entry.text).length > 0,
-    );
-    if (meaningfulLines.length > 0) {
-      const endLine = meaningfulLines[meaningfulLines.length - 1]?.line ?? current.endLine;
-      sections.push({ ...current, endLine, lines: meaningfulLines });
+    if (current.lines.length > 0) {
+      const endLine = current.lines[current.lines.length - 1]?.line ?? current.endLine;
+      sections.push({ ...current, endLine });
     }
     current = null;
   };
@@ -206,14 +174,11 @@ function parseMarkdownSections(content: string): ParsedMarkdownSection[] {
   return sections;
 }
 
-function sectionToSnippets(section: ParsedMarkdownSection): SectionSnippet[] {
-  const snippets: SectionSnippet[] = [];
+function sectionToSnippets(section: ParsedMarkdownSection): ParsedSectionLine[] {
+  const snippets: ParsedSectionLine[] = [];
   const seen = new Set<string>();
   for (const entry of section.lines) {
     const trimmed = entry.text.trim();
-    if (!trimmed) {
-      continue;
-    }
     const bulletMatch = trimmed.match(/^(?:[-*+]|\d+\.)\s+(?:\[[ xX]\]\s*)?(.*)$/);
     const candidateText = bulletMatch?.[1] ?? trimmed;
     const text = stripMarkdown(candidateText);
@@ -230,20 +195,10 @@ function sectionToSnippets(section: ParsedMarkdownSection): SectionSnippet[] {
   return snippets;
 }
 
-function countMatchingSnippets(snippets: SectionSnippet[], pattern: RegExp): number {
-  let count = 0;
-  for (const snippet of snippets) {
-    if (pattern.test(snippet.text)) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
-function scoreSection(section: ParsedMarkdownSection, snippets: SectionSnippet[]) {
+function scoreSection(section: ParsedMarkdownSection, snippets: ParsedSectionLine[]) {
   const title = section.title;
   const score = (pattern: RegExp) =>
-    countMatchingSnippets(snippets, pattern) + Number(pattern.test(title));
+    snippets.filter((snippet) => pattern.test(snippet.text)).length + Number(pattern.test(title));
   const preference = score(REM_MEMORY_SIGNAL_RE);
   const build = score(REM_BUILD_SIGNAL_RE);
   const incident = score(REM_INCIDENT_SIGNAL_RE);
@@ -297,8 +252,8 @@ function scoreSignals(signals: readonly (readonly [boolean, number])[], initial 
 
 function chooseSummarySnippets(
   section: ParsedMarkdownSection,
-  snippets: SectionSnippet[],
-): SectionSnippet[] {
+  snippets: ParsedSectionLine[],
+): ParsedSectionLine[] {
   const selectionLimit = REM_GENERIC_SECTION_RE.test(section.title) ? 2 : 3;
   return snippets
     .toSorted((left, right) => {
@@ -326,8 +281,8 @@ function joinSummaryParts(parts: string[]): string {
 function summarizeSection(
   pathValue: string,
   section: ParsedMarkdownSection,
-  snippets: SectionSnippet[],
-): SectionSummary | null {
+  snippets: ParsedSectionLine[],
+) {
   const selected = chooseSummarySnippets(section, snippets);
   if (selected.length === 0) {
     return null;
@@ -415,10 +370,10 @@ function scoreCandidateSnippet(text: string, title: string): number {
 
 function chooseScoredSnippets(
   section: ParsedMarkdownSection,
-  snippets: SectionSnippet[],
+  snippets: ParsedSectionLine[],
   scoreFor: (text: string, title: string) => number,
   minimumScore: number,
-): SectionSnippet[] {
+): ParsedSectionLine[] {
   return snippets
     .map((snippet) => {
       const text = compactCandidateSnippetText(snippet.text, section.title);
@@ -480,11 +435,11 @@ function findTopLevelDelimiter(text: string, delimiter: string): number {
   return -1;
 }
 
-function splitTopLevelClauses(text: string, delimiter: string): string[] {
+function splitTopLevelClauses(text: string): string[] {
   const parts: string[] = [];
   let rest = text;
   while (rest.length > 0) {
-    const splitAt = findTopLevelDelimiter(rest, delimiter);
+    const splitAt = findTopLevelDelimiter(rest, ";");
     if (splitAt < 0) {
       parts.push(rest);
       break;
@@ -527,10 +482,7 @@ function atomizeClaimText(text: string): string[] {
   if (!normalized) {
     return [];
   }
-  const atomic = splitTopLevelClauses(normalized, ";")
-    .flatMap((part) => splitSubjectLeadClaim(part))
-    .map((part) => normalizeWhitespace(part))
-    .filter(Boolean);
+  const atomic = splitTopLevelClauses(normalized).flatMap(splitSubjectLeadClaim);
   return uniqueStrings(atomic).slice(0, 3);
 }
 
@@ -543,21 +495,6 @@ function classifyCandidateLeanFromText(text: string, title: string): GroundedRem
     return "likely_situational";
   }
   return "unclear";
-}
-
-function addReflection(
-  reflections: GroundedRemPreviewItem[],
-  seen: Set<string>,
-  text: string,
-  refs: string[],
-) {
-  const normalized = normalizeWhitespace(text);
-  const key = normalized.toLowerCase();
-  if (!normalized || seen.has(key)) {
-    return;
-  }
-  seen.add(key);
-  reflections.push({ text: normalized, refs });
 }
 
 function coalesceGroundedRemItems<T extends GroundedRemPreviewItem>(
@@ -607,7 +544,7 @@ export function previewGroundedRemForFile(params: {
   relPath: string;
   content: string;
   formatItem?: (line: string, refs: readonly string[]) => string;
-}): GroundedRemFilePreview {
+}) {
   const sections = parseMarkdownSections(params.content);
   const sectionScores = sections.map((section) => ({
     section,
@@ -616,7 +553,7 @@ export function previewGroundedRemForFile(params: {
   const monitoringSignal = sectionScores.reduce(
     (sum, { section, snippets }) =>
       sum +
-      countMatchingSnippets(snippets, REM_MONITORING_SIGNAL_RE) +
+      snippets.filter((snippet) => REM_MONITORING_SIGNAL_RE.test(snippet.text)).length +
       (REM_MONITORING_SIGNAL_RE.test(section.title) ? 1 : 0),
     0,
   );
@@ -672,7 +609,7 @@ export function previewGroundedRemForFile(params: {
       ),
   );
 
-  const candidates = coalesceGroundedRemItems(
+  const candidates: GroundedRemCandidate[] = coalesceGroundedRemItems(
     candidateSnippets.toSorted((left, right) => {
       const leanRank = { likely_durable: 0, unclear: 1, likely_situational: 2 };
       const leanDelta = leanRank[left.lean] - leanRank[right.lean];
@@ -734,139 +671,81 @@ export function previewGroundedRemForFile(params: {
   }
 
   const reflections: GroundedRemPreviewItem[] = [];
-  const seenReflections = new Set<string>();
+  const addReflection = (eligible: boolean, text: string, refs: string[] | undefined) => {
+    if (eligible && refs?.length) {
+      reflections.push({ text, refs });
+    }
+  };
   const relationshipFacts = facts.filter((item) => REM_STABLE_PERSON_SIGNAL_RE.test(item.text));
   const multiRelationshipContext = relationshipFacts.length >= 2;
-  const buildSignal = summaries.reduce((sum, item) => sum + item.scores.build, 0);
-  const incidentSignal = summaries.reduce((sum, item) => sum + item.scores.incident, 0);
-  const logisticsSignal = summaries.reduce((sum, item) => sum + item.scores.logistics, 0);
-  const routingSignal = summaries.reduce((sum, item) => sum + item.scores.routing, 0);
-  const externalizationSignal = summaries.reduce(
-    (sum, item) => sum + item.scores.externalization,
-    0,
+  const operationalContext = !multiRelationshipContext && facts.length > 0;
+  const signalFor = (metric: keyof SectionSummary["scores"]) =>
+    summaries.reduce((sum, item) => sum + item.scores[metric], 0);
+  const buildSignal = signalFor("build");
+  const incidentSignal = signalFor("incident");
+  const strongestRefs = (predicate: (summary: SectionSummary) => boolean) =>
+    findStrongestSummary(summaries, predicate)?.refs;
+  const factRefs = (pattern: RegExp) =>
+    facts.filter((item) => pattern.test(item.text)).flatMap((item) => item.refs);
+  const wholeFileRefs = [
+    makeRef(
+      params.relPath,
+      sections[0]?.startLine ?? 1,
+      sections[sections.length - 1]?.endLine ?? 1,
+    ),
+  ];
+
+  addReflection(
+    facts.length === 0 && monitoringSignal >= 3,
+    "This day reads mostly as monitoring and operational state, not as durable memory. It should be treated as current-state exhaust unless a clearer rule or preference appears.",
+    wholeFileRefs,
   );
-  const retrySignal = summaries.reduce((sum, item) => sum + item.scores.retries, 0);
+  addReflection(
+    effectiveMemoryImplications.length > 0,
+    "A stable rule or preference was stated explicitly, which suggests operating choices are being made legible instead of left implicit.",
+    effectiveMemoryImplications.flatMap((item) => item.refs),
+  );
+  addReflection(
+    multiRelationshipContext,
+    "More than one active relationship thread appears in the same day, which means person-memory matters operationally: who each person is should be kept separate from the transient date or venue details attached to them.",
+    relationshipFacts.flatMap((item) => item.refs),
+  );
+  addReflection(
+    operationalContext && signalFor("routing") >= 2 && buildSignal >= incidentSignal,
+    "The strongest pattern here is a preference for converting messy inbound information into routed workflows with different downstream actions, instead of handling each case manually.",
+    strongestRefs(isRoutingSummary),
+  );
+  addReflection(
+    operationalContext && signalFor("externalization") >= 2,
+    "Important context tends to get externalized quickly into notes, trackers, or memory surfaces, which suggests a preference for explicit systems over holding context informally.",
+    strongestRefs((summary) => summary.scores.externalization > 0),
+  );
+  addReflection(
+    operationalContext && buildSignal >= 2,
+    "The day leaned toward building operator infrastructure, which suggests the interaction is often used to reshape the system around recurring needs rather than just complete isolated tasks.",
+    factRefs(REM_BUILD_SIGNAL_RE),
+  );
+  addReflection(
+    facts.length > 0 && incidentSignal >= 2,
+    signalFor("retries") >= 2
+      ? "When something breaks repeatedly, the response is systematic: retries, root-cause narrowing, and preserving enough state to resume once the blocker is fixed."
+      : "A meaningful share of the day went into friction, and the interaction pattern looks pragmatic rather than emotional: diagnose the blocker, preserve state, and move on.",
+    strongestRefs((summary) => summary.scores.incident > 0),
+  );
+  addReflection(
+    operationalContext && signalFor("logistics") >= 2,
+    "Personal logistics and operating-system work are being managed in the same surface, which suggests a preference for one integrated control plane rather than separate personal and technical loops.",
+    factRefs(REM_LOGISTICS_SIGNAL_RE),
+  );
   const taskSignal = sectionScores.reduce(
     (sum, { section, snippets }) => sum + scoreSection(section, snippets).tasks,
     0,
   );
-  const strongestRoutingSummary = findStrongestSummary(summaries, isRoutingSummary);
-  const strongestIncidentSummary = findStrongestSummary(
-    summaries,
-    (summary) => summary.scores.incident > 0,
+  addReflection(
+    taskSignal >= 3 && reflections.length === 0,
+    "The raw note is mostly task and current-state material, so it should not be over-read as memory.",
+    wholeFileRefs,
   );
-  const strongestExternalizationSummary = findStrongestSummary(
-    summaries,
-    (summary) => summary.scores.externalization > 0,
-  );
-
-  if (facts.length === 0 && monitoringSignal >= 3) {
-    addReflection(
-      reflections,
-      seenReflections,
-      "This day reads mostly as monitoring and operational state, not as durable memory. It should be treated as current-state exhaust unless a clearer rule or preference appears.",
-      [
-        makeRef(
-          params.relPath,
-          sections[0]?.startLine ?? 1,
-          sections[sections.length - 1]?.endLine ?? 1,
-        ),
-      ],
-    );
-  }
-  if (effectiveMemoryImplications.length > 0) {
-    addReflection(
-      reflections,
-      seenReflections,
-      "A stable rule or preference was stated explicitly, which suggests operating choices are being made legible instead of left implicit.",
-      effectiveMemoryImplications.flatMap((item) => item.refs),
-    );
-  }
-  if (multiRelationshipContext) {
-    addReflection(
-      reflections,
-      seenReflections,
-      "More than one active relationship thread appears in the same day, which means person-memory matters operationally: who each person is should be kept separate from the transient date or venue details attached to them.",
-      relationshipFacts.flatMap((item) => item.refs),
-    );
-  }
-  if (
-    !multiRelationshipContext &&
-    facts.length > 0 &&
-    routingSignal >= 2 &&
-    strongestRoutingSummary &&
-    buildSignal >= incidentSignal
-  ) {
-    addReflection(
-      reflections,
-      seenReflections,
-      "The strongest pattern here is a preference for converting messy inbound information into routed workflows with different downstream actions, instead of handling each case manually.",
-      strongestRoutingSummary.refs,
-    );
-  }
-  if (
-    !multiRelationshipContext &&
-    facts.length > 0 &&
-    externalizationSignal >= 2 &&
-    strongestExternalizationSummary
-  ) {
-    addReflection(
-      reflections,
-      seenReflections,
-      "Important context tends to get externalized quickly into notes, trackers, or memory surfaces, which suggests a preference for explicit systems over holding context informally.",
-      strongestExternalizationSummary.refs,
-    );
-  }
-  if (!multiRelationshipContext && facts.length > 0 && buildSignal >= 2) {
-    const buildRefs = facts
-      .filter((item) => REM_BUILD_SIGNAL_RE.test(item.text))
-      .flatMap((item) => item.refs);
-    if (buildRefs.length > 0) {
-      addReflection(
-        reflections,
-        seenReflections,
-        "The day leaned toward building operator infrastructure, which suggests the interaction is often used to reshape the system around recurring needs rather than just complete isolated tasks.",
-        buildRefs,
-      );
-    }
-  }
-  if (facts.length > 0 && incidentSignal >= 2 && strongestIncidentSummary) {
-    addReflection(
-      reflections,
-      seenReflections,
-      retrySignal >= 2
-        ? "When something breaks repeatedly, the response is systematic: retries, root-cause narrowing, and preserving enough state to resume once the blocker is fixed."
-        : "A meaningful share of the day went into friction, and the interaction pattern looks pragmatic rather than emotional: diagnose the blocker, preserve state, and move on.",
-      strongestIncidentSummary.refs,
-    );
-  }
-  if (!multiRelationshipContext && facts.length > 0 && logisticsSignal >= 2) {
-    const logisticsRefs = facts
-      .filter((item) => REM_LOGISTICS_SIGNAL_RE.test(item.text))
-      .flatMap((item) => item.refs);
-    if (logisticsRefs.length > 0) {
-      addReflection(
-        reflections,
-        seenReflections,
-        "Personal logistics and operating-system work are being managed in the same surface, which suggests a preference for one integrated control plane rather than separate personal and technical loops.",
-        logisticsRefs,
-      );
-    }
-  }
-  if (taskSignal >= 3 && reflections.length === 0) {
-    addReflection(
-      reflections,
-      seenReflections,
-      "The raw note is mostly task and current-state material, so it should not be over-read as memory.",
-      [
-        makeRef(
-          params.relPath,
-          sections[0]?.startLine ?? 1,
-          sections[sections.length - 1]?.endLine ?? 1,
-        ),
-      ],
-    );
-  }
 
   const reflectionLimit =
     facts.length === 0
@@ -921,7 +800,7 @@ export function previewGroundedRemForFile(params: {
 export async function previewGroundedRemMarkdown(params: {
   workspaceDir: string;
   inputPaths: string[];
-}): Promise<GroundedRemPreviewResult> {
+}) {
   const workspaceDir = params.workspaceDir.trim();
   const files = await collectMarkdownFiles(workspaceDir, params.inputPaths);
   const previews: GroundedRemFilePreview[] = [];

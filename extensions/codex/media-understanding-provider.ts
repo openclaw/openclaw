@@ -29,27 +29,11 @@ export function buildCodexMediaUnderstandingProvider(
     id: CODEX_MEDIA_PROVIDER_ID,
     capabilities: ["image"],
     defaultModels: { image: DEFAULT_CODEX_IMAGE_MODEL },
-    describeImage: async (req) =>
+    describeImage: async ({ buffer, fileName, mime, ...req }) =>
       describeCodexImages(
         {
-          images: [
-            {
-              buffer: req.buffer,
-              fileName: req.fileName,
-              mime: req.mime,
-            },
-          ],
-          provider: req.provider,
-          model: req.model,
-          prompt: req.prompt,
-          maxTokens: req.maxTokens,
-          timeoutMs: req.timeoutMs,
-          ...(req.signal ? { signal: req.signal } : {}),
-          profile: req.profile,
-          preferredProfile: req.preferredProfile,
-          authStore: req.authStore,
-          agentDir: req.agentDir,
-          cfg: req.cfg,
+          ...req,
+          images: [{ buffer, fileName, mime }],
         },
         options,
       ),
@@ -133,66 +117,21 @@ async function extractCodexStructured(
     requiredModalities: ["text", "image"],
     isolation: "configured-transport",
   });
-  return normalizeStructuredExtractionResult({ text, model, provider: req.provider, req });
-}
-
-function buildCodexImagePrompt(req: ImagesDescriptionRequest): string {
-  const prompt = req.prompt?.trim() || DEFAULT_CODEX_IMAGE_PROMPT;
-  if (req.images.length <= 1) {
-    return prompt;
-  }
-  return `${prompt}\n\nAnalyze all ${req.images.length} images together.`;
-}
-
-function buildCodexStructuredInput(req: StructuredExtractionRequest): CodexUserInput[] {
-  return [
-    { type: "text", text: buildStructuredExtractionPrompt(req), text_elements: [] },
-    ...req.input.map((entry) => {
-      if (entry.type === "text") {
-        return { type: "text" as const, text: entry.text, text_elements: [] };
-      }
-      return {
-        type: "image" as const,
-        url: `data:${entry.mime ?? "image/png"};base64,${entry.buffer.toString("base64")}`,
-      };
-    }),
-  ];
-}
-
-function buildStructuredExtractionPrompt(req: StructuredExtractionRequest): string {
-  return [
-    req.instructions.trim(),
-    req.schemaName ? `Schema name: ${req.schemaName}` : undefined,
-    req.jsonSchema ? `JSON schema:\n${JSON.stringify(req.jsonSchema)}` : undefined,
-    req.jsonMode === false
-      ? "Return the extraction as concise text."
-      : "Return valid JSON only. Do not wrap the JSON in Markdown fences.",
-  ]
-    .filter((part): part is string => Boolean(part))
-    .join("\n\n");
-}
-
-function normalizeStructuredExtractionResult(params: {
-  text: string;
-  model: string;
-  provider: string;
-  req: StructuredExtractionRequest;
-}): StructuredExtractionResult {
   const result: StructuredExtractionResult = {
-    text: params.text,
-    model: params.model,
-    provider: params.provider,
-    contentType: params.req.jsonMode === false ? "text" : "json",
+    text,
+    model,
+    provider: req.provider,
+    contentType: req.jsonMode === false ? "text" : "json",
   };
-  if (params.req.jsonMode !== false) {
+  if (req.jsonMode !== false) {
     try {
-      result.parsed = JSON.parse(params.text);
+      result.parsed = JSON.parse(text);
     } catch {
       throw new Error("Codex structured extraction returned invalid JSON.");
     }
-    if (isRecord(params.req.jsonSchema)) {
+    if (isRecord(req.jsonSchema)) {
       const validation = validateJsonSchemaValue({
-        schema: params.req.jsonSchema,
+        schema: req.jsonSchema,
         cacheKey: "codex.media-understanding.extractStructured",
         value: result.parsed,
         cache: false,
@@ -205,4 +144,37 @@ function normalizeStructuredExtractionResult(params: {
     }
   }
   return result;
+}
+
+function buildCodexImagePrompt(req: ImagesDescriptionRequest): string {
+  const prompt = req.prompt?.trim() || DEFAULT_CODEX_IMAGE_PROMPT;
+  if (req.images.length <= 1) {
+    return prompt;
+  }
+  return `${prompt}\n\nAnalyze all ${req.images.length} images together.`;
+}
+
+function buildCodexStructuredInput(req: StructuredExtractionRequest): CodexUserInput[] {
+  const prompt = [
+    req.instructions.trim(),
+    req.schemaName ? `Schema name: ${req.schemaName}` : undefined,
+    req.jsonSchema ? `JSON schema:\n${JSON.stringify(req.jsonSchema)}` : undefined,
+    req.jsonMode === false
+      ? "Return the extraction as concise text."
+      : "Return valid JSON only. Do not wrap the JSON in Markdown fences.",
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join("\n\n");
+  return [
+    { type: "text", text: prompt, text_elements: [] },
+    ...req.input.map((entry) => {
+      if (entry.type === "text") {
+        return { type: "text" as const, text: entry.text, text_elements: [] };
+      }
+      return {
+        type: "image" as const,
+        url: `data:${entry.mime ?? "image/png"};base64,${entry.buffer.toString("base64")}`,
+      };
+    }),
+  ];
 }

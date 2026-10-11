@@ -1,5 +1,5 @@
 // Manages compile-cache respawn behavior for the CLI entrypoint.
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { getCompileCacheDir } from "node:module";
 import path from "node:path";
@@ -13,10 +13,7 @@ import {
 } from "./cli/respawn-policy.js";
 import { enableOwnedNodeCompileCache } from "./infra/node-compile-cache-env.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
-import {
-  runRespawnChildWithSignalBridge,
-  type RespawnChildRuntime,
-} from "./process/respawn-child-runner.js";
+import { runRespawnChildWithSignalBridge } from "./process/respawn-child-runner.js";
 
 const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
 
@@ -56,10 +53,6 @@ type OpenClawCompileCacheRespawnPlan = {
   args: string[];
   env: NodeJS.ProcessEnv;
   detachForProcessTree: boolean;
-};
-
-type OpenClawCompileCacheRespawnRuntime = RespawnChildRuntime & {
-  writeError: (message: string) => void | Promise<void>;
 };
 
 function buildOpenClawCompileCacheRespawnPlan(params: {
@@ -116,46 +109,25 @@ export async function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
   if (!plan) {
     return false;
   }
-  const writeError = await params.prepareWriteError?.();
-  runOpenClawCompileCacheRespawnPlan(
-    plan,
-    writeError
-      ? {
-          spawn,
-          attachChildProcessBridge,
-          exit: process.exit.bind(process) as (code?: number) => never,
-          writeError,
-        }
-      : undefined,
-  );
-  return true;
-}
-
-function runOpenClawCompileCacheRespawnPlan(
-  plan: OpenClawCompileCacheRespawnPlan,
-  runtime: OpenClawCompileCacheRespawnRuntime = {
-    spawn,
-    attachChildProcessBridge,
-    exit: process.exit.bind(process) as (code?: number) => never,
-    writeError: (message: string) => {
+  const writeError =
+    (await params.prepareWriteError?.()) ??
+    ((message: string) => {
       process.stderr.write(message);
-    },
-  },
-): ChildProcess {
-  return runRespawnChildWithSignalBridge({
+    });
+  process.exitCode = await runRespawnChildWithSignalBridge({
     command: plan.command,
     args: plan.args,
     env: plan.env,
     detachForProcessTree: plan.detachForProcessTree,
-    runtime,
-    onError: (error) => {
-      return runtime.writeError(
+    runtime: { spawn, attachChildProcessBridge },
+    onError: (error) =>
+      writeError(
         `[openclaw] Failed to respawn CLI without compile cache: ${
           error instanceof Error ? (error.stack ?? error.message) : String(error)
         }\n`,
-      );
-    },
+      ),
   });
+  return true;
 }
 
 export function enableOpenClawCompileCache(params: {
@@ -167,7 +139,9 @@ export function enableOpenClawCompileCache(params: {
   }
   try {
     const directory = resolveOpenClawCompileCacheDirectory(params);
-    enableOwnedNodeCompileCache(directory);
+    if (directory) {
+      enableOwnedNodeCompileCache(directory);
+    }
   } catch {
     // Best-effort only; never block startup.
   }

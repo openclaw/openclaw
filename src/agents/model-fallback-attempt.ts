@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE } from "../../packages/agent-core/src/errors.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronTerminalAbortReasonText } from "../cron/service/execution-errors.js";
+import { renewAgentRunDeadline } from "../infra/agent-run-deadline.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
@@ -51,6 +52,7 @@ import {
 } from "./session-suspension.js";
 
 type FailoverAttribution = {
+  runId?: string;
   sessionId?: string;
   lane?: string;
 };
@@ -99,13 +101,13 @@ export type ModelFallbackRunFn<T> = (
   options?: ModelFallbackRunOptions,
 ) => Promise<T>;
 
-export type ModelFallbackErrorHandler = (attempt: {
-  provider: string;
-  model: string;
-  error: unknown;
-  attempt: number;
-  total: number;
-}) => void | Promise<void>;
+export type ModelFallbackErrorHandler = (
+  attempt: ModelCandidate & {
+    error: unknown;
+    attempt: number;
+    total: number;
+  },
+) => void | Promise<void>;
 
 export type ModelFallbackStepHandler = (step: ModelFallbackStepFields) => void | Promise<void>;
 
@@ -303,6 +305,8 @@ export async function runFallbackAttempt<T>(
   // Only the initial attempt may own a result after caller cancellation.
   if (params.attempt > 1) {
     params.abortSignal?.throwIfAborted();
+    // Give the next candidate its own budget without replacing parent cancellation.
+    renewAgentRunDeadline(params.attribution?.runId);
   }
   const runResult = await runFallbackCandidate(params);
   const classification = runResult.ok
@@ -534,27 +538,19 @@ export function recordFailedCandidateAttempt(params: {
   requestedModelMatched: boolean;
   fallbackConfigured: boolean;
 }): ModelFallbackStepFields | undefined {
-  const described = describeFailoverError(params.error);
+  const { attempts, error, ...observation } = params;
+  const described = describeFailoverError(error);
   const attempt = buildFailedCandidateAttempt(params.candidate, described);
-  params.attempts.push(attempt);
+  attempts.push(attempt);
   return logModelFallbackDecision({
+    ...observation,
     decision: "candidate_failed",
-    runId: params.runId,
-    sessionId: params.sessionId,
-    lane: params.lane,
     requestedProvider: params.requestedProvider ?? params.candidate.provider,
     requestedModel: params.requestedModel ?? params.candidate.model,
-    candidate: params.candidate,
-    attempt: params.attempt,
-    total: params.total,
     reason: described.reason,
     status: described.status,
     code: described.code,
     error: attempt.error,
-    nextCandidate: params.nextCandidate,
-    isPrimary: params.isPrimary,
-    requestedModelMatched: params.requestedModelMatched,
-    fallbackConfigured: params.fallbackConfigured,
   });
 }
 

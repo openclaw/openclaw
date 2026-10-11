@@ -5,9 +5,9 @@ import { expect, it } from "vitest";
 import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.js";
 import {
   disconnectGatewayClient,
-  getGatewayE2ePortBlock,
   startGatewayWithClient,
 } from "../../../src/gateway/test-helpers.e2e.js";
+import { acquireGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.listener.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -65,10 +65,14 @@ const suite = createControlUiE2eSuite({
         },
         "alpha",
       );
-      const port = await getGatewayE2ePortBlock();
-      signal.throwIfAborted();
+      const portClaim = await acquireGatewayE2ePortBlock();
+      if (signal.aborted) {
+        // Gateway startup has not taken ownership of the claim yet.
+        await portClaim.release();
+        signal.throwIfAborted();
+      }
       gatewayStartup = startGatewayWithClient({
-        port,
+        portClaim,
         configPath: state.configPath,
         token,
         scopes: ["operator.admin"],
@@ -274,7 +278,7 @@ suite.define(() => {
   );
 
   it.each(["pending", "complete", "reconnect", "ordinary-reconnect"] as const)(
-    "real chat route preserves account state during %s snapshot ordering",
+    "real chat route recovers current account state after %s snapshot ordering",
     async (replacementState) => {
       const { port, client: admin } = realGateway;
       const sessionName = `session-mutation-${replacementState}`;
@@ -299,6 +303,7 @@ suite.define(() => {
           const heldReplies: Array<() => void> = [];
           let holdReplacement = true;
           let holdReconnectCatalog = false;
+          let holdInitialSnapshot = true;
           await page.routeWebSocket(`ws://127.0.0.1:${port}/**`, (socket) => {
             const server = socket.connectToServer();
             disconnect.resolve(() => socket.close({ code: 1012, reason: "Reconnect proof" }));
@@ -317,7 +322,7 @@ suite.define(() => {
             });
             server.onMessage((message) => {
               const frame = requireRecord(JSON.parse(message.toString()));
-              if (frame.event === "models.snapshot") {
+              if (frame.event === "models.snapshot" && holdInitialSnapshot) {
                 frames.push({ direction: "held-initial", frame });
                 initialSnapshot.resolve({
                   deliver: () => socket.send(message),
@@ -461,6 +466,14 @@ suite.define(() => {
           if (replacementState === "pending") {
             deliverReplacement();
           }
+          expect(
+            await admin.request("models.list", { agentId: "alpha", sessionKey }),
+          ).toMatchObject({
+            accountSelection: { authProfileId: "fixture:account-b" },
+          });
+          holdInitialSnapshot = false;
+          await page.reload();
+          await trigger.click();
           await expect.poll(() => account.textContent()).toContain("Account B");
           const selectedRow = picker.locator('[data-chat-model-option="fixture/second"]');
           await revealChatModelOption(selectedRow);

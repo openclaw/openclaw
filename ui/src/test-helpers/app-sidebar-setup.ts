@@ -101,3 +101,16 @@ export function focusSidebarPersonWithKeyboard(target: HTMLElement): void {
   onTestFinished(() => keyboardFocus.mockRestore());
   target.focus();
 }
+
+/** Select a view through its actual fixed rail control. */
+export async function selectSidebarView(
+  sidebar: HTMLElement & Pick<AppSidebarSessionNavigationElement, "updateComplete">,
+  view: "pages" | "sessions" | "online",
+): Promise<void> {
+  const button = sidebar.querySelector<HTMLButtonElement>(`[data-navigation-view="${view}"]`);
+  if (!button) {
+    throw new Error(`Expected sidebar ${view} control`);
+  }
+  button.click();
+  await sidebar.updateComplete;
+}

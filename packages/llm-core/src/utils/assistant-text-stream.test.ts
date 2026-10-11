@@ -21,8 +21,8 @@ function fixture() {
     },
   };
   const stream = new AssistantMessageEventStream();
-  const append = (delta: string, contentIndex = 0) => {
-    const event = { type: "text_delta", contentIndex, delta } as const;
+  const append = (delta: string) => {
+    const event = { type: "text_delta", contentIndex: 0, delta } as const;
     stream.push(event);
     return event;
   };
@@ -38,20 +38,39 @@ async function collect(stream: AssistantMessageEventStream) {
 }
 
 describe("queued assistant text appends", () => {
-  it("combines unread appends without changing producer-owned events or text bytes", async () => {
-    const { message, stream, append } = fixture();
-    stream.push({ type: "start", partial: message });
-    const first = append("Hello");
-    append(" ");
-    append("world");
-    stream.push({ type: "done", reason: "stop", message });
-    expect(await collect(stream)).toEqual([
-      { type: "start", partial: message },
-      { type: "text_delta", contentIndex: 0, delta: "Hello world" },
-      { type: "done", reason: "stop", message },
-    ]);
-    expect(first.delta).toBe("Hello");
-    await expect(stream.result()).resolves.toBe(message);
+  it("coalesces unread text without mutation and freezes it at each terminal state", async () => {
+    for (const terminal of ["done", "end", "error"] as const) {
+      const { message, stream, append } = fixture();
+      const result = terminal === "error" ? { ...message, stopReason: "error" as const } : message;
+      const start = { type: "start", partial: message } as const;
+      stream.push(start);
+      const first = append("Hello");
+      append(" ");
+      append("world");
+      const last: AssistantMessageEvent[] =
+        terminal === "end"
+          ? []
+          : terminal === "done"
+            ? [{ type: "done", reason: "stop", message }]
+            : [{ type: "error", reason: "error", error: result }];
+      for (const event of last) {
+        stream.push(event);
+      }
+      if (terminal === "end") {
+        stream.end(result);
+      }
+      append("discarded");
+      if (terminal === "error") {
+        stream.end();
+      }
+      expect(await collect(stream)).toEqual([
+        start,
+        { type: "text_delta", contentIndex: 0, delta: "Hello world" },
+        ...last,
+      ]);
+      expect(first.delta).toBe("Hello");
+      await expect(stream.result()).resolves.toBe(result);
+    }
   });
 
   it("delivers a waiting first token immediately and never rewrites consumed events", async () => {
@@ -90,53 +109,14 @@ describe("queued assistant text appends", () => {
       append("a");
       append("b");
       stream.push(boundary);
-      append("c");
-      append("d");
-      const end: AssistantMessageEvent = {
-        type: "text_end",
-        contentIndex: 0,
-        content: "abcd",
-        partial: message,
-      };
-      stream.push(end);
-      expected.push(
-        { type: "text_delta", contentIndex: 0, delta: "ab" },
-        boundary,
-        { type: "text_delta", contentIndex: 0, delta: "cd" },
-        end,
-      );
+      expected.push({ type: "text_delta", contentIndex: 0, delta: "ab" }, boundary);
     }
+    append("c");
+    append("d");
     stream.end(message);
-    expect(await collect(stream)).toEqual(expected);
-  });
-
-  it("freezes unread text when the producer ends with an explicit result", async () => {
-    const { message, stream, append } = fixture();
-    append("Hello");
-    append(" world");
-    stream.end(message);
-    append("discarded");
     expect(await collect(stream)).toEqual([
-      { type: "text_delta", contentIndex: 0, delta: "Hello world" },
+      ...expected,
+      { type: "text_delta", contentIndex: 0, delta: "cd" },
     ]);
-    await expect(stream.result()).resolves.toBe(message);
   });
-
-  it.each(["error", "aborted"] as const)(
-    "drains prior text before %s and rejects later pushes",
-    async (reason) => {
-      const { message, stream, append } = fixture();
-      append("Hello");
-      append(" world");
-      const error: AssistantMessage = { ...message, stopReason: reason };
-      stream.push({ type: "error", reason, error });
-      append("discarded");
-      stream.end();
-      expect(await collect(stream)).toEqual([
-        { type: "text_delta", contentIndex: 0, delta: "Hello world" },
-        { type: "error", reason, error },
-      ]);
-      await expect(stream.result()).resolves.toBe(error);
-    },
-  );
 });

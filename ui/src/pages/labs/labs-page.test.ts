@@ -102,7 +102,9 @@ function labRow(page: LabsPageElement, title: string) {
 }
 
 function labToggle(page: LabsPageElement, title: string) {
-  const toggle = labRow(page, title).querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+  const toggle = labRow(page, title).querySelector<HTMLInputElement>(
+    "input.settings-toggle__input",
+  );
   if (!toggle) {
     throw new Error(`${title} toggle not rendered`);
   }
@@ -141,7 +143,9 @@ describe("LabsPage", () => {
     const introLink = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
     expect(introLink?.textContent?.trim()).toBe("Learn more");
     expect(introLink?.href).toBe("https://docs.openclaw.ai/concepts/experimental-features");
-    expect(page.querySelectorAll(".settings-row wa-switch")).toHaveLength(LAB_FEATURES.length);
+    expect(page.querySelectorAll(".settings-row input.settings-toggle__input")).toHaveLength(
+      LAB_FEATURES.length,
+    );
     expect(page.textContent).toContain("Code Mode");
     for (const title of [
       "Swarm",
@@ -485,7 +489,10 @@ describe("LabsPage Decision assistance", () => {
       });
       const row = labRow(page, "Decision assistance");
       expect(labToggle(page, "Decision assistance").checked).toBe(expected);
-      expect(row.textContent).toContain("No features use this setting yet");
+      expect(row.textContent).toContain(
+        "Enable experimental assistance from your configured Decision model",
+      );
+      expect(row.textContent).toContain("supported uses, setup, and data handling");
       expect(row.textContent?.includes("Preference saved.")).toBe(expected);
     },
   );
@@ -585,7 +592,7 @@ describe("LabsPage Decision assistance", () => {
       page.requestUpdate();
       await page.updateComplete;
       const row = labRow(page, "Decision assistance");
-      expect(row.querySelector("wa-switch")).toBeNull();
+      expect(row.querySelector("input.settings-toggle__input")).toBeNull();
       expect(row.textContent).toContain(
         state === "loading" ? "Loading setting" : "Couldn’t load this setting",
       );

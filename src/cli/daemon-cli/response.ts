@@ -1,5 +1,3 @@
-// JSON/text response helpers for Gateway service lifecycle commands.
-import { Writable } from "node:stream";
 import { currentGatewayServiceRebindReceipt } from "../../daemon/service-rebind.js";
 import type { GatewayServiceDefinitionBackupReceipt } from "../../daemon/service-stage.js";
 import type { GatewayService } from "../../daemon/service.js";
@@ -10,8 +8,8 @@ import {
 import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailable.js";
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createNullWriter } from "../../shared/null-writer.js";
 
-/** Gateway service action emitted by lifecycle commands. */
 type DaemonAction = "install" | "uninstall" | "start" | "stop" | "restart";
 
 /** Stable hint category for machine-readable daemon command output. */
@@ -24,13 +22,11 @@ type DaemonHintKind =
   | "wsl-systemd"
   | "generic";
 
-/** Classified daemon recovery hint item. */
 type DaemonHintItem = {
   kind: DaemonHintKind;
   text: string;
 };
 
-/** Machine-readable response shape for service lifecycle commands. */
 type DaemonActionResponse = {
   ok: boolean;
   action: DaemonAction;
@@ -44,49 +40,28 @@ type DaemonActionResponse = {
   service?: ReturnType<typeof buildDaemonServiceSnapshot>;
 };
 
-function emitDaemonActionJson(payload: DaemonActionResponse) {
-  const rebind = currentGatewayServiceRebindReceipt();
-  defaultRuntime.writeJson({ ...payload, ...(rebind ? { rebind } : {}) });
-}
+const DAEMON_HINT_PREFIXES: readonly (readonly [string, DaemonHintKind])[] = [
+  ["Service not installed. Run:", "install"],
+  ["Restart the container or the service that manages it for ", "container-restart"],
+  ["systemd user services are unavailable;", "systemd-unavailable"],
+  ["On a headless server (SSH/no desktop session):", "systemd-headless"],
+  ["Also check that XDG_RUNTIME_DIR is set:", "systemd-headless"],
+  [
+    "If you're in a container, run the gateway in the foreground instead of",
+    "container-foreground",
+  ],
+  ["WSL2 needs systemd enabled:", "wsl-systemd"],
+  ["Then run: wsl --shutdown", "wsl-systemd"],
+  ["Verify: systemctl --user status", "wsl-systemd"],
+];
 
 function classifyDaemonHintText(text: string): DaemonHintKind {
-  if (/\b(gateway|node) install\b/u.test(text) || text.startsWith("Service not installed. Run:")) {
+  if (/\b(gateway|node) install\b/u.test(text)) {
     return "install";
   }
-  if (text.startsWith("Restart the container or the service that manages it for ")) {
-    return "container-restart";
-  }
-  if (text.startsWith("systemd user services are unavailable;")) {
-    return "systemd-unavailable";
-  }
-  if (
-    text.startsWith("On a headless server (SSH/no desktop session):") ||
-    text.startsWith("Also ensure XDG_RUNTIME_DIR is set:")
-  ) {
-    return "systemd-headless";
-  }
-  if (text.startsWith("If you're in a container, run the gateway in the foreground instead of")) {
-    return "container-foreground";
-  }
-  if (
-    text.startsWith("WSL2 needs systemd enabled:") ||
-    text.startsWith("Then run: wsl --shutdown") ||
-    text.startsWith("Verify: systemctl --user status")
-  ) {
-    return "wsl-systemd";
-  }
-  return "generic";
+  return DAEMON_HINT_PREFIXES.find(([prefix]) => text.startsWith(prefix))?.[1] ?? "generic";
 }
 
-/** Classify plain-text hints for JSON daemon responses. */
-function buildDaemonHintItems(hints: string[] | undefined): DaemonHintItem[] | undefined {
-  if (!hints?.length) {
-    return undefined;
-  }
-  return hints.map((text) => ({ kind: classifyDaemonHintText(text), text }));
-}
-
-/** Build the service metadata snapshot embedded in JSON action responses. */
 export function buildDaemonServiceSnapshot(service: GatewayService, loaded: boolean) {
   return {
     label: service.label,
@@ -98,56 +73,6 @@ export function buildDaemonServiceSnapshot(service: GatewayService, loaded: bool
 
 type DaemonEmit = (payload: Omit<DaemonActionResponse, "action">) => void;
 
-/** Emit the no-op success returned when a service is already running. */
-export function emitDaemonAlreadyRunning(params: {
-  serviceNoun: string;
-  service: GatewayService;
-  pid?: number;
-  warnings: string[];
-  emitMessage: DaemonEmit;
-}): void {
-  const message =
-    params.pid === undefined
-      ? `${params.serviceNoun} service already running.`
-      : `${params.serviceNoun} service already running (pid ${params.pid}).`;
-  params.emitMessage({
-    ok: true,
-    result: "already-running",
-    message,
-    service: buildDaemonServiceSnapshot(params.service, true),
-    warnings: params.warnings.length ? params.warnings : undefined,
-  });
-}
-
-/** Emit a service-manager restart that has been accepted but not completed. */
-export function emitDaemonScheduledRestart(params: {
-  emitMessage: DaemonEmit;
-  result: string;
-  message: string;
-  service: GatewayService;
-  loaded: boolean;
-  warnings: string[];
-}): true {
-  params.emitMessage({
-    ok: true,
-    result: params.result,
-    message: params.message,
-    service: buildDaemonServiceSnapshot(params.service, params.loaded),
-    warnings: params.warnings.length ? params.warnings : undefined,
-  });
-  return true;
-}
-
-/** Writable sink used when JSON output should suppress service command stdout. */
-export function createNullWriter(): Writable {
-  return new Writable({
-    write(_chunk, _encoding, callback) {
-      callback();
-    },
-  });
-}
-
-/** Create stdout/warning/emit/fail helpers for one daemon lifecycle action. */
 export function createDaemonActionContext(params: {
   action: DaemonAction;
   json: boolean;
@@ -160,13 +85,19 @@ export function createDaemonActionContext(params: {
       return;
     }
     const definitionBackup = params.definitionBackup?.();
-    emitDaemonActionJson({
+    const payloadWithContext: DaemonActionResponse = {
       action: params.action,
       ...(definitionBackup ? { definitionBackup } : {}),
       ...payload,
-      hintItems: payload.hintItems ?? buildDaemonHintItems(payload.hints),
+      hintItems:
+        payload.hintItems ??
+        (payload.hints?.length
+          ? payload.hints.map((text) => ({ kind: classifyDaemonHintText(text), text }))
+          : undefined),
       warnings: payload.warnings ?? (warnings.length ? warnings : undefined),
-    });
+    };
+    const rebind = currentGatewayServiceRebindReceipt();
+    defaultRuntime.writeJson({ ...payloadWithContext, ...(rebind ? { rebind } : {}) });
   };
   // Message-bearing successes opt into text; emit remains JSON-only.
   const emitMessage: DaemonEmit = (payload) => {
@@ -212,7 +143,6 @@ async function buildInstallFailureHints(error: unknown): Promise<string[] | unde
   });
 }
 
-/** Install a service, convert platform install failures to hints, and emit the final response. */
 export async function installDaemonServiceAndEmit(params: {
   serviceNoun: string;
   service: GatewayService;
@@ -230,22 +160,15 @@ export async function installDaemonServiceAndEmit(params: {
    */
   onVerified?: () => Promise<void>;
 }) {
+  let installed: boolean;
+  let phase = "install";
   try {
     await params.install();
-  } catch (err) {
-    params.fail(
-      `${params.serviceNoun} install failed: ${String(err)}`,
-      await buildInstallFailureHints(err),
-    );
-    return;
-  }
-
-  let installed: boolean;
-  try {
+    phase = "install verification";
     installed = await params.service.isLoaded({ env: process.env });
   } catch (err) {
     params.fail(
-      `${params.serviceNoun} install verification failed: ${String(err)}`,
+      `${params.serviceNoun} ${phase} failed: ${String(err)}`,
       await buildInstallFailureHints(err),
     );
     return;
@@ -256,8 +179,6 @@ export async function installDaemonServiceAndEmit(params: {
     );
     return;
   }
-  // Post-success diagnostics run only on the verified-success path, so a
-  // failed install or verification never carries their warnings.
   if (params.onVerified) {
     try {
       await params.onVerified();

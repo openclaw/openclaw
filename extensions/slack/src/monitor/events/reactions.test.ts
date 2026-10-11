@@ -1,12 +1,13 @@
-// Slack tests cover reactions plugin behavior.
 import type { AllMiddlewareArgs } from "@slack/bolt";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerSlackReactionEvents } from "./reactions.js";
+import {
+  createSlackSystemEventTestHarness,
+  type SlackSystemEventHandler as ReactionHandler,
+  type SlackSystemEventTestOverrides,
+} from "./system-event-test-harness.js";
 
 const reactionQueueMock = vi.hoisted(() => vi.fn());
-let registerSlackReactionEvents: typeof import("./reactions.js").registerSlackReactionEvents;
-let createSlackSystemEventTestHarness: typeof import("./system-event-test-harness.js").createSlackSystemEventTestHarness;
-type SlackSystemEventTestOverrides =
-  import("./system-event-test-harness.js").SlackSystemEventTestOverrides;
 
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
   enqueueRoutedSystemEvent: (
@@ -15,7 +16,6 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
     options: Record<string, unknown>,
   ) => reactionQueueMock(text, { ...options, sessionKey: route.sessionKey }),
 }));
-type ReactionHandler = import("./system-event-test-harness.js").SlackSystemEventHandler;
 
 type ReactionRunInput = {
   handler?: "added" | "removed";
@@ -91,11 +91,6 @@ async function executeReactionCase(input: ReactionRunInput = {}) {
 }
 
 describe("registerSlackReactionEvents", () => {
-  beforeAll(async () => {
-    ({ registerSlackReactionEvents } = await import("./reactions.js"));
-    ({ createSlackSystemEventTestHarness } = await import("./system-event-test-harness.js"));
-  });
-
   beforeEach(() => {
     reactionQueueMock.mockClear();
   });
@@ -276,7 +271,7 @@ describe("registerSlackReactionEvents", () => {
     const harness = createSlackSystemEventTestHarness();
     const resolveSessionKey = vi
       .fn()
-      .mockReturnValue({ agentId: "ops", sessionKey: "agent:ops:main" });
+      .mockResolvedValue({ agentId: "ops", sessionKey: "agent:ops:main" });
     harness.ctx.resolveSlackSystemEventRoute = resolveSessionKey;
     registerSlackReactionEvents({ ctx: harness.ctx });
     const handler = requireReactionHandler(
@@ -306,7 +301,7 @@ describe("registerSlackReactionEvents", () => {
     const resolveChannelName = vi.fn(harness.ctx.resolveChannelName);
     const resolveUserName = vi.fn(harness.ctx.resolveUserName);
     const resolveSessionKey = vi.fn(
-      (input: Parameters<typeof harness.ctx.resolveSlackSystemEventRoute>[0]) => ({
+      async (input: Parameters<typeof harness.ctx.resolveSlackSystemEventRoute>[0]) => ({
         agentId: "main",
         sessionKey: `session:${input.eventScope?.teamId ?? "workspace"}`,
       }),

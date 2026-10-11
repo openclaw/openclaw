@@ -10,7 +10,6 @@ import {
 import { captureDeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
 import { createQueuedDeliveryOwner } from "./deliver-queue-state.js";
 import { ackDelivery } from "./delivery-queue-ack.js";
-import { holdAcknowledgementReply } from "./delivery-queue-ack.worker.test-support.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-namespaces.js";
 import type { AckDeliveryOptions } from "./delivery-queue-settlement.types.js";
 import {
@@ -19,6 +18,7 @@ import {
   enqueueDeliveryOnce,
   loadPendingDelivery,
 } from "./delivery-queue-storage.js";
+import { holdAcknowledgementReply } from "./delivery-queue-worker-reply.test-support.js";
 import { installDeliveryQueueTmpDirHooks } from "./delivery-queue.test-helpers.js";
 
 describe("outbound acknowledgement worker", () => {
@@ -28,71 +28,62 @@ describe("outbound acknowledgement worker", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([false, true])(
-    "settles the exact queue owner without host data SQL after cold reopen (generation: %s)",
-    async (generation) => {
-      const stateDir = fixtures.tmpDir();
-      const id = await enqueueDelivery(
-        {
-          channel: "matrix",
-          to: "!synthetic:example",
-          payloads: [{ text: "settled" }],
-          ...(generation
-            ? {
-                sessionGeneration: {
-                  agentId: "main",
-                  storePath: path.join(stateDir, "agent.sqlite"),
-                  sessionKey: "agent:main:test",
-                  sessionId: "test",
-                  lifecycleRevision: null,
-                },
-              }
-            : {}),
+  it("settles a generation-bound owner without host data SQL after cold reopen", async () => {
+    const stateDir = fixtures.tmpDir();
+    const id = await enqueueDelivery(
+      {
+        channel: "matrix",
+        to: "!synthetic:example",
+        payloads: [{ text: "settled" }],
+        sessionGeneration: {
+          agentId: "main",
+          storePath: path.join(stateDir, "agent.sqlite"),
+          sessionKey: "agent:main:test",
+          sessionId: "test",
+          lifecycleRevision: null,
         },
-        stateDir,
-      );
-      const claimId = await claimDeliveryPlatformSendAttempt(id, stateDir);
-      expect(claimId).toEqual(expect.any(String));
+      },
+      stateDir,
+    );
+    const claimId = await claimDeliveryPlatformSendAttempt(id, stateDir);
+    expect(claimId).toEqual(expect.any(String));
+    await closeOpenClawStateDatabaseAsync();
+    const context = captureDeliveryQueueStateContext(stateDir);
+    const owner = createQueuedDeliveryOwner(
+      { queueId: id, expectedPlatformSendAttemptId: claimId },
+      context,
+    );
+    const sql = observeHostDataSql();
+    try {
+      await owner.ack();
+      expect(owner.custody).toBe("released");
+      expect(sql.calls.map((call) => call.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+    } finally {
+      sql.restore();
       await closeOpenClawStateDatabaseAsync();
-      const context = captureDeliveryQueueStateContext(stateDir);
-      const owner = createQueuedDeliveryOwner(
-        { queueId: id, expectedPlatformSendAttemptId: claimId },
-        context,
-      );
-      const sql = observeHostDataSql({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
-      try {
-        await owner.ack();
-        expect(owner.custody).toBe("released");
-        expect(sql.calls.map((call) => call.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
-      } finally {
-        sql.restore();
-        await closeOpenClawStateDatabaseAsync();
-      }
-      expect(await loadPendingDelivery(id, stateDir)).toBeNull();
-    },
-  );
+    }
+    expect(await loadPendingDelivery(id, stateDir)).toBeNull();
+  });
 
-  it.each([null, undefined])(
-    "preserves explicit %s owner checks across worker transfer",
-    async (expectedPlatformSendAttemptId) => {
-      const stateDir = fixtures.tmpDir();
-      const id = await enqueueDelivery(
-        { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "retained" }] },
-        stateDir,
-      );
-      const claimId = await claimDeliveryPlatformSendAttempt(id, stateDir);
-      await expect(ackDelivery(id, stateDir, { expectedPlatformSendAttemptId })).rejects.toThrow(
-        `Delivery platform claim was lost: ${id}`,
-      );
-      expect(await loadPendingDelivery(id, stateDir)).toMatchObject({ producerClaimId: claimId });
-      await ackDelivery(id, stateDir, { expectedPlatformSendAttemptId: claimId });
-      expect(await loadPendingDelivery(id, stateDir)).toBeNull();
-      await expect(ackDelivery(id, stateDir, { expectedPlatformSendAttemptId })).rejects.toThrow(
-        `Delivery platform claim was lost: ${id}`,
-      );
-      await expect(ackDelivery(id, stateDir)).resolves.toBeUndefined();
-    },
-  );
+  it("preserves an explicit undefined owner check across worker transfer", async () => {
+    const stateDir = fixtures.tmpDir();
+    const id = await enqueueDelivery(
+      { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "retained" }] },
+      stateDir,
+    );
+    const claimId = await claimDeliveryPlatformSendAttempt(id, stateDir);
+    const options = { expectedPlatformSendAttemptId: undefined };
+    await expect(ackDelivery(id, stateDir, options)).rejects.toThrow(
+      `Delivery platform claim was lost: ${id}`,
+    );
+    expect(await loadPendingDelivery(id, stateDir)).toMatchObject({ producerClaimId: claimId });
+    await ackDelivery(id, stateDir, { expectedPlatformSendAttemptId: claimId });
+    expect(await loadPendingDelivery(id, stateDir)).toBeNull();
+    await expect(ackDelivery(id, stateDir, options)).rejects.toThrow(
+      `Delivery platform claim was lost: ${id}`,
+    );
+    await expect(ackDelivery(id, stateDir)).resolves.toBeUndefined();
+  });
   it("captures ACK facts before admission and settles an expired exact owner before media cleanup", async () => {
     const stateDir = fixtures.tmpDir();
     const id = "captured-expired-ack";

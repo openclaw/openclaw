@@ -42,7 +42,6 @@ vi.mock("../daemon/gateway-entrypoint.js", async (original) => ({
 }));
 vi.mock("../cli/update-cli/update-command-service-maintenance.js", () => ({
   maybeStopManagedServiceBeforeMutableUpdate: mocks.serviceStop,
-  maybeResumeWindowsTaskAutoStartAfterPackageUpdate: async () => {},
 }));
 
 afterEach(() => {

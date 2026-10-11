@@ -11,6 +11,10 @@ import {
   resetDiagnosticEventsForTest,
 } from "../infra/diagnostic-events.js";
 import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import {
   BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
   beginDiagnosticBackendActivity,
   closeDiagnosticEmbeddedRunOwner,
@@ -25,8 +29,8 @@ import { markDiagnosticToolStartedForTest } from "./diagnostic-run-activity.test
 import { resetDiagnosticSessionStateForTest } from "./diagnostic-session-state.js";
 import {
   logSessionStateChange,
-  startDiagnosticHeartbeat,
-  stopDiagnosticHeartbeat,
+  startGatewayDiagnosticHeartbeat,
+  stopGatewayDiagnosticHeartbeat,
 } from "./diagnostic.js";
 
 afterEach(() => {
@@ -268,11 +272,19 @@ describe("owned backend silence allowances", () => {
     },
   );
 
-  it("does not abort an Agent call while attributed subagent progress stays inside the floor", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(Date.parse("2026-09-24T00:00:00Z"));
+  it("does not abort an Agent call while attributed subagent progress stays inside the floor", async () => {
+    const clock = createGatewaySchedulerClock(Date.parse("2026-09-24T00:00:00Z"));
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
+    const advanceHeartbeats = async (durationMs: number) => {
+      // Recovery discounts scheduler lateness, so advance ordinary heartbeat windows.
+      for (let elapsed = 0; elapsed < durationMs; elapsed += 30_000) {
+        await clock.advanceBy(30_000);
+      }
+    };
     const recoverStuckSession = vi.fn();
-    startDiagnosticHeartbeat(
+    startGatewayDiagnosticHeartbeat(
+      scheduler,
       { diagnostics: { enabled: true } },
       {
         recoverStuckSession,
@@ -298,7 +310,7 @@ describe("owned backend silence allowances", () => {
       assertCurrent: () => {},
     });
     try {
-      vi.advanceTimersByTime(14 * 60_000);
+      await advanceHeartbeats(14 * 60_000);
       expect(recoverStuckSession).not.toHaveBeenCalled();
       expect(backend.observeAttributedAgentProgress("toolu_bash")).toBe(false);
       expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
@@ -315,14 +327,15 @@ describe("owned backend silence allowances", () => {
         activeToolAgeMs: 14 * 60_000,
       });
 
-      vi.advanceTimersByTime(14 * 60_000);
+      await advanceHeartbeats(14 * 60_000);
       expect(recoverStuckSession).not.toHaveBeenCalled();
-      vi.advanceTimersByTime(60_000);
+      await advanceHeartbeats(60_000);
       expect(recoverStuckSession).toHaveBeenCalled();
     } finally {
       backend.close();
       closeDiagnosticEmbeddedRunOwner(owner);
-      stopDiagnosticHeartbeat();
+      stopGatewayDiagnosticHeartbeat();
+      await scheduler.stop();
       resetDiagnosticSessionStateForTest();
     }
   });

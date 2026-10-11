@@ -2,8 +2,8 @@ import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   consumeCodexAppServerLiveThread,
   ensureCodexAppServerClientRuntime,
@@ -21,6 +21,7 @@ import {
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
+import type { CodexServerNotification } from "./protocol.js";
 import { resolveCodexSessionBinding } from "./session-binding.js";
 import {
   createCodexTestBindingStore,
@@ -30,8 +31,62 @@ import {
 import { createClientHarness } from "./test-support.js";
 import { withCodexAppServerThreadMutation } from "./thread-ownership.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-compact-");
 let tempDir: string;
+
+function contextEngineBinding() {
+  return {
+    schemaVersion: 1 as const,
+    engineId: "lossless-claw",
+    policyFingerprint: "policy-1",
+    projection: {
+      schemaVersion: 1 as const,
+      mode: "thread_bootstrap" as const,
+      epoch: "epoch-1",
+      fingerprint: "fingerprint-1",
+    },
+  };
+}
+
+async function createRetainedHarness(onRequest: (request: { id: number; method: string }) => void) {
+  const harness = createClientHarness({
+    onWrite(line, send) {
+      const request = JSON.parse(line) as { id: number; method: string };
+      if (request.method === "thread/unsubscribe") {
+        send({ id: request.id, result: { status: "unsubscribed" } });
+      } else if (request.method === "turn/interrupt") {
+        send({ id: request.id, result: {} });
+      } else {
+        onRequest(request);
+      }
+    },
+  });
+  ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+  await retainCodexAppServerLiveThread(harness.client, "thread-1");
+  return harness;
+}
+
+function compactionParams(sessionFile: string, abortSignal?: AbortSignal) {
+  return {
+    sessionId: "session-1",
+    sessionKey: "agent:main:session-1",
+    sessionFile,
+    workspaceDir: tempDir,
+    trigger: "manual" as const,
+    abortSignal,
+  };
+}
+
+function turnEvent(
+  threadId: string,
+  id: string,
+  status: "inProgress" | "completed" | "interrupted",
+): CodexServerNotification {
+  return {
+    method: status === "inProgress" ? "turn/started" : "turn/completed",
+    params: { threadId, turn: { id, status, ...(status === "inProgress" ? {} : { items: [] }) } },
+  };
+}
 
 function settleCompactionHarnessAfterAssertions(harness: ReturnType<typeof createClientHarness>) {
   // A failed admission assertion can leave an unexpected physical request pending.
@@ -41,26 +96,14 @@ function settleCompactionHarnessAfterAssertions(harness: ReturnType<typeof creat
       harness.send({ id: request.id, result: {} });
     }
   }
-  harness.send({
-    method: "turn/started",
-    params: {
-      threadId: "thread-1",
-      turn: { id: "cleanup-turn", status: "inProgress" },
-    },
-  });
-  harness.send({
-    method: "turn/completed",
-    params: {
-      threadId: "thread-1",
-      turn: { id: "cleanup-turn", status: "interrupted", items: [] },
-    },
-  });
+  harness.send(turnEvent("thread-1", "cleanup-turn", "inProgress"));
+  harness.send(turnEvent("thread-1", "cleanup-turn", "interrupted"));
 }
 
 describe("maybeCompactCodexAppServerSession", () => {
   beforeEach(() => {
     resetCodexTestBindingStore();
-    tempDir = tempDirs.make("openclaw-codex-compact-");
+    tempDir = tempDirs.make();
   });
 
   afterEach(() => {
@@ -92,39 +135,16 @@ describe("maybeCompactCodexAppServerSession", () => {
       const binding = {
         threadId: "thread-1",
         cwd: tempDir,
-        ...(rejection === "abort"
-          ? {
-              contextEngine: {
-                schemaVersion: 1 as const,
-                engineId: "lossless-claw",
-                policyFingerprint: "policy-1",
-                projection: {
-                  schemaVersion: 1 as const,
-                  mode: "thread_bootstrap" as const,
-                  epoch: "epoch-1",
-                  fingerprint: "fingerprint-1",
-                },
-              },
-            }
-          : {}),
+        ...(rejection === "abort" ? { contextEngine: contextEngineBinding() } : {}),
       };
       await bindingStore.mutate(previous, { kind: "set", binding });
       const abortController = new AbortController();
       const compactWritten = createDeferred<number>();
-      const harness = createClientHarness({
-        onWrite: (line, send) => {
-          const request = JSON.parse(line) as { id: number; method: string };
-          if (request.method === "thread/compact/start") {
-            compactWritten.resolve(request.id);
-          } else if (request.method === "thread/unsubscribe") {
-            send({ id: request.id, result: { status: "unsubscribed" } });
-          } else if (request.method === "turn/interrupt") {
-            send({ id: request.id, result: {} });
-          }
-        },
+      const harness = await createRetainedHarness((request) => {
+        if (request.method === "thread/compact/start") {
+          compactWritten.resolve(request.id);
+        }
       });
-      ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
-      await retainCodexAppServerLiveThread(harness.client, binding.threadId);
       const closeAndWait = vi
         .spyOn(harness.client, "closeAndWait")
         .mockResolvedValue({ exited: false, cleanup: "uncertain" });
@@ -179,10 +199,11 @@ describe("maybeCompactCodexAppServerSession", () => {
         queued = withCodexAppServerThreadMutation(binding.threadId, nextMutation);
         await vi.advanceTimersByTimeAsync(1_000);
 
+        expect(await retirementOutcome.promise).toBe("settled");
         expect(harness.writes.map((line) => JSON.parse(line).method)).toEqual([
           "thread/compact/start",
+          ...(rejection === "generation" ? ["thread/unsubscribe"] : []),
         ]);
-        expect(await retirementOutcome.promise).toBe("settled");
         await expect(pending).resolves.toMatchObject({
           ok: false,
           compacted: false,
@@ -205,7 +226,11 @@ describe("maybeCompactCodexAppServerSession", () => {
           storePath: scope.storePath,
         });
         expect(recovered.binding).toEqual(binding);
-        if (rejection === "abort") {
+        if (rejection === "generation") {
+          await expect(
+            consumeCodexAppServerLiveThread(harness.client, binding.threadId),
+          ).resolves.toBeUndefined();
+        } else if (rejection === "abort") {
           await expect(
             consumeCodexAppServerLiveThread(harness.client, binding.threadId),
           ).resolves.toEqual(expect.objectContaining({ release: expect.any(Function) }));
@@ -245,21 +270,12 @@ describe("maybeCompactCodexAppServerSession", () => {
         retirementOutcome.resolve("retained");
       }
     });
-    const pendingResult = maybeCompactCodexAppServerSession(
-      {
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        sessionFile,
-        workspaceDir: tempDir,
-        trigger: "manual",
-      },
-      {
-        clientFactory: async () => fake.client,
-        pluginConfig,
-        nativeCompletionTimeoutMs: 10,
-        nativeInterruptGraceMs: 10,
-      },
-    );
+    const pendingResult = maybeCompactCodexAppServerSession(compactionParams(sessionFile), {
+      clientFactory: async () => fake.client,
+      pluginConfig,
+      nativeCompletionTimeoutMs: 10,
+      nativeInterruptGraceMs: 10,
+    });
 
     try {
       const outcome = await Promise.race([
@@ -273,20 +289,8 @@ describe("maybeCompactCodexAppServerSession", () => {
         connectionScope: "supervision",
       });
     } finally {
-      fake.emit({
-        method: "turn/started",
-        params: {
-          threadId: "thread-stuck-supervision",
-          turn: { id: "supervised-terminal", status: "inProgress" },
-        },
-      });
-      fake.emit({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-stuck-supervision",
-          turn: { id: "supervised-terminal", status: "interrupted", items: [] },
-        },
-      });
+      fake.emit(turnEvent("thread-stuck-supervision", "supervised-terminal", "inProgress"));
+      fake.emit(turnEvent("thread-stuck-supervision", "supervised-terminal", "interrupted"));
       await pendingResult.finally(() => fake.client.close());
     }
     await expect(pendingResult).resolves.toMatchObject({ ok: false, compacted: false });
@@ -294,49 +298,23 @@ describe("maybeCompactCodexAppServerSession", () => {
 
   it("cancels compaction while reading a retained supervision thread", async () => {
     const sessionFile = await writeSupervisedTestBinding(tempDir, {
-      contextEngine: {
-        schemaVersion: 1,
-        engineId: "lossless-claw",
-        policyFingerprint: "policy-1",
-        projection: {
-          schemaVersion: 1,
-          mode: "thread_bootstrap",
-          epoch: "epoch-1",
-          fingerprint: "fingerprint-1",
-        },
-      },
+      contextEngine: contextEngineBinding(),
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     const readWritten = createDeferred<number>();
     const compactWritten = createDeferred<void>();
-    const harness = createClientHarness({
-      onWrite: (line, send) => {
-        const request = JSON.parse(line) as { id: number; method: string };
-        if (request.method === "thread/read") {
-          readWritten.resolve(request.id);
-        } else if (request.method === "thread/compact/start") {
-          compactWritten.resolve();
-        } else if (request.method === "thread/unsubscribe") {
-          send({ id: request.id, result: { status: "unsubscribed" } });
-        } else if (request.method === "turn/interrupt") {
-          send({ id: request.id, result: {} });
-        }
-      },
+    const harness = await createRetainedHarness((request) => {
+      if (request.method === "thread/read") {
+        readWritten.resolve(request.id);
+      } else if (request.method === "thread/compact/start") {
+        compactWritten.resolve();
+      }
     });
-    ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
-    await retainCodexAppServerLiveThread(harness.client, "thread-1");
     const closeAndWait = vi.spyOn(harness.client, "closeAndWait");
     const abortController = new AbortController();
     vi.useFakeTimers();
     const pending = maybeCompactCodexAppServerSession(
-      {
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        sessionFile,
-        workspaceDir: tempDir,
-        trigger: "manual",
-        abortSignal: abortController.signal,
-      },
+      compactionParams(sessionFile, abortController.signal),
       {
         clientFactory: async () => harness.client,
         pluginConfig: { supervision: { enabled: true } },
@@ -383,43 +361,21 @@ describe("maybeCompactCodexAppServerSession", () => {
 
   it("preserves native completion when cancellation wins the start acknowledgement", async () => {
     const compactWritten = createDeferred<number>();
-    const harness = createClientHarness({
-      onWrite: (line, send) => {
-        const request = JSON.parse(line) as { id: number; method: string };
-        if (request.method === "thread/compact/start") {
-          compactWritten.resolve(request.id);
-        } else if (request.method === "thread/unsubscribe") {
-          send({ id: request.id, result: { status: "unsubscribed" } });
-        } else if (request.method === "turn/interrupt") {
-          send({ id: request.id, result: {} });
-        }
-      },
+    const harness = await createRetainedHarness((request) => {
+      if (request.method === "thread/compact/start") {
+        compactWritten.resolve(request.id);
+      }
     });
-    ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
-    await retainCodexAppServerLiveThread(harness.client, "thread-1");
     const sessionFile = await writeCompactionTestBinding(tempDir);
     const abortController = new AbortController();
     const closeAndWait = vi.spyOn(harness.client, "closeAndWait");
     const pending = maybeCompactCodexAppServerSession(
-      {
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        sessionFile,
-        workspaceDir: tempDir,
-        trigger: "manual",
-        abortSignal: abortController.signal,
-      },
+      compactionParams(sessionFile, abortController.signal),
       { clientFactory: async () => harness.client },
     );
     try {
       const requestId = await compactWritten.promise;
-      harness.send({
-        method: "turn/started",
-        params: {
-          threadId: "thread-1",
-          turn: { id: "completed-turn", status: "inProgress" },
-        },
-      });
+      harness.send(turnEvent("thread-1", "completed-turn", "inProgress"));
       const unrelatedCapture = codexNativeSubagentMonitorRuntime.captureModelSource({
         client: harness.client,
         threadId: "thread-1",
@@ -451,13 +407,7 @@ describe("maybeCompactCodexAppServerSession", () => {
           }
         }
       }
-      harness.send({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-1",
-          turn: { id: "completed-turn", status: "completed", items: [] },
-        },
-      });
+      harness.send(turnEvent("thread-1", "completed-turn", "completed"));
       abortController.abort();
       harness.send({ id: requestId, result: {} });
 

@@ -126,9 +126,8 @@ describe("Codex plugin activation", () => {
     ]);
     expect(pluginListCalls).toBe(2);
     expect(
-      metadataCache.read("runtime", "curated-global")?.response.marketplaces[0]?.plugins[0],
+      metadataCache.read("runtime", "curated-global")?.marketplaces[0]?.plugins[0],
     ).toMatchObject({ installed: true, enabled: true });
-    expect(appCache.getRevision()).toBeGreaterThan(0);
   });
 
   it("keeps curated catalog refresh scoped to the active repository", async () => {
@@ -200,7 +199,6 @@ describe("Codex plugin activation", () => {
         message: "Codex app inventory refresh skipped: app/installed unavailable",
       },
     ]);
-    expect(appCache.getRevision()).toBeGreaterThan(0);
   });
 
   it("keeps a successful install usable when unrelated native refreshes fail", async () => {

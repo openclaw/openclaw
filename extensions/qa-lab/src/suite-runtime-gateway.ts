@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { isDeepStrictEqual } from "node:util";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { writeGatewayRestartIntentSync } from "openclaw/plugin-sdk/qa-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -10,7 +11,6 @@ import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import { waitForQaHttpReady } from "./suite-http-readiness.js";
 import { applyQaMergePatch } from "./suite-merge-patch.js";
 import type { QaConfigSnapshot, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
-import { resolveQaGatewayTimeoutWithGraceMs } from "./timer-timeouts.js";
 
 type QaGatewayMutationEnv = Pick<
   QaSuiteRuntimeEnv,
@@ -53,10 +53,21 @@ async function waitForTransportReady(
   env: Pick<QaSuiteRuntimeEnv, "gateway" | "transport">,
   timeoutMs = 45_000,
 ) {
-  await env.transport.waitReady({
-    gateway: env.gateway,
-    timeoutMs,
-  });
+  try {
+    await env.transport.waitReady({
+      gateway: env.gateway,
+      timeoutMs,
+    });
+  } catch (error) {
+    if (error instanceof QaSuiteInfraError) {
+      throw error;
+    }
+    throw new QaSuiteInfraError(
+      "transport_ready_timeout",
+      `transport did not become ready: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
 }
 
 async function waitForConfigRestartSettle(
@@ -100,77 +111,11 @@ async function waitForConfigRestartSettle(
   );
 }
 
-function formatGatewayPrimaryErrorText(error: unknown) {
-  // The persistent QA client flattens low-level closes and appends child logs,
-  // so the public one-shot gateway guards cannot recover a typed close here.
-  const text = formatErrorMessage(error);
-  const gatewayLogsIndex = text.indexOf("\nGateway logs:");
-  return (gatewayLogsIndex >= 0 ? text.slice(0, gatewayLogsIndex) : text).trim();
-}
-
-function isGatewayRestartRace(error: unknown) {
-  const text = formatGatewayPrimaryErrorText(error);
-  return (
-    text.includes("gateway closed (1012)") ||
-    text.includes("gateway closed (1006") ||
-    text.includes("abnormal closure") ||
-    text.includes("service restart")
-  );
-}
-
-function isConfigHashConflict(error: unknown) {
-  return formatGatewayPrimaryErrorText(error).includes("config changed since last load");
-}
-
-function getGatewayRetryAfterMs(error: unknown) {
-  const text = formatGatewayPrimaryErrorText(error);
-  const millisecondsMatch = /retryAfterMs["=: ]+(\d+)/i.exec(text);
-  if (millisecondsMatch) {
-    const parsed = Number(millisecondsMatch[1]);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return parsed;
-    }
-  }
-  const secondsMatch = /retry after (\d+)s/i.exec(text);
-  if (secondsMatch) {
-    const parsed = Number(secondsMatch[1]);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return parsed * 1_000;
-    }
-  }
-  return null;
-}
-
-function areJsonValuesEqual(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) {
-    return true;
-  }
-  if (Array.isArray(left) || Array.isArray(right)) {
-    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
-      return false;
-    }
-    return left.every((entry, index) => areJsonValuesEqual(entry, right[index]));
-  }
-  if (isPlainObject(left) || isPlainObject(right)) {
-    if (!isPlainObject(left) || !isPlainObject(right)) {
-      return false;
-    }
-    const leftKeys = Object.keys(left).toSorted();
-    const rightKeys = Object.keys(right).toSorted();
-    if (!areJsonValuesEqual(leftKeys, rightKeys)) {
-      return false;
-    }
-    return leftKeys.every((key) => areJsonValuesEqual(left[key], right[key]));
-  }
-  return false;
-}
-
 function withoutQaConfigApplyVolatileFields(
   config: Record<string, unknown>,
 ): Record<string, unknown> {
   const comparable = structuredClone(config);
-  // config.apply updates root metadata on write. Retries should not turn a
-  // completed apply into a metadata-only write/restart loop.
+  // config.apply updates root metadata on write; metadata alone needs no restart.
   delete comparable.meta;
   return comparable;
 }
@@ -190,8 +135,8 @@ function isConfigMutationNoopForSnapshot(
     return false;
   }
   return action === "config.patch"
-    ? areJsonValuesEqual(applyQaMergePatch(config, nextConfig), config)
-    : areJsonValuesEqual(
+    ? isDeepStrictEqual(applyQaMergePatch(config, nextConfig), config)
+    : isDeepStrictEqual(
         withoutQaConfigApplyVolatileFields(config),
         withoutQaConfigApplyVolatileFields(nextConfig),
       );
@@ -231,108 +176,67 @@ async function runConfigMutation(params: {
 }) {
   const restartDelayMs = params.restartDelayMs ?? 1_000;
   const timeoutMs = resolveQaLiveTurnTimeoutMs(params.env, 180_000);
-  let lastConflict: unknown = null;
-  for (let attempt = 1; attempt <= 8; attempt += 1) {
-    const snapshot = await readConfigSnapshot(params.env);
-    if (
-      isConfigMutationNoopForSnapshot(params.action, snapshot.config, params.raw) &&
-      params.skipRestartDeferral !== true
-    ) {
-      // QA scenarios do best-effort cleanup in finally blocks. Skipping
-      // client-known no-op patches keeps that cleanup from burning the
-      // control-plane write budget and making later capability checks flaky.
-      return { ok: true, noop: true };
-    }
-    try {
-      let restartTargetPid: number | undefined;
-      if (params.skipRestartDeferral === true) {
-        const systemInfo = await params.env.gateway.call("system.info", {}, { timeoutMs });
-        const targetPid =
-          typeof systemInfo === "object" && systemInfo !== null
-            ? (systemInfo as { pid?: unknown }).pid
-            : undefined;
-        if (typeof targetPid !== "number" || !Number.isSafeInteger(targetPid) || targetPid <= 0) {
-          throw new Error("qa gateway restart returned an invalid active process id");
-        }
-        restartTargetPid = targetPid;
-      }
-      const result = await params.env.gateway.call(
-        params.action,
-        {
-          raw: params.raw,
-          baseHash: snapshot.hash,
-          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-          ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
-          ...(params.note ? { note: params.note } : {}),
-          restartDelayMs,
-          ...(params.replacePaths?.length ? { replacePaths: params.replacePaths } : {}),
-        },
-        { timeoutMs },
-      );
-      if (params.skipRestartDeferral === true) {
-        if (
-          !writeGatewayRestartIntentSync({
-            env: params.env.gateway.runtimeEnv,
-            targetPid: restartTargetPid,
-            reason: "config.patch",
-            // QA checkpoints must be interrupted, not allowed to finish a graceful drain.
-            intent: { force: true, waitMs: 0 },
-          })
-        ) {
-          throw new Error("qa gateway could not persist a forced restart intent");
-        }
-        await params.env.gateway.call(
-          "gateway.restart.request",
-          { reason: "config.patch", skipDeferral: true },
-          { timeoutMs },
-        );
-      }
-      await waitForConfigRestartSettle(
-        params.env,
-        restartDelayMs,
-        timeoutMs,
-        params.restartSettleBufferMs,
-      );
-      return result;
-    } catch (error) {
-      if (isConfigHashConflict(error)) {
-        lastConflict = error;
-        await waitForGatewayHealthy(params.env, Math.max(15_000, restartDelayMs + 10_000)).catch(
-          () => undefined,
-        );
-        continue;
-      }
-      const retryAfterMs = getGatewayRetryAfterMs(error);
-      if (retryAfterMs && attempt < 8) {
-        await sleep(resolveQaGatewayTimeoutWithGraceMs(retryAfterMs, 500));
-        await waitForGatewayHealthy(params.env, Math.max(15_000, restartDelayMs + 10_000)).catch(
-          () => undefined,
-        );
-        continue;
-      }
-      if (!isGatewayRestartRace(error)) {
-        throw error;
-      }
-      await waitForConfigRestartSettle(
-        params.env,
-        restartDelayMs,
-        timeoutMs,
-        params.restartSettleBufferMs,
-      );
-      const postRestartSnapshot = await readConfigSnapshot(params.env);
-      if (isConfigMutationNoopForSnapshot(params.action, postRestartSnapshot.config, params.raw)) {
-        return { ok: true, restarted: true };
-      }
-      lastConflict = new Error(
-        `${params.action} restart race settled before the config mutation was visible`,
-      );
-      continue;
-    }
+  // The suite owns config writes. Conflicts or interrupted replies fail this run.
+  const snapshot = await readConfigSnapshot(params.env);
+  if (
+    isConfigMutationNoopForSnapshot(params.action, snapshot.config, params.raw) &&
+    params.skipRestartDeferral !== true
+  ) {
+    // QA scenarios do best-effort cleanup in finally blocks. Skipping
+    // client-known no-op patches keeps that cleanup from burning the
+    // control-plane write budget and making later capability checks flaky.
+    return { ok: true, noop: true };
   }
-  throw toErrorObject(
-    lastConflict ?? new Error(`${params.action} failed after retrying config hash conflicts`),
-    "Non-Error thrown",
+  let restartTargetPid: number | undefined;
+  if (params.skipRestartDeferral === true) {
+    const systemInfo = await params.env.gateway.call("system.info", {}, { timeoutMs });
+    const targetPid =
+      typeof systemInfo === "object" && systemInfo !== null
+        ? (systemInfo as { pid?: unknown }).pid
+        : undefined;
+    if (typeof targetPid !== "number" || !Number.isSafeInteger(targetPid) || targetPid <= 0) {
+      throw new Error("qa gateway restart returned an invalid active process id");
+    }
+    restartTargetPid = targetPid;
+  }
+  const result = await params.env.gateway.call(
+    params.action,
+    {
+      raw: params.raw,
+      baseHash: snapshot.hash,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
+      ...(params.note ? { note: params.note } : {}),
+      restartDelayMs,
+      ...(params.replacePaths?.length ? { replacePaths: params.replacePaths } : {}),
+    },
+    { timeoutMs },
   );
+  if (params.skipRestartDeferral === true) {
+    if (
+      !writeGatewayRestartIntentSync({
+        env: params.env.gateway.runtimeEnv,
+        targetPid: restartTargetPid,
+        reason: "config.patch",
+        // QA checkpoints must be interrupted, not allowed to finish a graceful drain.
+        intent: { force: true, waitMs: 0 },
+      })
+    ) {
+      throw new Error("qa gateway could not persist a forced restart intent");
+    }
+    await params.env.gateway.call(
+      "gateway.restart.request",
+      { reason: "config.patch", skipDeferral: true },
+      { timeoutMs },
+    );
+  }
+  await waitForConfigRestartSettle(
+    params.env,
+    restartDelayMs,
+    timeoutMs,
+    params.restartSettleBufferMs,
+  );
+  return result;
 }
 
 async function patchConfig(

@@ -1,16 +1,10 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-// Dedicated sidebar for the full-page settings takeover (see app-host.ts).
 import { html, nothing } from "lit";
 import type { AgentsListResult } from "../api/types.ts";
 import {
-  cancelRoutePreload,
   isSettingsNavigationRouteVisible,
   navigationIconForRoute,
-  scheduleRoutePreload,
   SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
-  settingsNavigationLabelForRoute,
-  settingsNavigationOwnerRoute,
-  settingsSearchTextMatches,
   subtitleForRoute,
   titleForRoute,
   visibleSettingsNavigationGroups,
@@ -25,12 +19,21 @@ import { t } from "../i18n/index.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../lib/agents/display.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { GatewayStatus } from "../lib/gateway-status.ts";
+import { isComposingKeyboardEvent } from "../lib/ime.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { cancelRoutePreload, scheduleRoutePreload } from "../lib/route-preload.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import {
+  settingsNavigationLabelForRoute,
+  settingsNavigationOwnerRoute,
+  settingsSearchTextMatches,
+} from "../lib/settings-navigation.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import { renderGatewayStatus } from "./gateway-status.ts";
 import { icons } from "./icons.ts";
+import { renderKbd } from "./kbd.ts";
 import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.ts";
+import { renderThemeBrandIcon } from "./theme-brand-icon.ts";
 import "./agent-select-registration.ts";
 import "./settings-save-indicator.ts";
 import "../styles/settings.css";
@@ -147,26 +150,22 @@ function filterSettingsNavigationGroups(
   }
   const pageRoutes = [...directRoutes, ...groupRoutes];
   return [
-    ...(pageRoutes.length > 0
-      ? [
-          {
-            labelKey: null,
-            items: pageRoutes.map((routeId) => ({
-              routeId,
-              blocks: (blocksByRoute.get(routeId) ?? []).filter(
-                (block) => !isRedundantRouteBlock(routeId, block),
-              ),
-            })),
-          },
-        ]
-      : []),
+    {
+      labelKey: null,
+      items: pageRoutes.map((routeId) => ({
+        routeId,
+        blocks: (blocksByRoute.get(routeId) ?? []).filter(
+          (block) => !isRedundantRouteBlock(routeId, block),
+        ),
+      })),
+    },
     ...searchableRoutes
       .filter((routeId) => !includedRoutes.has(routeId) && blocksByRoute.has(routeId))
       .map((routeId) => ({
         labelKey: null,
         items: [{ routeId, blocks: blocksByRoute.get(routeId) ?? [] }],
       })),
-  ];
+  ].filter((group) => group.items.length > 0);
 }
 
 function renderItem(props: SettingsSidebarProps, routeId: RouteId) {
@@ -196,7 +195,7 @@ function renderItem(props: SettingsSidebarProps, routeId: RouteId) {
       }}
     >
       <span class="settings-sidebar__item-icon" aria-hidden="true"
-        >${icons[navigationIconForRoute(routeId)]}</span
+        >${routeId === "custodian" ? renderThemeBrandIcon() : icons[navigationIconForRoute(routeId)]}</span
       >
       <span class="settings-sidebar__item-label"
         >${settingsNavigationLabelForRoute(routeId, props.nativeDeviceSettings?.snapshot)}</span
@@ -397,7 +396,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
         <button type="button" class="settings-sidebar__back" @click=${() => props.onExit()}>
           <span class="settings-sidebar__back-icon" aria-hidden="true">${icons.arrowLeft}</span>
           ${t("nav.exitSettings")}
-          <kbd class="settings-sidebar__esc" aria-hidden="true">esc</kbd>
+          ${renderKbd("esc", { className: "settings-sidebar__esc", ariaHidden: true })}
         </button>
         <h1 class="settings-sidebar__title">${t("nav.settings")}</h1>
       </header>
@@ -415,7 +414,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
           @input=${(event: Event) =>
             props.onSearchQueryChange((event.currentTarget as HTMLInputElement).value)}
           @keydown=${(event: KeyboardEvent) => {
-            if (event.key !== "Escape") {
+            if (event.key !== "Escape" || isComposingKeyboardEvent(event)) {
               return;
             }
             event.preventDefault();

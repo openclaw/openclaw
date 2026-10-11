@@ -1,9 +1,6 @@
-// Zai plugin entrypoint registers its OpenClaw integration.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import type {
   ProviderAuthContext,
+  ProviderAuthResult,
   ProviderAuthMethod,
   ProviderAuthMethodNonInteractiveContext,
   ProviderResolveDynamicModelContext,
@@ -38,38 +35,11 @@ import {
 } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { resolveThinkingProfile, resolveZaiReasoningEffort } from "./provider-policy-api.js";
+import { buildZaiVideoGenerationProvider } from "./video-generation-provider.js";
 
 const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
-function resolveDeprecatedPiAgentAuthPath(env: NodeJS.ProcessEnv): string {
-  const home = env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
-  return path.join(home, ".pi", "agent", "auth.json");
-}
-
-function resolveDeprecatedPiAgentAccessToken(
-  env: NodeJS.ProcessEnv,
-  providerIds: readonly string[],
-): string | undefined {
-  try {
-    const authPath = resolveDeprecatedPiAgentAuthPath(env);
-    if (!fs.existsSync(authPath)) {
-      return undefined;
-    }
-    const parsed = JSON.parse(fs.readFileSync(authPath, "utf-8")) as Record<
-      string,
-      { access?: unknown }
-    >;
-    for (const providerId of providerIds) {
-      const token = parsed[providerId]?.access;
-      if (typeof token === "string" && token.trim()) {
-        return token;
-      }
-    }
-  } catch {}
-  return undefined;
-}
-
 function resolveGlm5ForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
   return resolveFamilyForwardCompatModel({
     providerId: PROVIDER_ID,
@@ -155,12 +125,7 @@ async function promptForZaiEndpoint(ctx: ProviderAuthContext): Promise<ZaiEndpoi
 async function runZaiApiKeyAuth(
   ctx: ProviderAuthContext,
   endpoint?: ZaiEndpointId,
-): Promise<{
-  profiles: Array<{ profileId: string; credential: ReturnType<typeof buildApiKeyCredential> }>;
-  configPatch: ReturnType<typeof applyZaiProviderConnectionConfig>;
-  defaultModel: string;
-  notes?: string[];
-}> {
+): Promise<ProviderAuthResult> {
   const { apiKey, input, mode } = await captureProviderApiKey(ctx, {
     token:
       normalizeOptionalSecretInput(ctx.opts?.zaiApiKey) ??
@@ -240,28 +205,27 @@ async function runZaiApiKeyAuthNonInteractive(
   });
 }
 
-function buildZaiApiKeyMethod(params: {
-  id: string;
-  choiceId: string;
-  choiceLabel: string;
-  choiceHint?: string;
-  endpoint?: ZaiEndpointId;
-}): ProviderAuthMethod {
+function buildZaiApiKeyMethod(
+  choice: (typeof manifest.providerAuthChoices)[number],
+): ProviderAuthMethod {
+  const endpoint = (["global", "cn", "coding-global", "coding-cn"] as const).find(
+    (id) => id === choice.method,
+  );
   return {
-    id: params.id,
-    label: params.choiceLabel,
-    hint: params.choiceHint,
+    id: choice.method,
+    label: choice.choiceLabel,
+    hint: choice.choiceHint,
     kind: "api_key",
     wizard: {
-      choiceId: params.choiceId,
-      choiceLabel: params.choiceLabel,
-      ...(params.choiceHint ? { choiceHint: params.choiceHint } : {}),
-      groupId: "zai",
-      groupLabel: "Z.AI",
-      groupHint: "GLM Coding Plan / Global / CN",
+      choiceId: choice.choiceId,
+      choiceLabel: choice.choiceLabel,
+      ...(choice.choiceHint ? { choiceHint: choice.choiceHint } : {}),
+      groupId: choice.groupId,
+      groupLabel: choice.groupLabel,
+      groupHint: choice.groupHint,
     },
-    run: async (ctx) => await runZaiApiKeyAuth(ctx, params.endpoint),
-    runNonInteractive: async (ctx) => await runZaiApiKeyAuthNonInteractive(ctx, params.endpoint),
+    run: async (ctx) => await runZaiApiKeyAuth(ctx, endpoint),
+    runNonInteractive: async (ctx) => await runZaiApiKeyAuthNonInteractive(ctx, endpoint),
   };
 }
 
@@ -276,41 +240,7 @@ export default defineSingleProviderPluginEntry({
     docsPath: "/providers/models",
     envVars: ["ZAI_API_KEY", "Z_AI_API_KEY"],
     auth: [],
-    extraAuth: [
-      buildZaiApiKeyMethod({
-        id: "api-key",
-        choiceId: "zai-api-key",
-        choiceLabel: "Z.AI API key",
-      }),
-      buildZaiApiKeyMethod({
-        id: "coding-global",
-        choiceId: "zai-coding-global",
-        choiceLabel: "Coding-Plan-Global",
-        choiceHint: "GLM Coding Plan Global (api.z.ai)",
-        endpoint: "coding-global",
-      }),
-      buildZaiApiKeyMethod({
-        id: "coding-cn",
-        choiceId: "zai-coding-cn",
-        choiceLabel: "Coding-Plan-CN",
-        choiceHint: "GLM Coding Plan CN (open.bigmodel.cn)",
-        endpoint: "coding-cn",
-      }),
-      buildZaiApiKeyMethod({
-        id: "global",
-        choiceId: "zai-global",
-        choiceLabel: "Global",
-        choiceHint: "Z.AI Global (api.z.ai)",
-        endpoint: "global",
-      }),
-      buildZaiApiKeyMethod({
-        id: "cn",
-        choiceId: "zai-cn",
-        choiceLabel: "CN",
-        choiceHint: "Z.AI CN (open.bigmodel.cn)",
-        endpoint: "cn",
-      }),
-    ],
+    extraAuth: manifest.providerAuthChoices.map(buildZaiApiKeyMethod),
     catalog: { allowExplicitBaseUrl: true, liveModelDiscovery: true, discoveryMode: "strict" },
     resolveDynamicModel: resolveGlm5ForwardCompatModel,
     matchesContextOverflowError: ({ errorMessage }) =>
@@ -333,16 +263,13 @@ export default defineSingleProviderPluginEntry({
         providerIds: [PROVIDER_ID, "z-ai"],
         envDirect: [ctx.env.ZAI_API_KEY, ctx.env.Z_AI_API_KEY],
       });
-      if (apiKey) {
-        return { token: apiKey };
-      }
-      const legacyToken = resolveDeprecatedPiAgentAccessToken(ctx.env, ["z-ai", PROVIDER_ID]);
-      return legacyToken ? { token: legacyToken } : null;
+      return apiKey ? { token: apiKey } : null;
     },
     fetchUsageSnapshot: async (ctx) => await fetchZaiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
     isCacheTtlEligible: () => true,
   },
   register(api) {
     api.registerMediaUnderstandingProvider(zaiMediaUnderstandingProvider);
+    api.registerVideoGenerationProvider(buildZaiVideoGenerationProvider());
   },
 });

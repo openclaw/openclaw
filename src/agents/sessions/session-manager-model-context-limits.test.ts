@@ -10,6 +10,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { transcriptEventJsonSql } from "../../config/sessions/transcript-payload.js";
 import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
@@ -73,39 +74,66 @@ function appendResult(source: SessionManager, id: string, text = `result ${id}`)
   });
 }
 
-it.each(["sync", "async"])("returns empty context within a one-byte budget (%s)", async (mode) => {
-  await withHistory(`context-empty-limit-${mode}`, async ({ scope, source, verifyRead }) => {
+it("returns empty context within a one-byte budget", async () => {
+  await withHistory("context-empty-limit", async ({ scope, source, verifyRead }) => {
     const full = source.buildSessionContext();
     await verifyRead(async () => {
       const options = { limits: { maxBytes: 1, maxEvents: 1 } };
-      const selected =
-        mode === "async"
-          ? await SessionManager.openModelContextAsync(scope, options)
-          : SessionManager.openModelContext(scope, options);
+      const selected = await SessionManager.openModelContextAsync(scope, options);
       expect(selected.buildSessionContext()).toEqual(full);
       expect(selected.buildSessionContext().messages).toEqual([]);
     });
   });
 });
 
-it.each(["sync", "async"])("bounds the prepared message tail by event count (%s)", async (mode) => {
-  await withHistory(`context-event-limit-${mode}`, async ({ scope, source, verifyRead }) => {
-    for (let index = 0; index < 8; index++) {
-      source.appendMessage(makeUserMessage(`message ${index}`, index));
-    }
-    const full = source.buildSessionContext();
-    await verifyRead(async () => {
-      const options = { limits: { maxBytes: 16_384, maxEvents: 3 } };
-      const selected =
-        mode === "async"
-          ? await SessionManager.openModelContextAsync(scope, options)
-          : SessionManager.openModelContext(scope, options);
-      expect(selected.buildSessionContext()).toEqual({
-        ...full,
-        messages: full.messages.slice(-3),
+it("retires prior-series operators through bounded and detached transcript reads", async () => {
+  await withHistory("context-system-prompt-series", async ({ scope, source, verifyRead }) => {
+    source.appendMessage(makeUserMessage("Keep this question", 1));
+    const appendOperator = (content: string, kind: "prompt-update" | "runtime-context") =>
+      source.appendCustomMessageEntry("openclaw.system-update", content, false, {
+        kind,
+        turnScoped: kind === "runtime-context",
       });
-      expect(selected.isPersisted()).toBe(false);
-      expect(SessionManager.openModelContext(scope).buildSessionContext()).toEqual(full);
+    appendOperator("Retired instructions", "prompt-update");
+    appendOperator("Retained turn facts", "runtime-context");
+    const series = {
+      prefix: "Pinned stable instructions. ".repeat(100),
+      hash: "retained-prefix-hash",
+      renderedPrefix: "Effective stable instructions. ".repeat(100),
+      routeKey: "synthetic-provider/model/api-key",
+      historyId: null,
+    };
+    source.appendCustomEntry("openclaw.system-prompt", { ...series, restart: true });
+    appendOperator("Current instructions", "prompt-update");
+    appendOperator("Current facts", "runtime-context");
+    const checkpoint = { ...series, restart: false };
+    source.appendCustomEntry("openclaw.system-prompt", checkpoint);
+    const expected = source.buildSessionContext();
+    expect(expected.messages).toMatchObject([
+      { role: "user", content: "Keep this question" },
+      { role: "custom", content: "Retained turn facts" },
+      { role: "custom", content: "Current instructions" },
+      { role: "custom", content: "Current facts" },
+    ]);
+    await verifyRead(async () => {
+      const limits = { maxBytes: 16_384, maxEvents: 16 };
+      for (const restored of [
+        SessionManager.openBounded(scope, limits),
+        await SessionManager.openBoundedAsync(scope, limits),
+      ]) {
+        expect(restored.buildSessionContext()).toEqual(expected);
+        expect(
+          restored
+            .getBranch()
+            .findLast(
+              (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
+            ),
+        ).toMatchObject({ data: checkpoint });
+      }
+      expect(SessionManager.openModelContext(scope).buildSessionContext()).toEqual(expected);
+      expect(
+        (await SessionManager.openModelContextAsync(scope, { limits })).buildSessionContext(),
+      ).toEqual(expected);
     });
   });
 });
@@ -157,11 +185,20 @@ it.each([false, true])(
 it("applies the aggregate byte budget before hydrating omitted message bodies", async () => {
   await withHistory("context-byte-limit", async ({ scope, source, verifyRead }) => {
     for (let index = 0; index < 8; index++) {
-      source.appendMessage(makeUserMessage(`body-payload-${index}:` + "x".repeat(1024), index));
+      source.appendMessage(makeUserMessage(`body-payload-${index}:` + "x".repeat(4096), index));
     }
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
+    expect(
+      database.db
+        .prepare(
+          "SELECT count(*) AS count FROM transcript_events WHERE session_id = ? AND event_zstd IS NOT NULL",
+        )
+        .get(scope.sessionId),
+    ).toEqual({ count: 8 });
     const full = source.buildSessionContext().messages;
     await verifyRead(() => {
       const hydrated = new Set<string>();
+      const decompress = vi.spyOn(resolveZstdCodec()!, "decompress");
       const parse = JSON.parse;
       const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
         for (const match of text.matchAll(/body-payload-\d+:/gu)) {
@@ -172,15 +209,17 @@ it("applies the aggregate byte budget before hydrating omitted message bodies", 
       let messages: typeof full;
       try {
         messages = SessionManager.openModelContext(scope, {
-          limits: { maxBytes: 4096, maxEvents: 20 },
+          limits: { maxBytes: 16_384, maxEvents: 20 },
         }).buildSessionContext().messages;
+        expect(decompress).toHaveBeenCalledTimes(messages.length);
       } finally {
         spy.mockRestore();
+        decompress.mockRestore();
       }
       expect(messages.length).toBeGreaterThan(0);
       expect(messages.length).toBeLessThan(full.length);
       expect(messages).toEqual(full.slice(-messages.length));
-      expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThanOrEqual(4096);
+      expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThanOrEqual(16_384);
       expect(hydrated).toEqual(
         new Set(
           messages.flatMap((message) => {
@@ -295,60 +334,48 @@ it("budgets projected context without hydrating large private evidence", async (
   });
 });
 
-it.each([
-  { boundaryKind: "compaction", keepMarker: "canonical" },
-  { boundaryKind: "compaction", keepMarker: "opaque" },
-  { boundaryKind: "reset", keepMarker: "canonical" },
-  { boundaryKind: "reset", keepMarker: "opaque" },
-])(
-  "preserves the $boundaryKind boundary and selected retained ancestry with a $keepMarker keep marker",
-  async ({ boundaryKind, keepMarker }) => {
-    await withHistory(
-      `context-retained-${boundaryKind}-${keepMarker}`,
-      async ({ scope, source, verifyRead }) => {
-        source.appendMessage(makeUserMessage("obsolete", 0));
-        const firstKept = source.appendMessage(makeUserMessage("older retained request", 1));
-        source.appendMessage(makeUserMessage("newer retained request", 2));
-        const callId = appendCall(source, "retained");
-        const resultId = appendResult(source, "retained");
-        let keepEntryId = firstKept;
-        if (keepMarker === "opaque") {
-          await appendTranscriptEvent(scope, {
-            type: "opaque-synthetic",
-            id: "opaque-keep",
-            parentId: firstKept,
-          });
-          source.reloadPersistedTranscript();
-          keepEntryId = "opaque-keep";
-        }
-        const boundaryId =
-          boundaryKind === "compaction"
-            ? source.appendCompaction("preserve this complete summary", keepEntryId, 100)
-            : source.appendResetBoundary("new", keepEntryId);
-        const currentId = source.appendMessage(makeUserMessage("current history", 3));
-        const full = source.buildSessionContext().messages;
-        const expected =
-          boundaryKind === "compaction" ? [full[0], ...full.slice(-3)] : full.slice(-3);
-        await verifyRead(() => {
-          const selected = SessionManager.openModelContext(scope, {
-            limits: { maxBytes: 16_384, maxEvents: 4 },
-          });
-          expect(selected.buildSessionContext().messages).toEqual(expected);
-          const branch = selected.getBranch();
-          expect(
-            branch
-              .filter((entry) => entry.type === "message" || entry.type === boundaryKind)
-              .map((entry) => entry.id),
-          ).toEqual([callId, resultId, boundaryId, currentId]);
-          expect(branch.find((entry) => entry.id === boundaryId)).toMatchObject({
-            firstKeptEntryId: callId,
-          });
-          for (const [index, entry] of branch.entries()) {
-            expect(entry.parentId).toBe(index === 0 ? null : branch[index - 1]!.id);
-          }
+it.each(["compaction", "reset"])(
+  "preserves the %s boundary and selected retained ancestry with an opaque keep marker",
+  async (boundaryKind) => {
+    await withHistory(`context-retained-${boundaryKind}`, async ({ scope, source, verifyRead }) => {
+      source.appendMessage(makeUserMessage("obsolete", 0));
+      const firstKept = source.appendMessage(makeUserMessage("older retained request", 1));
+      source.appendMessage(makeUserMessage("newer retained request", 2));
+      const callId = appendCall(source, "retained");
+      const resultId = appendResult(source, "retained");
+      await appendTranscriptEvent(scope, {
+        type: "opaque-synthetic",
+        id: "opaque-keep",
+        parentId: firstKept,
+      });
+      source.reloadPersistedTranscript();
+      const boundaryId =
+        boundaryKind === "compaction"
+          ? source.appendCompaction("preserve this complete summary", "opaque-keep", 100)
+          : source.appendResetBoundary("new", "opaque-keep");
+      const currentId = source.appendMessage(makeUserMessage("current history", 3));
+      const full = source.buildSessionContext().messages;
+      const expected =
+        boundaryKind === "compaction" ? [full[0], ...full.slice(-3)] : full.slice(-3);
+      await verifyRead(() => {
+        const selected = SessionManager.openModelContext(scope, {
+          limits: { maxBytes: 16_384, maxEvents: 4 },
         });
-      },
-    );
+        expect(selected.buildSessionContext().messages).toEqual(expected);
+        const branch = selected.getBranch();
+        expect(
+          branch
+            .filter((entry) => entry.type === "message" || entry.type === boundaryKind)
+            .map((entry) => entry.id),
+        ).toEqual([callId, resultId, boundaryId, currentId]);
+        expect(branch.find((entry) => entry.id === boundaryId)).toMatchObject({
+          firstKeptEntryId: callId,
+        });
+        for (const [index, entry] of branch.entries()) {
+          expect(entry.parentId).toBe(index === 0 ? null : branch[index - 1]!.id);
+        }
+      });
+    });
   },
 );
 
@@ -567,7 +594,7 @@ it.each(["sync", "async"])(
       await verifyRead(async () => {
         const limits = { maxBytes: 4096, maxEvents: 8 };
         expect(() => SessionManager.openModelContext(scope, { limits })).toThrow(
-          /without splitting a tool frame/u,
+          "The latest messages exceed this session's context limit. Start a new session with a brief summary to continue.",
         );
         const options = { limits: { ...limits, toolResultOverflow: "omit" as const } };
         let oversizedPayloadReads = 0;
@@ -579,13 +606,19 @@ it.each(["sync", "async"])(
           return parse(text, reviver);
         });
         let selected: SessionManager;
+        const decompress = vi.spyOn(resolveZstdCodec()!, "decompress");
         try {
           selected =
             mode === "async"
               ? await SessionManager.openModelContextAsync(scope, options)
               : SessionManager.openModelContext(scope, options);
+          if (mode === "sync") {
+            // One decode to size the omission, then one to hydrate the selected result.
+            expect(decompress).toHaveBeenCalledTimes(2);
+          }
         } finally {
           spy.mockRestore();
+          decompress.mockRestore();
         }
         const messages = selected.buildSessionContext().messages;
         expect(messages.map((message) => message.role)).toEqual([

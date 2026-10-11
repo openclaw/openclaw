@@ -236,7 +236,10 @@ function reconcilePendingInputPage(
   const { page: displayPage, acceptedRunIds } = reconcileChatInputCustody(state, page, receipts);
   const settled = new Set([
     ...(receipts ?? [])
-      .filter((receipt) => receipt.state === "consumed")
+      .filter(
+        (receipt) =>
+          receipt.state === "consumed" || (receipt.state === "pending" && receipt.cancelled),
+      )
       .map((receipt) => receipt.runId),
     ...displayPage.items.filter((input) => input.state === "cancelled").map((input) => input.runId),
   ]);
@@ -367,6 +370,7 @@ async function requestPendingInputPage(
         inputReceipts?: ChatInputReceipts;
       }>("chat.history", {
         sessionKey: view.sessionKey,
+        toolResultMaxChars: 2_000,
         agentId: view.agentId,
         limit: 20,
         ...(inputRunIds.length ? { inputRunIds } : {}),

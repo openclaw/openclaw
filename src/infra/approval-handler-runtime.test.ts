@@ -1,6 +1,7 @@
 // Covers approval handler runtime adapter creation and lazy wiring.
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { createLazyChannelApprovalNativeRuntimeAdapterAsync } from "./approval-handler-adapter-runtime.js";
 import type { ChannelApprovalNativeRuntimeAdapter } from "./approval-handler-runtime-types.js";
 import {
   createChannelApprovalNativeRuntimeAdapter,
@@ -103,6 +104,35 @@ function firstCallArg(mock: ReturnType<typeof vi.fn>): unknown {
 }
 
 describe("createChannelApprovalHandlerFromCapability", () => {
+  it("awaits async native eligibility before loading delivery hooks", async () => {
+    const deliverPending = vi.fn().mockResolvedValue({ messageId: "async-card" });
+    const capability = makeNativeApprovalCapability({ deliverPending });
+    const nativeRuntime = capability.nativeRuntime;
+    if (!nativeRuntime) {
+      throw new Error("Expected fixture native runtime");
+    }
+    const load = vi.fn(async () => nativeRuntime);
+    const eligibility = createDeferred<boolean>();
+    const nativeRuntimeAsync = createLazyChannelApprovalNativeRuntimeAdapterAsync({
+      load,
+      isConfigured: async () => true,
+      shouldHandle: () => eligibility.promise,
+    });
+    const runtime = await createChannelApprovalHandlerFromCapability({
+      capability: { native: capability.native, nativeRuntimeAsync },
+      ...TEST_HANDLER_PARAMS,
+    });
+    if (!runtime) {
+      throw new Error("Expected async approval handler");
+    }
+    const requested = runtime.handleRequested(makeExecApprovalRequest("async-declined"));
+    eligibility.resolve(false);
+    await requested;
+    expect(load).not.toHaveBeenCalled();
+    expect(deliverPending).not.toHaveBeenCalled();
+    await runtime.stop();
+  });
+
   it("returns null when the capability does not expose a native runtime", async () => {
     await expect(
       createChannelApprovalHandlerFromCapability({
@@ -110,6 +140,28 @@ describe("createChannelApprovalHandlerFromCapability", () => {
         ...TEST_HANDLER_PARAMS,
       }),
     ).resolves.toBeNull();
+  });
+
+  it("keeps an older channel runtime from sending cards under scoped plugin reviewer policy", async () => {
+    const deliverPending = vi.fn().mockResolvedValue({ messageId: "1" });
+    const runtime = await createChannelApprovalHandlerFromCapability({
+      capability: makeNativeApprovalCapability({ eventKinds: ["plugin"], deliverPending }),
+      ...TEST_HANDLER_PARAMS,
+      channel: "slack",
+      cfg: {
+        approvals: { plugin: { slack: { approvers: ["team:T11111111:user:U11111111"] } } },
+      },
+    });
+    const request: PluginApprovalRequest = {
+      id: "plugin:older-channel",
+      createdAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+      request: { title: "Review", description: "Allow access", turnSourceChannel: "slack" },
+    };
+
+    await runtime?.handleRequested(request);
+    expect(deliverPending).not.toHaveBeenCalled();
+    await runtime?.stop();
   });
 
   it("derives kind once before stop-time cleanup unbinds", async () => {
@@ -148,18 +200,32 @@ describe("createChannelApprovalHandlerFromCapability", () => {
     expect(stopUnbind?.approvalKind).toBe("plugin");
   });
 
-  it("normalizes and cleans up system-agent entries through the shared lifecycle", async () => {
+  it("normalizes and cleans up system-agent entries through a lazy native runtime", async () => {
     const shouldHandle = vi.fn().mockReturnValue(true);
     const unbindPending = vi.fn();
     const onFinalized = vi.fn();
     const buildResolvedResult = vi.fn().mockResolvedValue({ kind: "leave" });
-    const approvalRuntime = await createTestApprovalHandler({
+    const nativeRuntime = createApprovalNativeRuntimeAdapterStubs({
       eventKinds: ["system-agent"],
       shouldHandle,
       buildResolvedResult,
       unbindPending,
       onFinalized,
     });
+    const approvalRuntime = await createChannelApprovalHandlerFromCapability({
+      ...TEST_HANDLER_PARAMS,
+      capability: {
+        ...makeNativeApprovalCapability(),
+        nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
+          eventKinds: nativeRuntime.eventKinds,
+          ...nativeRuntime.availability,
+          load: async () => nativeRuntime,
+        }),
+      },
+    });
+    if (!approvalRuntime) {
+      throw new Error("Expected approval handler runtime");
+    }
     const request = {
       id: "system-agent:1",
       request: {

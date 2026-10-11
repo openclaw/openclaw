@@ -3,10 +3,11 @@
   "private": true,
   "version": "1.0.0",
   "dependencies": {
-    "sandbox": "4.4.0",
-    "vercel": "59.20.0"
+    "sandbox": "4.6.0",
+    "vercel": "62.2.0"
   },
   "overrides": {
+    "@bytecodealliance/preview2-shim@0.17.6": "0.27.1",
     "@tootallnate/once@2.0.0": "2.0.1",
     "ajv@8.6.3": "8.20.0",
     "fast-uri@3.1.6": "3.1.7",
@@ -16,6 +17,6 @@
     "path-to-regexp@8.2.0 || 8.3.0": "8.4.2",
     "smol-toml@1.5.2": "1.8.0",
     "tar@7.5.7 || 7.5.11": "7.5.22",
-    "undici@5.28.4 || 5.29.0": "6.28.0"
+    "undici@5.28.4 || 5.29.0": "6.28.1"
   }
 }

@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { repoInstallSpec } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loggingState } from "../../logging/state.js";
+import { captureEnv } from "../../test-utils/env.js";
 import { isConfigSetJsonParseOnly } from "../config-output-mode.js";
 import { setCommandJsonMode } from "./json-mode.js";
 import {
@@ -77,8 +78,7 @@ let originalProcessArgv: string[];
 let originalProcessTitle: string;
 let originalProcessTitleDescriptor: PropertyDescriptor | undefined;
 let observedProcessTitle: string;
-let originalNodeNoWarnings: string | undefined;
-let originalHideBanner: string | undefined;
+let originalEnv: ReturnType<typeof captureEnv>;
 let originalForceStderr: boolean;
 let originalEarlyConsoleRoutingRestore: boolean | null;
 let observedMachineOutputStdoutIsTTY: boolean | undefined;
@@ -93,8 +93,7 @@ beforeEach(() => {
   originalProcessTitle = process.title;
   originalProcessTitleDescriptor = Object.getOwnPropertyDescriptor(process, "title");
   observedProcessTitle = originalProcessTitle;
-  originalNodeNoWarnings = process.env.NODE_NO_WARNINGS;
-  originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
+  originalEnv = captureEnv(["NODE_NO_WARNINGS", "OPENCLAW_HIDE_BANNER"]);
   originalForceStderr = loggingState.forceConsoleToStderr;
   originalEarlyConsoleRoutingRestore = loggingState.earlyConsoleRoutingRestore;
   observedMachineOutputStdoutIsTTY = undefined;
@@ -128,16 +127,7 @@ afterEach(() => {
   }
   loggingState.forceConsoleToStderr = originalForceStderr;
   loggingState.earlyConsoleRoutingRestore = originalEarlyConsoleRoutingRestore;
-  if (originalNodeNoWarnings === undefined) {
-    delete process.env.NODE_NO_WARNINGS;
-  } else {
-    process.env.NODE_NO_WARNINGS = originalNodeNoWarnings;
-  }
-  if (originalHideBanner === undefined) {
-    delete process.env.OPENCLAW_HIDE_BANNER;
-  } else {
-    process.env.OPENCLAW_HIDE_BANNER = originalHideBanner;
-  }
+  originalEnv.restore();
 });
 
 describe("registerPreActionHooks", () => {
@@ -592,11 +582,9 @@ describe("registerPreActionHooks", () => {
       parseArgv: ["config", "set", "gateway.auth.mode", "{bad", "--json"],
     });
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime: runtimeMock,
-      measure: expect.any(Function),
-      commandPath: ["config", "set"],
-    });
+    expect(routeLogsToStderrMock).not.toHaveBeenCalled();
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("does not select JSON output when Commander consumed --json as an option value", async () => {
@@ -748,20 +736,51 @@ describe("registerPreActionHooks", () => {
     });
   });
 
-  it("uses the Commander path past parent option values for gateway calls", async () => {
+  describe.each(["infer", "capability"])("%s model run startup", (command) => {
+    it.each([
+      { args: ["--prompt", "hello", "--gateway"], validationOnly: true },
+      { args: ["--prompt", "--local", "--gateway"], validationOnly: true },
+      { args: ["--gateway", "--prompt", "--local"], validationOnly: true },
+      { args: ["--prompt=--local", "--gateway"], validationOnly: true },
+      { args: ["--prompt", "hello"], validationOnly: false },
+      { args: ["--prompt", "hello", "--local"], validationOnly: false },
+      { args: ["--prompt", "--gateway"], validationOnly: false },
+      { args: ["--prompt", "--gateway", "--local"], validationOnly: false },
+    ])("uses parsed transport for $args", async ({ args, validationOnly }) => {
+      const parseProgram = new Command().name("openclaw").enablePositionalOptions();
+      const action = vi.fn();
+      parseProgram
+        .command(command)
+        .command("model")
+        .command("run")
+        .requiredOption("--prompt <text>")
+        .option("--local", "Force local execution", false)
+        .option("--gateway", "Force Gateway execution", false)
+        .action(action);
+      registerPreActionHooks(parseProgram, "9.9.9-test");
+      process.argv = ["node", "openclaw", command, "model", "run", ...args];
+
+      await parseProgram.parseAsync(process.argv);
+
+      expect(action).toHaveBeenCalledOnce();
+      expect(ensureConfigReadyMock).toHaveBeenCalledOnce();
+      const bootstrap = ensureConfigReadyMock.mock.calls[0]?.[0];
+      if (validationOnly) {
+        expect(bootstrap).toHaveProperty("validateConfigOnly", true);
+      } else {
+        expect(bootstrap).not.toHaveProperty("validateConfigOnly");
+      }
+    });
+  });
+
+  it("leaves gateway call config loading to the transport past parent option values", async () => {
     const parseProgram = buildProgram();
     process.argv = ["node", "openclaw", "gateway", "--token", "secret", "call", "health", "--json"];
 
     await parseProgram.parseAsync(process.argv);
 
-    const bootstrap = ensureConfigReadyMock.mock.calls.at(-1)?.[0];
-    expect(bootstrap).toEqual({
-      runtime: runtimeMock,
-      measure: expect.any(Function),
-      commandPath: ["gateway", "call"],
-      suppressDoctorStdout: true,
-      validateConfigOnly: true,
-    });
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("uses the shared skip policy for gateway health on the Commander path", async () => {
@@ -855,16 +874,13 @@ describe("registerPreActionHooks", () => {
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
-  it("keeps config guard for config unset mutations", async () => {
+  it("defers config unset preparation to its command owner", async () => {
     await runPreAction({
       parseArgv: ["config", "unset", "gateway.port"],
     });
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime: runtimeMock,
-      measure: expect.any(Function),
-      commandPath: ["config", "unset"],
-    });
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("bypasses config guard for backup create", async () => {

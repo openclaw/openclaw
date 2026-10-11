@@ -5,25 +5,20 @@ import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { nativeGatewaysCapability } from "../app/native-gateways.runtime.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
-import {
-  formatKeyboardShortcutCombo,
-  KEYBOARD_SHORTCUT_COMBOS,
-} from "../lib/keyboard-shortcut-catalog.ts";
-import { openExternalUrlSafe } from "../lib/open-external-url.ts";
+import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import type { PresenceViewer } from "../lib/presence-users.ts";
-import {
-  DEBUG_OVERLAY_SHORTCUT_LABEL,
-  requestDebugOverlayToggle,
-} from "../pages/debug/debug-overlay-contract.ts";
+import { requestDebugOverlayToggle } from "../pages/debug/debug-overlay-contract.ts";
 import {
   closeMenuAfterOwnDropdownHide,
   COMMAND_VALUE_PREFIX,
-  LINK_VALUE_PREFIX,
+  consumeSidebarMenuSelection,
   moveSidebarMenuFocus,
   renderSidebarHelpMenu,
 } from "./app-sidebar-agent-menu.ts";
-import { renderSidebarMenuAction, renderSidebarMenuTrigger } from "./app-sidebar-nav-menus.ts";
+import { renderSidebarMenuAction } from "./app-sidebar-nav-menus.ts";
 import { icons } from "./icons.ts";
+import { renderKbd, renderKeyboardShortcut } from "./kbd.ts";
+import { renderMenuTrigger } from "./menu-surface.ts";
 import "./sidebar-build-chip.ts";
 import "./viewer-facepile.ts";
 import { syncDropdownItemRadio, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
@@ -94,7 +89,10 @@ function renderIdentityGateways(onClose: SidebarIdentityMenuParams["onClose"]) {
           }
           ${
             !selected && index < 9
-              ? html`<kbd class="session-menu__shortcut" aria-hidden="true">⌘${index + 1}</kbd>`
+              ? renderKbd(["⌘", String(index + 1)], {
+                  className: "session-menu__shortcut",
+                  ariaHidden: true,
+                })
               : nothing
           }
           ${
@@ -141,28 +139,16 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
       .distance=${0}
       aria-label=${t("profilePage.identity.menuLabel")}
       @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
-        event.preventDefault();
-        const item = event.detail.item;
-        if (item.dataset.nativeNavigation) {
-          delete item.dataset.nativeNavigation;
-          params.onClose(false);
-          return;
-        }
-        const value = item.value;
+        const value = consumeSidebarMenuSelection(event, params.onClose);
         if (!value) {
           return;
         }
-        params.onClose(false);
         const capability = nativeGatewaysCapability();
         if (value.startsWith("gateway:")) {
           const id = decodeURIComponent(value.slice("gateway:".length));
           if (id !== capability?.snapshot?.currentId) {
             capability?.select(id);
           }
-          return;
-        }
-        if (value.startsWith(LINK_VALUE_PREFIX)) {
-          openExternalUrlSafe(decodeURIComponent(value.slice(LINK_VALUE_PREFIX.length)));
           return;
         }
         switch (value) {
@@ -208,7 +194,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
       }}
       @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
     >
-      ${renderSidebarMenuTrigger(
+      ${renderMenuTrigger(
         { x: position.x, y: position.bottom },
         t("profilePage.identity.menuLabel"),
         "bottom",
@@ -234,9 +220,11 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
       <div class="sidebar-customize-menu__separator" role="separator"></div>
       ${renderIdentityGateways(params.onClose)}
       ${renderSidebarMenuAction("command:settings", t("nav.settings"), "settings", {
-        details: html`<kbd slot="details" class="session-menu__shortcut" aria-hidden="true"
-          >${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.appearanceSettings)}</kbd
-        >`,
+        details: renderKeyboardShortcut(KEYBOARD_SHORTCUT_COMBOS.appearanceSettings, {
+          slot: "details",
+          className: "session-menu__shortcut",
+          ariaHidden: true,
+        }),
       })}
       ${renderSidebarMenuAction("command:usage", titleForRoute("usage"), "coins")}
       <div class="sidebar-customize-menu__separator" role="separator"></div>
@@ -247,10 +235,13 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
       })}
       ${renderSidebarMenuAction("command:apps", t("agentChip.getApps"), "layoutGrid")}
       ${renderSidebarMenuAction("command:debug-overlay", t("debug.overlay.title"), "activity", {
-        details: html`<span slot="details" class="session-menu__shortcut" aria-hidden="true"
-          >${DEBUG_OVERLAY_SHORTCUT_LABEL}</span
-        >`,
+        details: renderKeyboardShortcut(KEYBOARD_SHORTCUT_COMBOS.debugOverlay, {
+          slot: "details",
+          className: "session-menu__shortcut",
+          ariaHidden: true,
+        }),
       })}
+
       <div class="sidebar-customize-menu__separator" role="separator"></div>
       ${renderSidebarHelpMenu()}
       ${

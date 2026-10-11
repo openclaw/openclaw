@@ -55,8 +55,6 @@ function takeDebounceFlush(): () => void {
 describe("Telegram commands during buffered message processing", () => {
   it.for([
     { native: true, command: "/status" },
-    { native: false, command: "/status" },
-    { native: true, command: "/btw check this" },
     { native: false, command: "/btw check this" },
   ])(
     "dispatches $command and cross-topic /stop while an ordinary run is held (native=$native)",

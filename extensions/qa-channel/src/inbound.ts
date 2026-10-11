@@ -1,9 +1,8 @@
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import {
   buildChannelInboundEventContext,
-  createChannelInboundEnvelopeBuilder,
+  createChannelInboundEnvelopeBuilderAsync,
   formatInboundMediaUnavailableText,
-  resolveChannelInboundRouteEnvelope,
   toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
@@ -14,7 +13,7 @@ import {
   sanitizeQaBusToolCallArguments,
   type QaBusToolCall,
 } from "openclaw/plugin-sdk/qa-channel-protocol";
-import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import { resolveAgentRoute, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import {
   buildQaTarget,
@@ -23,7 +22,7 @@ import {
   sendQaBusMessage,
   type QaBusMessage,
 } from "./bus-client.js";
-import { sendQaChannelMediaBatch, sendQaChannelText } from "./outbound.js";
+import { collectQaMediaUrls, sendQaChannelMediaBatch, sendQaChannelText } from "./outbound.js";
 import { getQaChannelRuntime } from "./runtime.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
 
@@ -314,7 +313,7 @@ export async function handleQaInbound(params: {
     conversationId: inbound.conversation.id,
   });
   const toolCalls: QaBusToolCall[] = [];
-  const { route } = resolveChannelInboundRouteEnvelope({
+  const route = resolveAgentRoute({
     cfg: params.config,
     channel: params.channelId,
     accountId: params.account.accountId,
@@ -337,7 +336,7 @@ export async function handleQaInbound(params: {
     threadId: inbound.threadId,
     parentSessionKey: isGroup ? route.sessionKey : undefined,
   });
-  const buildEnvelope = createChannelInboundEnvelopeBuilder({
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({
     cfg: params.config,
     route: { agentId: route.agentId, sessionKey: threadKeys.sessionKey },
   });
@@ -490,14 +489,7 @@ export async function handleQaInbound(params: {
     delivery: {
       deliver: async (payload, info) => {
         const text = payload.text ?? "";
-        const mediaUrls = Array.from(
-          new Set(
-            [payload.mediaUrl, ...(payload.mediaUrls ?? [])].filter(
-              (mediaUrl): mediaUrl is string =>
-                typeof mediaUrl === "string" && mediaUrl.trim().length > 0,
-            ),
-          ),
-        );
+        const mediaUrls = collectQaMediaUrls(payload.mediaUrl, ...(payload.mediaUrls ?? []));
         if (!text.trim() && mediaUrls.length === 0) {
           return;
         }

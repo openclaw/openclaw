@@ -18,6 +18,47 @@ import {
 const requireRecord = createRequireRecord("object", "expected-label");
 
 describe("session roster refresh", () => {
+  it.each(["primary", "managed"] as const)(
+    "keeps the %s startup retry alive past three minutes and cancels it on disposal",
+    async (owner) => {
+      vi.useFakeTimers();
+      const pending = new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Agent is preparing its database",
+        retryable: true,
+        retryAfterMs: 7_000,
+        details: { code: "agent-database-inspection-pending", agentId: "main" },
+      });
+      const request = vi.fn().mockRejectedValue(pending);
+      const { sessions } = createSessionCapabilityHarness(request);
+      const query = {
+        agentId: "main",
+        ...(owner === "managed" ? { archivedFilter: "all" as const } : {}),
+      };
+      const stop = sessions.subscribeList(query, () => {});
+      try {
+        await sessions.refreshList({ ...query, force: true });
+        expect(sessions.listSnapshot(query)).toMatchObject({ startupPending: true, error: null });
+        await vi.advanceTimersByTimeAsync(6_999);
+        expect(request).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(request).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersByTimeAsync(180_000);
+        const reads = request.mock.calls.length;
+        expect(reads).toBeGreaterThan(20);
+        expect(sessions.listSnapshot(query)).toMatchObject({ startupPending: true, error: null });
+        stop();
+        sessions.dispose();
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(request).toHaveBeenCalledTimes(reads);
+      } finally {
+        stop();
+        sessions.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each([
     { recover: false, explicit: false },
     { recover: true, explicit: false },
@@ -431,7 +472,7 @@ describe("session roster refresh", () => {
         expect(researchSettled).toHaveBeenCalledOnce();
         expect(weakSettled).toHaveBeenCalledOnce();
         expect(sessions.state.agentId).toBe("research");
-        expect(sessions.state.result).toBe(researchResult);
+        expect(sessions.state.result).toStrictEqual(researchResult);
         expect(sessions.state.error).toBeNull();
       } finally {
         workList.resolve(workResult);
@@ -517,7 +558,7 @@ describe("session roster refresh", () => {
         researchList.resolve(researchResult);
         await Promise.all([active, weak, research]);
         expect(sessions.state.agentId).toBe("research");
-        expect(sessions.state.result).toBe(researchResult);
+        expect(sessions.state.result).toStrictEqual(researchResult);
       } finally {
         activeList.resolve(sessionsResult([], 1));
         researchList.resolve(researchResult);
@@ -574,7 +615,7 @@ describe("session roster refresh", () => {
       expect(writerOutcome).toBeUndefined();
       expect(replacementOutcome).toBeUndefined();
       expect(sessions.state.agentId).toBe(normalizedAgentId);
-      expect(sessions.state.result).toBe(replacementResult);
+      expect(sessions.state.result).toStrictEqual(replacementResult);
       expect(request.mock.calls.map(([, params]) => params?.agentId)).toEqual([
         "initial",
         normalizedAgentId,
@@ -657,8 +698,10 @@ describe("session roster refresh", () => {
     const { sessions } = createSessionCapabilityHarness(request);
     try {
       await sessions.refresh({ agentId: "main", search: "draft", force: true });
+      const admitted = sessions.state.result;
+      expect(admitted).toStrictEqual(previous);
       await expect(sessions.refreshReplacement()).resolves.toBeNull();
-      expect(sessions.state.result).toBe(previous);
+      expect(sessions.state.result).toBe(admitted);
       expect(sessions.state.error).toBe("Roster unavailable");
     } finally {
       sessions.dispose();
