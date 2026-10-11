@@ -3,7 +3,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startNativeLinkRouting } from "../app/native-link-routing.ts";
 import { resetTranscriptSession } from "../pages/chat/components/chat-thread-interactions.ts";
-import { installDialogPolyfill, waitForRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
+import {
+  installDialogPolyfill,
+  nextFrame,
+  waitForRenderedModalDialog,
+} from "../test-helpers/modal-dialog.ts";
 import {
   enhanceMarkdownTables,
   handleMarkdownTableInteraction,
@@ -271,12 +275,14 @@ describe("Markdown table interactions", () => {
     expect(modal.querySelector("table")?.textContent).toContain("Alpha");
     dialog.dispatchEvent(new Event("pointerdown", { bubbles: true }));
     expect(document.querySelector(".markdown-table-dialog")).toBeNull();
+    await nextFrame();
     expect(document.activeElement).toBe(expand);
 
     expand.click();
     const reopened = await waitForRenderedModalDialog(owner);
     reopened.modal.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();
     expect(document.querySelector(".markdown-table-dialog")).toBeNull();
+    await nextFrame();
     expect(document.activeElement).toBe(expand);
   });
 
@@ -298,6 +304,7 @@ describe("Markdown table interactions", () => {
     expect(owner.querySelectorAll(".markdown-table-modal")).toHaveLength(1);
     expect(modal.querySelector("table")?.textContent).toContain("Beta");
     modal.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();
+    await nextFrame();
     expect(document.activeElement).toBe(second);
   });
 
