@@ -328,13 +328,14 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 10px;
+  padding: 4px 12px;
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
 }
 
 .chat-pane__versions-info {
+  margin-inline-start: auto;
   width: 28px;
   height: 28px;
   padding: 6px;
@@ -353,9 +354,21 @@
   line-height: 1.5;
 }
 
+.chat-pane__branches-menu::part(menu) {
+  width: min(360px, calc(100vw - 24px));
+}
+
 .chat-pane__branch-item {
-  min-width: 260px;
-  max-width: 360px;
+  min-width: 0;
+  padding: 8px 12px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* Current is a readable selection, not an unavailable action. */
+.chat-pane__branch-item[data-active="true"] {
+  opacity: 1;
+  cursor: var(--cursor-action);
 }
 
 .chat-pane__branch-copy {
@@ -377,7 +390,7 @@
 
 .chat-pane__branch-active {
   display: inline-flex;
-  margin-left: auto;
+  align-items: center;
   color: var(--accent);
 }
 

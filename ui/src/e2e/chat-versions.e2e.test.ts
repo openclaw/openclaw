@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { extractSessionBranchHeadline } from "../../../src/config/sessions/session-message-cut-content.js";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionPath, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -34,13 +35,22 @@ suite.define(() => {
               branches: [
                 {
                   leafEntryId: "current",
-                  headline: "A simpler way to stay organized",
+                  headline: extractSessionBranchHeadline({
+                    type: "message",
+                    message: { role: "assistant", content: "**A simpler way to stay organized**" },
+                  }),
                   messageCount: 4,
                   active: true,
                 },
                 {
                   leafEntryId: "earlier",
-                  headline: "A more detailed release announcement",
+                  headline: extractSessionBranchHeadline({
+                    type: "message",
+                    message: {
+                      role: "assistant",
+                      content: "## A more detailed [release announcement](https://example.com)",
+                    },
+                  }),
                   messageCount: 6,
                   active: false,
                 },
@@ -60,6 +70,23 @@ suite.define(() => {
           .poll(() => info.evaluate((element) => element === document.activeElement))
           .toBe(true);
         expect(await help.isVisible()).toBe(false);
+        const infoBox = await info.boundingBox();
+        const menuBox = await menuSurface.boundingBox();
+        expect(infoBox).not.toBeNull();
+        expect(menuBox).not.toBeNull();
+        expect(menuBox!.x + menuBox!.width - infoBox!.x - infoBox!.width).toBeLessThanOrEqual(20);
+        const current = menu.locator('.chat-pane__branch-item[data-active="true"]');
+        expect(await current.locator(".chat-pane__branch-headline").textContent()).toBe(
+          "A simpler way to stay organized",
+        );
+        const textBox = await current.locator(".chat-pane__branch-copy").boundingBox();
+        const checkBox = await current.locator(".chat-pane__branch-active").boundingBox();
+        expect(textBox).not.toBeNull();
+        expect(checkBox).not.toBeNull();
+        expect(checkBox!.x).toBeGreaterThanOrEqual(textBox!.x + textBox!.width);
+        expect(
+          Math.abs(checkBox!.y + checkBox!.height / 2 - textBox!.y - textBox!.height / 2),
+        ).toBeLessThanOrEqual(1);
         const menuFrame = await takeControlUiScreenshotFrame(
           page,
           menuSurface,

@@ -475,6 +475,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
                         ${
                           branch.active
                             ? html`<span
+                                slot="details"
                                 class="chat-pane__branch-active"
                                 aria-label=${t("chat.sessionHeader.activeBranch")}
                                 >${icons.check}</span
