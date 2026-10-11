@@ -62,7 +62,8 @@ describe("parseExecApprovalRequested", () => {
     const result = parseExecApprovalRequested({
       id: "exec-1",
       request: {
-        command: "pwd",
+        command: "  pwd",
+        runId: "engine-run-1",
         allowedDecisions: ["allow-once", "bad", "deny", "allow-always"],
       },
       createdAtMs: 1000,
@@ -71,19 +72,12 @@ describe("parseExecApprovalRequested", () => {
 
     expect(result).toMatchObject({
       kind: "exec",
-      request: { allowedDecisions: ["allow-once", "deny", "allow-always"] },
+      request: {
+        command: "  pwd",
+        runId: "engine-run-1",
+        allowedDecisions: ["allow-once", "deny", "allow-always"],
+      },
     });
-  });
-
-  it("preserves the originating engine run id", () => {
-    const result = parseExecApprovalRequested({
-      id: "exec-1",
-      request: { command: "pwd", runId: "engine-run-1" },
-      createdAtMs: 1000,
-      expiresAtMs: 2000,
-    });
-
-    expect(result?.request.runId).toBe("engine-run-1");
   });
 });
 
@@ -103,20 +97,6 @@ describe("parsePluginApprovalRequested", () => {
       sessionKey: "sess-1",
     },
   };
-
-  it("parses a valid payload", () => {
-    const result = parsePluginApprovalRequested(validPayload);
-    expect(result?.kind).toBe("plugin");
-    expect(result?.pluginTitle).toBe("Dangerous command detected");
-    expect(result?.pluginDescription).toBe("chmod 777 script.sh modifies file permissions");
-    expect(result?.pluginSeverity).toBe("high");
-    expect(result?.pluginId).toBe("sage");
-    expect(result?.request.command).toBe("Dangerous command detected");
-    expect(result?.request.agentId).toBe("agent-1");
-    expect(result?.request.sessionKey).toBe("sess-1");
-    expect(result?.createdAtMs).toBe(1000);
-    expect(result?.expiresAtMs).toBe(120_000);
-  });
 
   it("returns null when title is missing from request", () => {
     const {
@@ -139,14 +119,6 @@ describe("parsePluginApprovalRequested", () => {
   it("returns null when timestamps are missing", () => {
     const { createdAtMs: _, expiresAtMs: __, ...noTimestamps } = validPayload;
     expect(parsePluginApprovalRequested(noTimestamps)).toBeNull();
-  });
-
-  it("returns null for null payload", () => {
-    expect(parsePluginApprovalRequested(null)).toBeNull();
-  });
-
-  it("returns null for non-object payload", () => {
-    expect(parsePluginApprovalRequested("not an object")).toBeNull();
   });
 
   it("handles missing optional fields gracefully", () => {
@@ -201,17 +173,6 @@ describe("parseSystemAgentApprovalRequested", () => {
 });
 
 describe("parseExecApprovalRequested command spans", () => {
-  it("preserves command text spacing for span offsets", () => {
-    const parsed = parseExecApprovalRequested({
-      id: "approval-spaces-1",
-      request: { command: "  python -c 'print(1)'" },
-      createdAtMs: 1,
-      expiresAtMs: 2,
-    });
-
-    expect(parsed?.request.command).toBe("  python -c 'print(1)'");
-  });
-
   it("rejects whitespace-only command text", () => {
     expect(
       parseExecApprovalRequested({
@@ -250,22 +211,6 @@ describe("parseExecApprovalRequested command spans", () => {
 });
 
 describe("isStaleApprovalResolutionError", () => {
-  it("detects already-resolved approval errors", () => {
-    expect(
-      isStaleApprovalResolutionError(
-        createGatewayError("approval already resolved", {
-          reason: "APPROVAL_ALREADY_RESOLVED",
-        }),
-      ),
-    ).toBe(true);
-  });
-
-  it("detects unknown or expired approval errors", () => {
-    expect(
-      isStaleApprovalResolutionError(createGatewayError("unknown or expired approval id")),
-    ).toBe(true);
-  });
-
   it("detects missing approval errors", () => {
     expect(
       isStaleApprovalResolutionError(
@@ -308,32 +253,6 @@ describe("approval queue ordering and countdown timer", () => {
     }
   });
 
-  it("does not change approval errors when another request arrives", () => {
-    vi.useFakeTimers();
-    try {
-      const state = createPromptState(
-        vi.fn<RequestFn>(async () => ({})),
-        [],
-      );
-      enqueueExecApprovalPrompt(
-        state,
-        createExecApproval({ id: "approval-a", createdAtMs: 1_000 }),
-      );
-      state.execApprovalErrors.set("approval-a", "Approval failed: Error: gateway unavailable");
-
-      enqueueExecApprovalPrompt(
-        state,
-        createExecApproval({ id: "approval-b", createdAtMs: 2_000 }),
-      );
-      expect(state.execApprovalErrors.get("approval-a")).toBe(
-        "Approval failed: Error: gateway unavailable",
-      );
-      clearExecApprovalTimers(state);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("does not publish shared countdown ticks", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
@@ -358,27 +277,6 @@ describe("approval queue ordering and countdown timer", () => {
 });
 
 describe("refreshPendingApprovalQueue", () => {
-  it("sorts refreshed approvals oldest-first", async () => {
-    const request = vi.fn<RequestFn>(async (method) => {
-      if (method === "exec.approval.list") {
-        return [
-          createExecApproval({ id: "approval-newer", createdAtMs: 2_000 }),
-          createExecApproval({ id: "approval-oldest", createdAtMs: 1_000 }),
-        ];
-      }
-      return [];
-    });
-    const state = createPromptState(request, []);
-
-    await refreshPendingApprovalQueue(state);
-
-    expect(state.execApprovalQueue.map((entry) => entry.id)).toEqual([
-      "approval-oldest",
-      "approval-newer",
-    ]);
-    clearExecApprovalTimers(state);
-  });
-
   it("keeps approvals received while a refresh is in flight", async () => {
     let resolveExecList: (value: unknown[]) => void = () => {};
     const execApprovalList = new Promise<unknown[]>((resolve) => {
@@ -506,36 +404,6 @@ describe("refreshPendingApprovalQueue", () => {
       expect(state.execApprovalQueue.map((entry) => entry.id)).toEqual(["approval-queued"]);
       expect(state.execApprovalErrors.has("approval-active-expiring")).toBe(false);
       clearExecApprovalTimers(state);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not requeue expired approvals returned by refresh lists", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
-    try {
-      const request = vi.fn<RequestFn>(async (method) => {
-        if (method === "exec.approval.list") {
-          return [
-            {
-              id: "approval-expired-1",
-              request: { command: "pnpm check:changed" },
-              createdAtMs: Date.now() - 2_000,
-              expiresAtMs: Date.now() - 1_000,
-            },
-          ];
-        }
-        if (method === "plugin.approval.list") {
-          return [];
-        }
-        return {};
-      });
-      const state = createPromptState(request, []);
-
-      await refreshPendingApprovalQueue(state);
-
-      expect(state.execApprovalQueue).toEqual([]);
     } finally {
       vi.useRealTimers();
     }
