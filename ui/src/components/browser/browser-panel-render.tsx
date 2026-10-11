@@ -323,7 +323,13 @@ function ViewportContent(props: ControllerProps) {
           ) : null}
         </div>
       </Match>
-      <Match when={!props.controller.native.activeTab && props.controller.running === false}>
+      <Match
+        when={
+          !props.controller.native.activeTab &&
+          props.controller.running === false &&
+          !props.controller.loading
+        }
+      >
         <PanelEmptyState
           icon={<Icon name="globe" />}
           heading={t("chat.sidePanel.browser")}

@@ -28,6 +28,7 @@ export type TranscriptsViewProps = {
   onSummaryRetry?: () => void;
   exportState: { kind: "idle" | "loading" | "done" | "error"; message?: string };
   onNavigate: (patch: Record<string, string | null>) => void;
+  onOpenCaptureSettings: () => void;
   onRefresh: () => void;
   onReaderRetry: () => void;
   onReaderTab: (tab: "text" | "summary") => void;

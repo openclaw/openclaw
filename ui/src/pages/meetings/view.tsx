@@ -581,6 +581,13 @@ export function TranscriptsView(props: TranscriptsViewProps) {
               captureTarget.search +
               captureTarget.hash
             }
+            onClick={(event) => {
+              if (!shouldHandleNavigationClick(event)) {
+                return;
+              }
+              event.preventDefault();
+              props.onOpenCaptureSettings();
+            }}
           >
             <Icon name="settings" />
             {t("meetingCapture.title")}

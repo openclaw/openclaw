@@ -20,6 +20,27 @@ function selectTab(page: Element, tab: "text" | "summary") {
 }
 
 describe("meeting transcript library", () => {
+  it("opens capture settings through the router while preserving modified link activation", async () => {
+    const request = vi.fn(async () => ({ sessions: [], nextCursor: null }));
+    const { page, navigate } = mount(request);
+    await waitForSolid(() =>
+      expect(page.querySelector('a[href*="settings/communications"]')).not.toBeNull(),
+    );
+    const link = page.querySelector<HTMLAnchorElement>('a[href*="settings/communications"]')!;
+    const modified = new MouseEvent("click", { bubbles: true, cancelable: true, ctrlKey: true });
+    link.dispatchEvent(modified);
+    expect(modified.defaultPrevented).toBe(false);
+    expect(navigate).not.toHaveBeenCalled();
+
+    const primary = new MouseEvent("click", { bubbles: true, cancelable: true });
+    link.dispatchEvent(primary);
+    expect(primary.defaultPrevented).toBe(true);
+    expect(navigate).toHaveBeenCalledWith("communications", {
+      search: "?section=transcripts",
+      hash: "#settings-communications-meeting-capture",
+    });
+  });
+
   it("opens Summary by default and refreshes an explicitly selected Transcript through completion", async () => {
     vi.useFakeTimers();
     let detail = {

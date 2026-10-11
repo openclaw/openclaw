@@ -15,6 +15,7 @@ import { isArchiveAccessDeniedError } from "../../lib/gateway-errors.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { SETTINGS_SEARCH_TARGETS } from "../config/settings-targets.ts";
 import {
   transcriptListParams,
   transcriptRouteSearch,
@@ -602,6 +603,10 @@ export const MeetingsPage = defineSolidBridge<{ routeSearch: string }>(
           onSummaryRetry={() => void generateMissingSummary(true)}
           exportState={exportState()}
           onNavigate={navigate}
+          onOpenCaptureSettings={() => {
+            const target = SETTINGS_SEARCH_TARGETS.meetingCapture;
+            context.navigate(target.routeId, { search: target.search, hash: target.hash });
+          }}
           onRefresh={refresh}
           onReaderRetry={() => {
             if (!readerPages().length) {
