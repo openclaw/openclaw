@@ -55,7 +55,7 @@ and coverage limits.
   available. These are correlation aids rather than anonymization; the state
   database stores the derivation key, but RPC and CLI exports do not.
 
-A root-level `audit` block is retired; the canonical path is `logging.audit`.
+A root-level `audit` block is retired; the current path is `logging.audit`.
 The root config object is strict, so an old top-level `audit` block is rejected.
 Run [`openclaw doctor --fix`](/cli/doctor) to move it to `logging.audit`.
 

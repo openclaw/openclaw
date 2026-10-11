@@ -143,7 +143,7 @@ Plugin-managed backends keep runtime-specific settings under their plugin entrie
 **SSH backend behavior:**
 
 - seeds the remote workspace once after create or recreate
-- then keeps the remote SSH workspace canonical
+- then uses the remote SSH workspace as the source of truth
 - routes `exec`, file tools, and media paths over SSH
 - does not sync remote changes back to the host automatically
 - does not support sandbox browser containers
@@ -191,8 +191,8 @@ Plugin-managed backends keep runtime-specific settings under their plugin entrie
 
 **OpenShell mode:**
 
-- `mirror`: seed remote from local before exec, sync back after exec; local workspace stays canonical
-- `remote`: seed remote once when the sandbox is created, then keep the remote workspace canonical
+- `mirror`: seed remote from local before exec, sync back after exec; local workspace stays the source of truth
+- `remote`: seed remote once when the sandbox is created, then use the remote workspace as the source of truth
 
 In `remote` mode, host-local edits made outside OpenClaw are not synced into the sandbox automatically after the seed step.
 Transport is SSH into the OpenShell sandbox, but the plugin owns sandbox lifecycle and optional mirror sync.

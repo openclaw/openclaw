@@ -7,7 +7,7 @@ read_when:
 title: Session permission modes
 ---
 
-Session permission modes set one session's filesystem boundary and exec escalation reviewer. The boundary is the session's recorded canonical `sessionRoot`, or the selected agent's canonical workspace when no root is recorded. The mode determines what may happen inside or outside that boundary.
+Session permission modes set one session's filesystem boundary and exec escalation reviewer. The boundary is the session's recorded resolved `sessionRoot`, or the selected agent's resolved workspace when no root is recorded. The mode determines what may happen inside or outside that boundary.
 
 | Mode        | Filesystem access                                         | Exec escalation reviewer                |
 | ----------- | --------------------------------------------------------- | --------------------------------------- |
@@ -30,7 +30,7 @@ Gateway approval-backed commands bind every resolved command-segment executable 
 
 ## Session root and defaults
 
-A permission mode can be set on any session. When a session has a recorded `sessionRoot`, that canonical path is its filesystem boundary. An explicit working directory and a managed worktree each pin their session's root. When no root is recorded, the boundary defaults to the selected agent's canonical workspace when the run is prepared.
+A permission mode can be set on any session. When a session has a recorded `sessionRoot`, that resolved path is its filesystem boundary. An explicit working directory and a managed worktree each pin their session's root. When no root is recorded, the boundary defaults to the selected agent's resolved workspace when the run is prepared.
 
 Managed worktree sessions use the worktree checkout as `sessionRoot`. A nested working directory remains the runtime `cwd`, so relative paths start there while filesystem containment covers the whole checkout.
 

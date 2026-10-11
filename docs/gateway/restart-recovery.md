@@ -68,7 +68,7 @@ rejects same-ID retries against retained newer receipts before execution. This
 includes queued or interrupted inputs and consumed collected-input receipts.
 Consumed receipts remain excluded from pending counts. Individually consumed
 inputs have already left the pending-input store and retain normal transcript
-idempotency. Upgrading again restores matching unconsumed-input recovery through
+duplicate prevention. Upgrading again restores matching unconsumed-input recovery through
 fresh authentication and admission, provided the session and accepted input have
 not been changed or removed. Already-consumed input remains consumed. Do not
 delete receipts or change message IDs merely to bypass a downgrade conflict.
@@ -791,7 +791,7 @@ model selection instead direct you to **Resume in new session** in WebChat.
 
 Every retry reuses one durable dispatch identifier, so an ambiguous connection
 failure cannot start the same recovery twice. Completed Control UI turns also
-retain bounded durable idempotency tombstones, allowing a reconnecting outbox
+retain bounded durable completion markers, allowing a reconnecting outbox
 to retire them without re-executing the request.
 
 When a pending final has no remaining queue owner and its delivery outcome is

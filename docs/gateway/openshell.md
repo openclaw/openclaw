@@ -122,8 +122,7 @@ fallback when no ambient selection exists.
 
 ### mirror (default)
 
-`plugins.entries.openshell.config.mode: "mirror"` keeps the **local workspace
-canonical**:
+`plugins.entries.openshell.config.mode: "mirror"` keeps the **local workspace as the source of truth**:
 
 - Before `exec`, OpenClaw syncs the local workspace into the sandbox.
 - After `exec`, OpenClaw syncs the remote workspace back to local.
@@ -150,7 +149,7 @@ its download can replace those external edits.
 
 ### remote
 
-`mode: "remote"` makes the **remote workspace canonical**:
+`mode: "remote"` makes the **remote workspace the source of truth**:
 
 - On first use after sandbox creation, OpenClaw seeds the remote workspace
   from local once. If the Gateway restarts before that first use, the next use
@@ -182,7 +181,7 @@ Editing files on the host outside OpenClaw after the initial seed is invisible t
 
 |                          | `mirror`                   | `remote`                  |
 | ------------------------ | -------------------------- | ------------------------- |
-| **Canonical workspace**  | Local host                 | Remote OpenShell          |
+| **Source of truth**      | Local host                 | Remote OpenShell          |
 | **Sync direction**       | Bidirectional (every exec) | One-time seed             |
 | **Per-turn overhead**    | Higher (upload + download) | Lower (direct remote ops) |
 | **Local edits visible?** | Yes, on next exec          | No, until recreate        |
@@ -368,10 +367,10 @@ openclaw sandbox recreate --agent researcher
 openclaw sandbox recreate --session "agent:researcher:main"
 ```
 
-For `remote` mode, recreate is especially important: it deletes the canonical
+For `remote` mode, recreate is especially important: it deletes the primary
 remote workspace for that scope, and the next use seeds a fresh one from
 local. For `mirror` mode, recreate mainly resets the remote execution
-environment since local stays canonical.
+environment since local stays the source of truth.
 
 Sandbox list and recreate commands activate the configured backend's owning
 plugin plus the owner of each recorded runtime before inspecting or deleting
@@ -388,7 +387,7 @@ Docker-backed sandbox may remain in a non-Ready phase after the gateway
 upgrade. OpenClaw preserves the registered runtime identity, refuses to create
 a replacement implicitly, and reports the scoped `openclaw sandbox recreate`
 command. Treat that recreation as destructive in `remote` mode because the
-remote workspace is canonical.
+remote workspace is the source of truth.
 
 Recreate after changing any of:
 
@@ -414,7 +413,7 @@ configured workspace or delete the registry entry to hide the failure.
 ## Security hardening
 
 The mirror-mode filesystem bridge pins the local workspace root and rechecks
-canonical paths (via realpath) before every read, write, mkdir, remove, and
+resolved filesystem paths (via realpath) before every read, write, mkdir, remove, and
 rename, rejecting mid-path symlinks. A symlink swap or a remounted local
 workspace cannot redirect file access outside the mirrored tree.
 
@@ -531,7 +530,7 @@ openclaw logs --follow
   OpenShell's documented credential flow. If `autoProviders` is disabled,
   required providers must already exist.
 - **Remote files are missing locally:** This is expected in `remote` mode.
-  Remote files are canonical and are not synchronized back to the host. Use
+  Remote files are the source of truth and are not synchronized back to the host. Use
   `mirror` mode when host-visible changes are required. Recreating a remote
   sandbox destroys its remote-only files.
 - **An image or attachment cannot be sent:** Use a path under the configured

@@ -29,7 +29,7 @@ All channels support DM policies and group policies:
 <Note>
 `channels.defaults.groupPolicy` applies only when the resolved channel policy is unset. The channel schemas listed on the [per-channel pages](/gateway/config-channels) default the root to `allowlist`; set `channels.<channel>.groupPolicy` explicitly to choose another policy.
 Pairing codes expire after 1 hour. Pending pairing requests are capped at **3 per account** (scoped by channel and account id).
-If a provider block is missing entirely (`channels.<provider>` absent), runtime group policy falls back to `allowlist` (fail-closed) with a startup warning.
+If a provider block is missing entirely (`channels.<provider>` absent), runtime group policy falls back to `allowlist` (rejecting groups not on the list) with a startup warning.
 </Note>
 
 ## Channel model overrides
