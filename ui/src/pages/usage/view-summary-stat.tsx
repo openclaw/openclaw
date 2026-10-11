@@ -8,57 +8,50 @@ function focusSummaryHint(event: MouseEvent) {
   }
 }
 
-export function renderSummaryStat(params: {
+export function SummaryStat(props: {
   hintId: string;
   metric: string;
   hint?: string;
   value: string | number;
   sub: string;
   tone?: "good" | "warn" | "bad";
-  className?: string;
+  class?: string;
   compactValue?: boolean;
 }) {
-  const hintId = `usage-summary-hint-${params.hintId}`;
-  const title = t(`usage.overview.${params.metric}`);
-  const classes = [
-    "stat",
-    "usage-summary-card",
-    params.className,
-    params.tone ? `usage-summary-card--${params.tone}` : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  const valueClasses = [
-    "stat-value",
-    "usage-summary-value",
-    params.tone ?? "",
-    params.compactValue ? "usage-summary-value--compact" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
   return (
-    <div class={classes}>
+    <div
+      class={[
+        "stat usage-summary-card",
+        props.class,
+        props.tone ? `usage-summary-card--${props.tone}` : undefined,
+      ]}
+    >
       <div class="usage-summary-title">
-        {title}
+        {t(`usage.overview.${props.metric}`)}
         <openclaw-tooltip open-on-click>
           <button
-            id={hintId}
+            id={`usage-summary-hint-${props.hintId}`}
             type="button"
             class="usage-summary-hint"
-            aria-label={title}
+            aria-label={t(`usage.overview.${props.metric}`)}
             onClick={focusSummaryHint}
           >
             ?
           </button>
-          {/*  Shared tooltips dismiss pointer activation so action buttons never
-               strand one open. This hint exists only to be read, so it opts in to
-               click-to-open; the click handler still normalizes browsers that do
-               not focus buttons on pointer activation.  */}
-          <span slot="content">{params.hint ?? t(`usage.overview.${params.metric}Hint`)}</span>
+          {/* Summary hints intentionally remain open on pointer activation. */}
+          <span slot="content">{props.hint ?? t(`usage.overview.${props.metric}Hint`)}</span>
         </openclaw-tooltip>
       </div>
-      <div class={valueClasses}>{params.value}</div>
-      <div class="usage-summary-sub">{params.sub}</div>
+      <div
+        class={[
+          "stat-value usage-summary-value",
+          props.tone,
+          { "usage-summary-value--compact": props.compactValue },
+        ]}
+      >
+        {props.value}
+      </div>
+      <div class="usage-summary-sub">{props.sub}</div>
     </div>
   );
 }

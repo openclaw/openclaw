@@ -1,6 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { For } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import "../../components/agent-row-chip.ts";
@@ -23,7 +23,7 @@ import type {
   UsageTotals,
   CostDailyEntry,
 } from "./types.ts";
-import { renderSummaryStat } from "./view-summary-stat.tsx";
+import { SummaryStat } from "./view-summary-stat.tsx";
 
 function renderFilterChips(
   sessions: UsageSessionEntry[],
@@ -224,203 +224,252 @@ function renderInsightList(
   );
 }
 
-function renderUsageInsights(
-  totals: UsageTotals | null,
-  aggregates: UsageAggregates,
-  stats: UsageInsightStats,
-  showCostHint: boolean,
-  showCostShares: boolean,
-  errorHours: Array<{ label: string; value: string; sub?: string }>,
-  sessionCount: number,
-  totalSessions: number,
-) {
-  if (!totals) {
-    return undefined;
-  }
+export function UsageInsights(props: {
+  totals: UsageTotals | null;
+  aggregates: UsageAggregates;
+  stats: UsageInsightStats;
+  showCostHint: boolean;
+  showCostShares: boolean;
+  errorHours: Array<{ label: string; value: string; sub?: string }>;
+  sessionCount: number;
+  totalSessions: number;
+}) {
+  const state = createMemo(() => {
+    const totals = props.totals;
+    const aggregates = props.aggregates;
+    const stats = props.stats;
+    const showCostHint = props.showCostHint;
+    const showCostShares = props.showCostShares;
+    const errorHours = props.errorHours;
+    const sessionCount = props.sessionCount;
+    const totalSessions = props.totalSessions;
+    if (!totals) {
+      return undefined;
+    }
 
-  const avgTokens = aggregates.messages.total
-    ? Math.round(totals.totalTokens / aggregates.messages.total)
-    : 0;
-  const avgCost = aggregates.messages.total ? totals.totalCost / aggregates.messages.total : 0;
-  const cacheBase = totals.input + totals.cacheRead + totals.cacheWrite;
-  const cacheHitRate = cacheBase > 0 ? totals.cacheRead / cacheBase : 0;
-  const cacheHitLabel =
-    cacheBase > 0 ? `${(cacheHitRate * 100).toFixed(1)}%` : t("usage.common.emptyValue");
-  const errorRatePct = stats.errorRate * 100;
-  const throughputLabel =
-    stats.throughputTokensPerMin !== undefined
-      ? `${formatUsageTokens(Math.round(stats.throughputTokensPerMin))} ${t("usage.overview.tokensPerMinute")}`
-      : t("usage.common.emptyValue");
-  const throughputCostLabel =
-    stats.throughputCostPerMin !== undefined
-      ? `${formatAnalysisCost(stats.throughputCostPerMin)} ${t("usage.overview.perMinute")}`
-      : t("usage.common.emptyValue");
-  const avgDurationLabel =
-    stats.durationCount > 0
-      ? (formatDurationCompact(stats.avgDurationMs) ?? t("usage.common.emptyValue"))
-      : t("usage.common.emptyValue");
-  const errorDays = aggregates.daily
-    .filter((day) => day.messages > 0 && day.errors > 0)
-    .toSorted((a, b) => b.errors / b.messages - a.errors / a.messages)
-    .slice(0, 5)
-    .map((day) => ({
-      label: formatDayLabel(day.date),
-      value: `${((day.errors / day.messages) * 100).toFixed(2)}%`,
-      sub: `${day.errors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${day.messages} ${t("usage.overview.messagesAbbrev")} · ${formatUsageTokens(day.tokens)}`,
+    const avgTokens = aggregates.messages.total
+      ? Math.round(totals.totalTokens / aggregates.messages.total)
+      : 0;
+    const avgCost = aggregates.messages.total ? totals.totalCost / aggregates.messages.total : 0;
+    const cacheBase = totals.input + totals.cacheRead + totals.cacheWrite;
+    const cacheHitRate = cacheBase > 0 ? totals.cacheRead / cacheBase : 0;
+    const cacheHitLabel =
+      cacheBase > 0 ? `${(cacheHitRate * 100).toFixed(1)}%` : t("usage.common.emptyValue");
+    const errorRatePct = stats.errorRate * 100;
+    const throughputLabel =
+      stats.throughputTokensPerMin !== undefined
+        ? `${formatUsageTokens(Math.round(stats.throughputTokensPerMin))} ${t("usage.overview.tokensPerMinute")}`
+        : t("usage.common.emptyValue");
+    const throughputCostLabel =
+      stats.throughputCostPerMin !== undefined
+        ? `${formatAnalysisCost(stats.throughputCostPerMin)} ${t("usage.overview.perMinute")}`
+        : t("usage.common.emptyValue");
+    const avgDurationLabel =
+      stats.durationCount > 0
+        ? (formatDurationCompact(stats.avgDurationMs) ?? t("usage.common.emptyValue"))
+        : t("usage.common.emptyValue");
+    const errorDays = aggregates.daily
+      .filter((day) => day.messages > 0 && day.errors > 0)
+      .toSorted((a, b) => b.errors / b.messages - a.errors / a.messages)
+      .slice(0, 5)
+      .map((day) => ({
+        label: formatDayLabel(day.date),
+        value: `${((day.errors / day.messages) * 100).toFixed(2)}%`,
+        sub: `${day.errors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${day.messages} ${t("usage.overview.messagesAbbrev")} · ${formatUsageTokens(day.tokens)}`,
+      }));
+
+    const costAttribution = (
+      label: string,
+      { totals: entryTotals, count }: { totals: UsageTotals; count?: number },
+      agent = false,
+    ) => ({
+      label,
+      ...(agent ? { agentId: label } : {}),
+      value: formatAnalysisCost(entryTotals.totalCost),
+      sub: [
+        showCostShares && totals.totalCost > 0
+          ? t("usage.overview.costShare", {
+              percent: ((entryTotals.totalCost / totals.totalCost) * 100).toFixed(1),
+            })
+          : null,
+        formatUsageTokens(entryTotals.totalTokens),
+        count === undefined ? null : `${count} ${t("usage.overview.messagesAbbrev")}`,
+      ]
+        .filter((part): part is string => part !== null)
+        .join(" · "),
+    });
+
+    const topModels = aggregates.byModel
+      .slice(0, 5)
+      .map((entry) => costAttribution(entry.model ?? t("usage.common.unknown"), entry));
+    const topProviders = aggregates.byProvider
+      .slice(0, 5)
+      .map((entry) => costAttribution(entry.provider ?? t("usage.common.unknown"), entry));
+    const topTools = aggregates.tools.tools.slice(0, 6).map((tool) => ({
+      label: tool.name,
+      value: `${tool.count}`,
+      sub: t("usage.overview.calls"),
     }));
+    const topAgents = aggregates.byAgent
+      .slice(0, 5)
+      .map((entry) => costAttribution(entry.agentId, entry, true));
+    const topChannels = aggregates.byChannel
+      .slice(0, 5)
+      .map((entry) => costAttribution(entry.channel, entry));
+    const insightLists = [
+      ["usage.overview.topModels", topModels, "usage.overview.noModelData"],
+      ["usage.overview.topProviders", topProviders, "usage.overview.noProviderData"],
+      ["usage.overview.topTools", topTools, "usage.overview.noToolCalls"],
+      ["usage.overview.topAgents", topAgents, "usage.overview.noAgentData"],
+      ["usage.overview.topChannels", topChannels, "usage.overview.noChannelData"],
+    ] as const;
 
-  const costAttribution = (
-    label: string,
-    { totals: entryTotals, count }: { totals: UsageTotals; count?: number },
-    agent = false,
-  ) => ({
-    label,
-    ...(agent ? { agentId: label } : {}),
-    value: formatAnalysisCost(entryTotals.totalCost),
-    sub: [
-      showCostShares && totals.totalCost > 0
-        ? t("usage.overview.costShare", {
-            percent: ((entryTotals.totalCost / totals.totalCost) * 100).toFixed(1),
-          })
-        : null,
-      formatUsageTokens(entryTotals.totalTokens),
-      count === undefined ? null : `${count} ${t("usage.overview.messagesAbbrev")}`,
-    ]
-      .filter((part): part is string => part !== null)
-      .join(" · "),
+    return {
+      aggregates,
+      throughputLabel,
+      throughputCostLabel,
+      avgTokens,
+      cacheHitLabel,
+      totals,
+      cacheBase,
+      cacheHitRate,
+      errorRatePct,
+      avgDurationLabel,
+      showCostHint,
+      avgCost,
+      sessionCount,
+      totalSessions,
+      insightLists,
+      errorDays,
+      errorHours,
+    };
   });
-
-  const topModels = aggregates.byModel
-    .slice(0, 5)
-    .map((entry) => costAttribution(entry.model ?? t("usage.common.unknown"), entry));
-  const topProviders = aggregates.byProvider
-    .slice(0, 5)
-    .map((entry) => costAttribution(entry.provider ?? t("usage.common.unknown"), entry));
-  const topTools = aggregates.tools.tools.slice(0, 6).map((tool) => ({
-    label: tool.name,
-    value: `${tool.count}`,
-    sub: t("usage.overview.calls"),
-  }));
-  const topAgents = aggregates.byAgent
-    .slice(0, 5)
-    .map((entry) => costAttribution(entry.agentId, entry, true));
-  const topChannels = aggregates.byChannel
-    .slice(0, 5)
-    .map((entry) => costAttribution(entry.channel, entry));
-  const insightLists = [
-    ["usage.overview.topModels", topModels, "usage.overview.noModelData"],
-    ["usage.overview.topProviders", topProviders, "usage.overview.noProviderData"],
-    ["usage.overview.topTools", topTools, "usage.overview.noToolCalls"],
-    ["usage.overview.topAgents", topAgents, "usage.overview.noAgentData"],
-    ["usage.overview.topChannels", topChannels, "usage.overview.noChannelData"],
-  ] as const;
-
   return (
-    <SettingsSection title={t("usage.overview.title")}>
-      <section class="usage-panel usage-overview-card">
-        <div class="usage-overview-layout">
-          <div class="usage-summary-grid">
-            {renderSummaryStat({
-              hintId: "messages",
-              metric: "messages",
-              value: aggregates.messages.total,
-              sub: `${aggregates.messages.user} ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} · ${aggregates.messages.assistant} ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`,
-              className: "usage-summary-card--hero",
-            })}
-            {renderSummaryStat({
-              hintId: "throughput",
-              metric: "throughput",
-              value: throughputLabel,
-              sub: throughputCostLabel,
-              className: "usage-summary-card--hero usage-summary-card--throughput",
-              compactValue: true,
-            })}
-            {renderSummaryStat({
-              hintId: "tool-calls",
-              metric: "toolCalls",
-              value: aggregates.tools.totalCalls,
-              sub: `${aggregates.tools.uniqueTools} ${t("usage.overview.toolsUsed")}`,
-              className: "usage-summary-card--half",
-            })}
-            {renderSummaryStat({
-              hintId: "average-tokens",
-              metric: "avgTokens",
-              value: formatUsageTokens(avgTokens),
-              sub: t("usage.overview.acrossMessages", {
-                count: String(aggregates.messages.total || 0),
-              }),
-              className: "usage-summary-card--half",
-            })}
-            {renderSummaryStat({
-              hintId: "cache-hit-rate",
-              metric: "cacheHitRate",
-              hint: t("usage.overview.cacheHint"),
-              value: cacheHitLabel,
-              sub: `${formatUsageTokens(totals.cacheRead)} ${t("usage.overview.cached")} · ${formatUsageTokens(cacheBase)} ${t("usage.overview.prompt")}`,
-              tone: cacheHitRate > 0.6 ? "good" : cacheHitRate > 0.3 ? "warn" : "bad",
-              className: "usage-summary-card--medium",
-            })}
-            {renderSummaryStat({
-              hintId: "error-rate",
-              metric: "errorRate",
-              hint: t("usage.overview.errorHint"),
-              value: `${errorRatePct.toFixed(2)}%`,
-              sub: `${aggregates.messages.errors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${avgDurationLabel} ${t("usage.overview.avgSession")}`,
-              tone: errorRatePct > 5 ? "bad" : errorRatePct > 1 ? "warn" : "good",
-              className: "usage-summary-card--medium",
-            })}
-            {renderSummaryStat({
-              hintId: "average-cost",
-              metric: "avgCost",
-              hint: t(
-                showCostHint ? "usage.overview.avgCostHintMissing" : "usage.overview.avgCostHint",
-              ),
-              value: formatAnalysisCost(avgCost),
-              sub: `${formatAnalysisCost(totals.totalCost)} ${normalizeLowercaseStringOrEmpty(t("usage.breakdown.total"))}`,
-              className: "usage-summary-card--compact",
-            })}
-            {renderSummaryStat({
-              hintId: "sessions",
-              metric: "sessions",
-              value: sessionCount,
-              sub: t("usage.overview.sessionsInRange", { count: String(totalSessions) }),
-              className: "usage-summary-card--compact",
-            })}
-            {renderSummaryStat({
-              hintId: "errors",
-              metric: "errors",
-              value: aggregates.messages.errors,
-              sub: `${aggregates.messages.toolResults} ${t("usage.overview.toolResults")}`,
-              className: "usage-summary-card--compact",
-            })}
-          </div>
-          <div class="usage-insights-grid">
-            <For each={insightLists}>
-              {([titleKey, items, emptyKey]) => (
-                <>{renderInsightList(t(titleKey), items, t(emptyKey))}</>
-              )}
-            </For>
-            {renderInsightList(
-              t("usage.overview.peakErrorDays"),
-              errorDays,
-              t("usage.overview.noErrorData"),
-              { error: true },
-            )}
-            {renderInsightList(
-              t("usage.overview.peakErrorHours"),
-              errorHours,
-              t("usage.overview.noErrorData"),
-              {
-                error: true,
-                className: "usage-insight-card--wide",
-                listClassName: "usage-error-list--hours",
-              },
-            )}
-          </div>
-        </div>
-      </section>
-    </SettingsSection>
+    <Show when={state()}>
+      {(insights) => (
+        <SettingsSection title={t("usage.overview.title")}>
+          <section class="usage-panel usage-overview-card">
+            <div class="usage-overview-layout">
+              <div class="usage-summary-grid">
+                <SummaryStat
+                  hintId="messages"
+                  metric="messages"
+                  value={insights().aggregates.messages.total}
+                  sub={`${insights().aggregates.messages.user} ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} · ${insights().aggregates.messages.assistant} ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`}
+                  class="usage-summary-card--hero"
+                />
+                <SummaryStat
+                  hintId="throughput"
+                  metric="throughput"
+                  value={insights().throughputLabel}
+                  sub={insights().throughputCostLabel}
+                  class="usage-summary-card--hero usage-summary-card--throughput"
+                  compactValue
+                />
+                <SummaryStat
+                  hintId="tool-calls"
+                  metric="toolCalls"
+                  value={insights().aggregates.tools.totalCalls}
+                  sub={`${insights().aggregates.tools.uniqueTools} ${t("usage.overview.toolsUsed")}`}
+                  class="usage-summary-card--half"
+                />
+                <SummaryStat
+                  hintId="average-tokens"
+                  metric="avgTokens"
+                  value={formatUsageTokens(insights().avgTokens)}
+                  sub={t("usage.overview.acrossMessages", {
+                    count: String(insights().aggregates.messages.total || 0),
+                  })}
+                  class="usage-summary-card--half"
+                />
+                <SummaryStat
+                  hintId="cache-hit-rate"
+                  metric="cacheHitRate"
+                  hint={t("usage.overview.cacheHint")}
+                  value={insights().cacheHitLabel}
+                  sub={`${formatUsageTokens(insights().totals.cacheRead)} ${t("usage.overview.cached")} · ${formatUsageTokens(insights().cacheBase)} ${t("usage.overview.prompt")}`}
+                  tone={
+                    insights().cacheHitRate > 0.6
+                      ? "good"
+                      : insights().cacheHitRate > 0.3
+                        ? "warn"
+                        : "bad"
+                  }
+                  class="usage-summary-card--medium"
+                />
+                <SummaryStat
+                  hintId="error-rate"
+                  metric="errorRate"
+                  hint={t("usage.overview.errorHint")}
+                  value={`${insights().errorRatePct.toFixed(2)}%`}
+                  sub={`${insights().aggregates.messages.errors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${insights().avgDurationLabel} ${t("usage.overview.avgSession")}`}
+                  tone={
+                    insights().errorRatePct > 5
+                      ? "bad"
+                      : insights().errorRatePct > 1
+                        ? "warn"
+                        : "good"
+                  }
+                  class="usage-summary-card--medium"
+                />
+                <SummaryStat
+                  hintId="average-cost"
+                  metric="avgCost"
+                  hint={t(
+                    insights().showCostHint
+                      ? "usage.overview.avgCostHintMissing"
+                      : "usage.overview.avgCostHint",
+                  )}
+                  value={formatAnalysisCost(insights().avgCost)}
+                  sub={`${formatAnalysisCost(insights().totals.totalCost)} ${normalizeLowercaseStringOrEmpty(t("usage.breakdown.total"))}`}
+                  class="usage-summary-card--compact"
+                />
+                <SummaryStat
+                  hintId="sessions"
+                  metric="sessions"
+                  value={insights().sessionCount}
+                  sub={t("usage.overview.sessionsInRange", {
+                    count: String(insights().totalSessions),
+                  })}
+                  class="usage-summary-card--compact"
+                />
+                <SummaryStat
+                  hintId="errors"
+                  metric="errors"
+                  value={insights().aggregates.messages.errors}
+                  sub={`${insights().aggregates.messages.toolResults} ${t("usage.overview.toolResults")}`}
+                  class="usage-summary-card--compact"
+                />
+              </div>
+              <div class="usage-insights-grid">
+                <For each={insights().insightLists}>
+                  {([titleKey, items, emptyKey]) => (
+                    <>{renderInsightList(t(titleKey), items, t(emptyKey))}</>
+                  )}
+                </For>
+                {renderInsightList(
+                  t("usage.overview.peakErrorDays"),
+                  insights().errorDays,
+                  t("usage.overview.noErrorData"),
+                  { error: true },
+                )}
+                {renderInsightList(
+                  t("usage.overview.peakErrorHours"),
+                  insights().errorHours,
+                  t("usage.overview.noErrorData"),
+                  {
+                    error: true,
+                    className: "usage-insight-card--wide",
+                    listClassName: "usage-error-list--hours",
+                  },
+                )}
+              </div>
+            </div>
+          </section>
+        </SettingsSection>
+      )}
+    </Show>
   );
 }
 
-export { renderCostWindowComparison, renderFilterChips, renderInsightList, renderUsageInsights };
+export { renderCostWindowComparison, renderFilterChips, renderInsightList };

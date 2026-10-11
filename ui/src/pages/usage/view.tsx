@@ -40,11 +40,7 @@ import { DailyChartCompact, CostBreakdownCompact } from "./view-chart.tsx";
 import { UsageCreatorFilter, UsageCreators } from "./view-creators.tsx";
 import { SessionDetailPanel } from "./view-details.tsx";
 import { renderUsageHeatmap } from "./view-heatmap.tsx";
-import {
-  renderCostWindowComparison,
-  renderFilterChips,
-  renderUsageInsights,
-} from "./view-overview.tsx";
+import { renderCostWindowComparison, renderFilterChips, UsageInsights } from "./view-overview.tsx";
 import { UsageQuerySection } from "./view-query-section.tsx";
 import { SessionsCard } from "./view-sessions-card.tsx";
 
@@ -644,18 +640,19 @@ export function renderUsage(props: UsageProps) {
               mode={state().display.chartMode}
               onSelect={(creatorKey) => state().filterActions.onScopeChange({ creatorKey })}
             />
-            {renderUsageInsights(
-              state().insightTotals,
-              state().insightAggregates,
-              state().insightStats,
-              state().hasMissingCost,
-              // Day totals are exact daily buckets; category rollups remain full-session totals.
-              // Hide shares instead of mixing those scopes into percentages above 100%.
-              state().filters.selectedDays.length === 0,
-              buildPeakErrorHours(state().aggregateSessions, state().filters.timeZone),
-              state().displaySessionCount,
-              state().totalSessions,
-            )}
+            <UsageInsights
+              totals={state().insightTotals}
+              aggregates={state().insightAggregates}
+              stats={state().insightStats}
+              showCostHint={state().hasMissingCost}
+              showCostShares={
+                /* Daily buckets are exact; category rollups remain full-session totals. */
+                state().filters.selectedDays.length === 0
+              }
+              errorHours={buildPeakErrorHours(state().aggregateSessions, state().filters.timeZone)}
+              sessionCount={state().displaySessionCount}
+              totalSessions={state().totalSessions}
+            />
             {state().costWindowComparison}
             {renderUsageHeatmap(
               state().filteredDaily,

@@ -653,6 +653,8 @@ suite.define(() => {
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
+            "sessions.usage.timeseries": { points: [] },
+            "sessions.usage.logs": { logs: [] },
             "agents.list": {
               agents: [
                 { id: "main", name: "Main" },

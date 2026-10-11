@@ -5,11 +5,7 @@ import { flush } from "../../test-helpers/solid-settle.ts";
 import type { UsageAggregates, UsageProps, UsageSessionEntry } from "./types.ts";
 import { totals, dailyEntry } from "./usage-chart.test-support.ts";
 import { CostBreakdownCompact } from "./view-chart.tsx";
-import {
-  renderCostWindowComparison,
-  renderFilterChips,
-  renderUsageInsights,
-} from "./view-overview.tsx";
+import { renderCostWindowComparison, renderFilterChips, UsageInsights } from "./view-overview.tsx";
 import { SessionsCard } from "./view-sessions-card.tsx";
 import { createUsageProps } from "./view.test-support.ts";
 
@@ -60,33 +56,39 @@ function getSummaryCards(container: HTMLElement): Array<{
   }));
 }
 
-describe("renderUsageInsights", () => {
+describe("UsageInsights", () => {
   it("renders overview hints as focusable tooltip anchors and identifies agents in the breakdown", async () => {
     const container = document.createElement("div");
     document.body.append(container);
+    const [currentTotals, setCurrentTotals] = createSignal(totals);
+    const [currentAggregates, setCurrentAggregates] = createSignal({
+      ...aggregates,
+      byAgent: [
+        { agentId: "main", totals },
+        { agentId: "research", totals },
+      ],
+    });
 
     mountSolid(
       () =>
-        renderUsageInsights(
-          totals,
-          {
-            ...aggregates,
-            byAgent: [
-              { agentId: "main", totals },
-              { agentId: "research", totals },
-            ],
+        UsageInsights({
+          get totals() {
+            return currentTotals();
           },
-          {
+          get aggregates() {
+            return currentAggregates();
+          },
+          stats: {
             durationCount: 0,
             avgDurationMs: 0,
             errorRate: 0,
           },
-          false,
-          true,
-          [],
-          1,
-          1,
-        ),
+          showCostHint: false,
+          showCostShares: true,
+          errorHours: [],
+          sessionCount: 1,
+          totalSessions: 1,
+        }),
       { container },
     );
     flush();
@@ -124,8 +126,28 @@ describe("renderUsageInsights", () => {
       }),
     ).toBe(true);
 
-    buttons[0]?.click();
-    expect(document.activeElement).toBe(buttons[0]);
+    await Promise.all(tooltips.map((tooltip) => tooltip.updateComplete));
+    const button = buttons[0]!;
+    const tooltip = button.closest("openclaw-tooltip")!;
+    button.click();
+    await tooltip.updateComplete;
+    const popup = tooltip.shadowRoot?.querySelector("wa-tooltip");
+    expect(popup).toBeTruthy();
+    expect(document.activeElement).toBe(button);
+
+    setCurrentTotals((current) => ({ ...current, totalCost: 12 }));
+    setCurrentAggregates((current) => ({
+      ...current,
+      messages: { ...current.messages, total: 8 },
+    }));
+    flush();
+    expect(container.querySelector("#usage-summary-hint-messages")).toBe(button);
+    expect(button.closest("openclaw-tooltip")).toBe(tooltip);
+    expect(tooltip.shadowRoot?.querySelector("wa-tooltip")).toBe(popup);
+    expect(document.activeElement).toBe(button);
+    expect(
+      button.closest(".usage-summary-card")?.querySelector(".usage-summary-value")?.textContent,
+    ).toBe("8");
   });
 
   it("includes cache writes in cache-hit-rate denominator", () => {
@@ -133,20 +155,20 @@ describe("renderUsageInsights", () => {
 
     mountSolid(
       () =>
-        renderUsageInsights(
+        UsageInsights({
           totals,
           aggregates,
-          {
+          stats: {
             durationCount: 0,
             avgDurationMs: 0,
             errorRate: 0,
           },
-          false,
-          true,
-          [],
-          1,
-          1,
-        ),
+          showCostHint: false,
+          showCostShares: true,
+          errorHours: [],
+          sessionCount: 1,
+          totalSessions: 1,
+        }),
       { container },
     );
     flush();
@@ -176,20 +198,20 @@ describe("renderUsageInsights", () => {
 
     mountSolid(
       () =>
-        renderUsageInsights(
-          costTotals,
-          costAggregates,
-          {
+        UsageInsights({
+          totals: costTotals,
+          aggregates: costAggregates,
+          stats: {
             durationCount: 0,
             avgDurationMs: 0,
             errorRate: 0,
           },
-          false,
-          true,
-          [],
-          1,
-          1,
-        ),
+          showCostHint: false,
+          showCostShares: true,
+          errorHours: [],
+          sessionCount: 1,
+          totalSessions: 1,
+        }),
       { container },
     );
     flush();
@@ -216,20 +238,20 @@ describe("renderUsageInsights", () => {
 
     mountSolid(
       () =>
-        renderUsageInsights(
-          costTotals,
-          costAggregates,
-          {
+        UsageInsights({
+          totals: costTotals,
+          aggregates: costAggregates,
+          stats: {
             durationCount: 0,
             avgDurationMs: 0,
             errorRate: 0,
           },
-          false,
-          false,
-          [],
-          1,
-          1,
-        ),
+          showCostHint: false,
+          showCostShares: false,
+          errorHours: [],
+          sessionCount: 1,
+          totalSessions: 1,
+        }),
       { container },
     );
     flush();
