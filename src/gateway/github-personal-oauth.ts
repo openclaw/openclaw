@@ -120,6 +120,10 @@ function revalidatePersonalGitHubStatus(
   ) {
     throw new Error("My GitHub connection changed; reload its status.");
   }
+  // Revalidating selection does not refresh the prepared account facts.
+  if (prepared.stale) {
+    current.stale = true;
+  }
   return prepared.state === "unavailable" ? { ...current, state: "unavailable" } : current;
 }
 
