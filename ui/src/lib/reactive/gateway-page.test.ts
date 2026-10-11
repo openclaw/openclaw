@@ -1,7 +1,8 @@
 import { createRoot, createSignal, flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../../app/context-types.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context-types.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { useGatewayPage } from "./gateway-page.ts";
 
 function snapshot(
@@ -22,27 +23,18 @@ function snapshot(
 }
 
 function source(initial: ApplicationGatewaySnapshot) {
-  let current = initial;
+  const fixture = createApplicationGateway(initial);
   const listeners = new Set<(value: ApplicationGatewaySnapshot) => void>();
-  const gateway = {
-    get snapshot() {
-      return current;
-    },
-    subscribe(listener: (value: ApplicationGatewaySnapshot) => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  } as ApplicationGateway;
-  return {
-    gateway,
-    listeners,
-    publish(next: ApplicationGatewaySnapshot) {
-      current = next;
-      for (const listener of listeners) {
-        listener(next);
-      }
-    },
+  const subscribe = fixture.gateway.subscribe;
+  fixture.gateway.subscribe = (listener) => {
+    listeners.add(listener);
+    const unsubscribe = subscribe(listener);
+    return () => {
+      listeners.delete(listener);
+      unsubscribe();
+    };
   };
+  return { ...fixture, listeners };
 }
 
 function mountGateway(options: Parameters<typeof useGatewayPage>[0]) {
