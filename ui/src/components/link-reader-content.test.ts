@@ -53,7 +53,9 @@ function mount(value: ControlUiLinkReaderDocument, link = target, loadImage?: Lo
       loadImage,
     }),
   );
-  updates.set(mounted.container, (next, link) => setState({ detail: next, target: link }));
+  updates.set(mounted.container, (next, nextTarget) =>
+    setState({ detail: next, target: nextTarget }),
+  );
   flush();
   return mounted.container;
 }
