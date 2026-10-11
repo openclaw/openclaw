@@ -725,3 +725,39 @@ describe("normalizePlainTextToolCallStreamEvents trim replay ordering", () => {
     expect(JSON.stringify(events)).not.toContain("<function=read>");
   });
 });
+
+describe("normalizePlainTextToolCallStreamEvents terminal trim drains", () => {
+  const trimmedPrefix = `[read]${" ".repeat(300)}`;
+  const trimmedVisible = `${trimmedPrefix}nope\n`;
+  const trimmedDeltas = [streamTextDelta(trimmedPrefix), streamTextDelta("nope\n<function=read>")];
+  const queuedReasoning = { type: "thinking_delta", contentIndex: 0, delta: "checking" };
+
+  it("drains buffered reasoning when a done trim clears the candidate", async () => {
+    const events = await normalize([
+      ...trimmedDeltas,
+      queuedReasoning,
+      doneEvent("stop", assistantMessage(textContent("visible only"))),
+    ]);
+    expect(textDeltas(events)).toEqual([trimmedVisible]);
+    expect(eventTypes(events)).toContain("thinking_delta");
+    expect(JSON.stringify(events)).not.toContain("<function=read>");
+  });
+
+  it("drains buffered reasoning when an error trim clears the candidate", async () => {
+    const events = await normalize([
+      ...trimmedDeltas,
+      queuedReasoning,
+      errorEvent(assistantMessage(textContent("visible only"))),
+    ]);
+    expect(textDeltas(events)).toEqual([trimmedVisible]);
+    expect(eventTypes(events)).toContain("thinking_delta");
+    expect(JSON.stringify(events)).not.toContain("<function=read>");
+  });
+
+  it("drains buffered reasoning at the candidate queue cap", async () => {
+    const events = await normalize([...trimmedDeltas, ...lifecycles]);
+    expect(textDeltas(events)).toEqual([trimmedVisible]);
+    expect(eventTypes(events)).toContain("thinking_start");
+    expect(JSON.stringify(events)).not.toContain("<function=read>");
+  });
+});
