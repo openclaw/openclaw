@@ -4,7 +4,7 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
-import { readSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
+import { readSqliteBusyTimeout, setSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import {
@@ -176,7 +176,7 @@ describe("SQLite session entry patch commit revalidation", () => {
   it("yields to the event loop while another connection holds the entry write lock", async () => {
     const other = new DatabaseSync(database.path);
     // Bound the defective synchronous path without a timer or a timing assertion.
-    database.db.exec("PRAGMA busy_timeout = 250");
+    setSqliteBusyTimeout(database.db, 250);
     let release: Promise<void> | undefined;
     try {
       const result = await patchEntry("ordinary", () => {
@@ -196,7 +196,7 @@ describe("SQLite session entry patch commit revalidation", () => {
     await closeOpenClawAgentDatabasesAsync();
     database = openOpenClawAgentDatabase({ agentId: "main", env });
     expect(database.db.prepare("PRAGMA journal_mode = DELETE").get()?.journal_mode).toBe("delete");
-    database.db.exec("PRAGMA busy_timeout = 37");
+    setSqliteBusyTimeout(database.db, 37);
     const reader = new DatabaseSync(database.path);
     try {
       reader.exec("BEGIN");

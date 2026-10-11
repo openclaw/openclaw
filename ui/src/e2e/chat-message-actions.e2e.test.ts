@@ -754,7 +754,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const sidebarShortcut = applePlatform ? "⌘B" : "Ctrl+B";
       const newSessionShortcut = applePlatform ? "⌘⇧O" : "Ctrl+Shift+O";
       await expectHoverTooltip(
-        page.locator(".sidebar-brand").getByRole("link", { name: "New conversation" }),
+        page.locator(".sidebar-session-toolbar .sidebar-new-session"),
         `New conversation (${newSessionShortcut})`,
       );
       await expectHoverTooltip(
@@ -762,8 +762,8 @@ describeControlUiE2e("Control UI chat message actions", () => {
         `Open command palette (${commandPaletteShortcut})`,
       );
       await expectHoverTooltip(
-        page.getByRole("button", { name: "Collapse sidebar" }),
-        `Collapse sidebar (${sidebarShortcut})`,
+        page.locator('[data-navigation-view][aria-pressed="true"]'),
+        `Sessions · Collapse sidebar (${sidebarShortcut})`,
       );
       await expectHoverTooltip(
         page.getByRole("button", { name: "Open split view" }),

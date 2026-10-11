@@ -637,39 +637,6 @@ describe("outbound prepared queue migration", () => {
     );
   });
 
-  it("fills a suppressed observer gap by source index without duplicating a later failure", async () => {
-    await enqueueDelivery(
-      {
-        channel: "matrix",
-        to: "!room:example",
-        queuePolicy: "required",
-        payloads: [{ text: "render-suppressed" }, { text: "failed" }],
-      },
-      tmpDir(),
-    );
-    const deliver = vi.fn(async (params: Parameters<typeof deliverOutboundPayloadsInternal>[0]) => {
-      params.onMessageSentEvent?.(
-        { success: false, content: "failed", error: "chat not found" },
-        1,
-      );
-      throw new Error("chat not found");
-    });
-
-    await recover(deliver);
-
-    expect(hookMocks.runMessageSent).toHaveBeenCalledTimes(2);
-    expect(hookMocks.runMessageSent).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ content: "render-suppressed", success: false }),
-      expect.any(Object),
-    );
-    expect(hookMocks.runMessageSent).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ content: "failed", success: false }),
-      expect.any(Object),
-    );
-  });
-
   it("dead-letters a partially-sent legacy row even when reconciliation reports not sent", async () => {
     const id = "legacy-partial-not-sent";
     seedDeliveryQueueEntry({

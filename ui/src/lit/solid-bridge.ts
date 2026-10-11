@@ -2,7 +2,6 @@ import { insert, render, spread } from "@solidjs/web";
 import { nothing, render as renderLit } from "lit";
 import {
   createComponent,
-  createEffect,
   createRenderEffect,
   createRoot,
   createSignal,
@@ -32,8 +31,8 @@ export type SolidBridgeElement<Props, Methods = object> = HTMLElement &
 
 type Spec<Props, Methods> = {
   properties: { [Key in keyof Props]-?: Property<Props[Key]> };
-  connected?(host: SolidBridgeElement<Props, Methods>): void;
-  disconnected?(host: SolidBridgeElement<Props, Methods>): void;
+  connected?: (host: SolidBridgeElement<Props, Methods>) => void;
+  disconnected?: (host: SolidBridgeElement<Props, Methods>) => void;
   propertyChanged?: (host: SolidBridgeElement<Props, Methods>, key: keyof Props) => void;
   methods?: {
     [Key in keyof Methods]: Methods[Key] extends (...args: infer Args) => infer Result
@@ -357,7 +356,8 @@ export function LitContent(props: {
     host.className = className;
   }
   let part: ReturnType<typeof renderLit> | undefined;
-  createEffect(
+  // Commit Lit descendants before post-render observers inspect the host.
+  createRenderEffect(
     () => props.render(),
     (template) => {
       part = renderLit(template, host, { host });

@@ -10,6 +10,8 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -19,6 +21,7 @@ import {
   listSessions,
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
+import { createPreparedGatewayModelCatalog } from "./server-model-catalog-view.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
@@ -422,6 +425,66 @@ it.each([false, true])(
     });
   },
 );
+
+it("updates one agent's catalog without rematerializing another agent's session", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {}, other: {} } } };
+    const queries = [
+      { agentId: "main", key: "agent:main:catalog-owner" },
+      { agentId: "other", key: "agent:other:catalog-owner" },
+    ] as const;
+    for (const query of queries) {
+      replaceSessionEntrySync(
+        { agentId: query.agentId, sessionKey: query.key },
+        {
+          sessionId: `${query.agentId}-catalog-owner`,
+          updatedAt: 1,
+          providerOverride: "unit-test",
+          modelOverride: "fixture",
+        },
+      );
+    }
+    const pluginRegistry = createEmptyPluginRegistry();
+    const metadataSnapshot = createPluginMetadataSnapshotFixture();
+    const catalog = (contextTokens: number) =>
+      createPreparedGatewayModelCatalog({
+        entries: [{ provider: "unit-test", id: "fixture", name: "Fixture", contextTokens }],
+        pluginRegistry,
+        metadataSnapshot,
+      });
+    let catalogs = new Map([
+      ["main", catalog(8_192)],
+      ["other", catalog(8_192)],
+    ]);
+    const release = retainSessionListForegroundWork();
+    let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
+    try {
+      projection = await createSessionRowProjection({ cfg, getModelCatalog: async () => catalogs });
+      await projection.ensureMaterialized();
+      const [changed, unchanged] = queries;
+      const retained = projection.describe(unchanged)?.materialized;
+      expect(retained).toBeDefined();
+      expect(projection.snapshot(changed).row?.contextTokens).toBe(8_192);
+      const before = projection.materializedCount;
+      catalogs = new Map([
+        ["main", catalog(16_384)],
+        ["other", catalog(8_192)],
+      ]);
+      notifyPreparedModelRuntimePublication({
+        phase: "catalog-published",
+        modelFactsChanged: true,
+      });
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(changed).row?.contextTokens).toBe(16_384);
+      expect(projection.snapshot(unchanged).row?.contextTokens).toBe(8_192);
+      expect(projection.describe(unchanged)?.materialized).toBe(retained);
+      expect(projection.materializedCount - before).toBe(1);
+    } finally {
+      projection?.dispose();
+      release();
+    }
+  });
+});
 
 it("waits for the first catalog before admitting session reads", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

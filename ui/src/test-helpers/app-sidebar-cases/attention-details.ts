@@ -122,10 +122,10 @@ describe("AppSidebar session attention details", () => {
           )
           ?.getAttribute("aria-label"),
       ).toBe(ownsRequest ? "Waiting for approval\ngit status --short" : undefined);
-      sidebar.querySelector<HTMLButtonElement>('button[aria-label="Mine"]')!.click();
+      sidebar.setSessionOwnerFilter("synthetic-unmatched-owner");
       await sidebar.updateComplete;
       expect(header()?.querySelector("[data-session-attention]")).toBeNull();
-      sidebar.querySelector<HTMLButtonElement>('button[aria-label="All"]')!.click();
+      sidebar.setSessionOwnerFilter(null);
       vi.spyOn(context.sessions, "deletionState").mockReturnValue("confirmed");
       await sidebar.updateComplete;
       expect(header()?.querySelector("[data-session-attention]")).toBeNull();
