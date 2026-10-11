@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
+import { scopeCommandTranscriptId } from "../../config/sessions/command-transcript.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import {
@@ -30,7 +31,6 @@ import {
 import {
   captureDeliveredTranscriptMirror,
   mirrorDeliveredReplyToTranscript,
-  scopeCommandTranscriptId,
 } from "./dispatch-from-config.transcript.js";
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
