@@ -1,4 +1,4 @@
-import { render, spread, type JSX } from "@solidjs/web";
+import { render, spread } from "@solidjs/web";
 import { nothing, render as renderLit } from "lit";
 import {
   createComponent,
@@ -8,11 +8,13 @@ import {
   flush,
   onCleanup,
   runWithOwner,
+  untrack,
 } from "solid-js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { shellLayoutOwnerForHost } from "../app/shell-layout-owner.ts";
 import { ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
+import type { JSX } from "../types/solid-elements.d.ts";
 
 type Property<T> = {
   default: T;
@@ -29,6 +31,7 @@ export type SolidBridgeElement<Props, Methods = object> = HTMLElement &
 
 type Spec<Props, Methods> = {
   properties: { [Key in keyof Props]-?: Property<Props[Key]> };
+  propertyChanged?: (host: SolidBridgeElement<Props, Methods>, key: keyof Props) => void;
   methods?: {
     [Key in keyof Methods]: Methods[Key] extends (...args: infer Args) => infer Result
       ? (host: SolidBridgeElement<Props, Methods>, ...args: Args) => Result
@@ -113,6 +116,8 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         return;
       }
       this.#values.set(key, value);
+      // SAFETY: Keys come only from spec.properties, which maps every Props key.
+      spec.propertyChanged?.(this.#host, key as keyof Props);
       const property = declarations.get(key);
       if (property?.reflect && property.attribute !== false) {
         const attribute = property.attribute ?? key.toLowerCase();
@@ -218,48 +223,55 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         if (!this.#content) {
           this.#content = this.ownerDocument.createDocumentFragment();
           this.#start = this.ownerDocument.createComment("solid-bridge-content");
-          this.#content.append(this.#start, ...this.childNodes);
+          this.prepend(this.#start);
+        } else {
+          this.append(...this.#content.childNodes);
         }
-        source = [...this.#content.childNodes];
+        // Adopt passthrough children in place so lazy upgrade keeps focus and hover intent.
+        source = [...this.childNodes];
       }
       this.#mountedApplication = this.#application;
       const layout = !this.#solidOwned ? shellLayoutOwnerForHost(this) : undefined;
-      this.#dispose = render(() => {
-        const [revision, setRevision] = createSignal(0);
-        this.#notify = () => setRevision((value) => value + 1);
-        const props = {
-          ...defaults,
-          get children() {
-            return children ? children() : source;
-          },
-        };
-        for (const [key] of properties) {
-          Object.defineProperty(props, key, {
-            get: () => {
-              revision();
-              return this.#values.get(key);
+      this.#dispose = render(
+        () => {
+          const [revision, setRevision] = createSignal(0);
+          this.#notify = () => setRevision((value) => value + 1);
+          const props = {
+            ...defaults,
+            get children() {
+              return children ? children() : source;
             },
-          });
-        }
-        const renderContent = () => content(props, this.#host);
-        const view = () =>
-          layout
-            ? createComponent(ShellLayoutProvider, {
-                value: { owner: layout, host: this },
+          };
+          for (const [key] of properties) {
+            Object.defineProperty(props, key, {
+              get: () => {
+                revision();
+                return this.#values.get(key);
+              },
+            });
+          }
+          const renderContent = () => content(props, this.#host);
+          const view = () =>
+            layout
+              ? createComponent(ShellLayoutProvider, {
+                  value: { owner: layout, host: this },
+                  get children() {
+                    return renderContent();
+                  },
+                })
+              : renderContent();
+          return this.#application
+            ? createComponent(ApplicationProvider, {
+                value: this.#application,
                 get children() {
-                  return renderContent();
+                  return view();
                 },
               })
-            : renderContent();
-        return this.#application
-          ? createComponent(ApplicationProvider, {
-              value: this.#application,
-              get children() {
-                return view();
-              },
-            })
-          : view();
-      }, this);
+            : view();
+        },
+        this,
+        source,
+      );
     }
 
     #disposeRoot() {
@@ -305,9 +317,21 @@ export function defineSolidBridge<Props extends object, Methods extends object =
 }
 
 /** Unported stateless templates exclusively own this adapter's descendants. */
-export function LitContent(props: { render: () => unknown }) {
-  const host = document.createElement("span");
-  host.style.display = "contents";
+export function LitContent(props: {
+  render: () => unknown;
+  tag?: "span" | "div" | "code";
+  class?: string;
+}) {
+  // Host shape stays fixed while the template updates.
+  const tag = untrack(() => props.tag ?? "span");
+  const host = document.createElement(tag);
+  if (tag === "span") {
+    host.style.display = "contents";
+  }
+  const className = untrack(() => props.class);
+  if (className) {
+    host.className = className;
+  }
   let part: ReturnType<typeof renderLit> | undefined;
   createEffect(
     () => props.render(),

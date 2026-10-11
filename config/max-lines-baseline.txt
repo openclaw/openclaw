@@ -15,7 +15,6 @@ extensions/browser/src/browser/routes/agent.snapshot.ts
 extensions/codex/src/app-server/approval-bridge.ts
 extensions/codex/src/app-server/auth-bridge.test.ts
 extensions/codex/src/app-server/auth-bridge.ts
-extensions/codex/src/app-server/client.ts
 extensions/codex/src/app-server/compact.test.ts
 extensions/codex/src/app-server/computer-use.ts
 extensions/codex/src/app-server/config.test.ts
@@ -277,7 +276,6 @@ src/auto-reply/reply/agent-runner-memory.ts
 src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts
 src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts
 src/auto-reply/reply/commands-acp.test.ts
-src/auto-reply/reply/commands-status.test.ts
 src/auto-reply/reply/directive-handling.model.test.ts
 src/auto-reply/reply/dispatch-acp.test.ts
 src/auto-reply/reply/dispatch-acp.ts
@@ -335,7 +333,6 @@ src/commands/doctor-auth-flat-profiles.ts
 src/commands/doctor-legacy-config.migrations.test.ts
 src/commands/doctor-session-sqlite.ts
 src/commands/doctor-state-integrity.ts
-src/commands/doctor-state-migrations.test.ts
 src/commands/doctor/repair-sequencing.test.ts
 src/commands/doctor/shared/codex-route-warnings.test.ts
 src/commands/doctor/shared/legacy-config-migrate.test.ts
@@ -545,8 +542,7 @@ ui/src/api/gateway.node.test.ts
 ui/src/lib/cron/index.test.ts
 ui/src/lib/cron/index.ts
 ui/src/lib/skills/index.test.ts
-ui/src/pages/agents/agents-page.ts
-ui/src/pages/agents/memory/view.ts
+ui/src/pages/agents/agents-page-state.ts
 ui/src/pages/chat/chat-gateway.test.ts
 ui/src/pages/chat/chat-responsive.browser.test.ts
 ui/src/pages/chat/chat-send.test.ts
@@ -558,7 +554,6 @@ ui/src/pages/chat/composer-persistence.ts
 ui/src/pages/chat/talk/gateway-relay.test.ts
 ui/src/pages/config/config-page.ts
 ui/src/pages/config/view.browser.test.ts
-ui/src/pages/cron/view.ts
 ui/src/pages/sessions/sessions-page.ts
 ui/src/pages/usage/view.ts
 ui/src/test-helpers/control-ui-e2e.ts

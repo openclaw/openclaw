@@ -37,12 +37,12 @@ import {
   type GitHubPublicationSessionRequest as SharedRequest,
 } from "./github-publication-coordinator-methods.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
-import { restoreGitHubPublicationRequester } from "./github-publication-requester.js";
 import {
   matchesGitHubPublicationIdentityRow,
-  markGitHubPublicationReported,
   projectGitHubPublicationResult,
-} from "./github-publication-store.js";
+} from "./github-publication-receipt.js";
+import { restoreGitHubPublicationRequester } from "./github-publication-requester.js";
+import { markGitHubPublicationReported } from "./github-publication-store.js";
 import { assertGitHubPublicationWorkflowChangesAllowed } from "./github-publication-workflows.js";
 import {
   executeRepositoryGitHubPublication,

@@ -61,6 +61,9 @@ export function createIncognitoSideDataWorker(
   let appendTrajectory:
     | typeof import("../../trajectory/runtime-store.sqlite.js").appendSqliteTrajectoryRuntimeEventsWithWriter
     | undefined;
+  let readTrajectory:
+    | typeof import("../../trajectory/runtime-store.sqlite.js").loadSqliteTrajectoryRuntimeEventRowsSync
+    | undefined;
   let trajectoryRetention:
     | typeof import("../../trajectory/runtime-retention.sqlite.js")
     | undefined;
@@ -101,6 +104,10 @@ export function createIncognitoSideDataWorker(
   };
   return {
     async prepare(command: Command) {
+      if (command.type === "session.trajectory.read") {
+        readTrajectory ??= (await import("../../trajectory/runtime-store.sqlite.js"))
+          .loadSqliteTrajectoryRuntimeEventRowsSync;
+      }
       if (command.type === "session.trajectory.append") {
         appendTrajectory ??= (await import("../../trajectory/runtime-store.sqlite.js"))
           .appendSqliteTrajectoryRuntimeEventsWithWriter;
@@ -156,6 +163,19 @@ export function createIncognitoSideDataWorker(
         }
         return withSqlitePostCommitPublications(database.db, () => {
           switch (command.type) {
+            case "session.trajectory.read": {
+              if (!readTrajectory) {
+                throw new Error("Incognito trajectory read was not prepared");
+              }
+              return result(
+                readTrajectory({
+                  ...command.input,
+                  agentId: database.agentId,
+                  storePath: database.path,
+                  env,
+                }).map((row) => row.event),
+              );
+            }
             case "session.trajectory.retention.prepare": {
               if (!trajectoryRetention) {
                 throw new Error("Trajectory retention was not prepared");

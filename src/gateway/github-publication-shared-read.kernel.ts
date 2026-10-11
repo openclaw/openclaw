@@ -15,8 +15,8 @@ import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   assertReadableSharedGitHubPublication,
   checkSharedWorktreeReceipt,
-  githubPublicationDatabase,
-} from "./github-publication-store.js";
+} from "./github-publication-receipt.js";
+import { githubPublicationDatabase } from "./github-publication-store.js";
 import { checkRepositoryGitHubPublication as checked } from "./github-repository-publication.kernel.js";
 
 const table = "github_repository_publication_requests";
