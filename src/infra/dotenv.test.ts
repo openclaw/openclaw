@@ -17,6 +17,22 @@ vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: vi.fn(() => loggerMocks),
 }));
 
+const CREDENTIAL_AND_GATEWAY_ENV_KEYS = [
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_API_KEY_SECONDARY",
+  "ANTHROPIC_OAUTH_TOKEN",
+  "OPENAI_API_KEY",
+  "OPENAI_API_KEYS",
+  "OPENAI_API_KEY_SECONDARY",
+  "OPENCLAW_LIVE_ANTHROPIC_KEY",
+  "OPENCLAW_LIVE_ANTHROPIC_KEYS",
+  "OPENCLAW_LIVE_GEMINI_KEY",
+  "OPENCLAW_LIVE_OPENAI_KEY",
+  "OPENCLAW_GATEWAY_TOKEN",
+  "OPENCLAW_GATEWAY_PASSWORD",
+  "OPENCLAW_GATEWAY_SECRET",
+] as const;
+
 const BUNDLED_TRUST_ROOT_ENV_LINES = [
   "OPENCLAW_BROWSER_CONTROL_MODULE=data:text/javascript,boom",
   "OPENCLAW_BUNDLED_HOOKS_DIR=./attacker-hooks",
@@ -188,6 +204,21 @@ describe("loadDotEnv", () => {
     });
   });
 
+  it("blocks credential and gateway auth vars from CWD .env", async () => {
+    await withDotEnvFixture(async ({ cwdDir }) => {
+      await writeEnvFile(
+        path.join(cwdDir, ".env"),
+        CREDENTIAL_AND_GATEWAY_ENV_KEYS.map((key) => `${key}=attacker-${key}`).join("\n"),
+      );
+
+      clearEnv(CREDENTIAL_AND_GATEWAY_ENV_KEYS);
+
+      loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+      expectEnvUndefined(CREDENTIAL_AND_GATEWAY_ENV_KEYS);
+    });
+  });
+
   it("blocks Windows shell trust-root vars from workspace .env", async () => {
     await withDotEnvFixture(async ({ cwdDir }) => {
       await writeEnvFile(
@@ -200,6 +231,50 @@ describe("loadDotEnv", () => {
       loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
       expectEnvUndefined(WINDOWS_SHELL_TRUST_ROOT_ENV_KEYS);
+    });
+  });
+
+  it("blocks path-override vars from workspace .env", async () => {
+    await withDotEnvFixture(async ({ base, cwdDir }) => {
+      const bundledPluginsDir = path.join(base, "attacker-bundled");
+      const pathOverrideEnvKeys = [
+        "NPM_CONFIG_PREFIX",
+        "OPENCLAW_AGENT_DIR",
+        "OPENCLAW_BUNDLED_PLUGINS_DIR",
+        "OPENCLAW_OAUTH_DIR",
+        "PI_CODING_AGENT_DIR",
+        "PNPM_HOME",
+      ] as const;
+      await writeEnvFile(
+        path.join(cwdDir, ".env"),
+        [
+          `NPM_CONFIG_PREFIX=${path.join(cwdDir, ".npm-prefix")}`,
+          "OPENCLAW_AGENT_DIR=./evil-agent",
+          `OPENCLAW_BUNDLED_PLUGINS_DIR=${bundledPluginsDir}`,
+          "OPENCLAW_OAUTH_DIR=./evil-oauth",
+          "PI_CODING_AGENT_DIR=./evil-pi-agent",
+          `PNPM_HOME=${path.join(cwdDir, ".pnpm")}`,
+        ].join("\n"),
+      );
+
+      clearEnv(pathOverrideEnvKeys);
+
+      loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+      expectEnvUndefined(pathOverrideEnvKeys);
+    });
+  });
+
+  it("blocks lowercase npm_execpath from workspace .env", async () => {
+    const key = "npm_execpath";
+    await withDotEnvFixture(async ({ cwdDir }) => {
+      await writeEnvFile(path.join(cwdDir, ".env"), `${key}=./evil/npm-cli.js\n`);
+
+      deleteTestEnvValue(key);
+
+      loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+      expect(process.env[key]).toBeUndefined();
     });
   });
 

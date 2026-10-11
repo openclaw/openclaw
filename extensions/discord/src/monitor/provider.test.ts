@@ -335,6 +335,34 @@ describe("monitorDiscordProvider", () => {
     expect(voiceRuntimeModuleLoadedMock).not.toHaveBeenCalled();
   });
 
+  it.each(["binding reconciliation", "interaction registration"] as const)(
+    "stops thread bindings when %s fails before lifecycle begins",
+    async (phase) => {
+      const failure = new Error("startup failed");
+      if (phase === "binding reconciliation") {
+        reconcileAcpThreadBindingsOnStartupMock.mockImplementationOnce(async () => {
+          throw failure;
+        });
+      } else {
+        createDiscordNativeCommandMock.mockImplementationOnce(() => {
+          throw failure;
+        });
+      }
+
+      await expect(
+        monitorDiscordProvider({
+          scheduler: createTestPluginServiceScheduler(),
+          config: baseConfig(),
+          runtime: baseRuntime(),
+        }),
+      ).rejects.toBe(failure);
+
+      expect(monitorLifecycleMock).not.toHaveBeenCalled();
+      expect(createdBindingManagers).toHaveLength(1);
+      expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it.each(["binding restoration", "binding reconciliation"] as const)(
     "stops acquired thread bindings without starting a client when cancelled during %s",
     async (phase) => {

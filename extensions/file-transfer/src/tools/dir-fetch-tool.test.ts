@@ -464,12 +464,16 @@ describe("dir.fetch archive extraction", () => {
     );
   });
 
-  it.each(["../escape.txt", "/escape.txt", "dir/C:escape.txt"])(
-    "rejects unsafe raw path %j",
-    async (entryPath) => {
-      await expectUnsafeArchive([{ path: entryPath, contents: "blocked" }]);
-    },
-  );
+  it.each([
+    "../escape.txt",
+    "dir/..\\escape.txt",
+    "/escape.txt",
+    "\\\\server\\share\\escape.txt",
+    "C:escape.txt",
+    "dir/C:escape.txt",
+  ])("rejects unsafe raw path %j", async (entryPath) => {
+    await expectUnsafeArchive([{ path: entryPath, contents: "blocked" }]);
+  });
 
   it.each(["PAX", "GNU"] as const)(
     "does not let a safe %s override hide an unsafe raw name",

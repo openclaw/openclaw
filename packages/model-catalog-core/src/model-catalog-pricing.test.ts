@@ -1,3 +1,4 @@
+import { calculateUsageCost } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
 import {
   normalizeModelPricingCatalog,
@@ -158,6 +159,24 @@ describe("OpenRouter native pricing", () => {
       ],
     });
   });
+  it.each([
+    { input: 40, output: 7, cacheRead: 30, cacheWrite: 30, expected: 0.0002325 },
+    { input: 41, output: 7, cacheRead: 30, cacheWrite: 30, expected: 0.0003865 },
+    { input: 0, output: 1_000, cacheRead: 0, cacheWrite: 0, expected: 0.01 },
+  ])(
+    "bills strict total-prompt boundaries with inherited cache prices: %j",
+    ({ expected, ...usage }) => {
+      const pricing = normalizeOpenRouterModelPricing({
+        ...base,
+        overrides: [{ min_prompt_tokens: 100, prompt: "0.000004", completion: "0.00002" }],
+      });
+      expect(pricing).toBeDefined();
+      if (!pricing) {
+        throw new Error("Expected a complete native schedule");
+      }
+      expect(calculateUsageCost(usage, pricing).total).toBeCloseTo(expected, 12);
+    },
+  );
 });
 
 describe("upstream pricing tiers", () => {

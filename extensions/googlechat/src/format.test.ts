@@ -4,11 +4,72 @@ import { formatGoogleChatTextChunks } from "./format.js";
 const formatGoogleChatText = (text: string) => formatGoogleChatTextChunks(text).join("");
 
 const DIALECT_FIXTURES = [
+  { name: "bold", input: "**bold**", before: "**bold**", after: "*bold*" },
+  { name: "italic", input: "*italic*", before: "*italic*", after: "_italic_" },
+  { name: "underline fallback", input: "<u>under</u>", before: "under", after: "under" },
+  { name: "strikethrough", input: "~~gone~~", before: "~~gone~~", after: "~gone~" },
+  { name: "spoiler fallback", input: "||secret||", before: "||secret||", after: "secret" },
+  { name: "inline code", input: "`value`", before: "`value`", after: "`value`" },
+  {
+    name: "fenced code drops language",
+    input: "```ts\nconst value = 1;\n```",
+    before: "```ts\nconst value = 1;\n```",
+    after: "```\nconst value = 1;\n```",
+  },
+  {
+    name: "labeled link",
+    input: "[docs](https://example.com)",
+    before: "[docs](https://example.com)",
+    after: "<https://example.com|docs>",
+  },
+  { name: "heading fallback", input: "## Heading", before: "## Heading", after: "*Heading*" },
+  {
+    name: "nested bullet list",
+    input: "- first\n  - second",
+    before: "- first\n  - second",
+    after: "* first\n    * second",
+  },
   {
     name: "ordered-list fallback",
     input: "1. first\n2. second",
     before: "1. first\n2. second",
     after: "1. first\n2. second",
+  },
+  {
+    name: "task-list fallback",
+    input: "- [x] done",
+    before: "- [x] done",
+    after: "[x] done",
+  },
+  {
+    name: "table fallback",
+    input: "| Name | Value |\n| --- | --- |\n| A | 1 |",
+    before: "| Name | Value |\n| --- | --- |\n| A | 1 |",
+    after: "*A*\n• Value: 1",
+  },
+  {
+    name: "multiline blockquote",
+    input: "> first\n> second",
+    before: "> first\n> second",
+    after: "> first\n> second",
+  },
+  {
+    name: "image fallback",
+    input: "![diagram](https://example.com/diagram.png)",
+    before: "![diagram](https://example.com/diagram.png)",
+    after: "diagram",
+  },
+  {
+    name: "raw mention stripping",
+    input: "Hello <users/123456789>",
+    before: "Hello",
+    after: "Hello",
+  },
+  {
+    name: "escaped literal markup",
+    input: "\\*literal\\* and \\_plain\\_",
+    before: "\\*literal\\* and \\_plain\\_",
+    after: "＊literal＊ and ＿plain＿",
   },
   {
     name: "bullet list inside blockquote",
