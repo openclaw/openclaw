@@ -3,7 +3,6 @@ import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agen
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import type {
   SessionActor,
-  SessionActorFactory,
   SessionActorLifetime,
   SessionActorTarget,
 } from "./session-actor-contract.js";
@@ -83,29 +82,30 @@ export function captureDurableSessionActor(params: {
   });
 }
 
-/** Select the current physical owner; native incognito remains native until P12. */
+type AcquisitionTarget =
+  | SessionActorTarget
+  | { database: { kind: "native-incognito" }; sessionKey: string };
+
+/** Native incognito keeps its existing owner and gets no actor savings until P12. */
 export function createSessionActorFactory(
   database: OpenClawAgentDatabaseOptions & { path: string },
-): SessionActorFactory {
+) {
   const captured = {
     ...database,
     env: Object.freeze({ ...(database.env ?? process.env) }),
   };
   return {
-    async acquire(requestedTarget, lifetime) {
-      const target = structuredClone(requestedTarget);
+    async acquire(requestedTarget: AcquisitionTarget, lifetime: SessionActorLifetime) {
       lifetime.assertCurrent();
+      if (requestedTarget.database.kind === "native-incognito") {
+        return { kind: "not-actor-owned" } as const;
+      }
+      const target: SessionActorTarget = {
+        sessionKey: requestedTarget.sessionKey,
+        database: structuredClone(requestedTarget.database),
+      };
       if (target.database.kind === "file") {
         return captureDurableSessionActor({
-          database: captured,
-          target: { sessionKey: target.sessionKey, database: target.database },
-          lifetime,
-        });
-      }
-      if (target.database.kind === "native-incognito") {
-        const { captureNativeIncognitoSessionActor } =
-          await import("./session-actor-native-incognito.js");
-        return captureNativeIncognitoSessionActor({
           database: captured,
           target: { sessionKey: target.sessionKey, database: target.database },
           lifetime,
@@ -156,5 +156,5 @@ export function createSessionActorFactory(
   };
 }
 
-/** Existing cutover callers keep the factory name while acquisition covers every owner kind. */
+/** Existing cutover callers retain the factory name. */
 export const createDurableSessionActorFactory = createSessionActorFactory;

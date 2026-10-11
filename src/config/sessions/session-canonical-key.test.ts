@@ -246,11 +246,11 @@ describe("cold canonical session validation", () => {
           ),
         { ...scope, path: scope.storePath },
       );
-    // Raw repair publishes pending rows after changing the persisted policy.
+    // Config publication invalidates the previously admitted policy before another write.
     const external = new DatabaseSync(scope.storePath);
     try {
+      setCanonicalSqliteSessionMainKey(database, "custom");
       external.exec("BEGIN IMMEDIATE");
-      external.prepare("UPDATE session_key_contract SET main_key = ? WHERE id = 1").run("custom");
       external
         .prepare("UPDATE session_nodes SET entry_json = '{' WHERE session_key = ?")
         .run(otherKey);

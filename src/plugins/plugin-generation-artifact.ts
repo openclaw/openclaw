@@ -55,7 +55,7 @@ export const capturePluginGenerationArtifact = createPluginGenerationCapture(
 
 function createPluginGenerationArtifact(
   rootDir: string,
-  entryFile?: string,
+  entryFile?: string | readonly string[],
   execute?: <T>(run: () => T) => T,
   moduleSource?: (filename: string) => string,
   nativeRecovery?: PluginNativeRecovery,
@@ -63,6 +63,10 @@ function createPluginGenerationArtifact(
   retained?: PluginSourceCustodyFork,
   captureForCustody = false,
 ) {
+  const entryFiles = typeof entryFile === "string" ? [entryFile] : entryFile && [...entryFile];
+  if (entryFiles?.length === 0) {
+    throw new Error("Selective plugin capture requires at least one entry");
+  }
   const sourceCapture = retained?.source.sourceCapture ?? createPluginSourceCapture();
   const directory = sourceCapture.directory;
   const packages = new Map<string, PluginPackageCapture>();
@@ -74,7 +78,7 @@ function createPluginGenerationArtifact(
   const nativeAdmission = createPluginNativeAdmission(
     rootDir,
     directory,
-    entryFile,
+    entryFiles,
     nativeRecovery,
     sourceCapture.outputRoot,
   );
@@ -87,7 +91,7 @@ function createPluginGenerationArtifact(
   const sourceAliases: Record<string, string> = {};
   const sourceFacts = createPluginSourceFacts(
     rootDir,
-    entryFile,
+    entryFiles,
     dependencyLookupBoundary,
     captureForCustody,
   );
@@ -627,18 +631,21 @@ function createPluginGenerationArtifact(
 
   try {
     const sourceRoot = fs.realpathSync(rootDir);
-    const entry = entryFile ? fs.realpathSync(entryFile) : undefined;
-    const root = copyPackage(sourceRoot, entry);
+    const entries = entryFiles?.map((file) => fs.realpathSync(file));
+    const root = copyPackage(sourceRoot, entries?.[0]);
+    for (const entry of entries?.slice(1) ?? []) {
+      packages.get(sourceRoot)!.materialize(entry);
+    }
     sourceAliases[path.resolve(rootDir)] = root;
-    if (entry && entryFile) {
+    for (const [index, entry] of entries?.entries() ?? []) {
       const alias = path.join(
         sourceRoot,
-        path.relative(path.resolve(rootDir), path.resolve(entryFile)),
+        path.relative(path.resolve(rootDir), path.resolve(entryFiles![index]!)),
       );
       capturedPaths.set(alias, capturedPaths.get(entry)!);
     }
     const assertSourceCurrent = () => {
-      assertPluginSourceRootCurrent({ rootDir, sourceRoot, entryFile, entry });
+      assertPluginSourceRootCurrent({ rootDir, sourceRoot, entryFiles, entries });
       nativeAdmission.reconcileSourceInputs(inputs);
       verifyPluginSourceInputs(inputs, inputs.keys());
     };
@@ -679,7 +686,7 @@ function createPluginGenerationArtifact(
       retainSourceCustody: () =>
         sourceFacts.captureCustody({
           sourceRoot,
-          entry,
+          entries,
           sourceDigest: initialReceipt.sourceDigest,
           capture: sourceLookup.captureRecoverySource,
         }),

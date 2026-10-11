@@ -145,35 +145,24 @@ function formatBlockedInstallPolicyResult(params: {
   ) {
     return { blocked: params.blocked };
   }
-  const reason = params.blocked.reason.slice(INSTALL_POLICY_BLOCK_REASON_PREFIX.length);
-  const notice = formatInstallPolicyNotice({
+  const noticeParams = {
     decision: "block",
-    findings: params.findings,
-    reason,
+    reason: params.blocked.reason.slice(INSTALL_POLICY_BLOCK_REASON_PREFIX.length),
     targetName: params.targetName,
     targetType: params.targetType,
-  });
-  if (notice.length > MAX_INSTALL_POLICY_NOTICE_CHARS) {
-    const compactNotice = `${formatInstallPolicyNotice({
-      decision: "block",
-      reason,
-      targetName: params.targetName,
-      targetType: params.targetType,
-    })}\n  Findings omitted: policy review exceeds the 4,000-character display limit.`;
-    return {
-      blocked: {
-        ...params.blocked,
-        reason:
-          compactNotice.length <= MAX_INSTALL_POLICY_NOTICE_CHARS
-            ? compactNotice
-            : "Install blocked by policy: review exceeds the 4,000-character display limit.",
-      },
-    };
+  } as const;
+  let reason = formatInstallPolicyNotice({ ...noticeParams, findings: params.findings });
+  if (reason.length > MAX_INSTALL_POLICY_NOTICE_CHARS) {
+    const compactNotice = `${formatInstallPolicyNotice(noticeParams)}\n  Findings omitted: policy review exceeds the 4,000-character display limit.`;
+    reason =
+      compactNotice.length <= MAX_INSTALL_POLICY_NOTICE_CHARS
+        ? compactNotice
+        : "Install blocked by policy: review exceeds the 4,000-character display limit.";
   }
   return {
     blocked: {
       ...params.blocked,
-      reason: notice,
+      reason,
     },
   };
 }
@@ -375,19 +364,8 @@ async function collectInstalledPackageScanRoots(params: {
   const boundaryDir = params.dependencyScanRootDir ?? params.packageDir;
   const boundaryRealPath = await fs.realpath(boundaryDir).catch(() => path.resolve(boundaryDir));
   const trustedHostOpenClawRootRealPath = await resolveTrustedHostOpenClawRootRealPath();
-  const packageRealPath = await fs
-    .realpath(params.packageDir)
-    .catch(() => path.resolve(params.packageDir));
-  if (!isSamePathOrInside(boundaryRealPath, packageRealPath)) {
-    throw new Error(
-      `installed dependency scan found package outside install root at ${params.packageDir}`,
-    );
-  }
-
-  const queue: InstalledPackageScanRoot[] = [
-    { packageDir: params.packageDir, realPath: packageRealPath },
-  ];
-  for (const packageDir of params.additionalPackageDirs ?? []) {
+  const queue: InstalledPackageScanRoot[] = [];
+  for (const packageDir of [params.packageDir, ...(params.additionalPackageDirs ?? [])]) {
     const realPath = await fs.realpath(packageDir).catch(() => path.resolve(packageDir));
     if (!isSamePathOrInside(boundaryRealPath, realPath)) {
       throw new Error(
@@ -398,6 +376,14 @@ async function collectInstalledPackageScanRoots(params: {
   }
   const visitedRealPaths = new Set<string>();
   const scanRoots: string[] = [];
+  const resolveDependency = (packageDir: string, dependencyName: string) =>
+    resolveInstalledPackageScanRoot({
+      allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
+      boundaryRealPath,
+      dependencyName,
+      packageDir,
+      trustedHostOpenClawRootRealPath,
+    });
   let queueIndex = 0;
 
   while (queueIndex < queue.length) {
@@ -421,23 +407,11 @@ async function collectInstalledPackageScanRoots(params: {
       continue;
     }
     for (const dependencyName of collectManifestRuntimeDependencyNames(manifest)) {
-      const nestedCandidate = await resolveInstalledPackageScanRoot({
-        allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
-        boundaryRealPath,
-        dependencyName,
-        packageDir: current.packageDir,
-        trustedHostOpenClawRootRealPath,
-      });
+      const nestedCandidate = await resolveDependency(current.packageDir, dependencyName);
       const candidate =
         nestedCandidate ??
         (params.dependencyScanRootDir
-          ? await resolveInstalledPackageScanRoot({
-              allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
-              boundaryRealPath,
-              dependencyName,
-              packageDir: params.dependencyScanRootDir,
-              trustedHostOpenClawRootRealPath,
-            })
+          ? await resolveDependency(params.dependencyScanRootDir, dependencyName)
           : undefined);
       if (candidate && !visitedRealPaths.has(candidate.realPath)) {
         queue.push(candidate);

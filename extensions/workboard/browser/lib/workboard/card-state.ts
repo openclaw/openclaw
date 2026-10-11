@@ -166,21 +166,25 @@ export function removeCardAndReferences(
   return nextCards;
 }
 
+export const WORKBOARD_DRAFT_DEFAULTS = {
+  draftOpen: false,
+  draftDiscardOpen: false,
+  editingCardId: null,
+  editingCardBase: null,
+  draftTitle: "",
+  draftNotes: "",
+  draftStatus: "todo",
+  draftPriority: "normal",
+  draftLabels: "",
+  draftAgentId: "",
+  draftSessionKey: "",
+  draftTemplateId: "",
+  draftCommentBody: "",
+} satisfies Partial<WorkboardUiState>;
+
 export function resetDraftState(state: WorkboardUiState) {
   const resolveStaleEdit = state.loaded && state.mutationReadiness === "stale_edit_draft";
-  state.draftOpen = false;
-  state.draftDiscardOpen = false;
-  state.editingCardId = null;
-  state.editingCardBase = null;
-  state.draftTitle = "";
-  state.draftNotes = "";
-  state.draftStatus = "todo";
-  state.draftPriority = "normal";
-  state.draftLabels = "";
-  state.draftAgentId = "";
-  state.draftSessionKey = "";
-  state.draftTemplateId = "";
-  state.draftCommentBody = "";
+  Object.assign(state, WORKBOARD_DRAFT_DEFAULTS);
   if (resolveStaleEdit) {
     state.mutationReadiness = "ready";
   }

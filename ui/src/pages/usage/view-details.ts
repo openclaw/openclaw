@@ -437,7 +437,9 @@ function renderSessionLogsCompact(
           size="4"
           aria-label=${t("usage.details.filterByRole")}
           @change=${(event: Event) =>
-            callbacks.onLogFilterRolesChange(selectedLogFilterValues(event) as SessionLogRole[])}
+            callbacks.onLogFiltersChange({
+              roles: selectedLogFilterValues(event) as SessionLogRole[],
+            })}
         >
           ${(
             [
@@ -457,7 +459,7 @@ function renderSessionLogsCompact(
           multiple
           size="4"
           aria-label=${t("usage.details.filterByTool")}
-          @change=${(event: Event) => callbacks.onLogFilterToolsChange(selectedLogFilterValues(event))}
+          @change=${(event: Event) => callbacks.onLogFiltersChange({ tools: selectedLogFilterValues(event) })}
         >
           ${toolOptions.map(
             (tool) =>
@@ -469,7 +471,9 @@ function renderSessionLogsCompact(
             type="checkbox"
             .checked=${filters.hasTools}
             @change=${(event: Event) =>
-              callbacks.onLogFilterHasToolsChange((event.target as HTMLInputElement).checked)}
+              callbacks.onLogFiltersChange({
+                hasTools: (event.target as HTMLInputElement).checked,
+              })}
           />
           ${t("usage.details.hasTools")}
         </label>
@@ -478,9 +482,12 @@ function renderSessionLogsCompact(
           placeholder=${t("usage.details.searchConversation")}
           aria-label=${t("usage.details.searchConversation")}
           .value=${filters.query}
-          @input=${(event: Event) => callbacks.onLogFilterQueryChange((event.target as HTMLInputElement).value)}
+          @input=${(event: Event) => callbacks.onLogFiltersChange({ query: (event.target as HTMLInputElement).value })}
         />
-        <button class="btn btn--sm" @click=${callbacks.onLogFilterClear}>
+        <button
+          class="btn btn--sm"
+          @click=${() => callbacks.onLogFiltersChange({ roles: [], tools: [], hasTools: false, query: "" })}
+        >
           ${t("usage.filters.clear")}
         </button>
       </div>

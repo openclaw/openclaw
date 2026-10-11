@@ -47,6 +47,8 @@ export function projectIncognitoSessionRuntimeFacts(
     policy: entry
       ? {
           sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision,
+          skillLibrarySelections: entry.skillLibrarySelections,
           sandbox: entry.sandbox,
           sandboxMode: entry.sandboxMode,
           createdActor: entry.createdActor,
@@ -56,7 +58,6 @@ export function projectIncognitoSessionRuntimeFacts(
           execHost: entry.execHost,
           execNode: entry.execNode,
           execCwd: entry.execCwd,
-          skillLibrarySelections: entry.skillLibrarySelections,
           pluginOwnerId: entry.pluginOwnerId,
           agentHarnessId: entry.agentHarnessId,
         }

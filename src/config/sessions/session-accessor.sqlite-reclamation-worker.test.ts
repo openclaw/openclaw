@@ -83,7 +83,7 @@ test("retains one archive Worker across refused and interleaved reclamation oper
         databaseOptions,
       ),
     );
-    let refusalPoint: "admission-request" | "commit-request" | undefined;
+    let refusalPoint: "admission-request" | undefined;
     let superseded = false;
     const create = sqliteArchive.createSqliteTranscriptArchiveWorker;
     const spawn = vi
@@ -127,11 +127,7 @@ test("retains one archive Worker across refused and interleaved reclamation oper
         ];
         for (const operation of plans) {
           const refusals =
-            operation.kind === "maintenance-statistics"
-              ? []
-              : operation.kind === "entry"
-                ? (["admission-request", "commit-request"] as const)
-                : (["admission-request"] as const);
+            operation.kind === "maintenance-statistics" ? [] : (["admission-request"] as const);
           for (const point of refusals) {
             refusalPoint = point;
             await expect(

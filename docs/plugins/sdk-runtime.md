@@ -238,8 +238,10 @@ registry, so a retained plugin sees replacement providers after a reload.
 Use it when installing timers, watchers, and listeners, and again when delivering
 each background callback. Keep the runner with the resource that owns it; an old
 manager must not look up a replacement plugin instance. Return asynchronous work
-from the callback so the instance can drain it. Its completion remains independent
-of disposal cleanup, so resource cleanup can safely await it. New calls reject after admission
+from the callback so the instance retains it until it settles. Disposal does not
+wait for this work before running `onDispose`, so cleanup can stop the work and
+safely await it; module teardown still waits for it to settle, and work that
+outlives the cleanup budget is force-retired like other calls. New calls reject after admission
 closes; already admitted host cleanup retains its teardown authority. The runner
 does not schedule work or cancel native resources: release those in the existing
 cleanup owner. Like the other instance lifecycle fields, it can be absent on an

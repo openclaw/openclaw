@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -10,11 +11,14 @@ import {
 } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveInternalSessionEffectsIdentity } from "./internal-session-key.js";
+import { readSessionNodesGeneration } from "./session-accessor.sqlite-entry-revision.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { patchSessionEntryCore, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
+import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import {
   readSessionEntriesFromStoreInWorker,
+  readSessionEntryReadOnlyInWorker,
   withSessionEntriesFromStoresInWorker,
 } from "./session-entry-read-runtime.js";
 import {
@@ -300,6 +304,33 @@ it("observes native and worker entry, participant, and membership writes after c
   });
 });
 
+it("keeps an ordered read current when session generation tracking initializes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const options = { agentId: "main", env };
+    const seeded = openOpenClawAgentDatabase(options);
+    const sessionKey = "agent:main:cold-generation";
+    writeSessionEntry(seeded, sessionKey, { sessionId: "original", updatedAt: 1 });
+    await closeOpenClawAgentDatabaseByPathAsync(seeded.path, seeded.agentId);
+    const database = openOpenClawAgentDatabase(options);
+    await expect(
+      withSessionEntriesFromStoresInWorker(
+        [{ ...options, storePath: database.path, sessionKeys: [sessionKey] }],
+        ([read]) => {
+          read!.assertCurrent();
+          return read!.result.entries[0]?.entry.sessionId;
+        },
+        {
+          ordered: true,
+          onReadAdmitted: () => {
+            expect(database.db.prepare("SELECT name FROM temp.sqlite_schema").all()).toEqual([]);
+            expect(readSessionNodesGeneration(database.db)).toBe(0);
+          },
+        },
+      ),
+    ).resolves.toBe("original");
+  });
+});
+
 it("retains the foreground FIFO through a nested ordered read", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
@@ -330,6 +361,58 @@ it("retains the foreground FIFO through a nested ordered read", async () => {
     ready.resolve();
     await Promise.all([outer, following]);
     expect(order).toEqual(["read", "writer"]);
+  });
+});
+
+it("reads entries through the active writer before and after its queued mutation", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const sessionKey = "agent:main:writer-read";
+    const scope = { agentId: "main", storePath: database.path, sessionKey, env };
+    const skillsSnapshot = { prompt: "retained instructions", skills: [] };
+    replaceSessionEntrySync(scope, {
+      sessionId: "writer-read",
+      updatedAt: 1,
+      label: "before",
+      skillsSnapshot,
+    });
+    const readExact = () =>
+      readSessionEntriesFromStoreInWorker({ ...scope, sessionKeys: [sessionKey] });
+    // A warm postimage must not overtake work already submitted to this writer.
+    await readExact();
+    await withSessionEntryWorker(
+      { agentId: "main", path: database.path, env },
+      undefined,
+      () => {},
+      async (execution, source) => {
+        await execution.runExisting(source, async (worker) => {
+          expect(await readSessionEntryReadOnlyInWorker(scope)).toMatchObject({
+            label: "before",
+            skillsSnapshot,
+          });
+          await worker.execute({
+            type: "session.entry.patch.commit",
+            input: {
+              selection: { kind: "entry", sessionKey, exact: true },
+              sessionKey,
+              operationLabel: "session-entry.patch",
+              validateCanonicalKeys: true,
+              operation: { kind: "fields", patch: { label: "after" } },
+            },
+          });
+          expect((await readExact()).entries[0]?.entry).toMatchObject({
+            label: "after",
+            skillsSnapshot,
+          });
+          expect(
+            await readSessionEntryReadOnlyInWorker({ ...scope, projection: "list" }),
+          ).toMatchObject({ label: "after" });
+          expect(
+            await readSessionEntryReadOnlyInWorker({ ...scope, sessionKey: "agent:main:absent" }),
+          ).toBeUndefined();
+        });
+      },
+    );
   });
 });
 

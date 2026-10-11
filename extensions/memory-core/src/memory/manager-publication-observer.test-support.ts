@@ -24,6 +24,12 @@ export function observePublishedReservations(publishedDb: DatabaseSync, onReserv
           onReserved();
           return result;
         });
+        const execute = worker.execute.bind(worker);
+        vi.spyOn(worker, "execute").mockImplementation((...executeArgs) => {
+          const result = execute(...executeArgs);
+          onReserved();
+          return result;
+        });
       }
       return worker;
     },

@@ -42,7 +42,8 @@ suite.define(() => {
     await suite.withPage(
       {
         serviceWorkers: "block",
-        viewport: { width: 1180, height: 520 },
+        // Preserve the original terminal content width alongside the new 52px navigation rail.
+        viewport: { width: 1232, height: 520 },
       },
       async ({ page }) => {
         await page.addInitScript(() => {
