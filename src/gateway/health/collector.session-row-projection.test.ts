@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   replaceSessionEntrySync,
@@ -83,6 +84,88 @@ describe("health agent summaries heartbeat roster", () => {
 });
 
 describe("health and status resident session summaries", () => {
+  it("returns current counts and recent entries while unrelated display work is held", async ({
+    signal,
+  }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+      const storePath = path.join(stateDir, "health-selection.sqlite");
+      const cfg: OpenClawConfig = {
+        agents: { entries: { main: {} } },
+        session: { store: storePath },
+      };
+      const first = "agent:main:first";
+      const second = "agent:main:second";
+      const added = "agent:main:added";
+      const backfill = observeSessionRowBackfill([first, second]);
+      for (const [key, updatedAt] of [
+        [first, 10],
+        [second, 20],
+      ] as const) {
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: key, storePath },
+          { sessionId: key, updatedAt },
+        );
+      }
+      const projection = await createSessionRowProjection({ cfg });
+      const release = createDeferred();
+      const displayJoined = createDeferred();
+      let held: Promise<void> | undefined;
+      let health: ReturnType<typeof buildHealthAgentSummaries> | undefined;
+      try {
+        await settleProjection(projection);
+        await backfill;
+        await settleProjection(projection);
+        held = projection.withSelectionPreparation(() => release.promise);
+        sessionChanges.emit({ all: true, scope: "catalog" });
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: first, storePath },
+          { sessionId: first, updatedAt: 30 },
+        );
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: added, storePath },
+          { sessionId: added, updatedAt: 40 },
+        );
+        expect(projection.dirtyRowCount).toBeGreaterThan(0);
+        const ensureMaterialized = projection.ensureMaterialized;
+        vi.spyOn(projection, "ensureMaterialized").mockImplementation(() => {
+          // Observe the real blocked join so the regression fails without a wall-clock race.
+          displayJoined.resolve();
+          return ensureMaterialized();
+        });
+        health = buildHealthAgentSummaries(cfg, resolveHealthAgentOrder(cfg), projection);
+        const outcome = await withinTest(
+          Promise.race([
+            health.then((agents) => ({ kind: "summary", agents })),
+            displayJoined.promise.then(() => ({ kind: "display-join" })),
+          ]),
+          signal,
+        );
+        expect(outcome).toMatchObject({
+          kind: "summary",
+          agents: [
+            {
+              agentId: "main",
+              sessions: {
+                count: 3,
+                recent: [
+                  { key: added, updatedAt: 40 },
+                  { key: first, updatedAt: 30 },
+                  { key: second, updatedAt: 20 },
+                ],
+              },
+            },
+          ],
+        });
+        expect(projection.dirtyRowCount).toBeGreaterThan(0);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([held, health]);
+        await settleProjection(projection);
+        projection.dispose();
+      }
+    });
+  });
+
   it("counts a shared physical store once while retaining bounded per-agent windows", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
       const storePath = path.join(stateDir, "shared-sessions.sqlite");

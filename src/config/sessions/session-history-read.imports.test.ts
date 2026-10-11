@@ -1,6 +1,15 @@
 import { expect, it } from "vitest";
 import { findSourceImportBackedges } from "../../../test/helpers/source-import-closure.js";
 
+it("keeps history worker transport independent of host config loading", () => {
+  expect(
+    findSourceImportBackedges("src/config/sessions/session-transcript-worker-runtime.ts", [
+      "src/config/io.ts",
+      "src/config/io.runtime.ts",
+    ]),
+  ).toEqual([]);
+});
+
 const readOwners = [
   "src/config/sessions/session-transcript.worker.ts",
   "src/config/sessions/session-accessor.sqlite-branches.ts",

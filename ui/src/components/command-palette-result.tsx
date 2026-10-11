@@ -9,7 +9,7 @@ import { formatRelativeTimestamp } from "../lib/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { renderArtTile } from "../pages/plugins/consent-dialog.ts";
 import type { CommandPaletteItem } from "./command-palette-catalog-search.ts";
-import { PaletteLitContent } from "./command-palette-lit.tsx";
+import { PaletteLitContent } from "./command-palette-view.ts";
 import { renderAgentIdentityAvatar } from "./identity-avatar-view.ts";
 import { renderSessionOwnerAvatar } from "./session-owner-chip.ts";
 import { Icon } from "./solid/icon.tsx";

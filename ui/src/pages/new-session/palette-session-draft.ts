@@ -408,7 +408,7 @@ export class PaletteSessionDraft implements ReactiveController {
       ? html`<button class="btn btn--sm" type="button" @click=${this.rejectedOpen}>
           ${t("sessionsView.openSession")}
         </button>`
-      : nothing;
+      : undefined;
   }
 
   renderAuxiliary() {

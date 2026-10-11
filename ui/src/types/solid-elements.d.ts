@@ -1,3 +1,5 @@
+import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
+import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import "@solidjs/web";
 import "../components/assistant-panel-content.ts";
 import "../components/home-session.runtime.ts";
@@ -8,6 +10,8 @@ import "../lib/toast.ts";
 import "../pages/custodian/custodian-surface.ts";
 import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import type { MascotMood } from "../components/mascot-pose.ts";
+
+export type { JSX } from "@solidjs/web";
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -73,6 +77,17 @@ declare module "@solidjs/web" {
       "openclaw-theme-brand-icon": HTMLAttributes<HTMLElement> & {
         "prop:branding"?: ThemeBranding;
       };
+      "wa-dropdown": HTMLAttributes<WaDropdown> &
+        Properties<WaDropdown> & {
+          placement?: WaDropdown["placement"];
+          "onWa-select"?: (event: CustomEvent<{ item: WaDropdownItem }>) => void;
+          "onWa-after-hide"?: (event: CustomEvent<void>) => void;
+        };
+      "wa-dropdown-item": HTMLAttributes<WaDropdownItem> &
+        Properties<WaDropdownItem> & { value?: WaDropdownItem["value"] };
+    }
+    interface SVGAttributes<T> {
+      "xml:space"?: "default" | "preserve";
     }
   }
 }

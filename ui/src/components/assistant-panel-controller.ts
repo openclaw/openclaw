@@ -1,5 +1,4 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { isSettingsTakeover } from "../app-navigation.ts";
 import { isSessionRouteId, type RouteId } from "../app-route-paths.ts";
 import type { AssistantDockOwner } from "../app/assistant-dock.ts";
@@ -25,6 +24,7 @@ import {
   resolveUiDefaultAgentId,
 } from "../lib/sessions/session-key.ts";
 import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
+import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import {
@@ -115,10 +115,10 @@ export class AssistantPanelController {
   requestUpdate() {
     this.controllerHost.requestUpdate();
   }
-  addController(controller: ReactiveController) {
+  addController(controller: SolidController) {
     this.controllerHost.addController(controller);
   }
-  removeController(controller: ReactiveController) {
+  removeController(controller: SolidController) {
     this.controllerHost.removeController(controller);
   }
   private startedHome = false;
@@ -159,7 +159,7 @@ export class AssistantPanelController {
   constructor(
     private props: AssistantPanelProps,
     private readonly element: SolidBridgeElement<AssistantPanelProps>,
-    private controllerHost: ReactiveControllerHost,
+    private controllerHost: SolidControllerHost,
     private application?: ApplicationContext,
   ) {
     this.dockLayout = new DockLayoutController(this, {
@@ -172,7 +172,7 @@ export class AssistantPanelController {
 
   attach(
     props: AssistantPanelProps,
-    controllerHost: ReactiveControllerHost,
+    controllerHost: SolidControllerHost,
     application?: ApplicationContext,
   ) {
     this.props = props;

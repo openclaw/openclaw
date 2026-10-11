@@ -1,5 +1,5 @@
 // Failure output tests cover CLI error formatting and failure summaries.
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createInvalidConfigError } from "../config/io.invalid-config.js";
 import {
   GatewayCredentialsRequiredError,
@@ -12,6 +12,7 @@ import {
   formatCliFailureLines,
   formatCliJsonFailure,
   isExpectedCliError,
+  toPluginCommandFailure,
 } from "./failure-output.js";
 
 // Mirrors the producer in ensureExplicitGatewayAuth: the message already carries the remedy.
@@ -21,6 +22,66 @@ const EXPLICIT_GATEWAY_AUTH_MESSAGE = [
   "For the default local or SSH-tunneled Gateway, remove --url to use the configured target.",
   "Config: /tmp/openclaw.json",
 ].join("\n");
+
+describe("toPluginCommandFailure", () => {
+  beforeEach(() => {
+    vi.stubEnv("OPENCLAW_DEBUG", "0");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    new Error("--limit must be a positive integer\nUse a value greater than zero."),
+    Object.assign(new Error("invalid limit"), {
+      name: "InvalidArgumentError",
+      code: "commander.invalidArgument",
+      exitCode: 1,
+    }),
+  ])("preserves the operator message and cause for $name", (error) => {
+    const failure = toPluginCommandFailure(error);
+
+    expect(failure).toSatisfy(
+      (value: unknown) => value instanceof ExpectedCliError && value.cause === error,
+    );
+    expect(failure).toMatchObject({ message: error.message });
+    expect(
+      formatCliFailureLines({
+        title: "The CLI command failed.",
+        error: failure,
+        argv: ["node", "openclaw", "x"],
+        env: {},
+      }),
+    ).toEqual(error.message.split("\n"));
+    expect(formatCliJsonFailure(failure).error.message).toBe(error.message);
+  });
+
+  it.each([
+    Object.assign(new Error("already reported"), { name: "CommanderError" }),
+    Object.assign(new Error("already reported"), { name: "ExitError" }),
+    Object.assign(new Error("state owner guidance"), { name: "LocalStateOwnerError" }),
+    new ExpectedCliError({
+      message: "expected",
+      humanOutput: "expected",
+      machineOutput: "expected",
+    }),
+  ])("keeps $name identity and existing rendering policy", (error) => {
+    expect(toPluginCommandFailure(error)).toBe(error);
+  });
+
+  it("keeps debug details except for Commander-coded action failures", () => {
+    vi.stubEnv("OPENCLAW_DEBUG", "1");
+    const error = new Error("action failed");
+    const commanderError = Object.assign(new Error("invalid limit"), {
+      name: "InvalidArgumentError",
+      code: "commander.invalidArgument",
+      exitCode: 1,
+    });
+
+    expect(toPluginCommandFailure(error)).toBe(error);
+    expect(toPluginCommandFailure(commanderError)).toBeInstanceOf(ExpectedCliError);
+  });
+});
 
 describe("formatCliJsonFailure", () => {
   it.each([false, true])(

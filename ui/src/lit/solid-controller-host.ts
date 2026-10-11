@@ -1,14 +1,27 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { createEffect, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+
+export type SolidController = {
+  hostConnected?(): void;
+  hostDisconnected?(): void;
+  hostUpdate?(): void;
+  hostUpdated?(): void;
+};
+
+export type SolidControllerHost = {
+  addController(controller: SolidController): void;
+  removeController(controller: SolidController): void;
+  requestUpdate(): void;
+  readonly updateComplete: Promise<boolean>;
+};
 
 /** Keeps imperative controllers in their existing owner while Solid renders their facts. */
 export function useSolidControllerHost(dependencies?: () => unknown) {
-  const controllers = new Set<ReactiveController>();
+  const controllers = new Set<SolidController>();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   let connected = false;
   let updating = false;
   let disposed = false;
-  const host: ReactiveControllerHost = {
+  const host: SolidControllerHost = {
     addController(controller) {
       controllers.add(controller);
       if (connected) {

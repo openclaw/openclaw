@@ -1,5 +1,4 @@
 import type { ViteUserConfig } from "vitest/config";
-import { controlUiLocaleModulesPlugin } from "../../ui/config/control-ui-locales.ts";
 import { controlUiSolidPlugin } from "../../ui/vite.config.ts";
 import { gatewayDatabaseWorkerTestFiles } from "./vitest.gateway-server-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
@@ -20,8 +19,7 @@ export function createGatewayDatabaseWorkersVitestConfig(
   });
   return {
     ...config,
-    // The auth-readiness integration delivers Gateway events through the real UI shell.
-    plugins: [...(config.plugins ?? []), controlUiLocaleModulesPlugin(), controlUiSolidPlugin()],
+    plugins: [...(config.plugins ?? []), controlUiSolidPlugin()],
   };
 }
 

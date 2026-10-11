@@ -1,5 +1,4 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { nothing } from "lit";
 import { createMemo, For, Show } from "solid-js";
 import type { GatewayAgentRow } from "../api/types.ts";
 import {
@@ -35,9 +34,9 @@ import {
 import { COMMAND_PALETTE_DIALOG_STYLE } from "./command-palette-contract.ts";
 import { COMMAND_PALETTE_INPUT_ID } from "./command-palette-input.ts";
 import { CommandPaletteInput } from "./command-palette-input.tsx";
-import { PaletteLitContent } from "./command-palette-lit.tsx";
 import { CommandPaletteResult } from "./command-palette-result.tsx";
 import { SESSION_ACTION_PREFIX } from "./command-palette-session-search.ts";
+import { PaletteLitContent } from "./command-palette-view.ts";
 import {
   CUSTODIAN_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
@@ -589,7 +588,7 @@ function OpenPalette(props: { readProps: () => CommandPaletteProps }) {
               </div>
             )}
           </Show>
-          <Show when={recovery() !== nothing}>
+          <Show when={recovery()}>
             <div class="cmd-palette__footer">
               <PaletteLitContent content={recovery()} />
             </div>
