@@ -1,6 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { render, nothing } from "lit";
-import { createEffect, createMemo, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, Show } from "solid-js";
 import { renderGatewayStatus } from "../components/gateway-status.ts";
 import { icons } from "../components/icons.ts";
 import { renderConnectingSplash } from "../components/loading-skeleton.ts";
@@ -12,6 +11,7 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
+import { createLitContentRef } from "../lit/solid-bridge.ts";
 import { DevicePairSetup } from "./app-shell-device-pair-setup.tsx";
 import { ShellDocks } from "./app-shell-docks.tsx";
 import { ShellLazyOverlays, type ShellElementAttributes } from "./app-shell-lazy-view.tsx";
@@ -45,18 +45,6 @@ declare module "@solidjs/web" {
       "openclaw-plugin-view": ShellElementAttributes;
     }
   }
-}
-
-/** Temporary Lit island for shared icon templates; remove with the icon cutover. */
-function litContent(value: () => unknown): (element: HTMLElement) => void {
-  let container: HTMLElement;
-  createEffect(value, (next) => {
-    render(next, container);
-  });
-  onCleanup(() => render(nothing, container));
-  return (element) => {
-    container = element;
-  };
 }
 
 export function renderApplicationShell(host: ShellViewHost): SolidJSX.Element {
@@ -172,7 +160,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
                     : undefined
                 }
                 onClick={() => props.host.viewCallbacks.toggleSidebar()}
-                ref={litContent(() => icons.panelLeftOpen)}
+                ref={createLitContentRef(() => icons.panelLeftOpen)}
               />
             </openclaw-tooltip>
             <LitRouteHost
@@ -196,7 +184,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
                 class="shell-chrome-controls__button shell-chrome-controls__search"
                 aria-label={t("chat.openCommandPalette")}
                 onClick={() => props.host.openPalette()}
-                ref={litContent(() => icons.search)}
+                ref={createLitContentRef(() => icons.search)}
               />
             </openclaw-tooltip>
             <Show when={view().homePanelAvailable && !view().railAvailable}>
@@ -291,7 +279,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
               <span
                 class="connection-action-block__icon"
                 aria-hidden="true"
-                ref={litContent(() => icons.globeOff)}
+                ref={createLitContentRef(() => icons.globeOff)}
               />
               <span class="connection-action-block__text">
                 {t(

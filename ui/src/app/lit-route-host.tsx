@@ -1,6 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { nothing, render } from "lit";
-import { createEffect, onCleanup } from "solid-js";
+import { createLitContentRef } from "../lit/solid-bridge.ts";
 
 type LitRouteHostProps = {
   presentation?: boolean;
@@ -20,18 +19,11 @@ declare module "@solidjs/web" {
 
 /** Temporary renderer island: delete when every route module renders Solid. */
 export function LitRouteHost(props: LitRouteHostProps): SolidJSX.Element {
-  let host!: HTMLElement;
+  const contentRef = createLitContentRef(() => props.renderValue());
   const bind = (element: HTMLElement) => {
-    host = element;
+    contentRef(element);
     props.ref?.(element);
   };
-  createEffect(
-    () => props.renderValue(),
-    (value) => {
-      render(value, host, { host });
-    },
-  );
-  onCleanup(() => render(nothing, host));
   return (
     <>
       {props.presentation ? (

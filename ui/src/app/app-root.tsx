@@ -34,7 +34,7 @@ import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import "./app-shell-locale-recovery.ts";
 import { loadFocusDashboard, type FocusDashboardRouteState } from "./app-root-focus.ts";
-import { connectLegacyApplicationContext, renderLegacyFocusEscape } from "./app-root-lit.ts";
+import { connectLegacyApplicationContext, createLegacyFocusEscape } from "./app-root-lit.ts";
 import { ShellLoader } from "./app-shell-loader.tsx";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import type { ControlUiReadiness } from "./control-ui-readiness.ts";
@@ -87,7 +87,6 @@ export function OpenClawApp(props: {
     snapshot().phase === "starting" ? t("common.gatewayStarting") : undefined;
   const focusTarget =
     runtime.focusLocation?.status === "valid" ? runtime.focusLocation.target : null;
-  const browserTarget = focusTarget?.kind === "browser" ? focusTarget : null;
   const panelTarget =
     focusTarget?.kind === "terminal" || focusTarget?.kind === "desktop" ? focusTarget : null;
   const onboarding = resolveOnboardingMode(globalThis.location?.search ?? "");
@@ -115,6 +114,7 @@ export function OpenClawApp(props: {
       globalThis.location.assign(context.basePath || "/");
     }
   };
+  const renderFocusEscape = createLegacyFocusEscape(closeDocument);
   const lazyHost = {
     requestUpdate: () => setLazyRevision((value) => value + 1),
     get updateComplete() {
@@ -655,14 +655,14 @@ export function OpenClawApp(props: {
               </div>
             </main>
           </Match>
-          <Match when={browserTarget}>
+          <Match when={focusTarget?.kind === "browser" ? focusTarget : null}>
             {(target) => (
               <>
                 <openclaw-browser-document
                   prop:props={{
                     context,
                     target: target(),
-                    renderEscape: (label: string) => renderLegacyFocusEscape(label, closeDocument),
+                    renderEscape: renderFocusEscape,
                   }}
                 />
                 <LazyDocument element={BROWSER_DOCUMENT_ELEMENT} />

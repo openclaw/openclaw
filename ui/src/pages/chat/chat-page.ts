@@ -272,7 +272,13 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
       this.retainedSessions.settleRoute();
     }
     if (data && routeHandoffRendered) {
-      queueMicrotask(() => {
+      const pane = [...this.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].find(
+        (candidate) =>
+          candidate.active &&
+          areUiSessionKeysEquivalent(candidate.sessionKey ?? "", data.sessionKey),
+      );
+      // Let the child apply this one-shot draft before clearing its route input.
+      void Promise.resolve(pane?.updateComplete).then(() => {
         if (
           this.isConnected &&
           this.presented &&

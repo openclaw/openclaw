@@ -1,8 +1,7 @@
-import { ContextProvider } from "@lit/context";
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { html, nothing } from "lit";
-import { applicationContext, type ApplicationContext } from "./context.ts";
 import { isNativeWebChromeHost } from "./native-web-chrome.ts";
+
+export { connectLegacyApplicationContext } from "../lit/solid-bridge.ts";
 
 type RootElementAttributes = SolidJSX.HTMLAttributes<HTMLElement> & {
   [key: `prop:${string}`]: unknown;
@@ -24,26 +23,20 @@ declare module "@solidjs/web" {
   }
 }
 
-/** Temporary DOM-context bridge for unported Lit descendants; delete at cutover. */
-export function connectLegacyApplicationContext(
-  host: HTMLElement,
-  context: ApplicationContext,
-): () => void {
-  const provider = new ContextProvider(host, {
-    context: applicationContext,
-    initialValue: context,
-  });
-  provider.hostConnected();
-  return () => {
-    provider.clearCallbacks();
-    host.removeEventListener("context-request", provider.onContextRequest);
-    host.removeEventListener("context-provider", provider.onProviderRequest);
+/** Keep focus on the same button when the unported document rerenders its label. */
+export function createLegacyFocusEscape(close: () => void): (label: string) => HTMLElement | null {
+  let button: HTMLButtonElement | undefined;
+  return (label) => {
+    if (isNativeWebChromeHost()) {
+      return null;
+    }
+    if (!button) {
+      button = document.createElement("button");
+      button.className = "btn btn--ghost";
+      button.type = "button";
+      button.addEventListener("click", close);
+    }
+    button.textContent = label;
+    return button;
   };
-}
-
-/** The unported browser document still consumes a Lit render callback. */
-export function renderLegacyFocusEscape(label: string, close: () => void) {
-  return isNativeWebChromeHost()
-    ? nothing
-    : html`<button class="btn btn--ghost" type="button" @click=${close}>${label}</button>`;
 }

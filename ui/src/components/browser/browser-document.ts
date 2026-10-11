@@ -1,5 +1,5 @@
 import type { ControlUiFocusTarget } from "@openclaw/session-url-contract";
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
@@ -13,7 +13,7 @@ import { readBrowserTabTarget } from "./browser-target.ts";
 type BrowserDocumentProps = {
   context: ApplicationContext;
   target: Extract<ControlUiFocusTarget, { kind: "browser" }>;
-  renderEscape: (label: string) => TemplateResult | typeof nothing;
+  renderEscape: (label: string) => HTMLElement | null;
 };
 
 class OpenClawBrowserDocument extends OpenClawLightDomContentsElement {

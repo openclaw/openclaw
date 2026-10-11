@@ -1,6 +1,9 @@
+import { ContextProvider } from "@lit/context";
 import { render, spread, type JSX } from "@solidjs/web";
+import { nothing, render as renderLit } from "lit";
 import {
   createComponent,
+  createEffect,
   createRenderEffect,
   createSignal,
   flush,
@@ -9,6 +12,35 @@ import {
 } from "solid-js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
+
+/** Temporary DOM-context bridge for unported Lit descendants; delete at cutover. */
+export function connectLegacyApplicationContext(
+  host: HTMLElement,
+  context: ApplicationContext,
+): () => void {
+  const provider = new ContextProvider(host, {
+    context: applicationContext,
+    initialValue: context,
+  });
+  provider.hostConnected();
+  return () => {
+    provider.clearCallbacks();
+    host.removeEventListener("context-request", provider.onContextRequest);
+    host.removeEventListener("context-provider", provider.onProviderRequest);
+  };
+}
+
+/** Temporary renderer island; remove with the last Lit route and template caller. */
+export function createLitContentRef(value: () => unknown): (element: HTMLElement) => void {
+  let host: HTMLElement;
+  createEffect(value, (next) => {
+    renderLit(next, host, { host });
+  });
+  onCleanup(() => renderLit(nothing, host));
+  return (element) => {
+    host = element;
+  };
+}
 
 type Property<T> = {
   default: T;
