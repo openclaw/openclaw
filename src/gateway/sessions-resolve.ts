@@ -106,7 +106,7 @@ export async function withPreparedSessionResolve<T>(
     const sessionId = normalizeOptionalString(p.sessionId);
     const label = parseSessionLabel(p.label);
     let lookup: Awaited<ReturnType<SessionRowProjection["readLookup"]>> | undefined;
-    const topologyChanged = Symbol("session-lookup-topology-changed");
+    const topologyChanged = new Error("Session lookup topology changed");
     const resolve = () => {
       assertCurrent();
       if (lookup && !lookup.isCurrent()) {
