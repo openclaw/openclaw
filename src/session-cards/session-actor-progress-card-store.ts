@@ -1,5 +1,5 @@
 import type { SessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
-import type { ProgressCardStore } from "../gateway/progress-card-store.js";
+import type { ProgressCardStore } from "./progress-card-store.types.js";
 
 /** Stores private progress cards in the session actor selected by the routing owner. */
 export function createSessionActorProgressCardStore(

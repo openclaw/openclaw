@@ -6,10 +6,8 @@ import { resolveAgentMainSessionKey, type SessionEntry } from "../config/session
 import { collectCanonicalSessionLookupKeys } from "../config/sessions/main-session-key.js";
 import { listSessionChildEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntryReadScope } from "../config/sessions/session-accessor.types.js";
-import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { SessionEntryChangedDuringReadError } from "../config/sessions/session-entry-read-errors.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import { attachSessionEntrySnapshots } from "../config/sessions/session-entry-snapshot-values.js";
 import type { SessionMember } from "../config/sessions/session-membership-facts.types.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
@@ -35,6 +33,7 @@ import {
   type GatewaySessionStoreDiscoveryCache,
 } from "./session-utils-store-candidates.js";
 import { GatewaySessionFactsChangedDuringReadError } from "./session-utils-store-errors.js";
+import { prepareIncognitoGatewaySessionStoreTarget } from "./session-utils-store-incognito.js";
 import {
   loadGatewaySessionStoreReads,
   gatewaySessionStoreReadOptions,
@@ -203,28 +202,7 @@ function prepareGatewaySessionStoreTarget(
     preserveQualifiedAddress: params.preserveQualifiedAddress,
   });
   if (isIncognitoSessionKey(canonicalKey)) {
-    const captured = captureSessionActorStorageOwner(
-      { agentId, sessionKey: canonicalKey, env: params.env },
-      { assertCurrent() {}, authorize() {} },
-    );
-    if (!captured) {
-      throw new Error("Incognito session lookup requires a memory target");
-    }
-    return {
-      reads: [],
-      resolve() {
-        const hot = captured.owner?.readSession(canonicalKey, captured.authority);
-        const entry = hot?.entry && attachSessionEntrySnapshots(hot.entry, {}, params.projection);
-        return {
-          agentId,
-          canonicalKey,
-          storePath: captured.path,
-          storeKeys: [canonicalKey],
-          store: entry ? { [canonicalKey]: entry } : {},
-          readSource: { agentId, path: captured.path },
-        };
-      },
-    };
+    return prepareIncognitoGatewaySessionStoreTarget({ ...params, agentId, canonicalKey });
   }
   const storeKeys = params.preserveQualifiedAddress
     ? [canonicalKey]

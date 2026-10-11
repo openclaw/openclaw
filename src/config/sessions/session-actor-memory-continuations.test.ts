@@ -29,11 +29,11 @@ import {
 } from "./session-actor-storage-binding.js";
 import type { SessionActorStorageOutcome } from "./session-actor-storage-contract.js";
 import { listSessionPendingInputs } from "./session-pending-input-history.js";
+import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
 import { readSessionPendingInputReceiptsInWorker } from "./session-pending-input-receipts.js";
 import { readPendingInputSource } from "./session-pending-input-source.js";
 import { preparePendingInputStore } from "./session-pending-input-store.js";
 import { discardSessionPendingInput } from "./session-pending-input-withdrawal.js";
-import type { SessionPendingInputOwner } from "./session-pending-input.types.js";
 import type { SessionEntry } from "./types.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({

@@ -34,7 +34,13 @@ export function withActorTranscriptWriteSequence<T>(
   if (!sessionId) {
     throw new Error("Transcript write requires its selected session window");
   }
-  const scope = { ...fenced, sessionId, agentId: binding.agentId, storePath: binding.path };
+  const scope = {
+    ...fenced,
+    sessionKey: fenced.sessionKey ?? binding.actor.target.sessionKey,
+    sessionId,
+    agentId: binding.agentId,
+    storePath: binding.path,
+  };
   const assertOwned = captureOwnedTranscriptWriteAssertion(scope);
   const authority = {
     ...binding.authority,

@@ -16,7 +16,7 @@ import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agen
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import { openMemoryContextEngineTurnOutboxStore } from "./context-engine-turn-outbox-memory.js";
 import type {
-  ContextEngineTurnOutboxStore,
+  ContextEngineTurnOutboxWorkerStore,
   ContextEngineTurnOutboxWorkerOperations,
 } from "./context-engine-turn-outbox.js";
 
@@ -61,25 +61,6 @@ async function runContextEngineTurnOutboxCommand(
     await execution.release();
   }
 }
-
-/** The durable context-engine turn outbox of one agent database, executed in its worker. */
-export type ContextEngineTurnOutboxWorkerStore = ContextEngineTurnOutboxStore &
-  Readonly<{
-    [
-      Type in
-        | "prepareRun"
-        | "enqueueIntent"
-        | "acceptIntent"
-        | "publishClosedTurn"
-        | "discardIntent"
-    ]: (
-      input: ContextEngineTurnOutboxWorkerOperations[Type]["input"],
-    ) => Promise<
-      ContextEngineTurnOutboxWorkerOperations[Type]["output"] extends undefined
-        ? void
-        : ContextEngineTurnOutboxWorkerOperations[Type]["output"]
-    >;
-  }>;
 
 export function openContextEngineTurnOutboxWorkerStore(target: {
   agentId: string;

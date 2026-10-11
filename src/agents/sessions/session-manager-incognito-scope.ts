@@ -12,7 +12,10 @@ import {
   runWithSessionActorStorage,
 } from "../../config/sessions/session-actor-storage-binding.js";
 import type { SessionActorStorageAuthority } from "../../config/sessions/session-actor-storage-contract.js";
-import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import {
+  sameSessionTranscriptTargetBinding,
+  type SessionTranscriptTargetBinding,
+} from "../../config/sessions/transcript-target-binding.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   getOwnedSessionTranscriptActor,
@@ -97,7 +100,7 @@ function retainAcquisition(
 }
 
 export function captureSessionManagerIncognitoBinding(
-  target: SessionTranscriptRuntimeTarget | undefined,
+  target: SessionTranscriptTargetBinding | undefined,
   manager?: object,
   retarget = false,
 ): SessionManagerMemoryBinding | undefined {

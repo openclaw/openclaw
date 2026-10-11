@@ -5,7 +5,7 @@ import { createSessionActorMemoryGoals } from "./session-actor-memory-goals.js";
 import { createSessionActorMemoryMessages } from "./session-actor-memory-messages.js";
 import type { SessionActorMemoryStorageContext } from "./session-actor-memory-storage-context.js";
 import type { SessionActorMemoryTurnReads } from "./session-actor-memory-turn-contract.js";
-import { createSessionTranscriptTurnKernel } from "./session-turn.kernel.js";
+import { prepareSessionTranscriptTurnEntry } from "./session-transcript-turn-state.js";
 import type { SessionTurnPlan } from "./session-turn.types.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 
@@ -24,7 +24,7 @@ export function prepareSessionActorMemoryTurn(
   if (input.agentId !== context.agentId || input.sessionKey !== state.hot.target.sessionKey) {
     throw new Error("Turn preparation does not target this session actor");
   }
-  const kernel = createSessionTranscriptTurnKernel(scope, input.options);
+  const { resolveExpectedEntry } = prepareSessionTranscriptTurnEntry(input.options);
   const selected = state.hot.entry ? { entry: state.hot.entry } : undefined;
   const ownerSourceValidation = input.ownerSources?.length
     ? context.validateSources(input.ownerSources)
@@ -36,7 +36,7 @@ export function prepareSessionActorMemoryTurn(
   const mutation = input.options.sessionTurnMutation;
   goals.assertRouting(mutation?.routingPredicate);
   const replay = mutation ? goals.readReceipt(scope.sessionId, mutation.operation) : undefined;
-  const expectedEntry = kernel.resolveExpectedEntry(selected);
+  const expectedEntry = resolveExpectedEntry(selected);
   const result =
     replay && selected?.entry.sessionId === scope.sessionId
       ? {

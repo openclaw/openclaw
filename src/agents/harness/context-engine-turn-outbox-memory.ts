@@ -6,7 +6,7 @@ import {
 } from "../../config/sessions/session-actor-storage-binding.js";
 import type { SessionActorStorageOutcome } from "../../config/sessions/session-actor-storage-contract.js";
 import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
-import type { ContextEngineTurnOutboxWorkerStore } from "./context-engine-turn-outbox-store.js";
+import type { ContextEngineTurnOutboxWorkerStore } from "./context-engine-turn-outbox.js";
 
 function committed<T>(outcome: SessionActorStorageOutcome<T>): T {
   if (outcome.kind === "rolled-back") {

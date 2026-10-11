@@ -1,4 +1,3 @@
-import path from "node:path";
 import {
   ErrorCodes,
   errorShape,
@@ -6,16 +5,14 @@ import {
   validateSessionsBranchesSwitchParams,
   validateSessionsForkParams,
   validateSessionsRewindParams,
-  type SessionsBranchesListParams,
   type SessionsBranchesSwitchParams,
   type SessionsRewindParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { ErrorCode } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { clearSessionLifecycleQueues } from "../../auto-reply/reply/queue/cleanup.js";
-import {
-  listSessionBranches,
-  type SessionBranchSwitchMutationResult,
-  type SessionMessageCutMutationResult,
+import type {
+  SessionBranchSwitchMutationResult,
+  SessionMessageCutMutationResult,
 } from "../../config/sessions/session-accessor.js";
 import { mutateSessionAtMessageWithPreconditions } from "../../config/sessions/session-accessor.sqlite-message-cut.js";
 import {
@@ -26,8 +23,6 @@ import {
 } from "../../config/sessions/session-actor-storage-binding.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { parseInboundMediaUri } from "../../media/media-reference.js";
-import { MEDIA_MAX_BYTES, readMediaBuffer } from "../../media/store.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
 import { recordSessionCreated } from "../../sessions/session-created.js";
@@ -62,8 +57,9 @@ import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { prepareSessionForkFilesystemRoot } from "./session-create-root.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
+import { resolveEditorMediaAttachments } from "./session-rewind-editor-media.js";
 import { waitForTerminalSessionRunSettlement } from "./session-run-settlement.js";
-import { retainSessionScopedRead } from "./session-scoped-read.js";
+import { listSessionBranchesForGateway } from "./sessions-branches-list.js";
 import {
   createUpstreamForkCurrentGuard,
   resolveUpstreamForkHarness,
@@ -81,51 +77,11 @@ type MessageCutMutationResult =
 const EXTERNAL_CONVERSATION_ERROR =
   "Session history changes are unavailable because this session is owned by an external agent harness.";
 
-// A message realistically carries a handful of images; a corrupt transcript must
-// not turn rewind into a bulk media read.
-const EDITOR_MEDIA_REF_LIMIT = 10;
-
-async function resolveEditorMediaAttachments(
-  refs: Array<{ path: string; contentType: string }> | undefined,
-): Promise<Array<{ mimeType: string; data: string }>> {
-  if (!refs) {
-    return [];
-  }
-  const seen = new Set<string>();
-  const attachments: Array<{ mimeType: string; data: string }> = [];
-  for (const ref of refs) {
-    // Transcript references are untrusted hints; only an inbound id is read through the
-    // media store (its traversal guards and byte cap stay authoritative), so
-    // dedupe on that resolved id — path aliases must not repeat the same read.
-    let id: string;
-    try {
-      id = parseInboundMediaUri(ref.path)?.id ?? path.basename(ref.path);
-    } catch {
-      // A corrupt URI is only a failed attachment hint, never a failed history cut.
-      continue;
-    }
-    if (seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
-    if (seen.size > EDITOR_MEDIA_REF_LIMIT) {
-      break;
-    }
-    try {
-      const media = await readMediaBuffer(id, "inbound", MEDIA_MAX_BYTES);
-      attachments.push({ mimeType: ref.contentType, data: media.buffer.toString("base64") });
-    } catch {
-      // Skipped refs (missing file, oversized, guard rejection) never fail the cut.
-    }
-  }
-  return attachments;
-}
-
 export const sessionRewindHandlers: GatewayRequestHandlers = {
   "sessions.branches.list": defineValidatedGatewayHandler(
     "sessions.branches.list",
     validateSessionsBranchesListParams,
-    listBranches,
+    listSessionBranchesForGateway,
   ),
   "sessions.branches.switch": defineValidatedGatewayHandler(
     "sessions.branches.switch",
@@ -143,103 +99,6 @@ export const sessionRewindHandlers: GatewayRequestHandlers = {
     (options) => mutateSessionAtMessage(options, "fork"),
   ),
 };
-
-async function listBranches(
-  options: Omit<GatewayRequestHandlerOptions, "params"> & { params: SessionsBranchesListParams },
-): Promise<void> {
-  const { params, respond, context } = options;
-  const sessionKey = params.sessionKey.trim();
-  const cfg = context.getRuntimeConfig();
-  const requestedAgent = resolveRequestedGlobalAgentId(cfg, sessionKey, params.agentId);
-  if (!requestedAgent.ok) {
-    respond(false, undefined, requestedAgent.error);
-    return;
-  }
-  // Branches depend on transcript/lifecycle state, not a label or activity update during I/O.
-  const read = retainSessionScopedRead(options, sessionKey, requestedAgent.agentId, {
-    allowMetadataChanges: true,
-  });
-  const run = () =>
-    withGatewaySessionEntryReadOnly(
-      {
-        key: sessionKey,
-        cfg,
-        agentId: requestedAgent.agentId,
-        excludeInternalEffects: true,
-        projection: "list",
-      },
-      async (current, assertCurrent) => {
-        const upstreamLink = current.entry?.sessionId
-          ? await prepareSessionUpstreamLink(
-              captureSessionUpstreamLinkReadSource(),
-              current.canonicalKey,
-              current.agentId,
-            )
-          : undefined;
-        assertCurrent();
-        read?.assertCurrent();
-        if (!current.entry?.sessionId || upstreamLink) {
-          // Fresh and upstream-owned sessions have no local branches. Only the
-          // mutating siblings treat those states as errors.
-          respond(true, { branches: [] }, undefined);
-          return;
-        }
-        const memory = getSessionActorStorageBinding({
-          sessionKey: current.canonicalKey,
-          agentId: current.agentId,
-          storePath: current.storePath,
-        });
-        const result = memory
-          ? await memory.actor.storage!.read(
-              { type: "session.history.branches", input: {} },
-              memory.authority,
-            )
-          : await listSessionBranches({
-              agentId: current.agentId,
-              sessionKey: current.canonicalKey,
-              sessionStoreKey: current.canonicalKey,
-              storePath: current.storePath,
-            });
-        assertCurrent();
-        read?.assertCurrent();
-        if (result.status !== "ok") {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              result.status === "failed" ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-              {
-                "missing-session": "session not found",
-                "unsupported-storage": "session transcript storage does not support branch listing",
-                failed: "failed to list session branches",
-              }[result.status],
-            ),
-          );
-          return;
-        }
-        respond(true, { branches: result.branches }, undefined);
-      },
-    );
-  const assertCurrent = () => read?.assertCurrent();
-  try {
-    const handled = await withSessionActorStorage(
-      { sessionKey, agentId: requestedAgent.agentId },
-      {
-        lifetime: { assertCurrent, assertReadable: assertCurrent },
-        authority: { assertCurrent, authorize() {} },
-      },
-      async () => {
-        await run();
-        return true;
-      },
-    );
-    if (!handled) {
-      await run();
-    }
-  } finally {
-    read?.release();
-  }
-}
 
 async function mutateSessionAtMessage(
   options: Omit<GatewayRequestHandlerOptions, "params"> & {

@@ -102,7 +102,9 @@ export function captureIncognitoMemoryReader(scope: SessionTranscriptReadScope) 
           },
           memory.authority,
         );
-        if (!snapshot) return null;
+        if (!snapshot) {
+          return null;
+        }
         return buildSessionEntryFromSnapshot(
           absPath,
           {

@@ -47,6 +47,25 @@ import type {
   SessionSharingCommitReceipt,
 } from "./session-sharing-store.types.js";
 
+function toMemoryCollaborationCommand(
+  command: SqliteWorkerCommand<SessionSharingWorkerOperations>,
+  scope: SessionCollaborationScope,
+): SessionActorMemoryCollaborationCommand {
+  if (command.type === "category.prepare" || command.type === "category.apply") {
+    throw new Error("Memory categories require the category owner composition");
+  }
+  const { scope: _scope, ...input } = command.input;
+  const profileAliases =
+    command.type === "participant" && command.input.params.identity.type === "profile"
+      ? [...readResidentUserProfileAliases(command.input.params.identity.id, { env: scope.env })]
+      : undefined;
+  // SAFETY: The discriminant retains the existing collaboration input/result pair.
+  return {
+    type: `session.collaboration.${command.type}`,
+    input: { ...input, ...(profileAliases ? { profileAliases } : {}) },
+  } as SessionActorMemoryCollaborationCommand;
+}
+
 export async function runSessionCollaborationWrite<
   Key extends keyof SessionSharingWorkerOperations,
   T,
@@ -70,19 +89,7 @@ export async function runSessionCollaborationWrite<
 ): Promise<T> {
   const owner = captureSessionActorStorageOwner(scope, { assertCurrent, authorize() {} });
   if (owner) {
-    if (command.type === "category.prepare" || command.type === "category.apply") {
-      throw new Error("Memory categories require the category owner composition");
-    }
-    const { scope: _scope, ...input } = command.input;
-    const profileAliases =
-      command.type === "participant" && command.input.params.identity.type === "profile"
-        ? [...readResidentUserProfileAliases(command.input.params.identity.id, { env: scope.env })]
-        : undefined;
-    // The discriminant retains the existing collaboration input/result pair.
-    const actorCommand = {
-      type: `session.collaboration.${command.type}`,
-      input: { ...input, ...(profileAliases ? { profileAliases } : {}) },
-    } as SessionActorMemoryCollaborationCommand;
+    const actorCommand = toMemoryCollaborationCommand(command, scope);
     const result = await withSessionActorStorage(
       scope,
       {
@@ -95,9 +102,9 @@ export async function runSessionCollaborationWrite<
       async (memory) => {
         let value: T | undefined;
         const outcome = await memory.actor.storage!.mutate(actorCommand, memory.authority, {
-          committed(result) {
+          committed(committedOutcome) {
             value = publish(
-              result.value as SessionSharingWorkerOperations[Key]["output"],
+              committedOutcome.value as SessionSharingWorkerOperations[Key]["output"],
               {
                 agentId: memory.agentId,
                 storePath: memory.path,
@@ -116,7 +123,9 @@ export async function runSessionCollaborationWrite<
         return { value: value! };
       },
     );
-    if (!result) throw new IncognitoSessionMissingError();
+    if (!result) {
+      throw new IncognitoSessionMissingError();
+    }
     return result.value;
   }
   const resolved = resolveSqliteScope(scope);

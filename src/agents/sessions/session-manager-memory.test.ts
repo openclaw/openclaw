@@ -360,7 +360,7 @@ describe("SessionManager selected memory actor", () => {
           withSessionMetadataWorker(
             admission.options,
             admission.database,
-            admission.assertCurrent,
+            () => admission.assertCurrent(),
             (worker) =>
               worker.execute({
                 type: "session.metadata.initialize",

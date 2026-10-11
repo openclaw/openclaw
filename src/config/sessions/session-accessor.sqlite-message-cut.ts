@@ -1,4 +1,5 @@
 import { isMainThread } from "node:worker_threads";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
@@ -193,7 +194,10 @@ async function mutateSqliteSessionAtMessage(
             );
             companions.settlement?.settle(outcome.kind);
             if (outcome.kind === "rolled-back" && authorityError) {
-              throw authorityError;
+              throw toErrorObject(
+                authorityError,
+                "Session message cut authority rejected the operation",
+              );
             }
             return readSessionActorStorageResult(outcome);
           };
@@ -254,12 +258,12 @@ async function mutateSqliteSessionAtMessage(
         { ...resolved, env, path: pathname },
         { ...intent, mode },
         source,
-        (prepared, assertCurrent) =>
+        (prepared, assertPreparedCurrent) =>
           mutatePreparedSqliteSessionAtMessage(
             { ...params, env },
             { ...resolved, env },
             prepared,
-            assertCurrent,
+            assertPreparedCurrent,
             preconditions,
           ),
         selection,

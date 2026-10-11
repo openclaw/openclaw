@@ -1,13 +1,16 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
-import { SessionManagerCore } from "../../agents/sessions/session-manager-core.js";
+import type { SessionEntry as TranscriptEntry } from "../../agents/sessions/session-manager-types.js";
 import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import {
   assertCurrentSessionTranscriptHeader,
+  classifySessionFileEntry,
   findSessionTranscriptHeader,
 } from "../../config/sessions/session-entry-codec.js";
+import { SessionEntryNavigation } from "../../config/sessions/session-entry-navigation.js";
 import type { SessionTranscriptReadSnapshot } from "../../config/sessions/session-history-read.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { MIN_READABLE_SESSION_VERSION } from "../../config/sessions/version.js";
 import { readTranscriptMessageIdempotencyKey } from "../session-transcript-entry-message.js";
 import type {
   AppliedTranscriptMessage,
@@ -25,6 +28,36 @@ export type PreparedTranscriptCommit = {
   nextMessageSeq: number;
   parentId: string | null;
 };
+
+class TranscriptCommitNavigation extends SessionEntryNavigation<TranscriptEntry> {
+  private readonly entries: TranscriptEntry[] = [];
+
+  constructor(events: readonly unknown[]) {
+    super();
+    // The caller admitted the header; replay current entries without a live session manager.
+    for (const event of events) {
+      const { entry, recognized } = classifySessionFileEntry(event, MIN_READABLE_SESSION_VERSION);
+      if (recognized && entry.type !== "session") {
+        this.entries.push(entry);
+        this.appendCanonicalNavigationEntry(entry);
+      } else {
+        this.appendOpaqueNavigationRecord(entry);
+      }
+    }
+    this.finishNavigation();
+  }
+
+  snapshot() {
+    return {
+      branch: this.getBranch(),
+      leafId: this.leafId,
+      appendParentId: this.appendParentId,
+      entries: this.entries
+        .filter((entry) => this.byId.has(entry.id))
+        .map((entry) => this.normalizeEntryParent(entry)),
+    };
+  }
+}
 
 export function isCommittedAgentMessage(message: unknown): message is CommittedAgentMessage {
   if (!isRecord(message)) {
@@ -44,7 +77,7 @@ export function isCommittedAgentMessage(message: unknown): message is CommittedA
 
 function resolveActiveCommitPrefix(params: {
   baseLeafId: string | null;
-  activeBranch: ReturnType<SessionManagerCore["getBranch"]>;
+  activeBranch: TranscriptEntry[];
   activeLeafId: string | null;
   messages: readonly AgentMessage[];
 }):
@@ -93,11 +126,11 @@ function resolveActiveCommitPrefix(params: {
 
 function resolvePersistedCommitAcrossDag(params: {
   baseLeafId: string | null;
-  manager: SessionManagerCore;
+  entries: TranscriptEntry[];
   messages: readonly AgentMessage[];
 }): PersistedCommitResolution {
-  const childrenByParent = new Map<string | null, ReturnType<SessionManagerCore["getEntries"]>>();
-  for (const entry of params.manager.getEntries()) {
+  const childrenByParent = new Map<string | null, TranscriptEntry[]>();
+  for (const entry of params.entries) {
     const children = childrenByParent.get(entry.parentId) ?? [];
     children.push(entry);
     childrenByParent.set(entry.parentId, children);
@@ -167,8 +200,8 @@ export function prepareTranscriptCommitFromSnapshot(
   if (snapshot.events.length > 0) {
     assertCurrentSessionTranscriptHeader(findSessionTranscriptHeader(snapshot.events));
   }
-  const manager = new SessionManagerCore(input.cwd, undefined, snapshot.events);
-  const activeBranch = manager.getBranch();
+  const navigation = new TranscriptCommitNavigation(snapshot.events).snapshot();
+  const activeBranch = navigation.branch;
   const activeVisibleEntries = activeBranch.filter(
     (event) => event.type === "message" || event.type === "compaction",
   );
@@ -193,13 +226,13 @@ export function prepareTranscriptCommitFromSnapshot(
       result: applied,
       version: snapshot.version,
       nextMessageSeq,
-      parentId: manager.getAppendParentId(),
+      parentId: navigation.appendParentId,
     };
   };
   if (input.recoverPersistedBatch) {
     const recovered = resolvePersistedCommitAcrossDag({
       baseLeafId: input.requestedBaseLeafId,
-      manager,
+      entries: navigation.entries,
       messages: input.messages,
     });
     if (recovered.kind === "found") {
@@ -216,7 +249,7 @@ export function prepareTranscriptCommitFromSnapshot(
   const prefix = resolveActiveCommitPrefix({
     baseLeafId: input.requestedBaseLeafId,
     activeBranch,
-    activeLeafId: manager.getLeafId(),
+    activeLeafId: navigation.leafId,
     messages: input.messages,
   });
   return prefix.ok

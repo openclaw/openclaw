@@ -4,7 +4,7 @@ import {
   type ConversationIdentity,
 } from "./conversation-identity.js";
 import {
-  normalizeConversationRef,
+  normalizeStoredConversationRef,
   selectUniqueConversationRows,
   type MappedConversationRow,
 } from "./conversation-record-policy.js";
@@ -15,6 +15,7 @@ import {
 } from "./conversation-route-context.js";
 import type {
   SessionActorMemoryConversationOwner,
+  SessionActorMemoryConversationLink,
   SessionActorMemoryConversationAddress,
   SessionActorMemoryConversationRegistration,
   SessionActorMemoryConversationQuery,
@@ -50,7 +51,9 @@ export function syncSessionActorMemoryConversations(
   observedContext?: ConversationRouteContext | null,
 ): void {
   const entry = state.hot.entry;
-  if (!entry) return;
+  if (!entry) {
+    return;
+  }
   const routeContext =
     observedContext === null
       ? null
@@ -62,7 +65,9 @@ export function syncSessionActorMemoryConversations(
   }
   let identity = conversationIdentityFromSessionEntry(entry, routeContext);
   state.primaryConversationRef = undefined;
-  if (!identity) return;
+  if (!identity) {
+    return;
+  }
   const previousWindow =
     previousEntry && previousEntry.sessionId !== entry.sessionId
       ? state.historicalWindows.get(previousEntry.sessionId)
@@ -70,8 +75,13 @@ export function syncSessionActorMemoryConversations(
   const windows = [state, ...(previousWindow ? [previousWindow] : [])];
   if (routeContext === undefined) {
     const candidate = identity;
-    const observed = windows
-      .flatMap((window) => [...window.conversationLinks.entries()])
+    const links: Array<[string, SessionActorMemoryConversationLink]> = [];
+    for (const window of windows) {
+      for (const link of window.conversationLinks) {
+        links.push(link);
+      }
+    }
+    const observed = links
       .filter(([, link]) => link.role === "primary" || link.role === "participant")
       .toSorted((a, b) => b[1].lastSeenAt - a[1].lastSeenAt)
       .map(([ref]) => shared.catalog.get(ref)?.identity)
@@ -84,7 +94,9 @@ export function syncSessionActorMemoryConversations(
           value.deliveryTarget === candidate.deliveryTarget &&
           value.threadId === candidate.threadId,
       );
-    if (observed) identity = { ...observed, label: identity.label ?? observed.label };
+    if (observed) {
+      identity = { ...observed, label: identity.label ?? observed.label };
+    }
   }
   const now = entry.updatedAt;
   registerIdentities(shared, [identity], now);
@@ -136,26 +148,29 @@ export function selectSessionActorMemoryConversations(
   const ref =
     query.conversationRef === undefined
       ? undefined
-      : normalizeConversationRef(query.conversationRef);
+      : normalizeStoredConversationRef(query.conversationRef);
   const refs =
     query.conversationRefs === undefined
       ? undefined
-      : new Set(query.conversationRefs.map(normalizeConversationRef));
+      : new Set(query.conversationRefs.map(normalizeStoredConversationRef));
   const records: Array<MappedConversationRow & { updatedAt: number }> = [];
   for (const [conversationRef, address] of context.conversations.catalog) {
     if (
       (channel && address.identity.channel !== channel) ||
       (ref && conversationRef !== ref) ||
       (refs && !refs.has(conversationRef))
-    )
+    ) {
       continue;
+    }
     let associated = false;
     for (const [sessionKey, state] of context.entries()) {
       const entry = state.hot.entry;
       const windows: SessionActorMemoryWindow[] = [state, ...state.historicalWindows.values()];
       for (const window of windows) {
         const link = window.conversationLinks.get(conversationRef);
-        if (!link) continue;
+        if (!link) {
+          continue;
+        }
         associated = true;
         const associationIsCurrent = Boolean(
           entry && window.hot.entry?.sessionId === entry.sessionId,
@@ -164,8 +179,9 @@ export function selectSessionActorMemoryConversations(
           query.currentSession &&
           (sessionKey !== query.currentSession.sessionKey ||
             window.hot.entry?.sessionId !== query.currentSession.sessionId)
-        )
+        ) {
           continue;
+        }
         if (
           query.primarySession &&
           (!associationIsCurrent ||
@@ -173,15 +189,17 @@ export function selectSessionActorMemoryConversations(
             entry?.sessionId !== query.primarySession.sessionId ||
             link.role !== "primary" ||
             window.primaryConversationRef !== conversationRef)
-        )
+        ) {
           continue;
+        }
         if (
           query.currentBindingOnly &&
           (!associationIsCurrent ||
             (link.role !== "participant" &&
               (link.role !== "primary" || window.primaryConversationRef !== conversationRef)))
-        )
+        ) {
           continue;
+        }
         records.push({
           associationIsCurrent,
           updatedAt: entry?.updatedAt ?? 0,
@@ -212,7 +230,11 @@ export function selectSessionActorMemoryConversations(
     map: (row) => row,
     limit: query.limit,
   });
-  for (const record of selected) if (record.sessionKey) context.get(record.sessionKey);
+  for (const record of selected) {
+    if (record.sessionKey) {
+      context.get(record.sessionKey);
+    }
+  }
   return selected;
 }
 
@@ -223,8 +245,9 @@ export function readSessionActorMemoryConversation(
     { type: "session.conversation.delivery.read" }
   >,
 ) {
-  if (query.type === "session.conversation.read")
+  if (query.type === "session.conversation.read") {
     return selectSessionActorMemoryConversations(context, query.input);
+  }
   const operation =
     "operationId" in query.input
       ? context.conversations.deliveries.get(query.input.operationId.trim())
@@ -253,10 +276,13 @@ export function writeSessionActorMemoryConversation(
     eligible: command.input.identities.map(() => true),
   };
   context.admit("commit", selected);
-  if (selected.eligible.length !== selected.identities.length)
+  if (selected.eligible.length !== selected.identities.length) {
     throw new Error("Conversation route owner returned an incomplete eligibility selection");
+  }
   const identities = selected.identities.filter((_, index) => selected.eligible[index]);
-  if (!identities.length) return undefined;
+  if (!identities.length) {
+    return undefined;
+  }
   const shared = context.editConversations();
   registerIdentities(shared, identities, command.input.discoveredAt);
   return command.input.query

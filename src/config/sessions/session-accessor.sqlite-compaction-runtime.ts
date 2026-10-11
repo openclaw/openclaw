@@ -126,7 +126,9 @@ export async function persistCompactionBoundaryWithSessionEntryAsync(
         memory,
         params.prepared.initializeEntry === true,
         async (selected) => {
-          if (!selected) throw new IncognitoSessionMissingError();
+          if (!selected) {
+            throw new IncognitoSessionMissingError();
+          }
           return persist(createSessionManagerMemoryDatabase(selected));
         },
       ),

@@ -18,6 +18,7 @@ import {
   readSessionProgressCard,
   writeSessionProgressCard,
 } from "../session-cards/progress-card-store.js";
+import type { ProgressCardStore } from "../session-cards/progress-card-store.types.js";
 import type { ProgressCardWorkerOperations } from "../session-cards/progress-card-store.worker.js";
 import { createSessionActorProgressCardStore } from "../session-cards/session-actor-progress-card-store.js";
 import { IncognitoSessionMissingError } from "../state/incognito-session-error.js";
@@ -33,9 +34,7 @@ import {
 } from "../state/openclaw-state-worker-error.js";
 import { captureGatewaySessionStoreScope } from "./board-store.js";
 
-export type ProgressCardStore = typeof progressCardStore;
-
-export const progressCardStore = {
+export const progressCardStore: ProgressCardStore = {
   async get(
     sessionKey: string,
     agentId?: string,
@@ -108,7 +107,9 @@ export const progressCardStore = {
             resolved.agentId,
           ),
       );
-      if (!result) throw new IncognitoSessionMissingError();
+      if (!result) {
+        throw new IncognitoSessionMissingError();
+      }
       return result;
     }
     assertCurrent();

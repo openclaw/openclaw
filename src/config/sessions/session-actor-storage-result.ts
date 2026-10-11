@@ -16,7 +16,7 @@ import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-w
 import { SessionWorkStartChangedError } from "./work-start-error.js";
 
 /** The write settled; callers must not retry it as a rolled-back operation. */
-export class SessionActorStorageCommittedError<Value> extends Error {
+class SessionActorStorageCommittedError<Value> extends Error {
   constructor(readonly outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>) {
     super(outcome.failure?.message ?? "Session actor publication failed after commit");
     this.name = "SessionActorStorageCommittedError";

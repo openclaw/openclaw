@@ -1,6 +1,6 @@
 import type { ConversationRecord } from "./conversation-registry.types.js";
 
-export function normalizeConversationRef(value: string): string {
+export function normalizeStoredConversationRef(value: string): string {
   const normalized = value.trim().toLowerCase();
   if (!/^conv_[a-f0-9]{32}$/u.test(normalized)) {
     throw new Error(`Invalid conversationRef: ${value}`);
@@ -25,9 +25,13 @@ export function selectUniqueConversationRows<Row>(
   const unique = new Map<string, MappedConversationRow>();
   for (const row of rows) {
     const existing = unique.get(options.conversationRef(row));
-    if (existing?.associationIsCurrent) continue;
+    if (existing?.associationIsCurrent) {
+      continue;
+    }
     const mapped = options.map(row);
-    if (!mapped) continue;
+    if (!mapped) {
+      continue;
+    }
     if (!existing) {
       unique.set(mapped.record.conversationRef, mapped);
       continue;

@@ -6,7 +6,6 @@ import {
   resolveSessionStoreCompatibilityAgentId,
   tryResolveLegacyCompatibilityAgentId,
 } from "../config/legacy.default-agent-owner.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { readPreparedSessionSharingChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import {
   assertSessionEntryCreationPublication,
@@ -44,10 +43,8 @@ import {
   matchesAgentDatabaseReadCandidatePath,
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../state/openclaw-agent-db-resources.js";
-import {
-  captureSessionSharingMemoryFacts,
-  SessionMutationFactsUnavailableError,
-} from "./session-sharing-incognito.js";
+import { SessionMutationFactsUnavailableError } from "./session-sharing-incognito.js";
+import { prepareMemorySessionMutationFacts } from "./session-sharing-memory-facts.js";
 import type { PreparedSessionMutationFacts } from "./session-sharing-policy.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
@@ -117,38 +114,12 @@ export async function prepareSessionMutationFacts(
 ): Promise<SessionFactsRead<PreparedSessionSourceFacts>> {
   const assertRoutingCurrent = captureSessionMutationRouting(params.cfg);
   const { canonicalKey, agentId } = resolveSessionStoreIdentity(params);
-  let memoryActive = true;
-  const memory = captureSessionSharingMemoryFacts(
-    {
-      agentId,
-      sessionKey: canonicalKey,
-      resolved: { storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }) },
-    },
-    () => {
-      if (!memoryActive) {
-        throw new SessionMutationFactsUnavailableError();
-      }
-    },
-    Boolean(params.allowMissing),
+  const memory = prepareMemorySessionMutationFacts(
+    { ...params, agentId, canonicalKey },
+    assertRoutingCurrent,
   );
   if (memory) {
-    const readCurrent = (cfg: OpenClawConfig) => {
-      assertRoutingCurrent(cfg);
-      return memory.readCurrent();
-    };
-    if (params.storageReady) {
-      await params.storageReady;
-    }
-    readCurrent(params.cfg);
-    return {
-      storageTarget: { agentId, canonicalKey, storePath: memory.location.path },
-      // The actor installs creation and its sharing facts together before acknowledgement.
-      bindCreation() {},
-      readCurrent,
-      release() {
-        memoryActive = false;
-      },
-    };
+    return memory;
   }
   const initialStoreKeys = [params.sessionKey.trim(), canonicalKey];
   const releases: Array<() => void> = [];

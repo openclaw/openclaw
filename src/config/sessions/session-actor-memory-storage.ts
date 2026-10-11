@@ -89,7 +89,7 @@ export function createSessionActorMemoryStorage(options: {
   current(): SessionActorMemoryState;
   enqueue<T>(run: () => T): Promise<T>;
   guards: SessionActorExecutorGuards;
-  acquire(sessionKey: string, lifetime?: SessionActorLifetime): Promise<SessionActor>;
+  acquire(this: void, sessionKey: string, lifetime?: SessionActorLifetime): Promise<SessionActor>;
   prepareInstall(state: SessionActorMemoryState): void;
   conversations(): SessionActorMemoryConversationOwner;
   installConversations(value: SessionActorMemoryConversationOwner): void;
@@ -189,7 +189,7 @@ export function createSessionActorMemoryStorage(options: {
     return {
       context,
       changed,
-      installConversations() {
+      installConversations: () => {
         if (conversations) {
           options.installConversations(conversations);
         }
