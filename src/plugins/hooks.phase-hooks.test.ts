@@ -584,33 +584,53 @@ describe("before_agent_finalize", () => {
   });
 });
 
-it("keeps the highest-priority model override after a broken plugin", async () => {
-  const registry = createEmptyPluginRegistry();
-  const broken = vi.fn(() => {
-    throw new Error("plugin crashed");
-  });
-  addStaticTestHooks(registry, {
-    hookName: "before_model_resolve",
-    hooks: [
-      {
-        pluginId: "low",
-        result: { modelOverride: "low-model", providerOverride: "low-provider" },
-      },
-      {
-        pluginId: "broken",
-        priority: 100,
-        result: {},
-        handler: broken,
-      },
-      {
-        pluginId: "high",
-        priority: 10,
-        result: { modelOverride: "high-model", providerOverride: "high-provider" },
-      },
-    ],
-  });
-  await expect(
-    createHookRunner(registry).runBeforeModelResolve({ prompt: "test" }, TEST_PLUGIN_AGENT_CTX),
-  ).resolves.toEqual({ modelOverride: "high-model", providerOverride: "high-provider" });
-  expect(broken).toHaveBeenCalledOnce();
-});
+it.each([
+  { higher: [], lower: ["local/backup"], priority: 10, expected: [] },
+  { higher: ["local/backup"], lower: [], priority: 10, expected: ["local/backup"] },
+  { higher: undefined, lower: ["local/backup"], priority: 10, expected: ["local/backup"] },
+  { higher: [], lower: ["local/first"], priority: 0, expected: ["local/first"] },
+])(
+  "keeps the first defined routing overrides after a broken plugin ($priority)",
+  async ({ higher, lower, priority, expected }) => {
+    const registry = createEmptyPluginRegistry();
+    const broken = vi.fn(() => {
+      throw new Error("plugin crashed");
+    });
+    addStaticTestHooks(registry, {
+      hookName: "before_model_resolve",
+      hooks: [
+        {
+          pluginId: "low",
+          result: {
+            modelOverride: "low-model",
+            providerOverride: "low-provider",
+            fallbacksOverride: lower,
+          },
+        },
+        {
+          pluginId: "broken",
+          priority: 100,
+          result: {},
+          handler: broken,
+        },
+        {
+          pluginId: "high",
+          priority,
+          result: {
+            modelOverride: "high-model",
+            providerOverride: "high-provider",
+            fallbacksOverride: higher,
+          },
+        },
+      ],
+    });
+    await expect(
+      createHookRunner(registry).runBeforeModelResolve({ prompt: "test" }, TEST_PLUGIN_AGENT_CTX),
+    ).resolves.toEqual({
+      modelOverride: priority ? "high-model" : "low-model",
+      providerOverride: priority ? "high-provider" : "low-provider",
+      fallbacksOverride: expected,
+    });
+    expect(broken).toHaveBeenCalledOnce();
+  },
+);

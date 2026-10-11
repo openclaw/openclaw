@@ -1,19 +1,54 @@
 /** Resolves model fallback chains for isolated cron runs and preflight. */
+import type { RunEntryModelResolve } from "../../agents/embedded-agent-runner/run-entry-model-selection.js";
 import { resolveModelCandidateChain } from "../../agents/model-fallback-candidates.js";
 import type { ModelCandidate } from "../../agents/model-fallback.types.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CronJob } from "../types.js";
+import { resolveCurrentChannelTarget } from "./channel-output-policy.js";
 import {
   resolveEffectiveModelFallbacks,
   resolveSubagentModelFallbacksOverride,
 } from "./run-execution.runtime.js";
+import type { CronRunExecutionParams } from "./run-execution.types.js";
 import { logWarn } from "./run.runtime.js";
 
 const cronModelPreflightRuntimeLoader = createLazyImportLoader(
   () => import("./model-preflight.runtime.js"),
 );
+
+/** Prepare one channel projection for both model routing hooks and embedded execution. */
+export async function prepareCronModelResolveInput(
+  params: Pick<
+    CronRunExecutionParams,
+    "cwd" | "cronSession" | "job" | "runSessionKey" | "resolvedDelivery"
+  > & { prompt: string; messageChannel: string | undefined },
+) {
+  const currentChannelId = await resolveCurrentChannelTarget({
+    channel: params.messageChannel,
+    to: params.resolvedDelivery.to,
+    threadId: params.resolvedDelivery.threadId,
+  });
+  const modelResolve: RunEntryModelResolve = {
+    prompt: params.prompt,
+    cwd: params.cwd,
+    modelSelectionLocked: params.cronSession.sessionEntry.modelSelectionLocked,
+    context: {
+      trigger: "cron",
+      jobId: params.job.id,
+      ...buildAgentHookContextChannelFields({
+        sessionKey: params.runSessionKey,
+        messageChannel: params.messageChannel,
+        messageTo: params.resolvedDelivery.to,
+        currentChannelId,
+        agentAccountId: params.resolvedDelivery.accountId,
+      }),
+    },
+  };
+  return { modelResolve, currentChannelId };
+}
 
 /** Resolves cron model fallbacks, giving explicit payload fallbacks precedence over subagent/default policy. */
 export function resolveCronFallbacksOverride(params: {

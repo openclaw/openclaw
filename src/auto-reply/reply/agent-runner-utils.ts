@@ -37,6 +37,11 @@ import {
   mintMessageActionTurnCapability,
   resolveMessageActionTurnCapabilityLifetime,
 } from "../../gateway/message-action-turn-capability.js";
+import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
+} from "../../plugins/hook-agent-context.js";
+import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
@@ -313,6 +318,25 @@ function buildTemplateSenderContext(sessionCtx: TemplateContext) {
     senderName: normalizeOptionalString(sessionCtx.SenderName),
     senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),
     senderE164: normalizeOptionalString(sessionCtx.SenderE164),
+  };
+}
+
+/** Reuse the candidate's channel and sender projection for early model routing. */
+export function buildModelResolveContext(
+  params: Parameters<typeof buildEmbeddedContextFromTemplate>[0] & {
+    trigger: PluginHookAgentContext["trigger"];
+  },
+) {
+  const context = {
+    ...buildEmbeddedContextFromTemplate(params),
+    ...buildTemplateSenderContext(params.sessionCtx),
+    ...buildReplyRunStateParams(params.run),
+    trigger: params.trigger,
+  };
+  return {
+    trigger: context.trigger,
+    ...buildAgentHookContextChannelFields(context),
+    ...buildAgentHookContextIdentityFields(context),
   };
 }
 
