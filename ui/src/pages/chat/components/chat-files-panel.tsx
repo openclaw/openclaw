@@ -1,4 +1,4 @@
-import { For, Show, createEffect } from "solid-js";
+import { For, Show, createEffect, onCleanup } from "solid-js";
 import { icons } from "../../../components/icons.ts";
 import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import {
@@ -98,18 +98,21 @@ export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
     };
     const activeHostedTabId = () => props.activeId ?? (props.previews.length ? "browse" : null);
     let browseAction!: HTMLButtonElement;
+    const showBrowser = () => props.onSelect(null);
     <button
       ref={(element) => {
         browseAction = element;
+        // The Lit header hosts this action outside Solid's delegated event root.
+        browseAction.addEventListener("click", showBrowser);
       }}
       class="rail-header__action"
       type="button"
       aria-label={t("chat.sidePanel.files")}
       title={t("chat.sidePanel.files")}
-      onClick={() => props.onSelect(null)}
     >
       <Icon name="folder" />
     </button>;
+    onCleanup(() => browseAction.removeEventListener("click", showBrowser));
     const hostedActions = () => browseAction;
     Object.defineProperties(host, {
       hostedTabs: { configurable: true, get: hostedTabs },

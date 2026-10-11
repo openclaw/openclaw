@@ -11,6 +11,8 @@ sidebarTitle: "Manage jobs"
 
 Day-to-day operation of stored jobs: copy-ready CLI examples, the management commands, run history semantics, and the `cron.*` configuration keys. Part of the [Automations](/automation/cron-jobs) guide.
 
+Run links from automation messages and notifications open the exact recorded run, even when newer runs fill the first history page. Choose **Show all runs** to return to that automation's full history. Links with a reused session or start-time identity do not select an ambiguous run.
+
 ## CLI examples
 
 <Tabs>
