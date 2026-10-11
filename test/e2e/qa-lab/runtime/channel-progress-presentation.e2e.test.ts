@@ -30,8 +30,13 @@ import {
   connectGatewayClient,
   disconnectGatewayClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
+import {
+  deliveryQueueEntriesQuery,
+  inflateDeliveryQueueRow,
+} from "../../../../src/infra/delivery-queue-sqlite-bound.js";
+import { executeSqliteQuerySync } from "../../../../src/infra/kysely-sync.js";
+import { OUTBOUND_EXECUTABLE_QUEUE_NAMES } from "../../../../src/infra/outbound/delivery-queue-namespaces.js";
 import { projectOutboundDelivery } from "../../../../src/infra/outbound/delivery-queue-projection.js";
-import { readOutboundDeliveriesInDatabase } from "../../../../src/infra/outbound/delivery-queue-storage.kernel.js";
 import { withOpenClawStateDatabaseReadOnly } from "../../../../src/state/openclaw-state-db-readonly.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { readQaSubagentRuns } from "../../../helpers/qa-subagent-runs.js";
@@ -1505,12 +1510,20 @@ describe("channel progress presentation through an isolated Gateway", () => {
               lastError: run.delivery.lastError,
             }
           : undefined;
-      // The Gateway writes in another process, outside runtime cache invalidation.
+      // The child Gateway cannot invalidate this process's physical-database queue cache.
+      // Read committed rows directly, retaining the canonical filters and projection.
       const pendingRows = withOpenClawStateDatabaseReadOnly(
         (database) =>
-          readOutboundDeliveriesInDatabase(database, { mode: "unfinished" }).map(
-            ({ queueName, entry }) => projectOutboundDelivery(queueName, entry),
-          ),
+          executeSqliteQuerySync(
+            database.db,
+            deliveryQueueEntriesQuery(database, OUTBOUND_EXECUTABLE_QUEUE_NAMES, "unfinished")
+              .select("queue_name")
+              .orderBy("enqueued_at", "asc")
+              .orderBy("id", "asc"),
+          ).rows.flatMap((row) => {
+            const entry = inflateDeliveryQueueRow(row);
+            return entry ? [projectOutboundDelivery(row.queue_name, entry)] : [];
+          }),
         { env: gateway.runtimeEnv },
       );
       queueRows = pendingRows.map(({ id, channel, to, recoveryState, lastError }) => ({
