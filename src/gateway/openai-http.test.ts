@@ -3392,21 +3392,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       );
     },
   );
-});
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
-
-// These configurations own their Gateway after the shared server has closed.
-describe("OpenAI-compatible HTTP API (e2e) with independent Gateways", () => {
+  // Keep this last: it verifies shutdown of the shared server.
   it("binds the Gateway lifecycle resolver to chat-completion runs", async () => {
-    const started = await startGatewayServerWithRetries({
-      port: await getGatewayTestPort(),
-      opts: {
-        host: "127.0.0.1",
-        auth: { mode: "none" },
-        controlUiEnabled: false,
-        openAiChatCompletionsEnabled: true,
-      },
-    });
     let resolveGatewayContext: ReturnType<typeof getGatewayContextResolver>;
     try {
       agentCommandMock.mockClear();
@@ -3419,18 +3406,22 @@ describe("OpenAI-compatible HTTP API (e2e) with independent Gateways", () => {
         return { payloads: [{ text: "hello" }] } as never;
       });
 
-      const res = await postChatCompletions(started.port);
+      const res = await postChatCompletions(enabledPort);
 
       expect(res.status).toBe(200);
       await res.text();
       const context = resolveGatewayContext?.();
       expect(context?.resolveGatewayContext).toBe(resolveGatewayContext);
     } finally {
-      await started.server.close({ reason: "chat-completion resolver lifecycle test done" });
+      await enabledServer.close({ reason: "chat-completion resolver lifecycle test done" });
     }
     expect(resolveGatewayContext?.()).toBeUndefined();
   });
+});
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
+// These configurations own their Gateway after the shared server has closed.
+describe("OpenAI-compatible HTTP API (e2e) with independent Gateways", () => {
   it("returns 429 for repeated failed auth when gateway.auth.rateLimit is configured", async () => {
     testState.gatewayAuth = {
       mode: "token",
