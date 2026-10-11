@@ -581,7 +581,10 @@ The retired General route and its `/config` alias are replaced once with
 Memory tabs use the paths in the table instead of `?tab=`. Older Memory links
 with `?tab=memories|dreams|settings`, `?tab=dreaming`, `?tab=search`, or
 `?section=memory` are replaced once with the corresponding path while keeping
-any setting anchor.
+any setting anchor and other query parameters. Memory settings search adds
+`?advanced=1` when a matching field is advanced, opening the advanced group without changing
+the browser's saved advanced-settings preference. The same reveal survives a
+reload or an older Memory link that includes `advanced=1`.
 
 Plugin catalog tabs also use paths instead of `?tab=`. Older links with
 `?tab=discover|installed` are replaced once with the corresponding path while

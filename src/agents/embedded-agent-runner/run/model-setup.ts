@@ -190,7 +190,13 @@ async function prepareNativeSessionRuntime(
       (...source) => publication.prepareSource(...source),
     );
   };
-  const ownership = await readOwnership(admission.entry);
+  // Admission precedes the lane's writer claim; a snapshot without that claim must be reread.
+  const expectedWriter = runParams.sessionTarget?.expectedWriterRunId;
+  const ownership = await readOwnership(
+    expectedWriter === undefined || admission.entry.activeWriterRunId === expectedWriter
+      ? admission.entry
+      : undefined,
+  );
   if (!ownership) {
     throw new AgentHarnessPreflightError(
       "The pinned runtime's native session ownership is unavailable. Reattach the original native session instead of starting a replacement model run.",

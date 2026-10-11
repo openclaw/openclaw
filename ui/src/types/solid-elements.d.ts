@@ -3,6 +3,9 @@ import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dro
 import type WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
 import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import type WaSwitch from "@awesome.me/webawesome/dist/components/switch/switch.js";
+import type WaTabGroup from "@awesome.me/webawesome/dist/components/tab-group/tab-group.js";
+import type WaTabPanel from "@awesome.me/webawesome/dist/components/tab-panel/tab-panel.js";
+import type WaTab from "@awesome.me/webawesome/dist/components/tab/tab.js";
 import type { JSX } from "@solidjs/web";
 import type { MascotMood } from "../components/mascot-pose.ts";
 export type { JSX } from "@solidjs/web";
@@ -42,6 +45,20 @@ declare module "@solidjs/web" {
         placement?: Tooltip["placement"];
         "open-on-click"?: boolean;
         "auto-size"?: boolean;
+      };
+      "wa-tab-group": HTMLAttributes<WaTabGroup> & {
+        "prop:active": string;
+        activation: "auto" | "manual";
+        "without-scroll-controls": boolean;
+      };
+      "wa-tab": HTMLAttributes<WaTab> & {
+        panel: string;
+        "prop:active"?: boolean;
+        "prop:tabIndex"?: number;
+      };
+      "wa-tab-panel": HTMLAttributes<WaTabPanel> & {
+        name: string;
+        "prop:active": boolean;
       };
       "openclaw-agent-row-chip": HTMLAttributes<HTMLElement> & {
         "prop:agentId"?: string;

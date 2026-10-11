@@ -44,6 +44,7 @@ import type {
 import { hydrateSessionActorState } from "./session-actor-hydration.worker.js";
 import {
   createSessionActorReplica,
+  readSessionActorRowFacts,
   retainSessionActorEntryFacts,
 } from "./session-actor-replica.js";
 import { mutatePendingInput, readPendingInput } from "./session-pending-input-operations.kernel.js";
@@ -433,6 +434,55 @@ it("invalidates for native owner, replacement, transcript and deletion writers",
     );
     expect(replica.read()).toBeUndefined();
     expect(hydrate(fixture).entry).toBeUndefined();
+  });
+});
+
+it("reuses list facts and invalidates summary watermarks after transcript writes", async () => {
+  await withReplica((fixture) => {
+    const { scope } = fixture;
+    replaceSessionEntrySync(scope, {
+      sessionId: "replica-session",
+      updatedAt: 1,
+      skillsSnapshot: { prompt: "Saved instructions", skills: [] },
+      activitySummary: {
+        version: 1,
+        text: "No messages yet",
+        updatedAt: 1,
+        sessionId: "replica-session",
+        generation: null,
+        maxSeq: null,
+        leafEntryId: null,
+        coveredMessages: 0,
+        totalMessages: 0,
+        omittedContent: false,
+      },
+    });
+    const before = hydrate(fixture);
+    const target = { path: scope.storePath, sessionKey: scope.sessionKey };
+    const facts = readSessionActorRowFacts(target);
+    expect(before.entry?.skillsSnapshot?.prompt).toBe("Saved instructions");
+    expect(facts?.entry).not.toHaveProperty("skillsSnapshot");
+    expect(facts).toMatchObject({
+      hasBoard: false,
+      activitySummaryWatermark: { generation: null, maxSeq: null },
+    });
+    if (!facts) {
+      throw new Error("Expected resident row facts");
+    }
+    facts.entry.label = "caller edit";
+    expect(readSessionActorRowFacts(target)?.entry.label).toBeUndefined();
+
+    const appended = appendTranscriptEventSync(
+      { ...scope, sessionId: "replica-session" },
+      { type: "proof", id: "summary-watermark" },
+    );
+    expect(appended.ok).toBe(true);
+    expect(readSessionActorRowFacts(target)).toBeUndefined();
+    const after = hydrate(fixture);
+    expect(after.transcript.watermark).not.toEqual(before.transcript.watermark);
+    expect(readSessionActorRowFacts(target)?.activitySummaryWatermark).toEqual(
+      after.transcript.watermark,
+    );
   });
 });
 

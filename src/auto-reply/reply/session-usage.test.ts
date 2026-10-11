@@ -1,11 +1,14 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import * as sessionActors from "../../config/sessions/session-actor.js";
+import { recordSessionParticipantInWorker } from "../../config/sessions/session-sharing-store.async.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   getOpenClawAgentDatabaseIfOpen,
@@ -101,6 +104,51 @@ describe("session actor usage accounting", () => {
     contextTokensUsed: 1_000_000,
     contextTokensSource: "runtime",
   } satisfies UsageUpdate;
+
+  it("persists terminal usage through an actor rebase while participant writes queue", async () => {
+    const session = await usageSession();
+    const competingWrites: Promise<unknown>[] = [];
+    const createActor = sessionActors.createSessionActor;
+    vi.spyOn(sessionActors, "createSessionActor").mockImplementation((params) => {
+      const actor = createActor(params);
+      if (params.target.sessionKey === session.scope.sessionKey) {
+        const complete = actor.completeTurn;
+        vi.spyOn(actor, "completeTurn").mockImplementationOnce(async (...command) => {
+          const recordParticipant = (promptedAt: number) =>
+            recordSessionParticipantInWorker(session.scope, {
+              identity: {
+                type: "observation",
+                pluginId: null,
+                accountId: null,
+                senderKind: "unknown",
+                id: "gateway-client",
+              },
+              promptedAt,
+              sessionAgentId: "main",
+            });
+          await recordParticipant(1);
+          const pending = complete(...command);
+          competingWrites.push(runOutsideStoreWriterContext(() => recordParticipant(2)));
+          const outcome = await pending;
+          expect(outcome).toMatchObject({
+            kind: "stale-version",
+            postimage: { target: actor.target },
+          });
+          return outcome;
+        });
+      }
+      return actor;
+    });
+    try {
+      await expect(session.update(producingUpdate)).resolves.toBeUndefined();
+      await Promise.all(competingWrites);
+      expect(session.read()).toMatchObject({ inputTokens: 120, outputTokens: 8 });
+    } finally {
+      await Promise.all(competingWrites);
+      vi.restoreAllMocks();
+    }
+  });
+
   it("completes usage in the existing unbound native incognito owner", async () => {
     const session = await usageSession(
       { incognito: true },
