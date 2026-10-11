@@ -1,9 +1,4 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
-import {
-  isCacheTtlTouch,
-  readCacheTtlCheckpoint,
-} from "../../agents/embedded-agent-runner/cache-ttl-checkpoint.js";
 import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type {
   CacheTtlProjectionPrefix,
@@ -13,7 +8,7 @@ import {
   getActiveTranscriptKysely,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
-import { isIndexedSessionEntry } from "./session-entry-codec.js";
+import { collectCacheTtlProjectionPrefix } from "./session-cache-ttl-prefix-values.js";
 import {
   transcriptEventJsonSql,
   transcriptEventModelNavigationSql,
@@ -27,14 +22,7 @@ export function readCacheTtlProjectionPrefix(
     | { activePosition: number; id: string; entry: Record<string, unknown>; beforeRawSeq?: number }
     | undefined,
 ): CacheTtlProjectionPrefix | undefined {
-  // Every retained branch can end at the anchor, before any later checkpoint.
-  if (
-    !anchor ||
-    (isIndexedSessionEntry(anchor.entry) &&
-      (anchor.entry.type === "reset" || readCacheTtlCheckpoint([anchor.entry])))
-  ) {
-    return undefined;
-  }
+  if (!anchor) return undefined;
   const lastNavigationValue = (key: "type" | "customType") =>
     /* kysely-allow-raw: legacy duplicate members follow JSON.parse's last-key semantics. */
     sql`(SELECT value FROM json_each(${transcriptEventResetNavigationSql("event")})
@@ -91,21 +79,12 @@ export function readCacheTtlProjectionPrefix(
       )
       .orderBy("active.active_position", "desc"),
   );
-  const prefix: Record<string, unknown>[] = [];
-  for (const row of rows) {
-    const entry = asOptionalRecord(JSON.parse(row.event_json));
-    if (
-      !isIndexedSessionEntry(entry) ||
-      (entry.type !== "reset" && (entry.type !== "custom" || isCacheTtlTouch(entry.data)))
-    ) {
-      continue;
-    }
-    prefix.push(entry);
-    if (entry.type === "reset" || readCacheTtlCheckpoint([entry])) {
-      break;
-    }
-  }
-  return prefix.length ? { anchorIds: [anchor.id], entries: prefix.toReversed() } : undefined;
+  return collectCacheTtlProjectionPrefix(
+    anchor,
+    (function* () {
+      for (const row of rows) yield JSON.parse(row.event_json) as unknown;
+    })(),
+  );
 }
 
 /** Bind hidden anchors while preserving every already-navigable retained boundary. */

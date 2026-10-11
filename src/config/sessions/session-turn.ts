@@ -7,7 +7,10 @@ import {
 import { retainSqliteWorkerErrorCode } from "../../infra/sqlite-worker-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { getCliHistoryWriter } from "./cli-history-boundary.js";
-import { assertSessionGoalOperationTime } from "./goals-operations.js";
+import {
+  assertSessionGoalOperationTime,
+  prepareSessionTurnGoalMessage,
+} from "./goals-operation-policy.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
 import { captureSessionPendingInputWorkerCustody } from "./session-accessor.sqlite-pending-inputs.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
@@ -42,7 +45,6 @@ import {
   completeSessionTurnPublication,
   publishCommittedSessionTurn,
 } from "./session-turn-publication.js";
-import { prepareSessionTurnGoalMessage } from "./session-turn.kernel.js";
 import type {
   IncognitoSessionTurnOperations,
   SessionTurnCommitted,

@@ -22,7 +22,7 @@ import type {
   SessionActorOutcome,
   SessionActorTarget,
 } from "./session-actor-contract.js";
-import type { SessionEntrySnapshotField } from "./session-entry-snapshots.js";
+import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
 export type SessionActorEntryFacts = Pick<

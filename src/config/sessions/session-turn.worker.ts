@@ -13,7 +13,8 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import { ensureSessionGoalOperationsSchema } from "../../state/openclaw-agent-goal-operations-schema.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { runWithCliHistoryWriter } from "./cli-history-boundary.js";
-import { applySessionGoalOperation, readSessionGoalOperationReceipt } from "./goals-operations.js";
+import { applySessionGoalOperation } from "./goals-operation-policy.js";
+import { readSessionGoalOperationReceipt } from "./goals-operations.js";
 import {
   readSessionPendingInputWorkerReceipt,
   resolveSessionPendingInputAppend,

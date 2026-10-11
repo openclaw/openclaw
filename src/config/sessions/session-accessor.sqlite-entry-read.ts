@@ -40,9 +40,9 @@ import {
 import { parseSqliteSessionEntryRecord } from "./session-entry-json.js";
 import {
   attachSessionEntrySnapshots,
-  sessionEntrySnapshotColumnsForKeys,
   type SessionEntryProjection,
-} from "./session-entry-snapshots.js";
+} from "./session-entry-snapshot-values.js";
+import { sessionEntrySnapshotColumnsForKeys } from "./session-entry-snapshots.js";
 import type { ResolvedSessionEntryRow } from "./session-entry-storage.types.js";
 import {
   collectSessionEntryLookupKeys,

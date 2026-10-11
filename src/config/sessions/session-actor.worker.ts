@@ -34,6 +34,7 @@ import {
   applySessionActorPhase,
   SessionActorStaleStateError,
 } from "./session-actor-phase.worker.js";
+import { createSessionActorCommittedOutcome } from "./session-actor-receipt.js";
 import {
   cloneSessionActorStoredState,
   withSessionActorTransactionState,
@@ -238,56 +239,14 @@ export function createSessionActorWorker(
               throw new Error("Session actor lost its native writer revision");
             }
             working.hot.writeToken = pendingToken;
-            const turn =
-              value && "kind" in value && value.kind === "session-turn"
-                ? value
-                : value && "turn" in value
-                  ? value.turn
-                  : undefined;
-            const append =
-              value && "kind" in value && (value.kind === "message" || value.kind === "metadata")
-                ? value
-                : value && "append" in value
-                  ? value.append
-                  : undefined;
-            const appended = append?.value.snapshot.ok
-              ? append.value.snapshot.value.result
-              : undefined;
-            const accepted = {
-              kind: "committed" as const,
-              value,
-              receipt: {
-                kind: "session-actor-committed" as const,
-                commandId: command.input.commandId,
-                phaseId: command.input.phaseId,
-                // SAFETY: The read command returned before entering this write transaction.
-                phase: phase as SessionActorPhase,
-                beforeVersion: before.hot.version,
-                afterVersion: working.hot.version,
-                transcript: {
-                  before: before.hot.transcript.version,
-                  after: working.hot.transcript.version,
-                  appendedMessages:
-                    turn?.result.appendedMessages ??
-                    (appended && "messageId" in appended ? [appended] : []),
-                  append,
-                  projectionNeedsReconcile:
-                    Boolean(turn?.projectionNeedsReconcile) ||
-                    Boolean(append?.value.projectionNeedsReconcile) ||
-                    Boolean(append?.header?.projectionNeedsReconcile) ||
-                    Boolean(
-                      value &&
-                      "projectionNeedsReconcile" in value &&
-                      value.projectionNeedsReconcile,
-                    ),
-                },
-                pendingInputReceipt: turn?.custody ?? append?.value.pendingInputReceipt,
-                pendingInputMutationReceipt: applied.pendingInputMutationReceipt,
-                pendingFinalDelivery: structuredClone(working.hot.entry?.pendingFinalDelivery),
-                reducers: applied.reducers,
-                postimage: structuredClone(working.hot),
-              },
-            };
+            const accepted = createSessionActorCommittedOutcome({
+              // SAFETY: The read command returned before entering this write transaction.
+              phase: phase as SessionActorPhase,
+              command: command.input,
+              before: before.hot,
+              after: working.hot,
+              applied,
+            });
             if (
               !stageSqliteTransactionState(opened.db, {
                 stage() {},
@@ -308,6 +267,12 @@ export function createSessionActorWorker(
             } else {
               deferSqliteWorkerCommitReceipt(opened.db, accepted);
             }
+            const turn =
+              value && "kind" in value && value.kind === "session-turn"
+                ? value
+                : value && "turn" in value
+                  ? value.turn
+                  : undefined;
             admit("commit", {
               kind: "session-actor-admission",
               snapshot: projectSessionActorHotState(working),

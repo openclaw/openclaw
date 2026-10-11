@@ -45,7 +45,7 @@ import {
   captureSessionEntryPublicationSource,
   hasSessionEntryPublicationCapacity,
 } from "./session-entry-publication-source.js";
-import { attachSessionEntrySnapshots } from "./session-entry-snapshots.js";
+import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import { readStagedSessionTranscriptAuthority } from "./session-transcript-authority.js";
 import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { SessionEntry } from "./types.js";
