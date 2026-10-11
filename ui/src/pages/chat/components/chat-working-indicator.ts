@@ -26,7 +26,7 @@ export function renderChatBubbleDots(working = false) {
 
 /** Local disclosure state stays on the native element while status text streams. */
 export function renderChatBubbleActivity(content: unknown, label: string, working = false) {
-  return html`<details class="chat-bubble-activity">
+  return html`<details class="chat-bubble-activity chat-bubble-activity--working">
     <summary
       class="chat-bubble-activity__summary"
       aria-label=${label}
@@ -224,7 +224,8 @@ export function renderChatWorkingIndicator(
   // Keep the live activity slot stable when the parent yields or resumes.
   const content = html`${waitingSubagents && options.subagentActivity ? nothing : status}
   ${options.subagentActivity ?? nothing}`;
-  return options.bubbleMode
+  // Human-action and child-wait states keep their existing visible controls.
+  return options.bubbleMode && working && runningSubagents === 0
     ? renderChatBubbleActivity(content, t("chat.view.workingDetails"), true)
     : content;
 }

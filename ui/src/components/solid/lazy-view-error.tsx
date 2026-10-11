@@ -1,9 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { Show, createEffect, createSignal, onCleanup } from "solid-js";
-import {
-  isOptionalElementDefined,
-  LazyCustomElementRequestController,
-} from "../../app/lazy-custom-element.ts";
+import { Show } from "solid-js";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { Icon } from "./icon.tsx";
@@ -40,118 +36,6 @@ export function LazyElementStateView(props: {
           onRetry={props.onRetry}
           onClose={props.onClose}
         />
-      )}
-    </Show>
-  );
-}
-
-export function LazyElementModal(props: {
-  controller: {
-    visibleState: LazyElementState | undefined;
-    retry(): void;
-    close(): void;
-  };
-}) {
-  const close = () => props.controller.close();
-  const [revision, setRevision] = createSignal(0);
-  let live = true;
-  const modalElement = {
-    tagName: "openclaw-modal-dialog",
-    get label() {
-      return props.controller.visibleState?.element.label ?? t("common.loading");
-    },
-    loadModule: () => import("../modal-dialog.ts"),
-  };
-  const loader = new LazyCustomElementRequestController({
-    requestUpdate: () => {
-      if (live) {
-        setRevision((value) => value + 1);
-      }
-    },
-  });
-  createEffect(
-    () => Boolean(props.controller.visibleState),
-    (active) => loader.requestWhileActive(modalElement, active),
-  );
-  onCleanup(() => {
-    live = false;
-    loader.requestWhileActive(modalElement, false);
-  });
-  const loaded = () => {
-    revision();
-    return isOptionalElementDefined(modalElement);
-  };
-  const failure = () => {
-    revision();
-    const state = loader.visibleState;
-    return state?.status === "error" ? state : undefined;
-  };
-  return (
-    <Show when={props.controller.visibleState}>
-      {(state) => (
-        <Show
-          when={loaded()}
-          fallback={
-            <Show
-              when={failure()}
-              fallback={
-                <section class="lazy-element-loading">
-                  <LoadingState />
-                  <button type="button" class="btn" onClick={close}>
-                    {t("common.close")}
-                  </button>
-                </section>
-              }
-            >
-              {(error) => (
-                <LazyViewError
-                  error={error().error}
-                  stale={error().stale}
-                  subtitle={state().element.label}
-                  onRetry={() => loader.retry()}
-                  onClose={close}
-                />
-              )}
-            </Show>
-          }
-        >
-          <openclaw-modal-dialog
-            class={state().status === "loading" ? "lazy-element-loading-modal" : undefined}
-            label={state().element.label}
-            onModal-cancel={close}
-          >
-            {state().status === "loading" ? (
-              <section class="lazy-element-loading">
-                <header class="lazy-element-loading__header">
-                  <h2>{state().element.label}</h2>
-                  <button
-                    class="btn btn--ghost btn--icon"
-                    type="button"
-                    aria-label={t("common.close")}
-                    onClick={close}
-                  >
-                    <Icon name="x" />
-                  </button>
-                </header>
-                <div
-                  class="lazy-element-loading__status"
-                  role="status"
-                  aria-live="polite"
-                  aria-label={t("common.loading")}
-                >
-                  <span class="btn__spinner" aria-hidden="true" />
-                  <span>{t("common.loading")}</span>
-                </div>
-              </section>
-            ) : (
-              <LazyElementStateView
-                state={state()}
-                onRetry={() => props.controller.retry()}
-                onClose={close}
-              />
-            )}
-          </openclaw-modal-dialog>
-        </Show>
       )}
     </Show>
   );
