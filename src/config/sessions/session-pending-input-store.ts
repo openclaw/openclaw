@@ -337,7 +337,6 @@ export async function preparePendingInputStore(
               {
                 commandId: randomUUID(),
                 phaseId: `accept:${input.runId}`,
-                expected: hot.version,
                 pending: input,
                 lifecycle: {},
                 expectedState: buildRestartRecoveryExpectedState(hot.entry),

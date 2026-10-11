@@ -20,6 +20,7 @@ import {
   readSqliteDatabaseWriteRevision,
   readSqliteDatabaseScopedWriteToken,
   revokeSqliteDatabaseAdmissions,
+  withSqliteDatabaseAdmissionExchange,
 } from "./sqlite-database-admission.js";
 import { runSqliteSchemaReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
 import { schemaAdmission } from "./sqlite-schema-admission.js";
@@ -37,6 +38,31 @@ import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-su
 
 describe("native SQLite schema snapshots and callbacks", () => {
   const { tempDirs, openDatabase } = useSqliteSchemaTestFixture();
+
+  it("settles the next write after first writer custody publication throws", () => {
+    const filename = path.join(tempDirs.make("sqlite-custody-recovery-"), "agent.sqlite");
+    {
+      using initial = new DatabaseSync(filename);
+      initial.exec("CREATE TABLE proof (value INTEGER NOT NULL)");
+    }
+    const writer = openDatabase("", true, filename);
+    const sibling = openDatabase("", true, filename);
+    expect(readSqliteDatabaseScopedWriteToken(sibling, "session")).toBeTypeOf("string");
+
+    expect(() =>
+      withSqliteDatabaseAdmissionExchange(
+        () => {
+          throw new Error("synthetic custody publication refusal");
+        },
+        () => writer.exec("INSERT INTO proof VALUES (1)"),
+      ),
+    ).toThrow("synthetic custody publication refusal");
+    expect(sibling.prepare("SELECT value FROM proof").all()).toEqual([]);
+
+    writer.exec("INSERT INTO proof VALUES (2)");
+    expect(sibling.prepare("SELECT value FROM proof").all()).toEqual([{ value: 2 }]);
+    expect(readSqliteDatabaseScopedWriteToken(sibling, "session")).toBeTypeOf("string");
+  });
 
   it.each(["autocommit", "commit", "rollback", "callback failure"] as const)(
     "settles %s writes while an unrelated read cursor remains open",

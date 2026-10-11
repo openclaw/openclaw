@@ -115,63 +115,56 @@ export async function withAgentTurnCompletion<T>(
           }
           finished = true;
           await refresh();
-          for (let attempt = 0; ; attempt++) {
-            const { reducers } = project();
-            if (reducers.length === 0 && !pendingFinalDelivery) {
-              return snapshot.entry!;
-            }
-            const committed: { receipt?: SessionActorReceipt } = {};
-            const outcome = await actor.completeTurn(
-              {
-                commandId: randomUUID(),
-                phaseId: `complete:${operationKey}`,
-                expected: snapshot.version,
-                reducers,
-                bookkeeping: {
-                  sessionId: expected.sessionId,
-                  lifecycleRevision: expected.lifecycleRevision ?? null,
-                  writerRunId: expected.writerRunId,
-                  expectedState: buildRestartRecoveryExpectedState(snapshot.entry!),
-                  ...(pendingFinalDelivery ? { lifecycle: { updatedAt: Date.now() } } : {}),
-                },
-                pendingFinalDelivery,
-              },
-              authority,
-              {
-                committed: (receipt) => {
-                  committed.receipt = receipt.receipt;
-                },
-              },
-            );
-            if (committed.receipt) {
-              snapshot = committed.receipt.postimage;
-              params.publish(snapshot.entry!);
-            }
-            if (outcome.kind === "stale-version" && attempt === 0) {
-              snapshot = outcome.postimage;
-              continue;
-            }
-            if (
-              outcome.kind === "rolled-back" &&
-              outcome.reason !== "stale-state" &&
-              !pendingFinalDelivery &&
-              reducers.every((reducer) => reducer.kind === "usage")
-            ) {
-              await refresh();
-              logVerbose(`failed to persist usage update: ${outcome.error.message}`);
-              return snapshot.entry!;
-            }
-            if (outcome.kind !== "committed") {
-              throw new SqliteWorkerError(
-                outcome.error.message,
-                outcome.kind === "unknown" ? "outcome-unknown" : "unavailable",
-              );
-            }
-            if (outcome.failure) {
-              throw new Error(outcome.failure.message);
-            }
+          const { reducers } = project();
+          if (reducers.length === 0 && !pendingFinalDelivery) {
             return snapshot.entry!;
           }
+          const committed: { receipt?: SessionActorReceipt } = {};
+          const outcome = await actor.completeTurn(
+            {
+              commandId: randomUUID(),
+              phaseId: `complete:${operationKey}`,
+              reducers,
+              bookkeeping: {
+                sessionId: expected.sessionId,
+                lifecycleRevision: expected.lifecycleRevision ?? null,
+                writerRunId: expected.writerRunId,
+                expectedState: buildRestartRecoveryExpectedState(snapshot.entry!),
+                ...(pendingFinalDelivery ? { lifecycle: { updatedAt: Date.now() } } : {}),
+              },
+              pendingFinalDelivery,
+            },
+            authority,
+            {
+              committed: (receipt) => {
+                committed.receipt = receipt.receipt;
+              },
+            },
+          );
+          if (committed.receipt) {
+            snapshot = committed.receipt.postimage;
+            params.publish(snapshot.entry!);
+          }
+          if (
+            outcome.kind === "rolled-back" &&
+            outcome.reason !== "stale-state" &&
+            !pendingFinalDelivery &&
+            reducers.every((reducer) => reducer.kind === "usage")
+          ) {
+            await refresh();
+            logVerbose(`failed to persist usage update: ${outcome.error.message}`);
+            return snapshot.entry!;
+          }
+          if (outcome.kind !== "committed") {
+            throw new SqliteWorkerError(
+              outcome.error.message,
+              outcome.kind === "unknown" ? "outcome-unknown" : "unavailable",
+            );
+          }
+          if (outcome.failure) {
+            throw new Error(outcome.failure.message);
+          }
+          return snapshot.entry!;
         },
       };
       let value: T;

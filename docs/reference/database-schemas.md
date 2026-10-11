@@ -58,6 +58,12 @@ commits independently of reply delivery. See
 [committed facts and completeness](/reference/database-schemas/worker-access#committed-facts-and-completeness)
 for ordering, rollback, and the writer families that still retain native guards.
 
+Session input and terminal bookkeeping commands validate their captured session,
+lifecycle, writer, and input predicates inside the actor transaction. Unrelated
+memory-index or trajectory writes can invalidate cached actor state without
+rejecting those commands. The shared unsettled-writer fence still applies, and
+failed writer admission releases its native bookkeeping before later commands.
+
 SQLite format, schema-version, integrity, canonical-index, and
 table-existence validation runs once per physical database per process load,
 on its first admission. The admitted facts are shared with all workers and

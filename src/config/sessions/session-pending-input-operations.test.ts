@@ -37,7 +37,11 @@ import {
   stageSessionPendingInput,
   type SessionPendingInputReceipt,
 } from "./session-accessor.pending-inputs.js";
-import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import {
+  readExactSessionEntryRow,
+  writeSessionEntry,
+} from "./session-accessor.sqlite-entry-store.js";
+import { acquireSessionInputActor, withSessionInputActor } from "./session-input-actor.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import { mutatePendingInput, readPendingInput } from "./session-pending-input-operations.kernel.js";
 import type { PendingInputMutation } from "./session-pending-input-operations.types.js";
@@ -75,6 +79,84 @@ function createFixture() {
         .all(),
   };
 }
+
+it.each(["metadata", "pending input"] as const)(
+  "retains prepared staging custody across an intervening %s write",
+  async (change) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const fixture = createFixture();
+      const input = expectDefined(
+        await acquireSessionInputActor(
+          {
+            agentId: scope.agentId,
+            storePath: fixture.database.path,
+            target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+          },
+          { assertCurrent() {}, assertReadable() {} },
+        ),
+        "Expected durable input actor",
+      );
+      let changed = false;
+      const accept = input.actor.acceptInput.bind(input.actor);
+      const spy = vi.spyOn(input.actor, "acceptInput").mockImplementation(async (...args) => {
+        if (!changed) {
+          changed = true;
+          if (change === "metadata") {
+            runOpenClawAgentWriteTransaction(
+              (database) => {
+                writeSessionEntry(database, scope.sessionKey, {
+                  sessionId: scope.sessionId,
+                  updatedAt: 2,
+                  label: "intervening metadata",
+                });
+              },
+              { agentId: scope.agentId },
+            );
+          } else {
+            const pending = expectDefined(args[0].pending, "Expected prepared pending input");
+            mutatePendingInput(
+              { ...pending, inputId: "rival-input", runId: "rival-run", requestHash: "rival-hash" },
+              {
+                admit() {},
+                writeTransaction: (_label, _owner, run) =>
+                  runOpenClawAgentWriteTransaction(run, { agentId: scope.agentId }),
+              },
+              () => {},
+            );
+          }
+        }
+        return accept(...args);
+      });
+      let receipt: SessionPendingInputReceipt | undefined;
+      try {
+        const staged = withSessionInputActor(
+          { phase: "acceptInput", acquire: async () => input },
+          () => fixture.stage("prepared-staging"),
+        );
+        if (change === "metadata") {
+          receipt = await staged;
+          expect(fixture.pending()).toEqual([
+            expect.objectContaining({ run_id: "prepared-staging", state: "queued" }),
+          ]);
+          expect(readExactSessionEntryRow(fixture.database, scope.sessionKey)?.entry.label).toBe(
+            "intervening metadata",
+          );
+        } else {
+          await expect(staged).rejects.toThrow("Pending input changed before staging committed");
+          expect(fixture.pending()).toEqual([
+            { run_id: "rival-run", state: "queued", request_hash: "rival-hash" },
+          ]);
+        }
+        expect(changed).toBe(true);
+      } finally {
+        spy.mockRestore();
+        receipt?.finish("interrupted");
+        await receipt?.settled?.();
+        await input.actor.release();
+      }
+    });
+  },
+);
 
 it("shares transaction rows without retaining stale custody and returns the persisted staging postimage", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

@@ -544,7 +544,6 @@ export async function appendSessionTurnInWorker(
             const command = {
               commandId: randomUUID(),
               phaseId: `${inputActor.phase}:${options.expectedSessionId}`,
-              expected: before.version,
               expectedState,
               lifecycle: {},
               turn: plan,
@@ -564,17 +563,7 @@ export async function appendSessionTurnInWorker(
                       committed: (commit) => record(commit.value),
                     },
                   );
-            let actorOutcome = await execute();
-            // A typed stale reply proves no mutation ran; preserve prepared hooks and domain guards.
-            if (
-              actorOutcome.kind === "stale-version" &&
-              !candidate &&
-              authorityFailure === undefined
-            ) {
-              authority.assertCurrent();
-              command.expected = actorOutcome.postimage.version;
-              actorOutcome = await execute();
-            }
+            const actorOutcome = await execute();
             if (actorOutcome.kind !== "committed") {
               throwSessionInputActorFailure(actorOutcome, authorityFailure);
             }
