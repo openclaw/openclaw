@@ -1,13 +1,17 @@
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { assertCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
+import type { InterruptedStartupRun } from "../store/run-recovery.types.js";
 import { ownsStreamSource } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
+import { enrollForeignReceipt, removeForeignReceipt } from "./foreign-receipt-monitor.js";
 import { findJobOrThrow, hasActiveCronRun, isJobEnabled } from "./jobs-scheduling.js";
 import { assertSupportedJobSpec } from "./jobs-validation.js";
 import type { ManualRunOptions } from "./run-options.js";
+import { emitInterruptedCronRun } from "./run-recovery-events.js";
+import { recoverCronRunProposals } from "./run-recovery.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import { recordSkippedCronRuns } from "./scheduler-mutations.js";
@@ -135,6 +139,46 @@ async function recomputeManualRunPreflight(
   });
 }
 
+async function recoverManualRunPreflight(state: CronServiceState, id: string): Promise<void> {
+  const job = state.store?.jobs.find((entry) => entry.id === id);
+  const interrupted: InterruptedStartupRun[] = [];
+  let repaired = false;
+  try {
+    await recoverCronRunProposals(
+      state,
+      [
+        {
+          jobId: id,
+          queuedAtMs: job?.state.queuedAtMs,
+          runningAtMs: job?.state.runningAtMs,
+          runningReceiptId: job?.state.runningReceiptId,
+        },
+      ],
+      {
+        onRecovery(_proposal, result) {
+          if (result.kind === "repaired") {
+            repaired = true;
+            removeForeignReceipt(state, id);
+            runPostPersistCronNotifications(state, result.notifications);
+            if (result.interrupted) {
+              interrupted.push(result.interrupted);
+            }
+          } else if (result.receipt && result.receipt.ownerPid !== process.pid) {
+            enrollForeignReceipt(state, result.receipt);
+          }
+        },
+      },
+    );
+  } finally {
+    if (repaired) {
+      await ensureLoaded(state, { forceReload: true });
+    }
+    for (const result of interrupted) {
+      await emitInterruptedCronRun(state, result);
+    }
+  }
+}
+
 // The caller holds the store lock through preflight and request submission.
 export async function inspectManualRunPreflight(
   state: CronServiceState,
@@ -148,7 +192,13 @@ export async function inspectManualRunPreflight(
     return { ok: true, ran: false, reason: "stopped" };
   }
   source.assertCurrent();
-  await ensureLoaded(state);
+  await ensureLoaded(state, { forceReload: true });
+  source.assertCurrent();
+  opts?.commitGuard?.();
+  if (state.stopped) {
+    return { ok: true, ran: false, reason: "stopped" };
+  }
+  await recoverManualRunPreflight(state, id);
   source.assertCurrent();
   opts?.commitGuard?.();
   if (state.stopped) {

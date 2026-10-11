@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { captureAsyncWorkTracker } from "../shared/async-work-scope.js";
 
 const mutationMethods = new Set([
   "cron.add",
@@ -12,6 +13,7 @@ type MutationState = {
   method: string;
   open: boolean;
   committed: boolean;
+  trackAdmission?: ReturnType<typeof captureAsyncWorkTracker>;
 };
 const currentMutation = new AsyncLocalStorage<MutationState>();
 
@@ -29,6 +31,8 @@ export function createCronMutationCompletion(method: string): CronMutationComple
     method,
     open: true,
     committed: false,
+    // Gateway dispatch installs its own scope; admission retains the originating tool.
+    ...(method === "cron.run" ? { trackAdmission: captureAsyncWorkTracker() } : {}),
   };
   return {
     isCommitted: () => state.committed,
@@ -42,6 +46,23 @@ export function createCronMutationCompletion(method: string): CronMutationComple
         state.open = false;
       }
     },
+  };
+}
+
+/** Capture resource ownership before acknowledgement, independently of authorization. */
+export function captureCronRunAdmissionTracker():
+  | ReturnType<typeof captureAsyncWorkTracker>
+  | undefined {
+  const state = currentMutation.getStore();
+  const track = state?.trackAdmission;
+  if (!state?.open || state.method !== "cron.run" || !track) {
+    return undefined;
+  }
+  return async (run) => {
+    if (!state.open) {
+      throw new Error("Cron mutation completion has already settled.");
+    }
+    return await track(run);
   };
 }
 

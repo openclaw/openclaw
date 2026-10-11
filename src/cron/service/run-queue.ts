@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { runOutsideOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
+import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
@@ -14,6 +15,7 @@ import { cronStoreKey } from "../store/key.js";
 import type { CronQueuedRun, CronSkippedRequest } from "../store/run-queue.types.js";
 import {
   claimLocalCronRunReceiptOwnership,
+  listLocallyOwnedCronRunReceiptIds,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
 import { createCronScheduledRunId } from "../store/run-request-id.js";
@@ -30,6 +32,7 @@ import {
 import { createCronOwnerExecutionIdentityAdmission, createCronRunHandle } from "./run-history.js";
 import type { ManualRunOptions } from "./run-options.js";
 import { skipCronJobsWithoutOwners } from "./run-owner.js";
+import { registerCronRunQueue, releaseCronRunQueue, wakeCronRunQueues } from "./run-queue-wake.js";
 import { markServiceCronJobActive } from "./run-receipts.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import {
@@ -59,6 +62,7 @@ type CronLaunchContext = {
   started?: boolean;
   removeCancellation?: () => void;
   completion: ReturnType<typeof createDeferredCore<CronRunResult>>;
+  activation: ReturnType<typeof createDeferredCore<void>>;
 };
 
 type LaunchState = {
@@ -76,7 +80,18 @@ function launchState(state: CronServiceState): LaunchState {
   return current;
 }
 
-export type RequestedCronRun = CronQueuedRun & { completion: Promise<CronRunResult> };
+export type RequestedCronRun = CronQueuedRun & {
+  completion: Promise<CronRunResult>;
+  activation: Promise<void>;
+};
+
+function pumpCronRunQueues(state: CronServiceState): void {
+  const queue = launchState(state);
+  if (!queue.contexts.size && !queue.running.size) {
+    releaseCronRunQueue(state);
+  }
+  wakeCronRunQueues(state);
+}
 
 function watchCronRunCancellation(state: CronServiceState, pending: CronLaunchContext): void {
   const signal = pending.options.onExit?.signal;
@@ -166,12 +181,17 @@ export async function commitCronRunRequests(
       generation,
       batch,
       completion: createDeferredCore<CronRunResult>(),
+      activation: createDeferredCore(),
     };
     void launch.completion.promise.catch(() => {});
     launchState(state).contexts.set(entry.runReceipt.receiptId, launch);
+    registerCronRunQueue(state, () => drainCronRunQueue(state));
     claimLocalCronRunReceiptOwnership(entry.runReceipt);
     watchCronRunCancellation(state, launch);
-    return Object.assign({}, entry, { completion: launch.completion.promise });
+    return Object.assign({}, entry, {
+      completion: launch.completion.promise,
+      activation: launch.activation.promise,
+    });
   });
   if (accepted.length > 0) {
     markCommitted?.();
@@ -202,6 +222,7 @@ async function publishSkipped(state: CronServiceState, skipped: CronSkippedReque
     return;
   }
   pending.removeCancellation?.();
+  pending.activation.resolve();
   launchState(state).contexts.delete(skipped.runReceipt.receiptId);
   // The worker writes skipped history with the same receipt; events are best effort.
   emit(state, {
@@ -210,15 +231,15 @@ async function publishSkipped(state: CronServiceState, skipped: CronSkippedReque
     action: "finished",
     status: "skipped",
     error: skipped.error,
-    runId: pending?.options.runId,
+    runId: pending.options.runId,
     runAtMs: skipped.runReceipt.startedAtMs,
     durationMs: 0,
     nextRunAtMs: skipped.job?.state.nextRunAtMs,
   });
-  if (pending?.options.terminalTracker) {
+  if (pending.options.terminalTracker) {
     pending.options.terminalTracker.emitted = true;
   }
-  pending?.completion.resolve({
+  pending.completion.resolve({
     ok: true,
     ran: false,
     reason:
@@ -228,8 +249,10 @@ async function publishSkipped(state: CronServiceState, skipped: CronSkippedReque
         ? "stopped"
         : "not-due",
   });
-  launchState(state).contexts.delete(skipped.runReceipt.receiptId);
   releaseLocalCronRunReceiptOwnership(skipped.runReceipt);
+  if (!launchState(state).contexts.size && !launchState(state).running.size) {
+    releaseCronRunQueue(state);
+  }
 }
 
 async function cancelCronRunRequests(
@@ -263,7 +286,6 @@ async function cancelCronRunRequests(
 export async function drainCronRunQueue(state: CronServiceState): Promise<void> {
   if (
     state.stopped ||
-    state.schedulingPaused ||
     (!launchState(state).contexts.size &&
       !state.store?.jobs.some((job) => job.state.queuedAtMs !== undefined))
   ) {
@@ -283,6 +305,8 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
           nowMs: state.deps.nowMs(),
           defaultAgentId: resolveCurrentDefaultAgentId(state),
           maxConcurrentRuns: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+          schedulingPaused: state.schedulingPaused,
+          locallyOwnedReceiptIds: listLocallyOwnedCronRunReceiptIds(),
           requests: [...launchState(state).contexts.values()].map(({ receipt, options }) => ({
             receiptId: receipt.receiptId,
             mode: options.onExit
@@ -314,20 +338,25 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
           generation: state.lifecycleGeneration,
           batch: { notified: false },
           completion: createDeferredCore<CronRunResult>(),
+          activation: createDeferredCore(),
         };
         launchState(state).contexts.set(entry.runReceipt.receiptId, pending);
+        registerCronRunQueue(state, () => drainCronRunQueue(state));
       }
       pending.receipt = entry.runReceipt;
       claimLocalCronRunReceiptOwnership(entry.runReceipt);
       const launch = pending;
-      // Execution runs after the transaction and lock have returned to their owners.
-      const running = Promise.resolve()
-        .then(() =>
-          runOutsideOperatorToolGatewayAuthority(() => {
-            const run = () => launchCronRun(state, entry, launch);
-            return state.deps.runSchedulerOwned ? state.deps.runSchedulerOwned(run) : run();
-          }),
-        )
+      // The launch owns its lifetime beyond the request acknowledgement and store lock.
+      const running = runWithGatewayDetachedWorkContinuation(
+        () =>
+          Promise.resolve().then(() =>
+            runOutsideOperatorToolGatewayAuthority(() => {
+              const run = () => launchCronRun(state, entry, launch);
+              return state.deps.runSchedulerOwned ? state.deps.runSchedulerOwned(run) : run();
+            }),
+          ),
+        "cron:run",
+      )
         .catch(async (error: unknown) => {
           state.deps.log.error(
             { jobId: entry.job.id, err: String(error) },
@@ -348,6 +377,7 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
               "cron: failed launch left for recovery",
             );
           } finally {
+            launch.activation.resolve();
             launch.completion.reject(error);
             launch.removeCancellation?.();
             launchState(state).contexts.delete(entry.runReceipt.receiptId);
@@ -356,9 +386,7 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
         })
         .finally(() => {
           launchState(state).running.delete(running);
-          void drainCronRunQueue(state).catch((error: unknown) =>
-            state.deps.log.warn({ err: String(error) }, "cron: queue drain delayed"),
-          );
+          pumpCronRunQueues(state);
         });
       launchState(state).running.add(running);
     }
@@ -388,9 +416,7 @@ async function launchCronRun(
     state.stopped ||
     pending.generation !== state.lifecycleGeneration ||
     !current ||
-    state.deps.isAgentAvailable?.(entry.runReceipt.agentId, undefined, {
-      deletionBlocked: false,
-    }) === false ||
+    unavailable ||
     current.state.runningReceiptId !== entry.runReceipt.receiptId ||
     (!force && (!isJobEnabled(current) || current.state.autoDisabled)) ||
     (options.streamScheduleKey !== undefined &&
@@ -450,12 +476,12 @@ async function launchCronRun(
   }
   pending.removeCancellation?.();
   pending.started = true;
+  pending.activation.resolve();
   let result: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
   try {
     result = await executeJobCoreWithTimeout(state, executionJob, {
       runId: taskRunId,
       activeJobMarker,
-      owningCronLaneTaskMarker: options.owningCronLaneTaskMarker,
       streamBatch: options.streamBatch,
       streamScheduleKey: options.streamScheduleKey,
       streamSourceIdentity: options.streamSourceIdentity,

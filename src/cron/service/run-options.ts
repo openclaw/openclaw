@@ -1,4 +1,3 @@
-import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import type { CronJob, CronPayload } from "../types.js";
 
 export type OnExitRunOptions = {
@@ -17,7 +16,6 @@ export type ManualRunOptions = {
   scheduleOwnershipAtMs?: number;
   payload?: CronPayload;
   terminalTracker?: { emitted: boolean };
-  owningCronLaneTaskMarker?: CommandLaneTaskMarker;
   evaluateTrigger?: boolean;
   streamBatch?: string;
   streamScheduleKey?: string;

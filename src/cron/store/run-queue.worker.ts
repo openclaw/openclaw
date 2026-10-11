@@ -237,6 +237,7 @@ export function drainCronQueueInWorker(
       const receiptSchema = prepareCronRunReceiptWriteSchema(db);
       const jobs = loadJobs(db, input.storeKey);
       const contexts = new Map(input.requests.map((request) => [request.receiptId, request]));
+      const locallyOwned = new Set(input.locallyOwnedReceiptIds);
       const jobOrder = new Map([...jobs.keys()].map((jobId, index) => [jobId, index]));
       const cancelled =
         input.requests.length === 0
@@ -282,6 +283,10 @@ export function drainCronQueueInWorker(
         skipped: cancelled,
       };
       for (const receipt of queued) {
+        if (!contexts.has(receipt.receiptId) && locallyOwned.has(receipt.receiptId)) {
+          // Another service in this Gateway owns the transient launch context.
+          continue;
+        }
         const handle = receiptHandle(receipt);
         const job = jobs.get(receipt.jobId)!;
         const timed = parseCronScheduledRunId(receipt.receiptId);
@@ -314,7 +319,10 @@ export function drainCronQueueInWorker(
           );
           continue;
         }
-        if (activeCount >= Math.max(1, input.maxConcurrentRuns)) {
+        if (
+          (input.schedulingPaused && context?.mode === "scheduled") ||
+          activeCount >= Math.max(1, input.maxConcurrentRuns)
+        ) {
           continue;
         }
         if (ownerStartTime === null) {

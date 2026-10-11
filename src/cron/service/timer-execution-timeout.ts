@@ -1,6 +1,5 @@
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
-import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
@@ -86,7 +85,6 @@ export type IsolatedAgentSetupTimeoutResult = {
 export type ExecuteJobCoreOptions = {
   deliveryAttemptFence?: CronCompletionDeliveryFence;
   activeJobMarker?: CronActiveJobMarker;
-  owningCronLaneTaskMarker?: CommandLaneTaskMarker;
   onPayloadExecutionStarted?: () => void;
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;

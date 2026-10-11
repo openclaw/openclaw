@@ -1,4 +1,4 @@
-// Timer ticks retain their Gateway roots while the worker owns run capacity.
+// Timer producers and detached runs retain separate Gateway roots.
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import {
   createCronRegressionState,
@@ -17,6 +17,7 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { start, stop } from "./service/ops-lifecycle.js";
+import { waitForCronRunQueue } from "./service/run-queue.js";
 import { onTimer } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.test-support.js";
@@ -116,16 +117,17 @@ describe("cron service cross-tick admission", () => {
       expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
       expect(blocked.peakActive).toBe(2);
       expect(store.receipt(jobB)).toBeDefined();
-      expect(getActiveGatewayRootWorkCount()).toBe(2);
+      expect(getActiveGatewayRootWorkHolders().toSorted()).toEqual([
+        "cron:run (2)",
+        "cron:timer-tick (2)",
+      ]);
 
       blocked.release(jobA);
       await tickA;
-      expect(
-        getActiveGatewayRootWorkCount(),
-        JSON.stringify(getActiveGatewayRootWorkHolders()),
-      ).toBe(1);
+      expect(state.activeTimerTicks).toBe(1);
       blocked.release(jobB);
       await tickB;
+      await waitForCronRunQueue(state);
       expect(getActiveGatewayRootWorkCount()).toBe(0);
       expect(state.activeTimerTicks).toBe(0);
     } finally {

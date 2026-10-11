@@ -34,7 +34,7 @@ function commandJob(id: string, nextRunAtMs = NOW + 60_000): CronJob {
   };
 }
 
-it("force-runs a disabled job without consuming its paced slot", async () => {
+it("force-runs a disabled job while scheduling is paused without consuming its paced slot", async () => {
   const { storePath } = await makeStorePath();
   const job = commandJob("disabled-force");
   job.enabled = false;
@@ -54,6 +54,7 @@ it("force-runs a disabled job without consuming its paced slot", async () => {
     runCommandJob,
   });
   try {
+    cron.pauseScheduling();
     expect(await cron.run(job.id, "force")).toEqual({ ok: true, ran: true });
     expect(runCommandJob).toHaveBeenCalledOnce();
     const persisted = (await loadCronStore(storePath)).jobs[0];
@@ -73,7 +74,7 @@ it("force-runs a disabled job without consuming its paced slot", async () => {
   }
 });
 
-it("shares capacity across timer, manual, stream, and consumed exit requests", async ({
+it("shares capacity across sibling services for timer, manual, stream, and consumed exit requests", async ({
   signal,
 }) => {
   const { storePath } = await makeStorePath();
@@ -84,6 +85,8 @@ it("shares capacity across timer, manual, stream, and consumed exit requests", a
   const timerRequested = createDeferred();
   const blockers = Array.from({ length: 8 }, (_, index) => commandJob(`blocker-${index}`));
   const manual = commandJob("queued-manual");
+  const disabled = commandJob("queued-disabled");
+  const removed = commandJob("queued-removed");
   const timed = commandJob("queued-timer", NOW + 10_000);
   const exitSchedule = { kind: "on-exit" as const, command: "synthetic-watch" };
   const exit: CronJob = { ...commandJob("queued-exit"), schedule: exitSchedule, state: {} };
@@ -96,7 +99,7 @@ it("shares capacity across timer, manual, stream, and consumed exit requests", a
   };
   await saveCronStore(storePath, {
     version: 1,
-    jobs: [...blockers, manual, timed, stream, exit],
+    jobs: [...blockers, manual, disabled, removed, timed, stream, exit],
   });
   let active = 0;
   let peakActive = 0;
@@ -121,18 +124,22 @@ it("shares capacity across timer, manual, stream, and consumed exit requests", a
     }
   });
   const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
-  const cron = new CronService({
-    scheduler: createTestGatewayScheduler(clock.clock),
-    nowMs: clock.clock.now,
-    storePath,
-    cronEnabled: true,
-    defaultAgentId: "main",
-    log: logger,
-    enqueueSystemEvent() {},
-    requestHeartbeat() {},
-    runCommandJob,
-    runIsolatedAgentJob,
-  });
+  const createService = () =>
+    new CronService({
+      scheduler: createTestGatewayScheduler(clock.clock),
+      nowMs: clock.clock.now,
+      storePath,
+      cronEnabled: true,
+      defaultAgentId: "main",
+      log: logger,
+      enqueueSystemEvent() {},
+      requestHeartbeat() {},
+      runCommandJob,
+      runIsolatedAgentJob,
+    });
+  const cron = createService();
+  const sibling = createService();
+  sibling.pauseScheduling();
   const pending: Array<Promise<unknown>> = [];
   const stopObserving = observeCronJobCommits(timed.id, (state) => {
     if (state.queuedAtMs !== undefined) {
@@ -152,14 +159,31 @@ it("shares capacity across timer, manual, stream, and consumed exit requests", a
     );
     const manualAck = await cron.enqueueRun(manual.id, "force");
     expect(manualAck).toMatchObject({ ok: true, enqueued: true });
-    const streamRun = cron.run(stream.id, "force", {
+    for (const [job, remove] of [
+      [disabled, false],
+      [removed, true],
+    ] as const) {
+      const ack = await sibling.enqueueRun(job.id, "force");
+      if (!ack.ok || !("runId" in ack)) {
+        throw new Error("Expected a queued request before cancellation");
+      }
+      if (remove) {
+        await cron.remove(job.id);
+      } else {
+        await cron.update(job.id, { enabled: false });
+      }
+      expect(await sibling.waitForManualRun(ack.runId, 60_000, signal)).toBe(true);
+      expect(active).toBe(8);
+      expect(executed).toEqual([]);
+    }
+    const streamRun = sibling.run(stream.id, "force", {
       payload: { kind: "agentTurn", message: "accepted stream payload" },
       streamBatch: "line one\nline two",
       streamScheduleKey: cronStreamScheduleKey(streamSchedule),
       streamSourceIdentity: "synthetic-source",
     });
     pending.push(streamRun);
-    const exitRun = cron.runOnExit(exit.id, {
+    const exitRun = sibling.runOnExit(exit.id, {
       schedule: exitSchedule,
       signal,
       commitGuard() {},
@@ -208,7 +232,9 @@ it("shares capacity across timer, manual, stream, and consumed exit requests", a
     stopObserving();
     await Promise.allSettled(pending);
     cron.stop();
+    sibling.stop();
     await cron.waitForIdle();
+    await sibling.waitForIdle();
   }
 });
 

@@ -53,8 +53,8 @@ export { CronRunReceiptRevisionError } from "./run-receipt.types.js";
  * Receipt/lease lifecycle (the SQLite status is `running` for the first three rows):
  *
  * State            | Transition owner       | Atomic durable change                         | Dead-owner recovery
- * reserved-queued  | reservation admission  | insert receipt + set job.queuedAtMs            | sibling interrupts receipt + clears exact queued marker
- * active-running   | execution admission    | advance receipt.startedAtMs + queued→running   | sibling interrupts receipt + repairs exact running marker
+ * requested        | worker request         | insert receipt + set job.queuedAtMs            | recover timed key or skip lost context; clear exact marker
+ * active-running   | worker activation      | advance receipt.startedAtMs + queued→running   | sibling interrupts receipt + repairs exact running marker
  * settling         | execution/finalizer    | outcome may be recorded; lease stays running   | sibling interrupts markerless receipt or restores finalized task fact
  * terminal{ok,error,skipped,interrupted,superseded}
  *                  | finalizer/recovery      | terminalize receipt with exact marker outcome  | no recovery; retained history is bounded

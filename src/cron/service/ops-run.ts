@@ -5,6 +5,7 @@ import { createAbortError, isAbortError } from "../../infra/abort-signal.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
+import { captureCronRunAdmissionTracker } from "../mutation-completion.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { locked } from "./locked.js";
 import { waitForRunSettlement } from "./ops-lifecycle.js";
@@ -100,6 +101,7 @@ export async function enqueueRun(
 ) {
   const runId = `cron-request.${randomUUID()}`;
   const releaseCaller = retainGatewayDeviceRevocation(opts?.commitGuard);
+  const trackAdmission = captureCronRunAdmissionTracker();
   return runWithoutOwnedSessionTranscriptWrites(() =>
     runWithGatewayIndependentRootWorkContinuation(async () => {
       const result = await requestManualCronRun(state, id, mode, {
@@ -111,6 +113,14 @@ export async function enqueueRun(
       if (!("requested" in result)) {
         releaseCaller?.();
         return result;
+      }
+      if (trackAdmission) {
+        void trackAdmission(() => result.requested.activation).catch((error: unknown) => {
+          state.deps.log.error(
+            { jobId: id, runId, err: String(error) },
+            "cron: queued manual admission tracking failed",
+          );
+        });
       }
       const completion = result.requested.completion
         .catch((error: unknown) => {

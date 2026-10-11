@@ -43,6 +43,8 @@ export type CronRunQueueOperations = {
       defaultAgentId?: string;
       maxConcurrentRuns: number;
       requests: CronRunRequestContext[];
+      schedulingPaused?: boolean;
+      locallyOwnedReceiptIds?: string[];
     };
     output: { launches: CronQueuedRun[]; skipped: CronSkippedRequest[] };
   };

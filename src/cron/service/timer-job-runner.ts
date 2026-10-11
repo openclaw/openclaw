@@ -1,5 +1,4 @@
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import {
@@ -49,7 +48,6 @@ type CronRunTimeout = { timeoutMs: number; reason: string };
 type CronCoreRunOptions = {
   runId?: string;
   activeJobMarker?: CronActiveJobMarker;
-  owningCronLaneTaskMarker?: CommandLaneTaskMarker;
   streamBatch?: string;
   streamScheduleKey?: string;
   streamSourceIdentity?: string;
@@ -338,7 +336,6 @@ async function executeJobCoreWithTimeoutUnfinalized(
     const coreOptions: ExecuteJobCoreOptions = {
       deliveryAttemptFence,
       activeJobMarker: opts?.activeJobMarker,
-      owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
       streamBatch: opts?.streamBatch,
       streamScheduleKey: opts?.streamScheduleKey,
       streamSourceIdentity: opts?.streamSourceIdentity,

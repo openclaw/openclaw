@@ -69,10 +69,14 @@ async function store(label: string, jobs: CronJob[]) {
         type: "cron.requestRuns",
         input: { storeKey, nowMs: now, requests },
       }),
-    drain: (requests: CronRunRequestContext[] = [], maxConcurrentRuns = 1) =>
+    drain: (
+      requests: CronRunRequestContext[] = [],
+      maxConcurrentRuns = 1,
+      schedulingPaused = false,
+    ) =>
       executeOpenClawStateWorker(context, {
         type: "cron.drainQueue",
-        input: { storeKey, nowMs: now + 1, requests, maxConcurrentRuns },
+        input: { storeKey, nowMs: now + 1, requests, maxConcurrentRuns, schedulingPaused },
       }),
     cancel: (receiptIds: string[], status?: "skipped" | "superseded") =>
       executeOpenClawStateWorker(context, {
@@ -179,6 +183,25 @@ it("uses edited payloads while queued and records a disabled request under its p
       error: "cron: queued job schedule changed or was disabled",
     },
   ]);
+});
+
+it("holds scheduled requests while paused and activates an explicit request behind them", async () => {
+  const jobs = [job("timed-paused"), job("manual-paused")];
+  const queue = await store("paused", jobs);
+  const timed = scheduled(queue.storeKey, jobs[0]!);
+  const manual = {
+    jobId: jobs[1]!.id,
+    receiptId: "cron-request.paused",
+    mode: "force" as const,
+    configRevision: resolveCronJobConfigRevision(jobs[1]!),
+  };
+  await queue.request([timed, manual]);
+  const paused = await queue.drain([manual], 1, true);
+  expect(paused.launches.map((entry) => entry.job.id)).toEqual(["manual-paused"]);
+  expect(paused.skipped).toEqual([]);
+  expect((await queue.read()).jobs[0]?.state.queuedAtMs).toBe(now);
+  await queue.cancel([manual.receiptId], "superseded");
+  expect((await queue.drain()).launches.map((entry) => entry.job.id)).toEqual(["timed-paused"]);
 });
 
 it("launches explicit force on a disabled job and retains a consumed exit event through rearming", async () => {

@@ -6,7 +6,12 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import { clearSessionStoreCacheForTest } from "../../../src/config/sessions/store-writer-state.js";
 import { createRunningCronServiceState } from "../../../src/cron/service.test-harness.js";
-import { createCronServiceState, type CronServiceDeps } from "../../../src/cron/service/state.js";
+import { stop } from "../../../src/cron/service/ops-lifecycle.js";
+import {
+  createCronServiceState,
+  type CronServiceDeps,
+  type CronServiceState,
+} from "../../../src/cron/service/state.js";
 import type { CronJob, CronJobState } from "../../../src/cron/types.js";
 import { resetAgentEventsForTest } from "../../../src/infra/agent-events.js";
 import { getTotalQueueSize } from "../../../src/process/command-queue.js";
@@ -16,6 +21,7 @@ import { createTestGatewayScheduler } from "../../../src/test-utils/gateway-sche
 import { createDeferred } from "../promise.js";
 
 const TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1_000;
+const fixtureStates = new Map<string, Set<CronServiceState>>();
 
 async function waitForCommandQueueIdle(timeoutMs: number): Promise<void> {
   const deadlineAt = Date.now() + timeoutMs;
@@ -54,15 +60,25 @@ export function createCronRegressionState(
     requestHeartbeat: vi.fn(),
     ...deps,
   });
+  fixtureStates.get(path.dirname(path.resolve(deps.storePath)))?.add(state);
   return state;
 }
 
 export function setupCronRegressionFixtures(options?: { prefix?: string; baseTimeIso?: string }) {
   let fixtureRoot = "";
   let fixtureCount = 0;
+  const states = new Set<CronServiceState>();
+  const drainStates = async () => {
+    for (const state of states) {
+      stop(state);
+    }
+    await Promise.all([...states].map((state) => state.schedulerDrain));
+    states.clear();
+  };
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), options?.prefix ?? "cron-issues-"));
+    fixtureStates.set(path.resolve(fixtureRoot), states);
   });
 
   beforeEach(() => {
@@ -71,6 +87,7 @@ export function setupCronRegressionFixtures(options?: { prefix?: string; baseTim
   });
 
   afterEach(async () => {
+    await drainStates();
     vi.clearAllTimers();
     vi.restoreAllMocks();
     useRealTime();
@@ -81,6 +98,8 @@ export function setupCronRegressionFixtures(options?: { prefix?: string; baseTim
   });
 
   afterAll(async () => {
+    await drainStates();
+    fixtureStates.delete(path.resolve(fixtureRoot));
     useRealTime();
     await waitForCommandQueueIdle(250);
     await fs.rm(fixtureRoot, { recursive: true, force: true });
