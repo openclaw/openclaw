@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { PluginHookReplyDispatchContext } from "../../plugins/hook-types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { ReplyDispatchRun } from "../get-reply-options.types.js";
@@ -151,6 +152,52 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
       scenario.expectedKind === "acp" ? "accepted user turn" : "source user turn",
     );
   });
+
+  it.each(["completion", "cancellation"] as const)(
+    "retires a retained adoption callback after hook %s",
+    async (ending) => {
+      const sourceAdopted = vi.fn(async () => {});
+      const caller = new AbortController();
+      const hookEntered = createDeferred();
+      const releaseHook = createDeferred();
+      let retainedAdoption: (() => void | Promise<void>) | undefined;
+      hookMocks.runner.hasHooks.mockReturnValue(true);
+      hookMocks.runner.runReplyDispatch.mockImplementation(async (_event, context) => {
+        retainedAdoption = (context as PluginHookReplyDispatchContext).onTurnAdopted;
+        hookEntered.resolve();
+        await releaseHook.promise;
+        return { handled: true, queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+      });
+      const dispatch = dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          SessionKey: "agent:test:acp:retained-adoption",
+          BodyForAgent: "review backend",
+        }),
+        cfg: emptyConfig,
+        dispatcher: createDispatcher(),
+        replyOptions: {
+          abortSignal: caller.signal,
+          turnAdoptionLifecycle: { onAdopted: sourceAdopted },
+        },
+      });
+      try {
+        await hookEntered.promise;
+        expect(retainedAdoption).toBeTypeOf("function");
+        if (ending === "cancellation") {
+          caller.abort(new Error("operator cancelled dispatch"));
+        } else {
+          releaseHook.resolve();
+        }
+        await dispatch;
+        await expect(retainedAdoption?.()).rejects.toThrow();
+        expect(sourceAdopted).not.toHaveBeenCalled();
+      } finally {
+        caller.abort();
+        releaseHook.resolve();
+        await dispatch;
+      }
+    },
+  );
 
   it("refuses restricted ACP takeover before invoking reply hooks", async () => {
     const sessionKey = "agent:test:restricted-acp";

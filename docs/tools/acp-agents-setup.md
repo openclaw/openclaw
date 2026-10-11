@@ -371,6 +371,10 @@ openclaw config set plugins.entries.acpx.config.timeoutSeconds 180
 ```
 
 Runtime turns use OpenClaw agent/run timeouts, including `/acp timeout`.
+The operation timeout does not limit the full reply-dispatch hook. For channel
+messages, ACP acknowledges durable ingress adoption before prompt submission,
+clearing the ingress startup watchdog while the review continues. Explicit
+cancellation and the configured execution deadline still apply.
 An interactive turn can continue beyond the plugin operation limit until its
 turn budget expires, the harness finishes, or you cancel it.
 `sessions_spawn` does not accept per-call timeout overrides; the operator path
