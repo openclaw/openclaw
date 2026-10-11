@@ -21,8 +21,6 @@ import {
   readSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
 import {
-  isFinalInputCompletion,
-  parseSessionPendingInputMessage,
   readSessionInputCompletion,
   readSessionPendingInputByKey,
   writeSessionInputCompletion,
@@ -41,6 +39,10 @@ import type {
   PendingInputSnapshot,
 } from "./session-pending-input-operations.types.js";
 import { readPendingInputSourceInDatabase } from "./session-pending-input-source.kernel.js";
+import {
+  isFinalInputCompletion,
+  parseSessionPendingInputMessage,
+} from "./session-pending-input-value.js";
 
 function readPendingInputStage(
   database: OpenClawAgentDatabase,

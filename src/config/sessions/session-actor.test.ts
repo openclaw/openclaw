@@ -26,10 +26,12 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import type { SessionActorAuthority, SessionActorOperations } from "./session-actor-contract.js";
 import { createDurableSessionActorFactory } from "./session-actor-durable.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { createSessionActorReplica } from "./session-actor-replica.js";
 import { createSessionActor, type SessionActorTransport } from "./session-actor.js";
 import { createSessionActorWorker } from "./session-actor.worker.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
+import { acquireSessionInputActor } from "./session-input-actor.js";
 
 // mock-isolation: this transport proof does not schedule unrelated maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -40,7 +42,7 @@ vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMa
 
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
 
-it("declines native incognito without changing its existing owner", async () => {
+it("keeps production incognito acquisition on its native owner without creating a memory actor", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = {
       agentId: "main",
@@ -56,11 +58,17 @@ it("declines native incognito without changing its existing owner", async () => 
       });
       return opened;
     }, database);
-    const actor = await createDurableSessionActorFactory(database).acquire(
-      { sessionKey, database: { kind: "native-incognito" } },
+    const actor = await acquireSessionInputActor(
+      {
+        agentId: database.agentId,
+        storePath: database.path,
+        env,
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      },
       { assertCurrent() {}, assertReadable() {} },
     );
-    expect(actor).toEqual({ kind: "not-actor-owned" });
+    expect(actor).toBeUndefined();
+    expect(memorySessionActorOwners.read(database)).toBeUndefined();
     expect(getOpenClawAgentDatabaseIfOpen(database)).toBe(owner);
     expect(readExactSessionEntryRow(owner, sessionKey)?.entry).toMatchObject({
       sessionId: "native-session",
@@ -319,6 +327,25 @@ it("serves installed state without a request and reconciles a retired worker gen
     const restored = await actor.read(authority);
     expect(restored.entry?.sessionId).toBe(initial.entry?.sessionId);
     expect(restored.version.epoch).not.toBe(initial.version.epoch);
+    expect(commands).toEqual(["session.actor.read", "session.actor.read"]);
+  });
+});
+
+it.each([1, 2])("bounds empty-replica recovery after %i superseding writes", async (writes) => {
+  await withActor(async ({ actor, commands, fault, nativePatch }) => {
+    let remaining = writes;
+    fault.onExecuted = () => {
+      if (remaining > 0) {
+        nativePatch(700 + remaining);
+        remaining -= 1;
+      }
+    };
+    const reading = actor.read(authority);
+    if (writes === 1) {
+      expect((await reading).entry?.updatedAt).toBe(701);
+    } else {
+      await expect(reading).rejects.toThrow("changed before its read could publish");
+    }
     expect(commands).toEqual(["session.actor.read", "session.actor.read"]);
   });
 });
