@@ -89,7 +89,9 @@ export function createWorkerSessionPlacementGate(
   );
   const validateWorkerTurn = (claim: WorkerSessionTurnClaim) =>
     !recoveryOnlyClaims.has(serializeWorkerSessionTurnClaim(claim)) &&
-    store.validateTurnClaim(claim);
+    // Credential issuance precedes owner binding; attached turns already hold live authority.
+    (getWorkerTurnExecutionIdentityCapability(store, claim) !== undefined ||
+      store.validateTurnClaim(claim));
 
   const fenceWorkerTurnForRecovery = (claim: WorkerSessionTurnClaim) => {
     if (claim.owner.kind === "worker") {
