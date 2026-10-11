@@ -128,15 +128,42 @@ function lastStderrLine(stderr: string): string | undefined {
     ?.trim();
 }
 
-async function readDisplaySocketNames(socketDir: string): Promise<string[]> {
+async function readDisplaySocketNames(
+  socketDir: string,
+  unixSocketTable: string,
+): Promise<string[]> {
+  let names: string[];
   try {
-    return await fs.readdir(socketDir);
+    names = await fs.readdir(socketDir);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
     }
-    throw error;
+    names = [];
   }
+  return [...names, ...(await readBoundDisplaySocketNames(socketDir, unixSocketTable))];
+}
+
+// X servers also bind an abstract socket per display. It lives in the network namespace,
+// so a server with a private /tmp (for example a systemd PrivateTmp service) still owns
+// the display although its socket file is invisible here.
+async function readBoundDisplaySocketNames(
+  socketDir: string,
+  unixSocketTable: string,
+): Promise<string[]> {
+  let table: string;
+  try {
+    table = await fs.readFile(unixSocketTable, "utf8");
+  } catch {
+    // The socket directory stays authoritative when the kernel table is unreadable.
+    return [];
+  }
+  const prefix = `${socketDir}/`;
+  return table.split("\n").flatMap((line) => {
+    // Columns: Num RefCount Protocol Flags Type St Inode Path; abstract paths start with "@".
+    const socketPath = line.trim().split(/\s+/u)[7]?.replace(/^@/u, "");
+    return socketPath?.startsWith(prefix) ? [socketPath.slice(prefix.length)] : [];
+  });
 }
 
 function binaryError(
@@ -169,6 +196,7 @@ export function createManagedLinuxDesktop(
         host: "127.0.0.1";
         exclusive: true;
       }) => Promise<number>;
+      unixSocketTable?: string;
       x11SocketDir?: string;
     };
   } = {},
@@ -187,6 +215,7 @@ export function createManagedLinuxDesktop(
   const tempRoot = params.runtime?.tempRoot ?? os.tmpdir();
   const pickPort = params.runtime?.tryListenOnPort ?? tryListenOnPort;
   const x11SocketDir = params.runtime?.x11SocketDir ?? "/tmp/.X11-unix";
+  const unixSocketTable = params.runtime?.unixSocketTable ?? "/proc/net/unix";
   const scopeKey = `host-desktop-managed-linux:${crypto.randomUUID()}`;
 
   let status: ManagedLinuxDesktopStatus = { state: "not-started" };
@@ -287,7 +316,9 @@ export function createManagedLinuxDesktop(
       }
       await fs.writeFile(passwordFile, filtered.stdout, { mode: 0o600, flag: "wx" });
       const port = await pickPort({ port: 0, host: "127.0.0.1", exclusive: true });
-      const display = chooseDisplayNumber(await readDisplaySocketNames(x11SocketDir));
+      const display = chooseDisplayNumber(
+        await readDisplaySocketNames(x11SocketDir, unixSocketTable),
+      );
       const env: NodeJS.ProcessEnv = {
         ...process.env,
         DISPLAY: `:${display}`,
