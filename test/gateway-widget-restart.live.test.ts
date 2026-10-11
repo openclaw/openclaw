@@ -1,4 +1,5 @@
 // Real provider, process replacement, and browser proof of recovered dashboard authoring.
+import { once } from "node:events";
 import { access, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
@@ -9,7 +10,6 @@ import {
   GATEWAY_CLIENT_IDS,
 } from "../packages/gateway-protocol/src/client-info.js";
 import type { BoardSnapshot } from "../packages/gateway-protocol/src/index.js";
-import { inspectManagedProcessGroup } from "../scripts/lib/managed-child-process.mts";
 import { isLiveTestEnabled, logLiveProgress } from "../src/agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import type { GatewayClient } from "../src/gateway/client.js";
@@ -198,14 +198,10 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
           `widget restart: checkpoint reached; replacing owned Gateway pid=${originalProcess.pid}`,
         );
         // Interrupt the Gateway without draining; the marker releases its detached exec below.
-        process.kill(-originalProcess.pid, "SIGKILL");
-        await vi.waitFor(
-          () =>
-            expect(
-              inspectManagedProcessGroup(originalProcess, { errorPolicy: "indeterminate" }),
-            ).toBe("dead"),
-          { timeout: 10_000 },
-        );
+        const closed = once(originalProcess, "close");
+        originalProcess.kill("SIGKILL");
+        expect(await closed).toEqual([null, "SIGKILL"]);
+        await instance.stopGateway();
         await writeFile(path.join(instance.state.workspaceDir, "checkpoint-resume"), "resume\n");
         await instance.startGateway();
         expect(instance.child?.pid).not.toBe(originalProcess.pid);

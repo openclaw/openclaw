@@ -1,7 +1,8 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { X509Certificate } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -12,6 +13,7 @@ import { getPluginRegistryVersion } from "../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import { connectUserModelAccountAsync } from "../state/user-model-account-operations.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { coreGatewayHandlers } from "./server-methods/core-handlers.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -87,6 +89,13 @@ it("reuses provider policy artifacts after a model config hot reload", async () 
     },
     plugins: { allow: ["openai"], slots: { memory: "none" } },
   };
+  // The config watcher validates its own snapshot outside the measured RPCs.
+  const modelRequests = new AsyncLocalStorage<boolean>();
+  const listModels = coreGatewayHandlers["models.list"]!;
+  const listHandler = vi
+    .spyOn(coreGatewayHandlers, "models.list")
+    .mockImplementation((options) => modelRequests.run(true, () => listModels(options)));
+  onTestFinished(() => listHandler.mockRestore());
   const gateway = await startGatewayWithClient({
     cfg: config,
     configPath: path.join(home, "openclaw.json"),
@@ -103,16 +112,26 @@ it("reuses provider policy artifacts after a model config hot reload", async () 
     origin: "https://control.example.test",
     scopes: ["operator.admin", "operator.read", "operator.write"],
   });
-  const candidateLoads = vi.spyOn(
-    artifacts,
-    "loadBundledPluginPublicArtifactModuleFromCandidatesSync",
-  );
+  let candidateLoads = 0;
+  const loadCandidates = artifacts.loadBundledPluginPublicArtifactModuleFromCandidatesSync;
+  const candidateLoader = vi
+    .spyOn(artifacts, "loadBundledPluginPublicArtifactModuleFromCandidatesSync")
+    .mockImplementation(function <T extends object>(params: Parameters<typeof loadCandidates>[0]) {
+      if (modelRequests.getStore()) {
+        candidateLoads += 1;
+      }
+      return loadCandidates<T>(params);
+    });
+  let policyLookups = 0;
   const versions = new Set<number | undefined>();
   const original = policy.resolveDirectBundledProviderPolicySurface;
   const resolvePolicy = vi
     .spyOn(policy, "resolveDirectBundledProviderPolicySurface")
     .mockImplementation((id) => {
-      versions.add(getPluginRegistryVersion(getPluginRegistryForContext()));
+      if (modelRequests.getStore()) {
+        policyLookups += 1;
+        versions.add(getPluginRegistryVersion(getPluginRegistryForContext()));
+      }
       return original(id);
     });
   let authProfileId: string;
@@ -128,8 +147,9 @@ it("reuses provider policy artifacts after a model config hot reload", async () 
   };
   const measure = async (label: string) => {
     await gateway.client.request("models.list", nextRequest());
-    candidateLoads.mockClear();
-    resolvePolicy.mockClear();
+    candidateLoads = 0;
+    policyLookups = 0;
+    listHandler.mockClear();
     versions.clear();
     const timings: number[] = [];
     for (let i = 0; i < 12; i++) {
@@ -148,13 +168,14 @@ it("reuses provider policy artifacts after a model config hot reload", async () 
         label,
         p50: timings[5],
         p95: timings[11],
-        loads: candidateLoads.mock.calls.length,
-        lookups: resolvePolicy.mock.calls.length,
+        loads: candidateLoads,
+        lookups: policyLookups,
         versions: [...versions],
       }),
     );
-    expect(resolvePolicy.mock.calls.length).toBeGreaterThan(0);
-    return candidateLoads.mock.calls.length;
+    expect(listHandler).toHaveBeenCalledTimes(12);
+    expect(policyLookups).toBeGreaterThan(0);
+    return candidateLoads;
   };
   try {
     await gateway.server.startupSettled;
@@ -175,7 +196,8 @@ it("reuses provider policy artifacts after a model config hot reload", async () 
     expect(afterLoads).toBe(0);
   } finally {
     resolvePolicy.mockRestore();
-    candidateLoads.mockRestore();
+    candidateLoader.mockRestore();
+    listHandler.mockRestore();
     await disconnectGatewayClient(gateway.client);
     await gateway.server.close({ reason: "policy reload proof complete" });
     vi.unstubAllEnvs();

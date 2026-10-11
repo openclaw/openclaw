@@ -1102,9 +1102,10 @@ test("recovers a replaced model catalog and drains the following Telegram callba
               claims: 0,
               failed: 0,
               pending: 0,
-              statuses: eventIds.map((eventId) => ({
+              // Catalog supersession returns to durable ingress for one retry.
+              statuses: eventIds.map((eventId, index) => ({
                 accountId: "picker",
-                attempts: 0,
+                attempts: index === 0 ? 1 : 0,
                 eventId,
                 laneKey: `telegram:${CHAT_ID}`,
                 lastAttemptAt: null,
