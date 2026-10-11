@@ -24,7 +24,7 @@ When this mode runs, Codex owns the native thread id, resume behavior,
 compaction, and app-server execution. OpenClaw still owns the chat channel,
 visible transcript mirror, tool policy, approvals, media delivery, and session
 selection. Use provider/model `agentRuntime.id: "codex"` to require a registered
-Codex harness. Unsupported routes/auth fail closed unless the harness declares
+Codex harness. Unsupported routes/auth are rejected unless the harness declares
 an exact-request fallback before execution. Codex runtime failures are not
 retried through another runtime.
 
@@ -126,7 +126,7 @@ To request Codex for embedded runs:
 }
 ```
 
-If you want a CLI backend for one canonical model, put the runtime on that
+If you want a CLI backend for one standard model ID, put the runtime on that
 model entry:
 
 ```json

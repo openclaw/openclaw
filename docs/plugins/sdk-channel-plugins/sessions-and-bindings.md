@@ -16,7 +16,7 @@ plugins](/plugins/sdk-channel-plugins) guide.
 
 If your platform stores extra scope inside conversation ids, keep that parsing
 in the plugin with `messaging.resolveSessionConversation(...)`. That is the
-canonical hook for mapping `rawId` to the base conversation id, optional
+primary hook for mapping `rawId` to the base conversation id, optional
 thread id, explicit `baseConversationId`, and any
 `parentConversationCandidates`. When you return `parentConversationCandidates`,
 order them from the narrowest parent to the broadest/base conversation.
@@ -25,7 +25,7 @@ order them from the narrowest parent to the broadest/base conversation.
 compatibility fallback for plugins that only need parent fallbacks on top of
 the generic/raw id. If both hooks exist, core uses
 `resolveSessionConversation(...).parentConversationCandidates` first and only
-falls back to `resolveParentConversationCandidates(...)` when the canonical
+falls back to `resolveParentConversationCandidates(...)` when the primary
 hook omits them.
 
 Bundled plugins that need the same parsing before the channel registry boots
@@ -81,7 +81,7 @@ read-only, and does not refresh binding liveness.
 Set `conversationBindings.supportsCurrentConversationBinding` when the channel
 supports generic current-conversation bindings. `createChatChannelPlugin(...)`
 sets this static capability to `true` by default. Channels whose monitor owns a custom binding
-adapter must also set `bindingStore: "adapter"`; core then fails closed while
+adapter must also set `bindingStore: "adapter"`; core then blocks binding operations while
 that adapter is unavailable instead of reading or writing generic binding rows.
 Older `createManager`-only plugins retain the same adapter-owned behavior.
 

@@ -260,7 +260,7 @@ claim from message text, routing, or host evidence-carrier integrity.
 `accessGroup:<name>` entries stay redacted. Core resolves static
 `message.senders` groups itself and calls `resolveAccessGroupMembership` only
 for dynamic groups that require a platform lookup. Missing, unsupported, and
-failed groups fail closed.
+failed groups deny access.
 
 ## Event modes
 

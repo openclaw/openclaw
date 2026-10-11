@@ -51,7 +51,7 @@ Pair `defineSetupPluginEntry(...)` with the narrow setup helper families:
 returns a bounded, frozen list of accepted `{ path, kind, size }` TAR/gzip members
 without creating an extracted tree. It uses fs-safe's complete admission and
 zero-strip extraction policy, not tar display output. Paths use the existing
-canonical archive identity; LF and Unicode spelling are preserved. Use matching
+normalized archive identity; LF and Unicode spelling are preserved. Use matching
 filter/limit settings and retain or verify the same archive bytes for subsequent
 extraction: inspection results are not reusable write authority. Only the resolved
 result is complete-admission evidence; a filter callback can precede a later

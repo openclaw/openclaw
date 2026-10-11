@@ -202,7 +202,7 @@ execute plugin code or require the Custom plugin UI Labs setting.
 }
 ```
 
-The catalog ID is `starship/xenovessel`. It preserves the plugin's canonical ID,
+The catalog ID is `starship/xenovessel`. It preserves the plugin's primary ID,
 including case, scoped IDs such as `@scope/starship`, and multi-entry IDs such as
 `pack/one`; their theme IDs are `@scope/starship/xenovessel` and
 `pack/one/xenovessel`. The complete catalog ID is limited to 256 characters.
@@ -329,13 +329,13 @@ when its required SQLite capabilities are unavailable. Declare every hardlink
 alias within these resources so backup can identify its journal owner.
 
 Other plugin SQLite files remain opaque byte copies, including their sidecars,
-unless they alias a canonical OpenClaw database. Backup reports each opaque
+unless they alias a primary OpenClaw database. Backup reports each opaque
 SQLite file and sidecar in `warnings`; verification and restore preserve its bytes
 without applying SQLite validation or compaction. Merely placing a database
 under the state or agent directory does not opt it into managed snapshots.
 Undeclared SQLite symbolic links that exceed the link-resolution limit (`ELOOP`),
 including loops, are skipped with filename warnings. Declared database links still
-fail closed if they cannot be captured safely.
+reject the backup if they cannot be captured safely.
 
 ```json
 {
@@ -368,7 +368,7 @@ or absolute and must not contain backslashes, NULs, empty path segments, `.`,
 `..`, Windows drive or UNC prefixes, URI-like values, or any path that escapes
 its selected anchor. Invalid entries are rejected rather than normalized.
 
-The planner deduplicates resources deterministically. A narrower `regenerable`
+The planner uses fixed rules to remove duplicate resources. A narrower `regenerable`
 declaration wins over a broad configured state or agent root. Among plugin
 resource declarations, only an explicit nested `include` protects a descendant
 and keeps its excluded ancestors traversable. Explicit config, credentials,
@@ -540,7 +540,7 @@ Declare every plugin-owned root command in `cliCommands` so root help and comman
 }
 ```
 
-The manifest row is the canonical help text. Register the same command at runtime with `api.registerCli(..., { descriptors: [...] })`; runtime descriptors may additionally provide `machineOutput`. Nested commands such as `openclaw nodes <feature>` are not root commands and do not belong in `cliCommands`.
+The manifest row is the source of help text. Register the same command at runtime with `api.registerCli(..., { descriptors: [...] })`; runtime descriptors may additionally provide `machineOutput`. Nested commands such as `openclaw nodes <feature>` are not root commands and do not belong in `cliCommands`.
 
 ## commandAliases reference
 
