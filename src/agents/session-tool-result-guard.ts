@@ -41,8 +41,8 @@ import type {
   CompactionAppendPersistence,
   CompactionAppendPersistenceAsync,
 } from "./sessions/session-compaction-persistence.js";
+import { withSessionManagerAppend } from "./sessions/session-manager-append-admission.js";
 import { prepareSessionManagerSync } from "./sessions/session-manager-incognito-scope.js";
-import { withSessionManagerWrite } from "./sessions/session-manager-write-admission.js";
 import {
   extractToolCallsFromAssistant,
   extractToolResultId,
@@ -455,7 +455,7 @@ export function installSessionToolResultGuard(
   }
   const flushPendingToolResults = () => runSync(flushPendingToolResultsOperation());
   const flushPendingToolResultsAsync = () =>
-    withSessionManagerWrite(sessionManager, () => runAsync(flushPendingToolResultsOperation()));
+    withSessionManagerAppend(sessionManager, () => runAsync(flushPendingToolResultsOperation()));
 
   function* guardedAppend(
     message: AgentMessage,
@@ -617,7 +617,7 @@ export function installSessionToolResultGuard(
     );
   }) as SessionManager["appendMessage"];
   sessionManager.appendMessageAsync = (message, options) =>
-    withSessionManagerWrite(sessionManager, () =>
+    withSessionManagerAppend(sessionManager, () =>
       withCodeModeSourceAppend(message, options, (sourceAppend) =>
         runAsync(guardedAppend(message, options, sourceAppend)),
       ),
