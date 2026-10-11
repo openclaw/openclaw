@@ -406,7 +406,9 @@ describe("browser panel route handoff", () => {
       await controller.openUrl("https://allowed.example/", { newTab: false });
       controller.handleViewportKeydown(new KeyboardEvent("keydown", { key: "a" }));
       controller.goHistory(-1);
-      controller.handleWheel(new WheelEvent("wheel", { deltaY: 40, cancelable: true }));
+      const wheel = new WheelEvent("wheel", { deltaY: 40, bubbles: true, cancelable: true });
+      panel.querySelector(".bp-viewport")!.dispatchEvent(wheel);
+      expect(wheel.defaultPrevented).toBe(true);
       controller.handleViewportResize(700, 500);
       await waitForSolid(() =>
         expect(

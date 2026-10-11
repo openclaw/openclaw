@@ -17,12 +17,11 @@ declare module "@solidjs/web" {
         "prop:active"?: boolean;
         "prop:tabIndex"?: number;
       };
-      "wa-tab-panel": HTMLAttributes<HTMLElement> &
-        Properties<HTMLElement> & {
-          name?: string;
-          active?: boolean;
-          "prop:active"?: boolean;
-        };
+      "wa-tab-panel": HTMLAttributes<HTMLElement> & {
+        name?: string;
+        active?: boolean;
+        "prop:active"?: boolean;
+      };
       "resizable-divider": Omit<HTMLAttributes<HTMLElement>, "onResize"> & {
         "prop:orientation": "horizontal" | "vertical";
         "prop:label": string;

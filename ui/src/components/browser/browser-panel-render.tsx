@@ -471,6 +471,12 @@ export function BrowserPanelChrome(
         </div>
       ) : null}
       <wa-tab-panel
+        ref={(element) => {
+          // Remote scrolling must cancel local scrolling before the event bubbles.
+          element.addEventListener("wheel", (event) => props.controller.handleWheel(event), {
+            passive: false,
+          });
+        }}
         id={panelId}
         class="bp-viewport"
         name={props.controller.activeTargetId ?? "browser"}
@@ -481,7 +487,6 @@ export function BrowserPanelChrome(
             : undefined
         }
         tabindex="0"
-        prop:onwheel={(event: WheelEvent) => props.controller.handleWheel(event)}
         onKeyDown={(event: KeyboardEvent) => props.controller.handleViewportKeydown(event)}
         onPaste={(event: ClipboardEvent) => props.controller.handleViewportPaste(event)}
         aria-busy={props.controller.loading ? "true" : "false"}
