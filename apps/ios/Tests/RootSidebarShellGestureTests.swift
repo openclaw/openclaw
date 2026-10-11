@@ -6,6 +6,35 @@ import Testing
 struct RootSidebarShellGestureTests {
     private typealias Drawer = RootSidebarShell<EmptyView, EmptyView>
 
+    @Test func `release velocity follows the remaining displacement in either direction`() {
+        for (velocity, remaining, expected): (CGFloat, CGFloat, Double) in [
+            (130, 180, 130 / 180),
+            (540, 180, 3),
+            (-360, -180, 2),
+            (360, -180, -2),
+            (-360, 180, -2),
+            (10000, 1, 8),
+            (-10000, 1, -8),
+            (500, 0, 0),
+        ] {
+            #expect(Drawer.normalizedSpringVelocity(velocity, remainingOffset: remaining) == expected)
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `owner visibility changes reject the remaining gesture even before commitment`(initialPresentation: Bool) {
+        let committed: Drawer.DragDisposition = initialPresentation ? .closing : .opening
+        for disposition: Drawer.DragDisposition? in [nil, committed, .rejected] {
+            #expect(Drawer.dragDisposition(
+                startLocation: CGPoint(x: 20, y: 100),
+                translation: CGSize(width: initialPresentation ? -40 : 40, height: 0),
+                isPresented: !initialPresentation,
+                initialPresentation: initialPresentation,
+                canOpenFromEdge: true,
+                latchedDisposition: disposition) == .rejected)
+        }
+    }
+
     @Test(arguments: [false, true])
     func `only clearly horizontal drags commit`(isPresented: Bool) {
         let committed: Drawer.DragDisposition = isPresented ? .closing : .opening
@@ -29,6 +58,7 @@ struct RootSidebarShellGestureTests {
                 startLocation: CGPoint(x: 20, y: 100),
                 translation: translation,
                 isPresented: isPresented,
+                initialPresentation: isPresented,
                 canOpenFromEdge: true,
                 latchedDisposition: nil) == expected)
         }
@@ -48,12 +78,14 @@ struct RootSidebarShellGestureTests {
                 startLocation: startLocation,
                 translation: CGSize(width: 20, height: 0),
                 isPresented: false,
+                initialPresentation: false,
                 canOpenFromEdge: canOpenFromEdge,
                 latchedDisposition: nil) == expected)
             #expect(Drawer.dragDisposition(
                 startLocation: startLocation,
                 translation: CGSize(width: -20, height: 0),
                 isPresented: true,
+                initialPresentation: true,
                 canOpenFromEdge: canOpenFromEdge,
                 latchedDisposition: nil) == .closing)
         }
@@ -73,6 +105,7 @@ struct RootSidebarShellGestureTests {
                     width: isPresented ? -translation.width : translation.width,
                     height: translation.height),
                 isPresented: isPresented,
+                initialPresentation: isPresented,
                 canOpenFromEdge: true,
                 latchedDisposition: disposition)
             #expect(disposition == expected)
@@ -89,6 +122,7 @@ struct RootSidebarShellGestureTests {
                     width: isPresented ? -translation.width : translation.width,
                     height: translation.height),
                 isPresented: isPresented,
+                initialPresentation: isPresented,
                 canOpenFromEdge: true,
                 latchedDisposition: disposition)
             #expect(disposition == (isPresented ? .closing : .opening))

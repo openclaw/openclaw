@@ -823,6 +823,9 @@ extension RootTabs {
     }
 
     private func showSidebar() {
+        if !self.isSidebarVisible {
+            RootSidebarFeedback.settle(isDrawerLayout: self.isSidebarDrawerLayout, reduceMotion: self.reduceMotion)
+        }
         if !self.isSidebarDrawerLayout { self.splitSidebarVisibility = true }
         withAnimation(self.sidebarAnimation) {
             self.isSidebarVisible = true
@@ -830,6 +833,9 @@ extension RootTabs {
     }
 
     private func hideSidebar() {
+        if self.isSidebarVisible {
+            RootSidebarFeedback.settle(isDrawerLayout: self.isSidebarDrawerLayout, reduceMotion: self.reduceMotion)
+        }
         if !self.isSidebarDrawerLayout { self.splitSidebarVisibility = false }
         withAnimation(self.sidebarAnimation) {
             self.isSidebarVisible = false
