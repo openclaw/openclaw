@@ -50,6 +50,7 @@ describe("personal avatar HTTP authentication", () => {
   let auth: ResolvedGatewayAuth;
   let cfg: OpenClawConfig;
   let rateLimiter: AuthRateLimiter | undefined;
+  let publishedPort: number | undefined;
 
   beforeAll(async () => {
     server = createServer((req, res) => {
@@ -64,6 +65,7 @@ describe("personal avatar HTTP authentication", () => {
         await handleUserProfileAvatarHttpRequest(req, res, pathname, {
           auth,
           rateLimiter,
+          publishedPort,
           getResolvedAuth: () => auth,
           getRuntimeConfig: () => cfg,
         });
@@ -93,6 +95,7 @@ describe("personal avatar HTTP authentication", () => {
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("personal-avatar-auth-"));
     cfg = {};
+    publishedPort = undefined;
     auth = { mode: "token", token: "test-shared-secret", allowTailscale: false };
     vi.spyOn(configIo, "getRuntimeConfig").mockImplementation(() => cfg);
     const profile = ensureGatewayOwnerProfile("Avatar test owner");
@@ -145,70 +148,96 @@ describe("personal avatar HTTP authentication", () => {
     return fetch(origin + avatarPath, { ...init, headers });
   }
 
-  it.each(["inspection", "saved", "host", "Gravatar"] as const)(
-    "withholds a prepared %s avatar after credentials rotate",
-    async (source) => {
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const createReader = profileAvatars.createProfileAvatarReader;
-      vi.spyOn(profileAvatars, "createProfileAvatarReader").mockImplementation((id, options) => {
-        const reader = createReader(id, options);
-        return {
-          async inspect() {
-            if (source === "inspection") {
-              entered.resolve();
-              await release.promise;
-            }
-            const prepared = await reader.inspect();
-            return {
-              ...prepared,
-              avatar: source === "host" || source === "Gravatar" ? undefined : prepared.avatar,
-              async loadBytes() {
-                entered.resolve();
-                await release.promise;
-                return prepared.loadBytes();
-              },
-            };
-          },
-        };
-      });
-      if (source === "host") {
-        vi.spyOn(hostAccountAvatar, "resolveHostAccountAvatar").mockImplementation(async () => {
-          entered.resolve();
-          await release.promise;
-          return { bytes: PNG, mime: "image/jpeg", sha256: "synthetic-avatar" };
-        });
-      } else if (source === "Gravatar") {
-        vi.spyOn(hostAccountAvatar, "resolveHostAccountAvatar").mockResolvedValue(null);
-        const profile = syncGitHubIdentity({
-          identity: { accountId: 9871, login: "avatar-authority" },
-          authenticationAlias: { kind: "email", email: "avatar-authority@example.test" },
-        });
-        avatarPath = `/api/users/${profile.id}/avatar`;
-        const fetch = globalThis.fetch;
-        vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-          const url =
-            typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-          if (url.startsWith("https://www.gravatar.com/avatar/")) {
+  it.each(
+    (["inspection", "saved", "host", "Gravatar"] as const).flatMap((source) =>
+      (["credential rotation", "origin revocation", "unchanged authority"] as const).map(
+        (change) => ({ source, change }),
+      ),
+    ),
+  )("revalidates a prepared $source avatar after $change", async ({ source, change }) => {
+    publishedPort = 19123;
+    cfg = { gateway: { publicOrigin: "https://dashboard.example.test" } };
+    const browserOrigin = "http://localhost:19123";
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const createReader = profileAvatars.createProfileAvatarReader;
+    vi.spyOn(profileAvatars, "createProfileAvatarReader").mockImplementation((id, options) => {
+      const reader = createReader(id, options);
+      return {
+        async inspect() {
+          if (source === "inspection") {
             entered.resolve();
             await release.promise;
-            return new Response(PNG, { headers: { "content-type": "image/png" } });
           }
-          return fetch(input, init);
-        });
-      }
-      const pending = request("test-shared-secret");
-      await entered.promise;
+          const prepared = await reader.inspect();
+          return {
+            ...prepared,
+            avatar: source === "host" || source === "Gravatar" ? undefined : prepared.avatar,
+            async loadBytes() {
+              entered.resolve();
+              await release.promise;
+              return prepared.loadBytes();
+            },
+          };
+        },
+      };
+    });
+    if (source === "host") {
+      vi.spyOn(hostAccountAvatar, "resolveHostAccountAvatar").mockImplementation(async () => {
+        entered.resolve();
+        await release.promise;
+        return { bytes: PNG, mime: "image/jpeg", sha256: "synthetic-avatar" };
+      });
+    } else if (source === "Gravatar") {
+      vi.spyOn(hostAccountAvatar, "resolveHostAccountAvatar").mockResolvedValue(null);
+      const profile = syncGitHubIdentity({
+        identity: { accountId: 9871, login: "avatar-authority" },
+        authenticationAlias: {
+          kind: "email",
+          email: `avatar-${change.replaceAll(" ", "-")}@example.test`,
+        },
+      });
+      avatarPath = `/api/users/${profile.id}/avatar`;
+      const fetch = globalThis.fetch;
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (url.startsWith("https://www.gravatar.com/avatar/")) {
+          entered.resolve();
+          await release.promise;
+          return new Response(PNG, { headers: { "content-type": "image/png" } });
+        }
+        return fetch(input, init);
+      });
+    }
+    const pending = request("test-shared-secret", { headers: { Origin: browserOrigin } });
+    await entered.promise;
+    if (change === "credential rotation") {
       auth = { ...auth, token: "replacement-token" };
-      release.resolve();
-      const response = await pending;
+    } else if (change === "origin revocation") {
+      cfg = { gateway: { ...cfg.gateway, controlUi: { allowedOrigins: [] } } };
+    }
+    release.resolve();
+    const response = await pending;
 
+    if (change === "credential rotation") {
       expect(response.status).toBe(401);
       expect(response.headers.get("content-type")).not.toMatch(/^image\//);
       expect(response.headers.get("etag")).toBeNull();
       expect(Buffer.from(await response.arrayBuffer())).not.toEqual(PNG);
-    },
-  );
+      return;
+    }
+    // Explicit credentials still authorize the bytes. Only a current browser
+    // origin grant may expose that response to the requesting page.
+    expect(response.status).toBe(200);
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(PNG);
+    expect(response.headers.get("access-control-allow-origin")).toBe(
+      change === "origin revocation" ? null : browserOrigin,
+    );
+    expect(response.headers.get("access-control-allow-credentials")).toBe(
+      change === "origin revocation" ? null : "true",
+    );
+  });
 
   it.each(["password", "trusted-proxy"] as const)(
     "loads the saved personal photo with the connected credentials under %s auth",

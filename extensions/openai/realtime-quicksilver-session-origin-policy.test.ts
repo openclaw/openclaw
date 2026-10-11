@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { createServer, IncomingMessage, type Server } from "node:http";
 import { type AddressInfo, Socket } from "node:net";
 import { networkInterfaces } from "node:os";
@@ -118,6 +119,7 @@ describe("GPT-Live offer origin policy", () => {
     sidebandServer.on("connection", () => {
       sidebandConnections += 1;
     });
+    const sidebandConnected = once(sidebandServer, "connection");
     const { realtime } = createBroker({
       getConfig: () => cfg,
       fetchImpl: (_input, init) =>
@@ -193,9 +195,13 @@ describe("GPT-Live offer origin policy", () => {
       expect(acceptedResponse.status).toBe(200);
       expect(await acceptedResponse.text()).toBe("v=answer\r\n");
       expect(providerRequests).toBe(1);
-      await vi.waitFor(() => expect(sidebandConnections).toBe(1));
+      await sidebandConnected;
+      expect(sidebandConnections).toBe(1);
       await realtime.broker.cancelBrowserSession(accepted);
-      await vi.waitFor(() => expect(acceptedGateway.readLogicalSessionStatus()).toBe("closed"));
+      // Join teardown only after the provider has started the owner's close.
+      expect(acceptedGateway.owner.signal.aborted).toBe(true);
+      await acceptedGateway.owner.close();
+      expect(acceptedGateway.readLogicalSessionStatus()).toBe("closed");
 
       const revoked = await createReservation(revokedGateway);
       expect(realtime.getSessionCounts().pending).toBe(1);
@@ -205,12 +211,17 @@ describe("GPT-Live offer origin policy", () => {
           controller.enqueue(new TextEncoder().encode("v=0\r\n"));
         },
       });
+      // The body reader resumes after the broker has consumed the pending offer.
+      const revokedOfferReading = new Promise<void>((resolve) => {
+        gatewayServer.once("request", (req) => req.once("resume", resolve));
+      });
       const revokedResponsePromise = postOffer(
         revoked.clientSecret,
         "http://localhost:25432",
         body,
       );
-      await vi.waitFor(() => expect(realtime.getSessionCounts().pending).toBe(0));
+      await revokedOfferReading;
+      expect(realtime.getSessionCounts().pending).toBe(0);
       cfg.gateway!.controlUi = { allowedOrigins: [] };
       const bodyController = heldBody;
       if (!bodyController) {
@@ -224,7 +235,9 @@ describe("GPT-Live offer origin policy", () => {
       expect(revokedResponse.status).toBe(403);
       expect(await revokedResponse.text()).toBe("Origin not allowed");
       expect(providerRequests).toBe(1);
-      await vi.waitFor(() => expect(revokedGateway.readLogicalSessionStatus()).toBe("closed"));
+      expect(revokedGateway.owner.signal.aborted).toBe(true);
+      await revokedGateway.owner.close();
+      expect(revokedGateway.readLogicalSessionStatus()).toBe("closed");
       expect(revokedGateway.events.map((event) => event.type)).toEqual([
         "session.error",
         "session.closed",
@@ -332,11 +345,13 @@ describe("GPT-Live offer origin policy", () => {
     const response = createResponseHarness();
 
     try {
+      const offerReading = once(deferred.req, "resume");
       const handling = withPluginRuntimeGatewayRequestScope(
         { isWebchatConnect: () => false, publishedPort: 25432 },
         () => realtime.handler(deferred.req, response.res),
       );
-      await vi.waitFor(() => expect(realtime.getSessionCounts().pending).toBe(0));
+      await offerReading;
+      expect(realtime.getSessionCounts().pending).toBe(0);
 
       cfg.gateway!.controlUi = { allowedOrigins: [] };
       deferred.finish(AUDIO_ONLY_SDP);
@@ -346,8 +361,10 @@ describe("GPT-Live offer origin policy", () => {
       expect(response.readBody()).toBe("Origin not allowed");
       expect(response.removeHeader).toHaveBeenCalledWith("Access-Control-Allow-Origin");
       expect(fetchImpl).not.toHaveBeenCalled();
-      await vi.waitFor(() => expect(gateway.closeLogicalSession).toHaveBeenCalledOnce());
-      await vi.waitFor(() => expect(gateway.readLogicalSessionStatus()).toBe("closed"));
+      expect(() => gateway.owner.assertOpen()).toThrow("Realtime voice session closed");
+      await gateway.owner.close();
+      expect(gateway.closeLogicalSession).toHaveBeenCalledOnce();
+      expect(gateway.readLogicalSessionStatus()).toBe("closed");
       expect(gateway.events.map((event) => event.type)).toEqual([
         "session.error",
         "session.closed",
@@ -355,7 +372,6 @@ describe("GPT-Live offer origin policy", () => {
       expect(gateway.events[0]?.payload).toEqual(
         expect.objectContaining({ message: "Origin not allowed" }),
       );
-      expect(() => gateway.owner.assertOpen()).toThrow("Realtime voice session closed");
       expect(realtime.getSessionCounts()).toEqual({
         active: 0,
         inFlight: 0,
