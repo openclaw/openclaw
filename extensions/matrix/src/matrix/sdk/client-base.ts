@@ -47,6 +47,8 @@ import type { MatrixClientEventMap, MatrixCryptoBootstrapApi, MatrixRawEvent } f
 type MatrixCryptoRuntime = typeof import("./crypto-runtime.js");
 
 const MATRIX_ENCRYPTED_STARTUP_TIMEOUT_MS = 60_000;
+const ENCRYPTED_TO_DEVICE_PATH_RE =
+  /\/_matrix\/client\/(?:v3|r0|unstable)\/sendToDevice\/m\.room\.encrypted\//;
 
 let loadedMatrixCryptoRuntime: MatrixCryptoRuntime | null = null;
 
@@ -221,6 +223,7 @@ export abstract class MatrixClientBase {
       beforeRequest: async (resource, init) => {
         // Complete admitted key persistence before checking live wire authority.
         await this.recoveryKeyStore.drainPendingPersistence();
+        await this.persistCryptoBeforeEncryptedToDevice(resource, init);
         await this.messageWireDispatchGuards.beforeRequest(resource, init);
       },
     });
@@ -688,6 +691,35 @@ export abstract class MatrixClientBase {
         this.cryptoInitializationPromise = null;
       }
     }
+  }
+
+  /**
+   * An Olm message must not leave the process before the ratchet state that
+   * produced it is durable: restoring an older ratchet after a crash makes the
+   * device reuse message keys and lose the keys it needs for the peer's replies.
+   */
+  private async persistCryptoBeforeEncryptedToDevice(
+    resource: RequestInfo | URL,
+    init?: RequestInit,
+  ): Promise<void> {
+    if (!this.encryptionEnabled || !this.cryptoInitialized || !this.cryptoDatabasePrefix) {
+      return;
+    }
+    const method = init?.method ?? (resource instanceof Request ? resource.method : "GET");
+    if (method.toUpperCase() !== "PUT") {
+      return;
+    }
+    const url = resource instanceof Request ? resource.url : String(resource);
+    if (!ENCRYPTED_TO_DEVICE_PATH_RE.test(new URL(url).pathname)) {
+      return;
+    }
+    const { persistIdbToDisk } = await loadMatrixCryptoRuntime();
+    await persistIdbToDisk({
+      snapshotPath: this.idbSnapshotPath,
+      databasePrefix: this.cryptoDatabasePrefix,
+      strict: true,
+      stateRuntime: this.stateRuntime,
+    });
   }
 
   private async initializeCrypto(abortSignal: AbortSignal): Promise<void> {
