@@ -359,5 +359,9 @@ describe("session suggestion store", () => {
         expectedSessionId: "session-a",
       })?.state,
     ).toBe("accepted");
+    expect(await listSessionSuggestions(scope, { pendingOnly: true })).toEqual([]);
+    expect(await listSessionSuggestions(scope)).toEqual([
+      expect.objectContaining({ id: "claimed", state: "accepted", text: "dispatch me" }),
+    ]);
   });
 });

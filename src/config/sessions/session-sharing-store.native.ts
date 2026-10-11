@@ -31,7 +31,12 @@ function assertAuthorizedSessionInstance(
   expectedSessionId: string | undefined,
   expectedEntry?: SessionSharingExpectedEntry,
 ): string {
-  const sessionId = readSessionEntryInstanceId(database, sessionKey);
+  const entry = expectedEntry
+    ? readExactSessionEntryRow(database, sessionKey, "list")?.entry
+    : undefined;
+  const sessionId = expectedEntry
+    ? entry?.sessionId
+    : readSessionEntryInstanceId(database, sessionKey);
   if (
     sessionId === undefined ||
     (expectedSessionId !== undefined && sessionId !== expectedSessionId)
@@ -39,7 +44,6 @@ function assertAuthorizedSessionInstance(
     throw new Error("session changed before sharing mutation");
   }
   if (expectedEntry) {
-    const entry = readExactSessionEntryRow(database, sessionKey, "list")?.entry;
     if (
       !entry ||
       !isDeepStrictEqual(
@@ -150,29 +154,24 @@ export function removeSessionMember(
         expectedEntry,
       );
       const db = getSessionMemberKysely(database);
-      const row = executeSqliteQueryTakeFirstSync(
-        database.db,
-        db
-          .selectFrom("session_members")
-          .select(["identity_id", "added_by", "added_at"])
-          .where("session_key", "=", sessionKey)
-          .where("identity_id", "=", normalizedIdentityId),
-      );
-      if (
-        !row ||
-        (expected && (row.added_by !== expected.addedBy || row.added_at !== expected.addedAt))
-      ) {
-        return null;
+      let deletion = db
+        .deleteFrom("session_members")
+        .where("session_key", "=", sessionKey)
+        .where("identity_id", "=", normalizedIdentityId);
+      if (expected) {
+        deletion = deletion
+          .where("added_by", "=", expected.addedBy)
+          .where("added_at", "=", expected.addedAt);
       }
-      withSqliteDatabaseWriteScope(database.db, [sessionKey], () =>
-        executeSqliteQuerySync(
+      const row = withSqliteDatabaseWriteScope(database.db, [sessionKey], () =>
+        executeSqliteQueryTakeFirstSync(
           database.db,
-          db
-            .deleteFrom("session_members")
-            .where("session_key", "=", sessionKey)
-            .where("identity_id", "=", normalizedIdentityId),
+          deletion.returning(["identity_id", "added_by", "added_at"]),
         ),
       );
+      if (!row) {
+        return null;
+      }
       publishCommittedSessionMembership(
         database,
         agentId,
