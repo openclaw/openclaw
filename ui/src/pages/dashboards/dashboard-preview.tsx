@@ -1,4 +1,5 @@
-import { createSignal, Errored, lazy, Loading, onSettled, Show } from "solid-js";
+import { createErrorBoundary } from "@solidjs/signals";
+import { createSignal, lazy, Loading, onSettled, Show } from "solid-js";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { NearViewportObserver } from "../../components/near-viewport-observer.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -42,21 +43,22 @@ export function DashboardPreviewContent(props: DashboardPreviewProps, host: HTML
           </div>
         }
       >
-        <Errored
-          fallback={(error) => (
+        {createErrorBoundary(
+          () => (
+            <Loading>
+              <BoardDocument
+                passive={true}
+                gatewaySnapshot={props.gatewaySnapshot}
+                preparedSession={{ sessionKey: props.sessionKey ?? "", agentId: props.agentId }}
+              />
+            </Loading>
+          ),
+          (error) => (
             <div class="dashboard-preview__error">
               {t("dashboardDocument.loadFailed", { error: formatUiError(error()) })}
             </div>
-          )}
-        >
-          <Loading>
-            <BoardDocument
-              passive={true}
-              gatewaySnapshot={props.gatewaySnapshot}
-              preparedSession={{ sessionKey: props.sessionKey ?? "", agentId: props.agentId }}
-            />
-          </Loading>
-        </Errored>
+          ),
+        )}
       </Show>
     </Show>
   );

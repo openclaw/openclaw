@@ -1,4 +1,3 @@
-import { Dynamic } from "@solidjs/web";
 import { For, Show, createMemo } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -95,58 +94,73 @@ function DashboardCard(props: {
   );
   const author = createMemo(() => dashboardAuthor(props.row, props.data.fallbackAgentId));
   const title = createMemo(() => resolveSessionDisplayName(props.row.key, props.row));
-  return (
-    <article class="dashboard-card" data-dashboard-session={props.row.key}>
-      <Dynamic
-        component={target() ? "a" : "div"}
-        class="dashboard-card__main"
-        href={target()?.href}
-        aria-label={target() ? title() : undefined}
-        onClick={(event: MouseEvent) => {
-          const destination = target();
-          if (destination && props.handlers.onNavigate && shouldHandleNavigationClick(event)) {
-            event.preventDefault();
-            props.handlers.onNavigate("dashboard", destination.options);
-          }
-        }}
-      >
-        <div class="dashboard-preview" aria-hidden="true" inert>
-          <DashboardPreview
-            gatewaySnapshot={props.gatewaySnapshot}
-            sessionKey={props.row.key}
-            agentId={props.row.agentId}
-          />
-        </div>
-        <div class="dashboard-card__body">
-          <div class="dashboard-card__heading">
-            <h2>{title()}</h2>
-            <Show when={props.row.status === "running"}>
-              <span class="dashboard-card__live">
-                <i />
-                {t("dashboardsPage.live")}
-              </span>
-            </Show>
-          </div>
-          <div class="dashboard-card__author">
-            <span class="dashboard-card__avatar" aria-hidden="true">
-              {author().label.trim().charAt(0).toLocaleUpperCase() || "?"}
-            </span>
-            <span>{t("dashboardsPage.byAuthor", { author: author().label })}</span>
-          </div>
-        </div>
-        <footer class="dashboard-card__footer">
-          <span>
-            {props.row.updatedAt
-              ? t("dashboardsPage.updated", { time: formatRelativeTimestamp(props.row.updatedAt) })
-              : t("dashboardsPage.updatedUnknown")}
-          </span>
-          <Show when={target()}>
-            <span class="dashboard-card__open" aria-hidden="true">
-              <Icon name="arrowUpRight" />
+  const Content = () => (
+    <>
+      <div class="dashboard-preview" aria-hidden="true" inert>
+        <DashboardPreview
+          gatewaySnapshot={props.gatewaySnapshot}
+          sessionKey={props.row.key}
+          agentId={props.row.agentId}
+        />
+      </div>
+      <div class="dashboard-card__body">
+        <div class="dashboard-card__heading">
+          <h2>{title()}</h2>
+          <Show when={props.row.status === "running"}>
+            <span class="dashboard-card__live">
+              <i />
+              {t("dashboardsPage.live")}
             </span>
           </Show>
-        </footer>
-      </Dynamic>
+        </div>
+        <div class="dashboard-card__author">
+          <span class="dashboard-card__avatar" aria-hidden="true">
+            {author().label.trim().charAt(0).toLocaleUpperCase() || "?"}
+          </span>
+          <span>{t("dashboardsPage.byAuthor", { author: author().label })}</span>
+        </div>
+      </div>
+      <footer class="dashboard-card__footer">
+        <span>
+          {props.row.updatedAt
+            ? t("dashboardsPage.updated", { time: formatRelativeTimestamp(props.row.updatedAt) })
+            : t("dashboardsPage.updatedUnknown")}
+        </span>
+        <Show when={target()}>
+          <span class="dashboard-card__open" aria-hidden="true">
+            <Icon name="arrowUpRight" />
+          </span>
+        </Show>
+      </footer>
+    </>
+  );
+  return (
+    <article class="dashboard-card" data-dashboard-session={props.row.key}>
+      <Show
+        when={target()}
+        fallback={
+          <div class="dashboard-card__main">
+            <Content />
+          </div>
+        }
+      >
+        {(destination) => (
+          <a
+            class="dashboard-card__main"
+            href={destination().href}
+            aria-label={title()}
+            onClick={(event: MouseEvent) => {
+              const current = target();
+              if (current && props.handlers.onNavigate && shouldHandleNavigationClick(event)) {
+                event.preventDefault();
+                props.handlers.onNavigate("dashboard", current.options);
+              }
+            }}
+          >
+            <Content />
+          </a>
+        )}
+      </Show>
     </article>
   );
 }

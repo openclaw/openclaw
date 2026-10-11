@@ -21,7 +21,7 @@ import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import { extractText } from "../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../lib/chat/message-normalizer.ts";
 import { formatSenderLabel } from "../lib/chat/sender-label.ts";
-import { projectGateway, projectGatewayEvents } from "../lib/reactive/application.ts";
+import { projectGateway } from "../lib/reactive/application.ts";
 import { projectProgressCard } from "../lib/reactive/domain-keyed.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
@@ -80,7 +80,6 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
     target: scope.session,
     options: { admitAutomaticRead: current },
   });
-  const events = projectGatewayEvents(scope.gateway);
   const refresh = async () => {
     if (!current()) {
       return;
@@ -116,7 +115,7 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
     }
   };
   onCleanup(
-    events.subscribe((event) => {
+    scope.gateway.subscribeEvents((event) => {
       if (event.event !== "sessions.changed" && event.event !== "session.message") {
         return;
       }

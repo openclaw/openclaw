@@ -255,7 +255,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           });
         }
         // Provider child memos must not subscribe to component setup reads.
-        const renderContent = () => untrack(() => content(props, this.#host));
+        const renderContent = () => createComponent(() => content(props, this.#host), {});
         const contentView = () =>
           layout
             ? createComponent(ShellLayoutProvider, {

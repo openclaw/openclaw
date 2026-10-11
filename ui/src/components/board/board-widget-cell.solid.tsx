@@ -1,11 +1,10 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { ContextNotFoundError } from "@solidjs/signals";
+import { ContextNotFoundError, createErrorBoundary } from "@solidjs/signals";
 import { dynamic, type JSX as SolidJSX } from "@solidjs/web";
 import {
   createEffect,
   createMemo,
   createSignal,
-  Errored,
   onCleanup,
   onSettled,
   Show,
@@ -635,16 +634,17 @@ function BoardWidgetCellContent(
             },
           ]}
         >
-          <Errored
-            fallback={(error, reset) => {
+          {createErrorBoundary(
+            () => (
+              <Body />
+            ),
+            (error, reset) => {
               resetBodyError = reset;
               bodyErrored = true;
               requestUpdate();
               return <BoardWidgetError error={error()} />;
-            }}
-          >
-            <Body />
-          </Errored>
+            },
+          )}
           <Show when={state().error && props.widget!.grantState !== "pending"}>
             <div class="board-widget__error-overlay">
               <BoardWidgetError error={state().error} action />
