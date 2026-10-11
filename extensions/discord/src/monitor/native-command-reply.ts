@@ -38,19 +38,20 @@ export function formatDiscordCommandComponents(components: readonly TopLevelComp
     if (!value || typeof value !== "object") {
       return;
     }
-    const component = value as Record<string, unknown>;
-    for (const key of ["content", "label", "description", "placeholder"]) {
-      if (typeof component[key] === "string") {
-        text.push(component[key]);
-      }
-    }
-    for (const key of ["components", "options"]) {
-      if (Array.isArray(component[key])) {
-        component[key].forEach(visit);
+    for (const [key, field] of Object.entries(value)) {
+      if (
+        (key === "content" || key === "label" || key === "description" || key === "placeholder") &&
+        typeof field === "string"
+      ) {
+        text.push(field);
+      } else if ((key === "components" || key === "options") && Array.isArray(field)) {
+        field.forEach(visit);
       }
     }
   };
-  components.forEach((component) => visit(component.serialize()));
+  components.forEach((component) =>
+    visit(typeof component.serialize === "function" ? component.serialize() : component),
+  );
   return text.join("\n");
 }
 
@@ -139,6 +140,7 @@ export async function deliverDiscordInteractionReply(params: {
   preferFollowUp: boolean;
   responseEphemeral?: boolean;
   chunkMode: "length" | "newline";
+  onDelivered?: (text: string) => Promise<void>;
 }): Promise<boolean> {
   const { interaction, textLimit, maxLinesPerMessage, preferFollowUp, chunkMode } = params;
   const nativeParts = resolveDiscordInteractionMessageParts(params.payload);
@@ -174,6 +176,7 @@ export async function deliverDiscordInteractionReply(params: {
   // Interaction acknowledgement/defer state is not delivery for this payload. Only a
   // successful native send in this invocation can make a later expiry partial.
   let payloadDelivered = false;
+  const deliveredText: string[] | undefined = params.onDelivered ? [] : undefined;
   const sendMessage = async (content: string, files?: MessagePayloadFile[]) => {
     const firstMessage = !payloadDelivered;
     const components = firstMessage ? firstMessageComponents : undefined;
@@ -211,6 +214,27 @@ export async function deliverDiscordInteractionReply(params: {
           "Discord interaction expired before message dispatch",
           { cause: new Error("Unknown interaction") },
         );
+      }
+      if (deliveredText) {
+        if (payloadLocal.content) {
+          deliveredText.push(payloadLocal.content);
+        }
+        if (payloadLocal.components) {
+          deliveredText.push(formatDiscordCommandComponents(payloadLocal.components));
+        }
+        for (const embed of payloadLocal.embeds ?? []) {
+          deliveredText.push(
+            [
+              embed.title,
+              embed.description,
+              embed.author?.name,
+              ...(embed.fields ?? []).flatMap((field) => [field.name, field.value]),
+              embed.footer?.text,
+            ]
+              .filter(Boolean)
+              .join("\n"),
+          );
+        }
       }
     } catch (error) {
       if (!payloadDelivered) {
@@ -255,6 +279,9 @@ export async function deliverDiscordInteractionReply(params: {
       continue;
     }
     await sendMessage(chunk, chunkFiles);
+  }
+  if (payloadDelivered && params.onDelivered) {
+    await params.onDelivered(deliveredText?.filter(Boolean).join("\n") ?? "");
   }
   return payloadDelivered;
 }

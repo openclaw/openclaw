@@ -2,6 +2,7 @@
 import { ChannelType } from "discord-api-types/v10";
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type * as SessionTranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import * as nativeCommandRoute from "./native-command-route.js";
@@ -31,7 +32,8 @@ vi.mock("openclaw/plugin-sdk/command-status-runtime", () => ({
     runtimeModuleMocks.resolveDirectStatusReplyForSession(...args),
 }));
 
-vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof SessionTranscriptRuntime>()),
   recordDeliveredCommandExchange: runtimeModuleMocks.recordDeliveredCommandExchange,
 }));
 

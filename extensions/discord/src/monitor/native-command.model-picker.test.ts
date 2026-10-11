@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelsRuntimeChoice } from "openclaw/plugin-sdk/models-provider-runtime";
 import * as runtimeConfigSnapshotModule from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import type * as SessionTranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import * as commandTextModule from "openclaw/plugin-sdk/text-utility-runtime";
@@ -41,7 +42,8 @@ const hostSdk = vi.hoisted(() => ({
   recordDeliveredCommandExchange: vi.fn(async () => ({ ok: true })),
 }));
 
-vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof SessionTranscriptRuntime>()),
   recordDeliveredCommandExchange: hostSdk.recordDeliveredCommandExchange,
 }));
 

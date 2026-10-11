@@ -21,6 +21,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import * as sessionStore from "openclaw/plugin-sdk/session-store-runtime";
+import type * as SessionTranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
@@ -42,7 +43,8 @@ const runtimeModuleMocks = vi.hoisted(() => ({
   recordDeliveredCommandExchange: vi.fn(async () => ({ ok: true })),
 }));
 
-vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof SessionTranscriptRuntime>()),
   recordDeliveredCommandExchange: runtimeModuleMocks.recordDeliveredCommandExchange,
 }));
 let observedNativeTurnDispatcher: unknown;

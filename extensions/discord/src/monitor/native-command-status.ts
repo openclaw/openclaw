@@ -45,38 +45,31 @@ export async function maybeDeliverDiscordDirectStatus(params: {
     isGroup: params.isGroup,
     defaultGroupActivation: params.defaultGroupActivation,
   });
+  const recordReply = async (replyText: string) => {
+    await recordDeliveredCommandExchange({
+      config: params.cfg,
+      agentId: params.effectiveRoute.agentId,
+      sessionKey: params.commandTargetSessionKey?.trim() || params.sessionKey,
+      commandText: "/status",
+      commandId: `discord:${params.accountId}:${params.commandTargetSessionKey?.trim() || params.sessionKey}:${params.interaction.id}`,
+      replyId: "status",
+      replyText,
+    });
+  };
   if (statusReply && hasRenderableReplyPayload(statusReply)) {
-    const delivered = await deliverDiscordInteractionReply({
+    await deliverDiscordInteractionReply({
       interaction: params.interaction,
       payload: statusReply,
       mediaLocalRoots: params.mediaLocalRoots,
       ...resolveDiscordInteractionReplyOptions(params),
       preferFollowUp: params.preferFollowUp,
       responseEphemeral: params.responseEphemeral,
+      onDelivered: recordReply,
     });
-    if (delivered && statusReply.text) {
-      await recordDeliveredCommandExchange({
-        config: params.cfg,
-        agentId: params.effectiveRoute.agentId,
-        sessionKey: params.commandTargetSessionKey?.trim() || params.sessionKey,
-        commandText: "/status",
-        commandId: `discord:${params.accountId}:${params.commandTargetSessionKey?.trim() || params.sessionKey}:${params.interaction.id}`,
-        replyId: "status",
-        replyText: statusReply.text,
-      });
-    }
   } else {
     const delivered = await params.respond("Status unavailable.");
     if (delivered) {
-      await recordDeliveredCommandExchange({
-        config: params.cfg,
-        agentId: params.effectiveRoute.agentId,
-        sessionKey: params.commandTargetSessionKey?.trim() || params.sessionKey,
-        commandText: "/status",
-        commandId: `discord:${params.accountId}:${params.commandTargetSessionKey?.trim() || params.sessionKey}:${params.interaction.id}`,
-        replyId: "status",
-        replyText: "Status unavailable.",
-      });
+      await recordReply("Status unavailable.");
     }
   }
   return { accepted: true, effectiveRoute: params.effectiveRoute };

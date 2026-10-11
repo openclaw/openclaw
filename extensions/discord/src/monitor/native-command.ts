@@ -554,18 +554,7 @@ async function dispatchDiscordCommandInteraction(
       await settleDiscordInteractionWithoutVisibleReply(interaction);
       return { accepted: true, effectiveRoute };
     }
-    const hasReply = hasRenderableReplyPayload(pluginReply);
-    const delivered = hasReply
-      ? await deliverDiscordInteractionReply({
-          interaction,
-          payload: pluginReply,
-          ...resolveDiscordInteractionReplyOptions({ cfg, discordConfig, accountId }),
-          preferFollowUp,
-          responseEphemeral,
-        })
-      : await respond(DISCORD_EMPTY_VISIBLE_REPLY_WARNING);
-    const replyText = hasReply ? pluginReply.text : DISCORD_EMPTY_VISIBLE_REPLY_WARNING;
-    if (delivered && replyText) {
+    const recordReply = async (replyText: string) => {
       await recordDeliveredCommandExchange({
         config: cfg,
         agentId: pluginCommandAgentId,
@@ -576,6 +565,18 @@ async function dispatchDiscordCommandInteraction(
         replyId: "plugin-reply",
         replyText,
       });
+    };
+    if (hasRenderableReplyPayload(pluginReply)) {
+      await deliverDiscordInteractionReply({
+        interaction,
+        payload: pluginReply,
+        ...resolveDiscordInteractionReplyOptions({ cfg, discordConfig, accountId }),
+        preferFollowUp,
+        responseEphemeral,
+        onDelivered: recordReply,
+      });
+    } else if (await respond(DISCORD_EMPTY_VISIBLE_REPLY_WARNING)) {
+      await recordReply(DISCORD_EMPTY_VISIBLE_REPLY_WARNING);
     }
     return { accepted: true, effectiveRoute };
   }
