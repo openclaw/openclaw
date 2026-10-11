@@ -144,7 +144,6 @@ export async function runAgentAttempt(
       pluginsEnabled?: boolean;
       metadataSnapshot?: PluginMetadataSnapshot;
       pluginGeneration: PreparedModelRuntimePluginGeneration | undefined;
-      modelFallbacksOverride?: string[];
       sessionHasHistory?: boolean;
       fallbackRuntimeState?: { originRuntime?: "cli" | "embedded" };
       suppressPromptPersistenceOnRetry?: boolean;
@@ -791,6 +790,7 @@ export async function runAgentAttempt(
     toolBindings: params.opts.toolBindings,
     provider: embeddedAgentProvider,
     requestedRouteResolution: "resolved",
+    resolvedModelSelection: params.resolvedModelSelection,
     modelThinkingCapability: params.modelThinkingCapability,
     modelFallbacksOverride: params.modelFallbacksOverride,
     authProfileId,

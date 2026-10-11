@@ -66,7 +66,7 @@ command handling is enabled for the surface.
 
 Command replies delivered through the shared dispatcher are part of the conversation
 on every channel. Native command menus and button selections on Discord and
-Telegram, and Slack argument menus, are also retained after delivery.
+Telegram, Slack argument menus, and Mattermost model pickers are also retained after delivery.
 These exchanges appear in session history and later model context.
 Login codes, pairing codes,
 login URLs, and sensitive `/config set` or `/debug set` values are redacted in the
