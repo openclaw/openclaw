@@ -32,8 +32,9 @@ export async function resolveWorktreeCheckoutKey(
       "GIT_ATTR_SOURCE",
     ].some((key) => process.env[key])
   ) {
-    if (scope === "template")
+    if (scope === "template") {
       setWorktreePreparationTemplate("unavailable", { reason: "git-environment" });
+    }
     return undefined;
   }
   const config = await git.require(
@@ -59,8 +60,9 @@ export async function resolveWorktreeCheckoutKey(
         key,
       )
     ) {
-      if (scope === "template")
+      if (scope === "template") {
         setWorktreePreparationTemplate("unavailable", { reason: "checkout-configuration" });
+      }
       return undefined;
     }
     checkoutConfig.push(field);
@@ -87,8 +89,9 @@ export async function resolveWorktreeCheckoutKey(
     !git.sourceOnly &&
     (await worktreePathExists(path.join(options.commonDir, "info", "attributes")))
   ) {
-    if (scope === "template")
+    if (scope === "template") {
       setWorktreePreparationTemplate("unavailable", { reason: "repository-attributes" });
+    }
     return undefined;
   }
   // Join both probes before returning or throwing, including cancellation, so
@@ -121,10 +124,11 @@ export async function resolveWorktreeCheckoutKey(
       (result.stdout.trim() &&
         (await worktreePathExists(normalizeGitPathForFilesystem(result.stdout.trim()))))
     ) {
-      if (scope === "template")
+      if (scope === "template") {
         setWorktreePreparationTemplate("unavailable", {
           reason: result.code === 0 ? "external-attributes" : "attributes-probe-failed",
         });
+      }
       return undefined;
     }
   }
