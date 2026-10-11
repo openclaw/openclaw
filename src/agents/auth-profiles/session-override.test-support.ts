@@ -68,6 +68,7 @@ vi.mock("./source-check.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./source-check.js")>()),
   hasAnyAuthProfileStoreSourceAsync: authStoreMocks.hasAnyAuthProfileStoreSourceAsync,
 }));
+// mock-isolation: keep credential reads in the fixture auth store.
 vi.mock("./store-runtime.js", () => ({
   ensureAuthProfileStore: authStoreMocks.ensureAuthProfileStore,
   loadAuthProfileStoreForRuntimeAsync: async () => authStoreMocks.state.store,
