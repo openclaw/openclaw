@@ -93,16 +93,20 @@ openclaw-mermaid > .preview img {
   max-height: 480px;
   object-fit: contain;
 }
-openclaw-mermaid > pre {
+openclaw-mermaid > .source {
   margin: 0;
   padding: 36px 16px 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   overflow: auto;
   max-height: 480px;
   font: 12px/1.6 var(--mono);
   tab-size: 2;
 }
-openclaw-mermaid > pre > code {
-  font: inherit;
+openclaw-mermaid > .source > code {
+  font-family: monospace;
+  font-size: inherit;
 }
 openclaw-mermaid > .status {
   margin: 0;
@@ -120,7 +124,7 @@ openclaw-mermaid > .status {
     pointer-events: auto;
   }
   openclaw-mermaid > .preview,
-  openclaw-mermaid > pre,
+  openclaw-mermaid > .source,
   openclaw-mermaid > .status {
     padding-top: 44px;
   }

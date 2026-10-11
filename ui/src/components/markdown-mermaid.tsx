@@ -235,7 +235,7 @@ function MermaidContent(props: MermaidProps, host: MermaidElement) {
           </Show>
         }
       >
-        <pre>
+        <pre class="source">
           <code>{props.source}</code>
         </pre>
       </Show>
