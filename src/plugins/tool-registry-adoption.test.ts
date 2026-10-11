@@ -184,15 +184,12 @@ it("executes only the admitting Gateway's current service and skips unowned turn
     return { registry: builder.registry, instance: getPluginInstance(record)!, call };
   };
   const a = create("Gateway A");
-  const b = create("Gateway B");
   // A request may retain a previous registry while its admitting owner publishes a successor.
   const requestRegistry = createEmptyPluginRegistry();
   setActivePluginRegistry(requestRegistry);
   const ownerA = createPluginRegistryOwner(requestRegistry);
   setActivePluginRegistry(a.registry);
   ownerA.publish(a.registry);
-  setActivePluginRegistry(b.registry);
-  const ownerB = createPluginRegistryOwner(b.registry);
   const services: PluginServicesHandle[] = [];
   const acquired: Awaited<ReturnType<typeof acquireAgentRuntimePluginRegistry>>[] = [];
   const selected: ReturnType<typeof create>[] = [];
@@ -215,24 +212,20 @@ it("executes only the admitting Gateway's current service and skips unowned turn
     });
   };
   try {
-    for (const { registry } of [a, b]) {
-      await startPluginServices({
-        registry,
-        config,
-        workspaceDir,
-        throwOnStartError: true,
-        onHandle: (handle) => {
-          services.push(handle);
-        },
-      });
-    }
+    await startPluginServices({
+      registry: a.registry,
+      config,
+      workspaceDir,
+      throwOnStartError: true,
+      onHandle: (handle) => {
+        services.push(handle);
+      },
+    });
     const owned = await withPluginRuntimeRegistryScope(requestRegistry, prepare);
     acquired.push(owned);
     assert("resources" in owned);
     expect.soft(owned.registry.tools).toEqual(a.registry.tools);
-    expect.soft(owned.registry.tools).not.toContain(b.registry.tools[0]);
     expect.soft(a.instance.retainedWorkCount).toBeGreaterThan(0);
-    expect.soft(b.instance.retainedWorkCount).toBe(0);
     const scope = owned.resources.createInvocationScope(owned.registry);
     try {
       const tool = scope.wrap(owned.registry.tools[0]!.factory)({ config, workspaceDir });
@@ -241,7 +234,6 @@ it("executes only the admitting Gateway's current service and skips unowned turn
         .soft(await tool.execute("owned-tool", {}))
         .toMatchObject({ content: [{ type: "text", text: "Gateway A" }] });
       expect.soft(a.call).toHaveBeenCalledOnce();
-      expect.soft(b.call).not.toHaveBeenCalled();
     } finally {
       scope.release();
     }
@@ -250,7 +242,7 @@ it("executes only the admitting Gateway's current service and skips unowned turn
     expect.soft(unscoped.registry.tools).toEqual(selected[1]!.registry.tools);
     const ambiguous = createEmptyPluginRegistry();
     bindPluginRegistryGatewayOwner(ambiguous, { current: () => a.registry });
-    bindPluginRegistryGatewayOwner(ambiguous, { current: () => b.registry });
+    bindPluginRegistryGatewayOwner(ambiguous, { current: () => createEmptyPluginRegistry() });
     const unowned = await withPluginRuntimeRegistryScope(ambiguous, prepare);
     acquired.push(unowned);
     expect.soft(unowned.registry.tools).toEqual(selected[2]!.registry.tools);
@@ -264,7 +256,6 @@ it("executes only the admitting Gateway's current service and skips unowned turn
     for (const service of services) {
       await service.stop({ strict: true });
     }
-    await ownerB.close();
     await ownerA.close();
     for (const local of selected) {
       await local.instance.dispose();

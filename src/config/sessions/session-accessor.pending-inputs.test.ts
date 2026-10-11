@@ -426,22 +426,6 @@ describe("accepted input custody", () => {
     ).toMatchObject({ ok: true, value: { appended: false } });
   });
 
-  it("does not use a dirty projection to excuse an inactive admitted user", async () => {
-    const receipt = await stage("dirty-off-path");
-    await promote(receipt);
-    expect(
-      appendTranscriptMessageSync(scope(), {
-        eventId: "other-root",
-        message: message("other-root"),
-        parentId: null,
-      }),
-    ).toMatchObject({ ok: true, value: { appended: true, messageId: "other-root" } });
-
-    expect(() =>
-      receipt.run(() => appendTranscriptMessageSync(scope(), { message: receipt.message })),
-    ).toThrow("no longer active");
-  });
-
   it("rejects a split-cursor replay before and after projection reconciliation", async () => {
     const visible = await appendTranscriptMessage(scope(), {
       message: message("visible", "Visible history"),

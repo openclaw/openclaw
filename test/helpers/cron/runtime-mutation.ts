@@ -115,6 +115,9 @@ export function observeCronJobCommits(
     .spyOn(cronStore, "noteCronJobsStoreCommit")
     .mockImplementation((storeKey) => {
       noteCommit(storeKey);
+      if (storeKey === undefined) {
+        return;
+      }
       const row = read(storeKey);
       const current = JSON.stringify(row);
       if (current === previous.get(storeKey) || typeof row?.state_json !== "string") {

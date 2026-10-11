@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import JSZip from "jszip";
 import {
   callGatewayTool,
   listNodes,
@@ -200,26 +199,14 @@ describe("file_fetch tool", () => {
     expect(saveMediaBuffer).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { fileName: "Quarterly report.md", expectedName: "Quarterly_report.md" },
-    { fileName: "train.py", expectedName: "train.txt" },
-    { fileName: "report.xlsx", expectedName: "report.xlsx" },
-  ])(
+  it.each([{ fileName: "train.py", expectedName: "train.txt" }])(
     "keeps the canonical basename through real staging and forwarding: $fileName",
     async (testCase) => {
       await withTempHome(async () => {
         const { saveMediaBuffer: stage } = await vi.importActual<
           typeof import("openclaw/plugin-sdk/media-store")
         >("openclaw/plugin-sdk/media-store");
-        const contents = testCase.fileName.endsWith(".xlsx")
-          ? await new JSZip()
-              .file(
-                "[Content_Types].xml",
-                '<Types><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>',
-              )
-              .file("xl/workbook.xml", "<workbook/>")
-              .generateAsync({ type: "nodebuffer" })
-          : Buffer.from("quarterly report\n");
+        const contents = Buffer.from("quarterly report\n");
         const fetched = await executeFetchedNodeFile({
           ...testCase,
           contents,

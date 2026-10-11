@@ -7,6 +7,7 @@ import {
   type SessionCapability,
 } from "../../lib/sessions/index.ts";
 import { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts";
+import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { resetChatHistoryProjection, setChatError } from "./chat-history-state.ts";
@@ -192,7 +193,6 @@ export async function clearChatHistory(
     runId,
     sessionKey,
     clearLocalRun: true,
-    clearChatStream: true,
     clearToolStream: true,
     clearRunStatus: !hadActiveRun,
   });
@@ -207,10 +207,7 @@ export async function clearChatHistory(
 function captureChatHistoryView(state: ChatState) {
   const sessionKey = state.sessionKey;
   const agentParams = scopedAgentParamsForSession(state, sessionKey);
-  const client = state.client;
-  const connectionEpoch = state.connectionEpoch;
-  const connectionIsCurrent = () =>
-    state.connected && state.client === client && state.connectionEpoch === connectionEpoch;
+  const connectionIsCurrent = captureChatConnectionOwner(state);
   const viewMatches = () => visibleSessionMatches(state, sessionKey, agentParams.agentId);
   const viewIsCurrent = () => connectionIsCurrent() && viewMatches();
   return { sessionKey, agentParams, connectionIsCurrent, viewMatches, viewIsCurrent };

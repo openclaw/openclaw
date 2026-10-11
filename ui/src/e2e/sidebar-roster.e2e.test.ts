@@ -197,10 +197,10 @@ suite.define(() => {
         await expect.poll(() => sessionRows.count()).toBe(8);
         expect(await sidebar.locator(".sidebar-footer-bar__home").count()).toBe(1);
         await expectWorkspace();
-        expect(await sidebar.locator(".sidebar-session-toolbar").count()).toBe(0);
-        expect(await sidebar.locator(".sidebar-brand__actions .sidebar-session-sort").count()).toBe(
-          1,
-        );
+        expect(await sidebar.locator(".sidebar-session-toolbar").count()).toBe(1);
+        expect(
+          await sidebar.locator(".sidebar-session-toolbar .sidebar-session-sort").count(),
+        ).toBe(1);
         for (const agent of agentsList.agents) {
           const group = sidebar.locator(`[data-agent-group="${agent.id}"]`);
           const pin = sidebar.locator(
@@ -320,8 +320,8 @@ suite.define(() => {
         await expect.poll(() => workspaceMenu.count()).toBe(0);
         await expectFocused(workspace);
 
-        await sidebar.locator(".sidebar-brand__new-thread").click();
-        const newMenu = sidebar.locator(".sidebar-brand .sidebar-new-session-menu");
+        await sidebar.locator(".sidebar-session-toolbar .sidebar-new-session").click();
+        const newMenu = sidebar.locator(".sidebar-new-session-menu");
         await expect.poll(() => newMenu.locator("wa-dropdown-item").first().isVisible()).toBe(true);
         expect(
           await newMenu
@@ -475,7 +475,8 @@ suite.define(() => {
         const drawerToggle = page
           .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
           .first();
-        await drawerToggle.click();
+        // Keep keyboard navigation free of hover tooltips while the drawer slides in.
+        await drawerToggle.press("Enter");
         for (const trigger of [chip, workspace]) {
           if (trigger === workspace) {
             await chip.press("Enter");

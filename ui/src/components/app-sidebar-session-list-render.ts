@@ -20,7 +20,6 @@ import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog
 import type { SidebarSessionCatalog } from "./app-sidebar-session-catalogs.ts";
 import {
   renderPersonalSessionEmpty,
-  renderSessionListToolbar,
   renderSessionMutationError,
 } from "./app-sidebar-session-filter-summary.ts";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
@@ -670,7 +669,6 @@ export function renderSessionListFrame(host: SidebarSessionListHost, body: unkno
       @dragleave=${(event: DragEvent) => host.sessionOrganizer.handleSessionListDragLeave(event)}
       @drop=${(event: DragEvent) => host.sessionOrganizer.handleSessionListDrop(event)}
     >
-      ${host.sidebarAgentsMode === "roster" ? nothing : renderSessionListToolbar(host)}
       ${
         host.sessionData.sessionsStartingUp && !host.sidebarSnapshot
           ? html`<div

@@ -20,7 +20,6 @@ import {
   type SessionTranscriptRawDeltaResult,
   type SessionTranscriptVisibleMessageDeltaLimits,
 } from "../config/sessions/session-accessor.js";
-import { normalizeRawDeltaLimits } from "../config/sessions/session-accessor.sqlite-raw-delta-read.js";
 import { normalizeVisibleDeltaLimits } from "../config/sessions/session-accessor.sqlite-visible-cursor.js";
 import type { LockedTranscriptMessageAppendOptions } from "../config/sessions/session-accessor.types.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -34,6 +33,7 @@ import { readLatestTranscriptAssistantTextAsync } from "../config/sessions/sessi
 import { withSessionTranscriptDeltaReader } from "../config/sessions/session-transcript-delta-read.js";
 import { prepareSessionTranscriptHydration } from "../config/sessions/session-transcript-hydration.js";
 import { assertLegacyTranscriptPreparation } from "../config/sessions/session-transcript-preparation.js";
+import { normalizeRawDeltaLimits } from "../config/sessions/session-transcript-raw-cursor.js";
 import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   resolveMirroredTranscriptText,
@@ -735,3 +735,5 @@ function projectVisibleMessageEntry(entry: {
     },
   ];
 }
+
+export { recordDeliveredCommandExchange } from "../config/sessions/command-transcript.js";

@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   markManagedWorktreePreparation,
   setWorktreePreparationTemplate,
+  startWorktreePreparationPhase,
   timeWorktreePreparationPhase,
   withWorktreePreparationTiming,
 } from "./preparation-timing.js";
@@ -29,7 +30,7 @@ it("attributes nested preparation once per owner and retains failed phase time",
   await expect(
     withWorktreePreparationTiming("sandbox", async () => {
       markManagedWorktreePreparation();
-      setWorktreePreparationTemplate("warm");
+      setWorktreePreparationTemplate("warm", { reason: "ready", backend: "btrfs", cloneBytes: 42 });
       await timeWorktreePreparationPhase("templateApply", async () => {
         clock += 12;
         await withWorktreePreparationTiming("managed", async () => {
@@ -51,8 +52,10 @@ it("attributes nested preparation once per owner and retains failed phase time",
         consoleMessage: expect.stringContaining('phaseDurationsMs={"checkout":40}'),
         kind: "managed",
         template: "unavailable",
+        templateDetails: { reason: "not-requested" },
         outcome: "returned",
         durationMs: 40,
+        unattributedMs: 0,
         phaseDurationsMs: { checkout: 40 },
       },
     ],
@@ -64,8 +67,10 @@ it("attributes nested preparation once per owner and retains failed phase time",
         ),
         kind: "sandbox",
         template: "warm",
+        templateDetails: { reason: "ready", backend: "btrfs", cloneBytes: 42 },
         outcome: "threw",
         durationMs: 60,
+        unattributedMs: 0,
         phaseDurationsMs: { templateApply: 52, containerStart: 8 },
       },
     ],
@@ -77,6 +82,9 @@ it("attributes nested preparation once per owner and retains failed phase time",
     details: {
       kind: "sandbox",
       template: "warm",
+      "template.reason": "ready",
+      "template.backend": "btrfs",
+      "template.cloneBytes": 42,
       outcome: "threw",
       templateApply: 52,
       containerStart: 8,
@@ -95,4 +103,26 @@ it("omits unmanaged sandboxes and preserves results if a diagnostics sink fails"
   await expect(withWorktreePreparationTiming("managed", async () => "ready")).resolves.toBe(
     "ready",
   );
+});
+
+it("reports uncovered time without double-counting overlapping phases", async () => {
+  let clock = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => clock);
+  await withWorktreePreparationTiming("managed", async () => {
+    clock = 10;
+    const finishBase = startWorktreePreparationPhase("base");
+    clock = 20;
+    const finishWait = startWorktreePreparationPhase("baseWait");
+    clock = 40;
+    finishBase();
+    finishBase();
+    clock = 50;
+    finishWait();
+    clock = 60;
+  });
+  expect(observations.log.mock.calls[0]?.[1]).toMatchObject({
+    durationMs: 60,
+    unattributedMs: 20,
+    phaseDurationsMs: { base: 30, baseWait: 30 },
+  });
 });

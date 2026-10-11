@@ -581,9 +581,21 @@ defineDiscordVoiceTests(
       );
 
       await manager.autoJoin();
-      await manager.destroy();
-
       expect(client.rest.get).toHaveBeenCalledTimes(24);
+      for (let pass = 0; pass < 2; pass += 1) {
+        const before = client.rest.get.mock.calls.length;
+        await manager.autoJoin();
+        const calls = client.rest.get.mock.calls.slice(before);
+        expect(calls.length).toBeLessThanOrEqual(32);
+        expect(new Set(calls.map(([path]) => String(path).split("/")[2])).size).toBeLessThanOrEqual(
+          4,
+        );
+      }
+      const visitedGuilds = new Set(
+        client.rest.get.mock.calls.map(([path]) => String(path).split("/")[2]),
+      );
+      expect(visitedGuilds.size).toBe(10);
+      await manager.destroy();
     });
 
     it("keeps followed voice state when reconciliation hits a transient REST failure", async () => {
@@ -641,13 +653,14 @@ defineDiscordVoiceTests(
       );
 
       await manager.autoJoin();
-      expect(client.rest.get).toHaveBeenCalledTimes(31);
+      expect(client.rest.get).toHaveBeenCalledTimes(32);
       expect(joinVoiceChannelMock).not.toHaveBeenCalled();
 
       await manager.autoJoin();
       await manager.destroy();
 
-      expect(client.rest.get).toHaveBeenCalledTimes(62);
+      // The bot slot needs no REST lookup after the followed user was found.
+      expect(client.rest.get).toHaveBeenCalledTimes(63);
       expect(joinVoiceChannelMock).toHaveBeenCalledWith(
         expect.objectContaining({ guildId: "g1", channelId: "1001" }),
       );
@@ -675,17 +688,17 @@ defineDiscordVoiceTests(
       );
 
       await manager.autoJoin();
-      expect(client.rest.get).toHaveBeenCalledTimes(31);
+      expect(client.rest.get).toHaveBeenCalledTimes(32);
       expect(joinVoiceChannelMock).not.toHaveBeenCalled();
 
       await manager.autoJoin();
       await manager.destroy();
 
-      expect(client.rest.get).toHaveBeenCalledTimes(62);
-      expect(client.rest.get.mock.calls.slice(0, 31)).toEqual(
+      expect(client.rest.get).toHaveBeenCalledTimes(64);
+      expect(client.rest.get.mock.calls.slice(0, 32)).toEqual(
         expect.arrayContaining([[expect.stringContaining("/guilds/g1/voice-states/u1")]]),
       );
-      expect(client.rest.get.mock.calls.slice(31)).toEqual(
+      expect(client.rest.get.mock.calls.slice(32)).toEqual(
         expect.arrayContaining([[expect.stringContaining("/guilds/g2/voice-states/u1")]]),
       );
       expect(joinVoiceChannelMock).toHaveBeenCalledWith(

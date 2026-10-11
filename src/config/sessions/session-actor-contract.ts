@@ -1,11 +1,13 @@
 import type { RestartRecoveryTerminalDeliveryClaim } from "./restart-recovery-receipt-state.js";
 import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
 import type {
+  SessionActorAuthority,
   SessionActorTarget,
   SessionActorVersion,
   SessionActorLifetime,
   SessionActorHotState,
 } from "./session-actor-state.types.js";
+import type { SessionActorStorage } from "./session-actor-storage-contract.js";
 import type { SessionEntryBookkeepingReducer } from "./session-entry-patch-operation.js";
 import type {
   InitialSessionEntryCommit,
@@ -29,23 +31,14 @@ import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type {
+  SessionActorAuthority,
+  SessionActorAuthorityFacts,
   SessionActorTarget,
   SessionActorVersion,
   SessionActorLifetime,
   SessionActorHotState,
   SessionActorSettlement,
 } from "./session-actor-state.types.js";
-
-/** Host-owned live authority, rechecked at both synchronous admission boundaries. */
-export type SessionActorAuthority = {
-  assertCurrent(): void;
-  authorize(
-    stage: "transaction" | "commit",
-    facts: SessionActorHotState,
-    /** Existing kernel source/custody evidence remains subject to its owner's checks. */
-    publication?: unknown,
-  ): void;
-};
 
 /** Serializable, pure bookkeeping. These reducers cannot change session identity or authority. */
 export type SessionActorReducer = SessionEntryBookkeepingReducer;
@@ -327,6 +320,8 @@ type SessionActorCommands = {
 export type SessionActor = SessionActorLifetime &
   SessionActorCommands & {
     readonly target: SessionActorTarget;
+    /** Present only when the selected backend owns the storage domain. */
+    readonly storage?: SessionActorStorage;
     /** Detached installed MAIN state; undefined means fenced/missing. Never opens SQLite or dispatches a worker request. */
     snapshot(authority: SessionActorAuthority): SessionActorHotState | undefined;
     read(authority: SessionActorAuthority): Promise<SessionActorHotState>;

@@ -7,6 +7,8 @@ import {
   type CommandArgs,
 } from "openclaw/plugin-sdk/command-auth-native";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   Button,
@@ -50,6 +52,7 @@ import {
   resolveDiscordModelPickerPreferenceScope,
   resolveDiscordModelPickerRoute,
 } from "./native-command-model-picker-ui.js";
+import { formatDiscordCommandComponents } from "./native-command-reply.js";
 import type {
   DiscordCommandArgContext,
   SafeDiscordInteractionCall,
@@ -223,7 +226,12 @@ async function handleDiscordModelPickerInteraction(
     accountId: ctx.accountId,
     threadBindings: ctx.threadBindings,
   });
-  const sessionEntry = createDiscordModelPickerSessionReader({ cfg, route }, "latest")();
+  const sessionEntry = await getSessionEntryAsync({
+    agentId: route.agentId,
+    storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
+    sessionKey: route.sessionKey,
+    readConsistency: "latest",
+  });
   const pickerData = await loadDiscordModelPickerData(cfg, route.agentId, { sessionEntry });
   const tokenModel = parsed.modelToken
     ? resolveDiscordModelPickerModelRefByToken(pickerData, parsed.modelToken)
@@ -252,10 +260,36 @@ async function handleDiscordModelPickerInteraction(
     allowedModelRefs,
     limit: 5,
   });
-  const updatePicker = async (payload: MessagePayload) =>
-    await params.safeInteractionCall("model picker update", () => interaction.editReply(payload));
-  const showNotice = async (message: string) =>
-    await updatePicker(buildDiscordModelPickerNoticePayload(message));
+  const recordReply = async (commandText: string, replyText: string, replyId: string) =>
+    await recordDeliveredCommandExchange({
+      config: cfg,
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      expectedSessionId: sessionEntry?.sessionId,
+      commandText,
+      commandId: `discord:${ctx.accountId}:${route.sessionKey}:${interaction.id}`,
+      replyId,
+      replyText,
+    });
+  const updatePicker = async (payload: MessagePayload, capture = true) => {
+    const delivered = await params.safeInteractionCall("model picker update", () =>
+      interaction.editReply(payload),
+    );
+    if (delivered !== null && capture) {
+      await recordReply(
+        `/${parsed.command}`,
+        typeof payload === "string"
+          ? payload
+          : [payload.content, formatDiscordCommandComponents(payload.components ?? [])]
+              .filter(Boolean)
+              .join("\n"),
+        "picker-update",
+      );
+    }
+    return delivered;
+  };
+  const showNotice = async (message: string, capture = true) =>
+    await updatePicker(buildDiscordModelPickerNoticePayload(message), capture);
   const renderContext = {
     command: parsed.command,
     userId: parsed.userId,
@@ -509,7 +543,7 @@ async function handleDiscordModelPickerInteraction(
       return;
     }
 
-    const updateResult = await showNotice(`Applying model change to ${resolvedModelRef}...`);
+    const updateResult = await showNotice(`Applying model change to ${resolvedModelRef}...`, false);
     if (updateResult === null) {
       return;
     }
@@ -545,12 +579,15 @@ async function handleDiscordModelPickerInteraction(
         }),
     });
 
-    await params.safeInteractionCall("model picker follow-up", () =>
+    const delivered = await params.safeInteractionCall("model picker follow-up", () =>
       interaction.followUp({
         ...buildDiscordModelPickerNoticePayload(applyResult.noticeMessage),
         ephemeral: true,
       }),
     );
+    if (delivered !== null) {
+      await recordReply(selectionCommand.prompt, applyResult.noticeMessage, "selection");
+    }
     return;
   }
 

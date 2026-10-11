@@ -230,6 +230,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/config/sessions/session-accessor.sqlite-lifecycle-state.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["assertRawSessionEntryRemovalUnchanged"],
+        evidence:
+          "Doctor-only raw-row removal: commands/doctor-session-canonical-keys.ts constructs expectedRawEntryJson; lifecycle-state.ts and projection-state.ts call this guard only for that removal variant. Ordinary lifecycle reads and writes remain T1.",
+      },
+    ],
+  ],
+  [
     "src/agents/auth-profiles/sqlite-json.ts",
     [
       {
@@ -594,6 +605,36 @@ const reviewedOperations = new Map([
         ],
         evidence:
           "state-read.worker.ts:334 and state-worker-runtime.ts:222; readSessionGroupCatalogEntry stays T1 for native incognito categories",
+      },
+    ],
+  ],
+  [
+    "src/gateway/github-publication-store.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "listSharedGitHubPublicationsInDatabase",
+          "markSharedGitHubPublicationReportedInDatabase",
+          "assertSharedGitHubPublicationClaimInDatabase",
+          "bindAcceptedGitHubPublicationClaimSnapshotInDatabase",
+        ],
+        evidence:
+          "List is called by state/github-publication.read.worker.ts and github-publication-defer.kernel.ts whose selector only runs in state/github-publication.worker.ts. Report/snapshot are called only by that mutation worker; claim assertion by its snapshot kernel and state/github-publication-request.worker.ts. Native store adapters remain T1.",
+      },
+    ],
+  ],
+  [
+    "src/gateway/github-repository-publication-store.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "markRepositoryGitHubPublicationReportedInDatabase",
+          "failStaleRepositoryGitHubPublicationInDatabase",
+        ],
+        evidence:
+          "Only state/github-publication.worker.ts repositoryMutation report/retire calls these kernels. Native stale-request and reporting adapters retain their separate SQL and T1 classification.",
       },
     ],
   ],
@@ -1050,7 +1091,13 @@ const reviewedOperations = new Map([
           "compareAndCertifyCanonicalSessionValidationBatch",
         ],
         evidence:
-          "Only session-accessor.sqlite-mutation-worker.runtime.ts:375,280,381 calls these operations in the mutation-worker message handler. Shared host readiness hasPendingCanonicalSessionValidation stays T1.",
+          "Only session-accessor.sqlite-mutation-worker.runtime.ts:375,280,381 calls these operations in the mutation-worker message handler.",
+      },
+      {
+        tier: "T2",
+        operations: ["hasPendingCanonicalSessionValidation"],
+        evidence:
+          "Native readiness is startup-migration.ts:359 via session-canonical-validation-readiness.ts:91. Runtime request-authorization.ts:461 and session-row-prepared-read.ts:240 pass captured PendingCanonicalValidation.source and skip that probe; the other caller is the mutation worker's has-pending operation.",
       },
     ],
   ],
@@ -1079,6 +1126,15 @@ const reviewedOperations = new Map([
   [
     "src/gateway/github-personal-publication-store.ts",
     [
+      {
+        tier: "W",
+        operations: [
+          "requirePersonalGitHubPublicationConfirmationInDatabase",
+          "markPersonalGitHubPublicationReportedInDatabase",
+        ],
+        evidence:
+          "Only state/github-publication.worker.ts personalMutation restart/report calls these kernels. Native confirmation and reporting adapters retain their separate SQL and existing classification.",
+      },
       {
         tier: "T2",
         operations: ["requirePersonalGitHubPublicationConfirmation"],
@@ -2233,6 +2289,7 @@ const workerModules = new Set([
   "extensions/memory-core/src/memory/manager-embedding-cache.ts", // Cache SQL, including iterator reads, is called only by manager-publication.worker.ts.
   "extensions/memory-core/src/memory/manager-source-index-kernel.ts", // Hash reads and source mutations are called only by manager-publication.worker.ts.
   "extensions/memory-core/src/memory/manager-retrieval-read.ts", // Search and publication workers own all SQL; host imports are types or the metadata key.
+  "extensions/memory-core/src/memory/manager-vector-rebuild-state.ts", // Retrieval, source-index and database-publication kernels run in the search/publication workers; the host consumes published vector facts.
 
   "extensions/workboard/src/sqlite-store-kernel.ts", // Workboard SQLite worker backend factory only.
   "extensions/workboard/src/sqlite-store-sessions-board.ts", // Workboard worker kernel sessions-board store only.
@@ -2323,6 +2380,7 @@ const workerModules = new Set([
 
   "src/state/backup-run-records.kernel.ts", // Backup record writes are called only by the shared-state worker runtime.
   "src/state/github-personal-publication-lifecycle.ts", // Receipt SQL runs in shared-state worker dispatch; host helper enqueues commands.
+  "src/state/github-publication-source.kernel.ts", // Only github-publication-source.worker.ts:63,80; its reader is instantiated by openclaw-state.worker.ts:234.
   "src/state/openclaw-state-lease-worker.ts", // Lease transaction dispatch is called only by the shared-state worker backend.
   "src/state/openclaw-state-worker-runtime.ts",
   "src/state/session-repository-workspaces.kernel.ts", // SQL callers are shared-state workspace dispatch and the state read worker.

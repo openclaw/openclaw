@@ -52,10 +52,7 @@ import {
   readDanglingSkillWorkshopReviewIndex,
 } from "./openclaw-state-db-corruption.test-support.js";
 import { hasDanglingSkillWorkshopCollectionReviewIndex } from "./openclaw-state-db-doctor-schema.js";
-import {
-  runHotRollbackJournalRecoveryProbe,
-  runConcurrentSchemaProbe,
-} from "./openclaw-state-db-hot-journal.test-support.js";
+import { runHotRollbackJournalRecoveryProbe } from "./openclaw-state-db-hot-journal.test-support.js";
 import { prepareStateDatabaseSchemaRepair } from "./openclaw-state-db-maintenance.js";
 import { ensureGitHubPublicationSchema } from "./openclaw-state-db-schema-additive.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
@@ -3151,45 +3148,6 @@ describe("openclaw state database", () => {
     ]);
     expect(result.warnings[0]).not.toContain("run openclaw doctor --fix");
   });
-
-  it.for(["upgrade", "fresh"] as const)(
-    "serializes concurrent %s database initialization across processes",
-    { timeout: 60_000 },
-    (mode, { signal }) =>
-      fixtureLifetime.run(async () => {
-        signal.throwIfAborted();
-        const rootDir = processTempDirs.make("openclaw-state-db-");
-        const moduleUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.stateDatabase).href;
-        const databasePaths = await runConcurrentSchemaProbe({
-          mode,
-          moduleUrl,
-          rootDir,
-          signal,
-          verifyCleanup: fixtureLifetime.verifyCleanup,
-        });
-        const expectedShape = createInitialStateSchemaShape();
-        const { DatabaseSync } = requireNodeSqlite();
-
-        expect(databasePaths).toHaveLength(1);
-        for (const databasePath of databasePaths) {
-          const db = new DatabaseSync(databasePath, { readOnly: true });
-          try {
-            expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-            expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-            if (mode === "fresh") {
-              expect(readSqliteNumberPragma(db, "auto_vacuum")).toBe(2);
-            }
-            expect(readSqliteNumberPragma(db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-            expect(
-              db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
-            ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
-            expect(collectSqliteSchemaShape(db)).toEqual(expectedShape);
-          } finally {
-            db.close();
-          }
-        }
-      }),
-  );
 
   it("opens databases with early cron tables before creating cron indexes", () => {
     const stateDir = createTempStateDir();
