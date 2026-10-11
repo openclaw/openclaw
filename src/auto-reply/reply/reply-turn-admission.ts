@@ -544,7 +544,12 @@ export async function admitReplyTurn(
           throw error;
         }
         const { operationAdmission, releaseWorkerDatabaseClaim } =
-          bindReplyOperationDatabaseAdmission(operation, params, admission, admittedDatabaseClaim);
+          bindReplyOperationDatabaseAdmission(
+            operation,
+            { sessionKey: params.sessionKey, workSignal },
+            admission,
+            admittedDatabaseClaim,
+          );
         if (releaseWorkerDatabaseClaim) {
           const admittedOperation = operation;
           let releasingForRestart = false;
