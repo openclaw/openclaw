@@ -7,6 +7,7 @@ import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayTlsParams
 import ai.openclaw.app.gateway.isLocalCleartextGatewayHost
 import ai.openclaw.app.gateway.isLoopbackGatewayHost
+import ai.openclaw.app.gatewayControlPageBaseUrl
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.protocol.OpenClawCapability
@@ -103,6 +104,66 @@ class ConnectionManagerTest {
 
   @Test
   fun resolveTlsParamsForEndpoint_discoveryPrivateLanWithoutHintsStillRequiresTls() = assertDiscoveredHostRequiresTls("192.168.1.20")
+
+  @Test
+  fun controlPageIsHttpsWhenDiscoveredLanOmitsTlsAdvertisement() {
+    val endpoint = discoveredControlPageEndpoint("192.168.1.20")
+    val tls =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = null,
+        manualTlsEnabled = false,
+      )
+    assertEquals("https://192.168.1.20:18789", gatewayControlPageBaseUrl(endpoint, tls))
+  }
+
+  @Test
+  fun controlPageStaysHttpForDiscoveredLoopbackWithoutPin() {
+    val endpoint = discoveredControlPageEndpoint("127.0.0.1")
+    val tls =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = null,
+        manualTlsEnabled = false,
+      )
+    assertEquals("http://127.0.0.1:18789", gatewayControlPageBaseUrl(endpoint, tls))
+  }
+
+  @Test
+  fun controlPageIsHttpsWhenLoopbackHasStoredPin() {
+    val endpoint = discoveredControlPageEndpoint("127.0.0.1")
+    val tls =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = "pinned",
+        manualTlsEnabled = false,
+      )
+    assertEquals("https://127.0.0.1:18789", gatewayControlPageBaseUrl(endpoint, tls))
+  }
+
+  @Test
+  fun controlPageStaysHttpForManualLanCleartext() {
+    val endpoint = GatewayEndpoint.manual(host = "192.168.1.20", port = 18789, tlsEnabled = false)
+    val tls =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = "pinned",
+        manualTlsEnabled = false,
+      )
+    assertEquals("http://192.168.1.20:18789", gatewayControlPageBaseUrl(endpoint, tls))
+  }
+
+  @Test
+  fun controlPageIsHttpsWhenManualRemoteToggleIsOff() {
+    val endpoint = GatewayEndpoint.manual(host = "example.com", port = 443, tlsEnabled = false)
+    val tls =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = null,
+        manualTlsEnabled = false,
+      )
+    assertEquals("https://example.com:443", gatewayControlPageBaseUrl(endpoint, tls))
+  }
 
   @Test
   fun resolveTlsParamsForEndpoint_discoveryMdnsWithoutHintsStillRequiresTls() = assertDiscoveredHostRequiresTls("gateway.local")
@@ -384,6 +445,15 @@ class ConnectionManagerTest {
 
     assertEquals(permissionSnapshot.gatewayPermissions(), options.permissions)
   }
+
+  private fun discoveredControlPageEndpoint(host: String): GatewayEndpoint =
+    GatewayEndpoint(
+      stableId = "_openclaw-gw._tcp.|local.|Test",
+      name = "Test",
+      host = host,
+      port = 18789,
+      tlsEnabled = false,
+    )
 
   private fun resolveDiscoveredTls(
     host: String,
