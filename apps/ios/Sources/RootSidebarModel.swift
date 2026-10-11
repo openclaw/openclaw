@@ -185,7 +185,34 @@ final class RootSidebarModel {
     }
 
     private(set) var sessions: [OpenClawChatSessionEntry] = [] {
-        didSet { self.updateSnoozeWakeDeadline() }
+        didSet {
+            self.resolvedSessionKeys = [:]
+            self.updateSnoozeWakeDeadline()
+        }
+    }
+
+    /// The drawer asks for the selected and main keys once per row, and each answer scans the roster.
+    @ObservationIgnored private var resolvedSessionKeys: [[String?]: String] = [:]
+
+    func resolvedSessionKey(
+        current: String,
+        mainSessionKey: String,
+        activeAgentID: String?,
+        sessionRoutingContract: String?) -> String
+    {
+        let sessions = self.sessions
+        let inputs = [current, mainSessionKey, activeAgentID, sessionRoutingContract]
+        if let key = self.resolvedSessionKeys[inputs] { return key }
+        let key = ChatSessionSidebarModel.selectedSessionKey(
+            sessions: sessions,
+            currentSessionKey: current,
+            mainSessionKey: mainSessionKey,
+            activeAgentID: activeAgentID,
+            sessionRoutingContract: sessionRoutingContract)
+        // A disconnected roster can stay unchanged across many session switches.
+        if self.resolvedSessionKeys.count >= 32 { self.resolvedSessionKeys.removeAll(keepingCapacity: true) }
+        self.resolvedSessionKeys[inputs] = key
+        return key
     }
 
     private(set) var now: Date = .now
@@ -550,7 +577,7 @@ final class RootSidebarModel {
                 sessions.contains { $0.totalTokensFresh == false })
     }
 
-    private func applyRoster(_ roster: ChatSessionRosterSnapshot) {
+    func applyRoster(_ roster: ChatSessionRosterSnapshot) {
         self.sessions = roster.sessions
         self.isSessionRosterComplete = roster.isComplete
         guard !roster.isComplete, !roster.isCached else {
