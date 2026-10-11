@@ -1,7 +1,6 @@
 import type WaTabGroup from "@awesome.me/webawesome/dist/components/tab-group/tab-group.js";
 import type WaTab from "@awesome.me/webawesome/dist/components/tab/tab.js";
 import { For, Show, createEffect, untrack } from "solid-js";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { reclaimHubTabFocus, rememberHubTabFocus } from "../../components/hub-tabs-focus.ts";
 import {
@@ -121,9 +120,9 @@ export function WorktreesView(props: { model: WorktreesModel }) {
       <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
         <section class="content-header content-header--settings content-header--page hub-page-header sessions-hub-header">
           <div class="hub-page-header__title">
-            <div class="page-title">{titleForRoute("sessions")}</div>
+            <div class="page-title">{t("tabs.sessions")}</div>
             <div class="page-subtitle">
-              {subtitleForRoute("worktrees")}{" "}
+              {t("subtitles.worktrees")}{" "}
               <a
                 class="learn-more-link"
                 href={WORKTREES_DOCS_URL}

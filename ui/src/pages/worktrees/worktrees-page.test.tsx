@@ -5,6 +5,7 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { i18n } from "../../i18n/index.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -151,6 +152,23 @@ afterEach(() => {
 });
 
 describe("WorktreesPage lifecycle", () => {
+  it("updates the shared header when the locale changes", async () => {
+    const page = createWorktreesPage();
+    page.mount();
+    const locale = i18n.getLocale();
+    try {
+      await i18n.setLocale("pt-BR");
+      flush();
+      expect(i18n.t("tabs.sessions")).not.toBe("Sessions");
+      expect(page.element.querySelector(".page-title")?.textContent).toBe(i18n.t("tabs.sessions"));
+      expect(page.element.querySelector(".page-subtitle")?.textContent).toContain(
+        i18n.t("subtitles.worktrees"),
+      );
+    } finally {
+      await i18n.setLocale(locale);
+    }
+  });
+
   it("keeps read-only viewers in browsing mode without branch or mutation RPCs", async () => {
     const record = worktree();
     const request = vi.fn(async (method: string) =>

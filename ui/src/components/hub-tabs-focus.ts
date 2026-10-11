@@ -8,7 +8,11 @@ export function rememberHubTabFocus(hubId: string, tab: string, source: Element)
 }
 
 export function reclaimHubTabFocus(hubId: string, tab: string, element: Element | undefined) {
-  if (!element || pendingFocus?.hubId !== hubId || pendingFocus.tab !== tab) {
+  if (
+    !(element instanceof HTMLElement) ||
+    pendingFocus?.hubId !== hubId ||
+    pendingFocus.tab !== tab
+  ) {
     return;
   }
   const pending = pendingFocus;
@@ -30,7 +34,7 @@ export function reclaimHubTabFocus(hubId: string, tab: string, element: Element 
         currentFocus === document.body ||
         currentFocus === document.documentElement)
     ) {
-      (element as HTMLElement).focus();
+      element.focus();
     }
   }, 0);
 }
