@@ -564,6 +564,7 @@ it("keeps current row facts when the subagent snapshot changes during a list", a
             ),
         );
         replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, label: "Current" });
+        sessionChanges.emit({ ...scope, factsInvalidated: true });
         const result = await listProjectedSessions({ projection, opts: { limit: 1 } });
         expect(result.sessions).toEqual([
           expect.objectContaining({ key: scope.sessionKey, label: "Current" }),

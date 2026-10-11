@@ -226,7 +226,7 @@ authenticates the plugin.
 OpenClaw does not install unknown apps or let the model authorize new plugin
 installs. Owner-approved plugin installation refreshes the target runtime
 inventory. Missing inventory methods, authentication errors, transport
-failures, and connector refresh failures fail closed.
+failures, and connector refresh failures block the request.
 
 ## Scheduled app authority
 
@@ -270,8 +270,8 @@ Codex may discover shared `$HOME/.agents/skills` and
 `$HOME/.agents/plugins/marketplace.json` entries. With
 `appServer.homeScope: "user"`, OpenClaw instead uses the native user Codex
 home and its existing account without injecting an OpenClaw auth profile.
-Canonical `openai/*` chats on a user-home stdio or Unix connection also retain
-the native configured model provider; select the model with the canonical
+Standard `openai/*` chats on a user-home stdio or Unix connection also retain
+the native configured model provider; select the model with the standard
 OpenClaw model ref. Explicit non-OpenAI providers remain explicit. Prepared
 route compatibility and subscription/API-key account checks still apply.
 
@@ -309,7 +309,7 @@ network-family autoselection, environment-proxy, and CA-source options because
 those settings cannot preload code or change module resolution. For example,
 `--dns-result-order=ipv4first --no-network-family-autoselection` is allowed.
 Malformed or unknown options and code-loading options such as `--require` or
-`--import` fail closed. If an inherited option is not needed by Codex, remove
+`--import` are rejected. If an inherited option is not needed by Codex, remove
 `NODE_OPTIONS` with `appServer.clearEnv`.
 
 ## Local testing env overrides

@@ -125,7 +125,9 @@ export async function dispatchCronDelivery(
   let deliveryAttempted = verifiedMessageToolDelivery;
   let deferredDeletingSessionMirror: DirectCronTranscriptMirror | undefined;
   const buildDeliveryState = async (disposition?: CronDeliveryDisposition) => {
-    const executionFailed = disposition?.kind === "error" || agentReportedFailure !== undefined;
+    const executionFailed =
+      (disposition?.kind === "error" && disposition.errorKind !== "delivery-target") ||
+      agentReportedFailure !== undefined;
     const completion = resolveAdmittedCronCompletionStatus(
       params.job,
       executionFailed ? "error" : params.undeliveredRunStatus,

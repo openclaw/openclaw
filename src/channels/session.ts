@@ -37,6 +37,7 @@ export async function recordInboundSession(
     ctx,
     groupResolution,
     createIfMissing,
+    assertCommitAllowed: params.assertAuthority,
   });
   const metaTask = write.catch(async (err: unknown) => {
     try {
@@ -80,5 +81,6 @@ export async function recordInboundSession(
     ctx: targetSessionKey === canonicalSessionKey ? ctx : undefined,
     groupResolution,
     createIfMissing,
+    assertCommitAllowed: params.assertAuthority,
   });
 }

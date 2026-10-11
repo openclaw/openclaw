@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-import { chatMetadataSessionFields } from "../../gateway/server-methods/chat-metadata-contract.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import {
@@ -8,10 +6,7 @@ import {
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-store.js";
-import {
-  isIncognitoSessionKey,
-  resolveIncognitoSessionExpiresAt,
-} from "../../shared/incognito-session-key.js";
+import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseIncognitoIdentity } from "../../state/openclaw-agent-execution-contract.js";
@@ -22,7 +17,6 @@ import {
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { assertSessionCreationLabelAvailable } from "./session-accessor.sqlite-creation-read.js";
 import { readSessionIdentityEvidenceInDatabase } from "./session-accessor.sqlite-entry-availability.js";
-import { projectSessionSharingEntry } from "./session-accessor.sqlite-entry-cache.types.js";
 import { listSqliteSessionEntriesFromDatabase } from "./session-accessor.sqlite-entry-list.read.js";
 import {
   readExactSessionEntryRow,
@@ -33,9 +27,7 @@ import { resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
-import { projectSessionEntryCapabilityFacts } from "./session-entry-capability-facts.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
-import { sessionEntryReadRevision } from "./session-entry-read-revision.js";
 import {
   isIncognitoComputeCommand,
   isIncognitoComputeWrite,
@@ -50,6 +42,10 @@ import { isIncognitoEntryCreationCommand } from "./session-incognito-entry-creat
 import { createIncognitoEntryCreationWorker } from "./session-incognito-entry-creation.worker.js";
 import { isIncognitoEntryPatchCommand } from "./session-incognito-entry-patch-contract.js";
 import { createIncognitoEntryPatchWorker } from "./session-incognito-entry-patch.worker.js";
+import {
+  createIncognitoSessionSnapshotReader,
+  withIncognitoSessionFacts,
+} from "./session-incognito-facts.worker.js";
 import {
   incognitoHistoryKeys,
   isIncognitoHistoryCommand,
@@ -88,7 +84,6 @@ import type {
   PendingInputCustodyGrant,
   PendingInputMutationReceipt,
 } from "./session-pending-input-operations.types.js";
-import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import type { SessionSourceValidation } from "./session-source-authority.js";
 import { prepareSessionTurnPredicates } from "./session-turn-predicate.js";
 import { applySessionTurn, prepareSessionTurn } from "./session-turn.worker.js";
@@ -102,107 +97,10 @@ export function createIncognitoSessionWorker(
   let revision = 0;
   const sessionRevisions = new Map<string, number>();
   const history = createIncognitoHistoryWorker(database, env);
-  const read = (sessionKey: string): IncognitoSessionSnapshot => {
-    const entry = readExactSessionEntryRow(database, sessionKey)?.entry;
-    return {
-      entry,
-      facts: [
-        {
-          identity,
-          sessionKey,
-          revision: sessionRevisions.get(sessionKey) ?? 0,
-          completionSources: history.completionFacts(sessionKey),
-          capability: entry ? projectSessionEntryCapabilityFacts(entry) : undefined,
-          entryReadRevision: entry ? sessionEntryReadRevision(entry) : undefined,
-          chatMetadataRevision: entry
-            ? createHash("sha256")
-                .update(JSON.stringify(chatMetadataSessionFields.map((field) => entry[field])))
-                .digest("hex")
-            : undefined,
-          delivery: entry
-            ? { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery }
-            : undefined,
-          media: entry
-            ? {
-                sessionId: entry.sessionId,
-                updatedAt: entry.updatedAt,
-                lifecycleRevision: entry.lifecycleRevision,
-                permissionMode: entry.permissionMode,
-                execNode: entry.execNode,
-                repositoryWorkspaceId: entry.repositoryWorkspaceId,
-                worktreeId: entry.worktree?.id,
-                sessionRoot: entry.sessionRoot,
-                spawnedCwd: entry.spawnedCwd,
-                spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
-                pendingWorktree: entry.pendingWorktree,
-                pendingProjectGitUrl: entry.pendingProjectGitUrl,
-              }
-            : undefined,
-          steering: entry
-            ? {
-                lifecycleRevision: entry.lifecycleRevision,
-                restartRecoveryHarnessCompletion: entry.restartRecoveryHarnessCompletion,
-                restartRecoveryTerminalDeliveryEvidence:
-                  entry.restartRecoveryTerminalDeliveryEvidence?.map((receipt) => ({
-                    runId: receipt.runId,
-                    harnessCompletion: receipt.harnessCompletion,
-                    deliveryContext: receipt.deliveryContext,
-                    payloads: receipt.payloads?.map(({ visible }) => ({ visible })),
-                    payloadsTruncated: receipt.payloadsTruncated,
-                    deliveryStatus: receipt.deliveryStatus && {
-                      status: receipt.deliveryStatus.status,
-                      resultCount: receipt.deliveryStatus.resultCount,
-                    },
-                    messagingToolSentTargets: receipt.messagingToolSentTargets?.map(
-                      ({
-                        provider,
-                        accountId,
-                        to,
-                        threadId,
-                        threadImplicit,
-                        threadSuppressed,
-                        visible,
-                        sourceReplyFinal,
-                      }) => ({
-                        provider,
-                        accountId,
-                        to,
-                        threadId,
-                        threadImplicit,
-                        threadSuppressed,
-                        visible,
-                        sourceReplyFinal,
-                      }),
-                    ),
-                    messagingToolSentTargetsTruncated: receipt.messagingToolSentTargetsTruncated,
-                    messagingToolAggregateEvidenceUnaccounted:
-                      receipt.messagingToolAggregateEvidenceUnaccounted,
-                  })),
-                sessionId: entry.sessionId,
-                updatedAt: entry.updatedAt,
-                status: entry.status,
-                restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
-                restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
-                restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
-                restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
-                restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
-              }
-            : undefined,
-          sharing: entry
-            ? {
-                entry: projectSessionSharingEntry(entry),
-                membership: new Set(
-                  listSessionMembersInDatabase(database, sessionKey).map(
-                    (member) => member.identityId,
-                  ),
-                ),
-              }
-            : undefined,
-          expiresAt: entry ? resolveIncognitoSessionExpiresAt(entry) : undefined,
-        },
-      ],
-    };
-  };
+  const read = createIncognitoSessionSnapshotReader(database, identity, {
+    revision: (sessionKey) => sessionRevisions.get(sessionKey) ?? 0,
+    completionSources: (sessionKey) => history.completionFacts(sessionKey),
+  });
   const assertKey = (sessionKey: string) => {
     assertCanonicalSessionKeyWrite(sessionKey, database.agentId);
     if (!isIncognitoSessionKey(sessionKey)) {
@@ -430,7 +328,10 @@ export function createIncognitoSessionWorker(
             ? entryCreation.execute(command)
             : entryPatch.execute(command);
           keys.forEach(assertKey);
-          return { value, facts: keys.flatMap((key) => read(key).facts) };
+          return withIncognitoSessionFacts(
+            value,
+            keys.flatMap((key) => read(key).facts),
+          );
         };
         return command.type.endsWith(".commit")
           ? execute()
@@ -476,13 +377,16 @@ export function createIncognitoSessionWorker(
             receipt = committed;
           },
         );
-        return { value, facts: read(sessionKey).facts };
+        return withIncognitoSessionFacts(value, read(sessionKey).facts);
       }
       if (isIncognitoManagerCommand(command)) {
         assertKey(command.input.sessionKey);
         const execute = () => {
           const { value, keys } = manager.execute(command);
-          return { value, facts: keys.flatMap((key) => read(key).facts) };
+          return withIncognitoSessionFacts(
+            value,
+            keys.flatMap((key) => read(key).facts),
+          );
         };
         return isIncognitoManagerWrite(command.type)
           ? execute()
@@ -510,7 +414,7 @@ export function createIncognitoSessionWorker(
             receipt = committed;
           },
         );
-        return { value, facts: read(sessionKey).facts };
+        return withIncognitoSessionFacts(value, read(sessionKey).facts);
       }
       if (isIncognitoComputeCommand(command)) {
         if (!isIncognitoStoreComputeCommand(command)) {
@@ -518,7 +422,10 @@ export function createIncognitoSessionWorker(
         }
         const execute = () => {
           const { value, keys } = compute.execute(command);
-          return { value, facts: keys.flatMap((key) => read(key).facts) };
+          return withIncognitoSessionFacts(
+            value,
+            keys.flatMap((key) => read(key).facts),
+          );
         };
         if (isIncognitoComputeWrite(command.type)) {
           return execute();
@@ -556,7 +463,10 @@ export function createIncognitoSessionWorker(
         const execute = () => {
           const { value, keys } = lifecycle.execute(command);
           keys.forEach(assertKey);
-          return { value, facts: keys.flatMap((key) => read(key).facts) };
+          return withIncognitoSessionFacts(
+            value,
+            keys.flatMap((key) => read(key).facts),
+          );
         };
         return isIncognitoLifecycleWrite(command.type) ? execute() : readOnly(execute);
       }
@@ -621,7 +531,7 @@ export function createIncognitoSessionWorker(
                 },
                 identity.incarnation,
               );
-        return { value, facts: read(sessionKey).facts };
+        return withIncognitoSessionFacts(value, read(sessionKey).facts);
       }
       if (command.type !== "session.entry.create" && command.type !== "session.entry.read") {
         const keys = incognitoSideDataKeys(command);
@@ -697,6 +607,11 @@ export function createIncognitoSessionWorker(
       sideData.assertSettled();
       transcript.assertSettled();
       outbox.assertSettled();
+    },
+    recordExternalWrite(sessionKey: string) {
+      assertKey(sessionKey);
+      revision += 1;
+      sessionRevisions.set(sessionKey, revision);
     },
     close() {
       sessionRevisions.clear();

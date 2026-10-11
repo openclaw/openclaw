@@ -1,3 +1,4 @@
+import { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi } from "vitest";
 import { AgentsApiClient } from "./agentsapi-client.js";
@@ -47,7 +48,7 @@ export function registerNativeLifecycleTests(
             ? harness.reset({ ...fixture.params.sessionTarget, reason: "reset" })
             : harness.withSessionDeletion(
                 { ...fixture.params.sessionTarget, assertCurrent: () => {} },
-                async (mutation) => mutation.commit(),
+                async (settle) => settle(),
               );
         try {
           fixture.cancel.mockRejectedValueOnce(new Error("Native cancellation unavailable"));
@@ -93,6 +94,15 @@ export function registerNativeLifecycleTests(
             terminal: { kind: "ok" },
           });
           const saved = await fixture.openStore().lookup(fixture.params.sessionId);
+          if (predecessor) {
+            await patchSessionEntry({
+              ...fixture.params.sessionTarget,
+              update: () => ({
+                sessionId: "rotated-local-session",
+                previousSessionId: fixture.params.sessionId,
+              }),
+            });
+          }
           fixture.events.length = 0;
           const failure = new Error("History cut rejected");
           const result = harness.withSessionContextReset(
@@ -106,17 +116,13 @@ export function registerNativeLifecycleTests(
                 : {}),
               assertCurrent: () => {},
             },
-            async (mutation) => {
+            async (settle) => {
               expect(fixture.controller.retire).not.toHaveBeenCalled();
               if (outcome === "reject") {
                 throw failure;
               }
-              mutation.commit();
-              fixture.events.push("commit");
-              if (outcome === "rollback") {
-                mutation.rollback();
-                fixture.events.push("rollback");
-              }
+              await settle(outcome);
+              fixture.events.push(outcome);
               expect(fixture.controller.retire).not.toHaveBeenCalled();
             },
           );
@@ -132,7 +138,7 @@ export function registerNativeLifecycleTests(
             outcome === "commit"
               ? ["commit", "retire"]
               : outcome === "rollback"
-                ? ["commit", "rollback"]
+                ? ["rollback"]
                 : [],
           );
           if (outcome === "commit") {

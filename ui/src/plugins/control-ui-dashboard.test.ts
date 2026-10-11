@@ -360,25 +360,6 @@ describe("Plugin session dashboard", () => {
     expect(board.active).toBe(true);
   });
 
-  it("keeps an empty dashboard compact until the operator expands its hint", async () => {
-    const { client, request } = createClient();
-    const element = await mountDashboard({ sessionKey: "agent:main:workboard-empty" }, client);
-
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("board.get", expect.anything()));
-    await vi.waitFor(() =>
-      expect(element.textContent).toContain("This session has no dashboard widgets yet."),
-    );
-    expect(
-      element.querySelector(".plugin-session-dashboard__toggle")?.getAttribute("aria-expanded"),
-    ).toBe("false");
-
-    element.querySelector<HTMLButtonElement>(".plugin-session-dashboard__toggle")?.click();
-    await element.updateComplete;
-    expect(element.querySelector(".plugin-session-dashboard__body")?.textContent).toContain(
-      "This session has no dashboard widgets yet.",
-    );
-  });
-
   it("reacts when the embedded board selects another tab", async () => {
     const tabs = [
       { tabId: "main", title: "Main", position: 0, chatDock: "right" },

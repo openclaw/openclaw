@@ -204,7 +204,7 @@ ACPX isolates bare session names by OpenClaw owner. If a session reports
 `openclaw doctor --fix`, then restart. Doctor uses the same service workspace
 as the Gateway; ACPX's default state directory is `<service workspace>/state`.
 
-The repair requires one current, unambiguous canonical owner claim with matching
+The repair requires one current, unambiguous stored owner claim with matching
 backend identifiers. It preserves the raw history, event-log references, upstream
 session IDs, timestamps, options, and usage. Persistent record names move to an
 owner-qualified resource; existing oneshot physical IDs and histories remain intact.
@@ -214,7 +214,7 @@ session does not bypass this repair.
 
 This is an offline, crash-recoverable migration with atomic destination-file
 publication. Files and SQLite are not one atomic transaction. Interrupted repairs
-can be rerun: Doctor checks the existing destination and canonical claim before
+can be rerun: Doctor checks the existing destination and stored owner claim before
 finishing the metadata update and archiving the old persistent record.
 
 ## Plugin setup for acpx backend
@@ -442,7 +442,7 @@ See [Config hot reload](/gateway/configuration/hot-reload) for other reload mode
 <Warning>
 OpenClaw defaults to `permissionMode=approve-reads` and `nonInteractivePermissions=fail`. In non-interactive ACP sessions, any write or exec that triggers a permission prompt can fail with `PermissionPromptUnavailableError: Permission prompt unavailable in non-interactive mode`.
 
-If you need to restrict permissions, set `nonInteractivePermissions` to `deny` so sessions degrade gracefully instead of crashing.
+If you need to restrict permissions, set `nonInteractivePermissions` to `deny` so sessions deny restricted actions instead of crashing.
 </Warning>
 
 ## Related

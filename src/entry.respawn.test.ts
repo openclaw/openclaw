@@ -2,7 +2,7 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
 
 const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
@@ -346,14 +346,19 @@ describe("buildCliRespawnPlan", () => {
 });
 
 describe("runCliRespawnPlan", () => {
-  it("spawns and bridges the respawn child", () => {
+  const originalExitCode = process.exitCode;
+  afterEach(() => {
+    process.exitCode = originalExitCode;
+  });
+  it("records status after the respawn child closes", async () => {
+    process.exitCode = undefined;
     const child = new EventEmitter() as ChildProcess;
     const spawn = vi.fn(() => child);
-    const attachChildProcessBridge = vi.fn();
-    const exit = vi.fn<(code?: number) => never>();
+    const detach = vi.fn();
+    const attachChildProcessBridge = vi.fn(() => ({ detach }));
     const writeError = vi.fn();
 
-    runCliRespawnPlan(
+    const completion = runCliRespawnPlan(
       {
         command: "/usr/bin/node",
         argv: ["/repo/openclaw/dist/entry.js", "status"],
@@ -363,7 +368,6 @@ describe("runCliRespawnPlan", () => {
       {
         spawn: spawn as unknown as typeof import("node:child_process").spawn,
         attachChildProcessBridge,
-        exit,
         writeError,
       },
     );
@@ -385,9 +389,12 @@ describe("runCliRespawnPlan", () => {
     expect(bridgeChild).toBe(child);
     expect(bridgeOptions).toEqual({ onSignal: expect.any(Function) });
 
-    child.emit("exit", 0, null);
-
-    expect(exit).toHaveBeenCalledWith(0);
+    child.emit("exit", 7, null);
+    expect(process.exitCode).toBeUndefined();
+    child.emit("close", 7, null);
+    await completion;
+    expect(process.exitCode).toBe(7);
+    expect(detach).toHaveBeenCalledOnce();
     expect(writeError).not.toHaveBeenCalled();
   });
 });

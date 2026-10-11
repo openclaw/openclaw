@@ -190,20 +190,17 @@ export function createPluginGenerationFileCapture({
           sizeBytes: retainedInput.sizeBytes,
           sourceIdentity: pluginSourceInputIdentity(stat),
         };
-      } else if (captured) {
-        // A second filename for a prefetched entry retains its first bytes and source identity.
-        copiedContent = copyPluginSourceFile(captured, directory, target, {
-          hashCopiedContent: true,
-          copyFile,
-          preserveSourceMode: true,
-        });
       } else {
-        copiedContent = copyPluginSourceFile(real, inputBoundary, target, {
-          hashCopiedContent: true,
-          copyFile,
-        });
+        // A second filename for a prefetched entry retains its first bytes and source identity.
+        copiedContent = copyPluginSourceFile(
+          captured ?? real,
+          captured ? directory : inputBoundary,
+          target,
+          { hashCopiedContent: true, copyFile, ...(captured ? { preserveSourceMode: true } : {}) },
+        );
         const identity = pluginSourceInputIdentity(stat);
         if (
+          !captured &&
           copiedContent &&
           copiedContent.sourceIdentity !== identity &&
           !pluginSourceIdentityChangedOnlyByCtime(identity, copiedContent.sourceIdentity)
