@@ -1,7 +1,6 @@
 // Channels capabilities tests cover capability reporting, account selection, probes, and installable plugins.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
-import { ExpectedCliError } from "../../cli/failure-output.js";
 import type { OpenClawConfig, replaceConfigFile } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { createTestConfigSnapshot } from "../test-runtime-config-helpers.js";
@@ -231,6 +230,41 @@ describe("channelsCapabilitiesCommand", () => {
       discoversChannels: false,
     },
     {
+      name: "blank channel",
+      options: { channel: "" },
+      message: "--channel must not be blank",
+      errorName: "Error",
+      discoversChannels: false,
+    },
+    {
+      name: "whitespace-only channel",
+      options: { channel: " \t " },
+      message: "--channel must not be blank",
+      errorName: "Error",
+      discoversChannels: false,
+    },
+    {
+      name: "blank agent with all channels",
+      options: { channel: "all", agent: " " },
+      message: "--agent must not be blank",
+      discoversChannels: false,
+    },
+    // --account is absent from this table because parseAccountSelector rejects it at
+    // option-parse time, and src/cli/account-selector-boundary.test.ts already proves
+    // that for this route, blank and whitespace, before command startup.
+    {
+      name: "blank target without a channel",
+      options: { target: "  " },
+      message: "--target must not be blank",
+      discoversChannels: false,
+    },
+    {
+      name: "blank target with a channel",
+      options: { channel: "discord", target: "", json: true },
+      message: "--target must not be blank",
+      discoversChannels: false,
+    },
+    {
       name: "unknown channel after installable plugin lookup",
       options: { channel: "definitely-not-a-channel", json: true },
       message:
@@ -249,11 +283,13 @@ describe("channelsCapabilitiesCommand", () => {
 
     const failure = channelsCapabilitiesCommand(testCase.options, runtime);
 
-    await expect(failure).rejects.toBeInstanceOf(ExpectedCliError);
+    const errorName = testCase.errorName ?? "ExpectedCliError";
     await expect(failure).rejects.toMatchObject({
+      name: errorName,
       message: testCase.message,
-      humanOutput: testCase.message,
-      machineOutput: testCase.message,
+      ...(errorName === "ExpectedCliError"
+        ? { humanOutput: testCase.message, machineOutput: testCase.message }
+        : {}),
     });
     expect(logs).toStrictEqual([]);
     expect(errors).toStrictEqual([]);
@@ -268,6 +304,42 @@ describe("channelsCapabilitiesCommand", () => {
     expect(probeAccount).not.toHaveBeenCalled();
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     expect(mocks.refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
+  });
+
+  it("reports every configured account when --account is omitted", async () => {
+    const plugin = buildPlugin({ id: "slack" });
+    plugin.config.listAccountIds = () => ["ops", "sales"];
+    plugin.config.resolveAccount = (_cfg: OpenClawConfig, accountId?: string | null) => ({
+      accountId,
+    });
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: {} },
+      channelId: "slack",
+      plugin,
+      configChanged: false,
+    });
+
+    await channelsCapabilitiesCommand({ channel: "slack", json: true }, runtime);
+
+    const payload = JSON.parse(logs[0] ?? "{}") as {
+      channels?: Array<{ accountId?: string }>;
+    };
+    expect(payload.channels?.map((entry) => entry.accountId)).toStrictEqual(["ops", "sales"]);
+  });
+
+  it("reports every channel when --channel is omitted", async () => {
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
+      buildPlugin({ id: "slack" }),
+      buildPlugin({ id: "discord" }),
+    ]);
+
+    await channelsCapabilitiesCommand({ json: true }, runtime);
+
+    const payload = JSON.parse(logs[0] ?? "{}") as {
+      channels?: Array<{ channel?: string }>;
+    };
+    expect(payload.channels?.map((entry) => entry.channel)).toStrictEqual(["slack", "discord"]);
+    expect(mocks.resolveInstallableChannelPlugin).not.toHaveBeenCalled();
   });
 
   it.each([

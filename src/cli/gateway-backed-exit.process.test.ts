@@ -554,4 +554,22 @@ describe("gateway-backed CLI process exit", () => {
       expect(gateway.calls).toEqual(["cron.get", "cron.list"]);
     },
   );
+
+  it("renders a blank channel error and exits nonzero for channels capabilities", async () => {
+    const root = tempDirs.make("openclaw-capabilities-blank-selector-");
+    const { stateDir, configPath } = await prepareGatewayCliFixture(root, { mode: "local" });
+
+    const result = await runIsolatedGatewayCli({
+      args: ["channels", "capabilities", "--channel", "", "--json"],
+      root,
+      stateDir,
+      configPath,
+    });
+
+    expect(result, result.stderr).toMatchObject({ code: 1, signal: null });
+    expect(JSON.parse(result.stdout)).toEqual({
+      ok: false,
+      error: { type: "cli_error", message: "--channel must not be blank" },
+    });
+  });
 });

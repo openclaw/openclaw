@@ -32,6 +32,7 @@ import {
   requireValidConfigFileSnapshot,
   requireValidConfigForWrite,
 } from "../config-validation.js";
+import { parseChannelSelector } from "./channel-selector.js";
 import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { formatChannelAccountLabel } from "./shared.js";
 
@@ -257,6 +258,18 @@ export async function channelsCapabilitiesCommand(
     : await requireValidConfigFileSnapshot(runtime);
   if (!configSnapshot) {
     return;
+  }
+  parseChannelSelector(opts.channel);
+  // An explicit blank selector must not change scope. --account is absent because
+  // parseAccountSelector rejects it at option-parse time, before this runs.
+  for (const [option, value] of [
+    ["--agent", opts.agent],
+    ["--target", opts.target],
+  ] as const) {
+    if (typeof value === "string" && !value.trim()) {
+      const message = `${option} must not be blank`;
+      throw new ExpectedCliError({ message, humanOutput: danger(message), machineOutput: message });
+    }
   }
   let cfg = await resolveCapabilitiesRuntimeConfig(configSnapshot.config, runtime);
   const timeoutMs = Math.min(
