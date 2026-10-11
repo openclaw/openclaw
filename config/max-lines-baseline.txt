@@ -541,7 +541,6 @@ src/tui/tui-event-handlers.test.ts
 src/tui/tui-pty-local.e2e.test.ts
 src/tui/tui-session-actions.test.ts
 src/tui/tui.ts
-src/web-search/runtime.test.ts
 src/wizard/setup.finalize.test.ts
 src/wizard/setup.finalize.ts
 src/wizard/setup.test.ts

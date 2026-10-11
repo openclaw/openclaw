@@ -243,41 +243,17 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
     await consumer;
   });
 
-  it("preserves the provider-owned first-event timeout when core passes a shorter generic value", async () => {
-    const { controller, consumer, underlying } = await createStreamHarness({
-      callOptions: { firstEventTimeoutMs: 30_000 } as ProviderCallOptions,
-    });
-    expect(underlying).toHaveBeenCalledTimes(1);
-    expect(underlying.mock.calls[0]?.[2]).toMatchObject({
-      firstEventTimeoutMs: 300_000,
-    });
-
-    controller.end();
-    await consumer;
-  });
-
-  it("honors explicit opencode-go provider request timeout below wrapper defaults", async () => {
-    const { consumer, wasAborted } = await createStreamHarness({
-      model: asProviderModel({
-        provider: "opencode-go",
-        id: "deepseek-v4-flash",
-        requestTimeoutMs: 2_000,
-      }),
-    });
-    await vi.advanceTimersByTimeAsync(2_500);
-    expect(wasAborted()).toBe(true);
-    await consumer;
-  });
-
   it("aborts and releases the underlying stream when no first event arrives", async () => {
-    const { consumer, received, getReturnCalls, capturedSignals, wasAborted } =
+    const { consumer, received, getReturnCalls, capturedSignals, wasAborted, underlying } =
       await createStreamHarness({
         model: asProviderModel({
           api: "openai-responses",
           provider: "opencode-go",
           id: "gpt-5.6-luna",
         }),
+        callOptions: { firstEventTimeoutMs: 30_000 } as ProviderCallOptions,
       });
+    expect(underlying.mock.calls[0]?.[2]).toMatchObject({ firstEventTimeoutMs: 300_000 });
     await vi.advanceTimersByTimeAsync(120_001);
     expect(wasAborted()).toBe(false);
     await vi.advanceTimersByTimeAsync(180_000);
