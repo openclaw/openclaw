@@ -161,7 +161,9 @@ export function createWorkerProviderOwnerLifecycle(
       record.environmentId,
       () => {
         // An earlier timed-out operation can keep this call queued across owner changes.
-        requireCurrentOwner(record);
+        if (requireCurrentOwner(record).state !== record.state) {
+          throw serviceError("invalid_state", "Worker environment owner changed during teardown");
+        }
         return provider.destroy(lease);
       },
       timeoutMs,
