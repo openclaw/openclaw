@@ -1391,6 +1391,42 @@ describe("tryDispatchAcpReplyCore", () => {
     );
   });
 
+  it("keeps a free-text [[tts:<prose>]] reply visible in the Telegram voice caption", async () => {
+    ttsCapabilityMocks.captionedFinalText = true;
+    const text = "Yes—I understand you clearly now.";
+    ttsMocks.maybeApplyTtsToPayload.mockResolvedValueOnce({
+      text,
+      mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+      audioAsVoice: true,
+      spokenText: text,
+      ttsSupplement: { spokenText: text },
+    } as MockTtsReply);
+    mockVisibleTextTurn(`[[tts:${text}]]`);
+    const attempted: ReplyPayload[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        attempted.push(payload);
+        return { visibleReplySent: true };
+      },
+    });
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      cfg: liveConfig({ auto: "always", mode: "final" }),
+      ctxOverrides: { Provider: "telegram", Surface: "telegram" },
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(attempted).toHaveLength(1);
+    expect(attempted[0]).toMatchObject({
+      text,
+      mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+      audioAsVoice: true,
+    });
+  });
+
   it.each([
     { deliveryPath: "direct", outcome: "channel_transform" },
     { deliveryPath: "direct", outcome: "cancelled" },
