@@ -1,14 +1,14 @@
-import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildSkillLibraryMock } from "../../test-helpers/skill-library-fixtures.ts";
+import { cleanupSkillsViews, renderSkills } from "./view.solid.test-support.tsx";
 import { createProps, createSkill } from "./view.test-support.ts";
-import { renderSkills } from "./view.ts";
+afterEach(cleanupSkillsViews);
 
 function renderDiscovery(
   props: Parameters<typeof createProps>[0],
   container = document.createElement("div"),
 ) {
-  render(renderSkills(createProps({ surface: "discovery", ...props })), container);
+  renderSkills(createProps({ surface: "discovery", ...props }), container);
   return container;
 }
 
