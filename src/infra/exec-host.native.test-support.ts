@@ -139,7 +139,14 @@ try {
   order.push("native-started");
   caller.end();
   order.push("response-dropped");
-  assert.equal(await outcome, null);
+  assert.deepEqual(await outcome, {
+    ok: false,
+    error: {
+      code: "UNKNOWN",
+      reason: "response-lost",
+      message: "UNKNOWN: macOS app exec host response was lost; execution outcome is unknown",
+    },
+  });
   order.push("client-null");
   assert.equal(await fs.readFile(marker, "utf8"), "START\n");
   await fs.writeFile(release, "finish\n");
