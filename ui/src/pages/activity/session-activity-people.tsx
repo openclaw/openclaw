@@ -1,4 +1,5 @@
 import { createMemo, For, Show } from "solid-js";
+import type { SessionsListResult } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import {
@@ -8,10 +9,17 @@ import {
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
 import { locale, t } from "../../lib/reactive/i18n.ts";
-import type { SessionActivityViewProps } from "./session-activity-view.tsx";
+import type { SessionActivityFilters } from "./session-activity.ts";
 
 type ActivityPerson = PresenceViewer & {
   count: number;
+};
+
+type PeopleView = {
+  filters: SessionActivityFilters;
+  onFiltersChange: (filters: SessionActivityFilters) => void;
+  presentationRevision?: number;
+  result?: Pick<SessionsListResult, "peopleIncomplete">;
 };
 
 function isUnresolvedPerson(person: PresenceViewer): boolean {
@@ -70,7 +78,7 @@ function PersonAvatar(props: {
   );
 }
 
-function selectPerson(event: Event, props: SessionActivityViewProps, personId: string | null) {
+function selectPerson(event: Event, props: PeopleView, personId: string | null) {
   if (event.currentTarget instanceof Element) {
     event.currentTarget.closest("wa-popover")?.removeAttribute("open");
   }
@@ -85,11 +93,7 @@ function setPeopleExpanded(event: Event, expanded: boolean) {
   }
 }
 
-function PersonRow(props: {
-  person: ActivityPerson | null;
-  view: SessionActivityViewProps;
-  count?: number;
-}) {
+function PersonRow(props: { person: ActivityPerson | null; view: PeopleView; count?: number }) {
   const personId = () => props.person?.id ?? null;
   return (
     <button
@@ -115,7 +119,7 @@ function PersonRow(props: {
 }
 
 export function PeopleControl(props: {
-  view: SessionActivityViewProps;
+  view: PeopleView;
   people: readonly ActivityPerson[];
   selectedPerson: PresenceViewer | null;
   totalSessions: number;
