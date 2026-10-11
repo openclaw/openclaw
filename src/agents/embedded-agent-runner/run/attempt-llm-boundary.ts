@@ -443,24 +443,29 @@ export function installModelPromptProjection(params: {
                   prependContext: params.prependContext,
                   appendContext: params.appendContext,
                 }));
+        // Inter-session input keeps its stored source-provenance envelope as the model-facing
+        // text, now and in history. Comparing whole stored text also covers forwarded bodies
+        // with their own envelope. A shorter routed body would either drop the safety text from
+        // replayed history or make the next request rewrite this turn's bytes.
+        if (
+          frozen === undefined &&
+          text !== undefined &&
+          firstText?.startsWith(INTER_SESSION_PROMPT_PREFIX_BASE) === true &&
+          !text.includes(firstText)
+        ) {
+          text = firstText;
+        }
         if (text !== undefined && (frozen !== undefined || text !== firstText)) {
           const captureProjection = params.recorder?.captureModelPromptProjection;
-          // Request-local text crosses the provider boundary under the recorder's redaction
-          // but never becomes the replayed history:
-          // - a fallback retry after the turn already reached a provider unprojected keeps
-          //   history on the bytes first sent;
-          // - a prompt that drops the stored inter-session envelope keeps history replaying
-          //   that source-provenance safety text once its transient carrier is gone. Compare
-          //   whole stored text, not the body prefix: a forwarded body may carry its own.
+          // A fallback retry can change the prompt after the turn already reached a provider
+          // unprojected. Its text stays request-local; history keeps the bytes first sent.
           const requestLocal =
             frozen === undefined &&
-            ((params.recorder !== undefined &&
-              getUserTurnTranscriptAdmissionOwner(params.recorder)?.sentToProvider() === true) ||
-              (firstText?.startsWith(INTER_SESSION_PROMPT_PREFIX_BASE) === true &&
-                !text.includes(firstText)));
-          if (frozen === undefined && captureProjection) {
+            params.recorder !== undefined &&
+            getUserTurnTranscriptAdmissionOwner(params.recorder)?.sentToProvider() === true;
+          if (frozen === undefined && captureProjection && !requestLocal) {
             const pendingText = text;
-            const capture = () => captureProjection(pendingText, assertCurrent, { requestLocal });
+            const capture = () => captureProjection(pendingText, assertCurrent);
             const captured = await (params.withTranscriptWrite
               ? params.withTranscriptWrite(capture)
               : capture());
