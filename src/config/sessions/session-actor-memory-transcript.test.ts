@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { SessionActorAuthority, SessionActorOutcome } from "./session-actor-contract.js";
 import { createMemorySessionActorOwner } from "./session-actor-memory.js";
 import type { SessionPendingInputWorkerFacts } from "./session-pending-input.types.js";
+import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 import type { SessionTurnPlan } from "./session-turn.types.js";
+import type { InternalSessionEntry } from "./types.js";
 
 const sessionKey = "agent:main:dashboard:incognito-transcript-test";
 const sessionId = "session-1";
@@ -10,7 +12,9 @@ const path = ":memory:transcript-test";
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
 const owners: ReturnType<typeof createMemorySessionActorOwner>[] = [];
 afterEach(() => {
-  for (const owner of owners.splice(0)) owner.close();
+  for (const owner of owners.splice(0)) {
+    owner.close();
+  }
 });
 
 function committed<Value>(outcome: SessionActorOutcome<Value>) {
@@ -37,7 +41,7 @@ function turn(
 }
 
 async function fixture(
-  initialEntry: Partial<NonNullable<SessionTurnPlan["options"]["initialSessionEntry"]>> = {},
+  initialEntry: Partial<InternalSessionEntry> = {},
   cliWriter?: SessionTurnPlan["cliWriter"],
 ) {
   const owner = createMemorySessionActorOwner({ agentId: "main", path });
@@ -51,7 +55,7 @@ async function fixture(
       {
         commandId: "initialize",
         phaseId: "turn",
-        expectedState: {},
+        expectedState: buildRestartRecoveryExpectedState({ sessionId: "session-1", updatedAt: 1 }),
         lifecycle: {},
         turn: {
           ...turn(
@@ -231,7 +235,10 @@ describe("memory actor transcript", () => {
         {
           commandId: "stage",
           phaseId: "turn",
-          expectedState: {},
+          expectedState: buildRestartRecoveryExpectedState({
+            sessionId: "session-1",
+            updatedAt: 1,
+          }),
           lifecycle: {},
           pending: {
             kind: "stage",
@@ -366,6 +373,74 @@ describe("memory actor transcript", () => {
       transcriptInputId: "relocated",
       consumedInputIds: [],
     });
+  });
+
+  it("replays collected promotion when its transcript identity differs from source input identity", async () => {
+    const { actor, append } = await fixture();
+    const message = {
+      role: "user",
+      content: "Collected input",
+      timestamp: 2,
+      idempotencyKey: "collected",
+    };
+    const messageJson = JSON.stringify(message);
+    const source: SessionPendingInputWorkerFacts = {
+      agentId: "main",
+      databaseAgentId: "main",
+      databasePath: path,
+      sessionKey,
+      sessionId,
+      inputId: "source-input",
+      transcriptInputId: "collected-transcript",
+      idempotencyKey: "collected",
+      lifecycleGeneration: "life-1",
+      messageJson,
+    };
+    committed(
+      await actor.acceptInput(
+        {
+          commandId: "stage-collected",
+          phaseId: "turn",
+          expectedState: buildRestartRecoveryExpectedState({ sessionId, updatedAt: 1 }),
+          lifecycle: {},
+          pending: {
+            kind: "stage",
+            sessionKey,
+            sessionId,
+            idempotencyKey: source.idempotencyKey,
+            inputId: source.inputId,
+            runId: "run-1",
+            requestHash: "request-1",
+            lifecycleGeneration: source.lifecycleGeneration,
+            messageJson,
+            trackCompletion: true,
+            expected: {
+              kind: "stage",
+              current: true,
+              existing: undefined,
+              previous: undefined,
+              committed: undefined,
+            },
+          },
+        },
+        authority,
+      ),
+    );
+    const plan = { ...turn([{ message }]), custody: { ...source, sources: [source] } };
+    const first = committed(await append(plan));
+    expect(first.receipt.pendingInputReceipt).toEqual({
+      transcriptInputId: "collected-transcript",
+      consumedInputIds: ["source-input"],
+    });
+    const replay = committed(await append(plan));
+    expect(replay.receipt.transcript.appendedMessages).toMatchObject([
+      { appended: false, messageId: "collected-transcript", message },
+    ]);
+    expect(replay.receipt.pendingInputReceipt).toEqual({
+      transcriptInputId: "collected-transcript",
+      consumedInputIds: [],
+    });
+    expect(replay.receipt.transcript.after).toEqual(first.receipt.transcript.after);
   });
 
   it("rebases active appends, preserves explicit branches, and rolls back a mixed atomic batch", async () => {
@@ -508,7 +583,9 @@ describe("memory actor transcript", () => {
     expect(actor.snapshot(authority)?.entry).toEqual(snapshot.entry);
     expect(replay.receipt.transcript.after).toEqual(snapshot.transcript.version);
     const identity = actor.target.database;
-    if (identity.kind !== "memory") throw new Error("Expected memory identity");
+    if (identity.kind !== "memory") {
+      throw new Error("Expected memory identity");
+    }
     expect(
       await append({
         ...plan,
@@ -563,7 +640,9 @@ describe("memory actor transcript", () => {
       ),
     );
     const user = latest.receipt.transcript.appendedMessages[0]?.anchor;
-    if (!user) throw new Error("Expected admitted user anchor");
+    if (!user) {
+      throw new Error("Expected admitted user anchor");
+    }
     const result = committed(
       await actor.appendTranscriptEvent(
         {
@@ -601,8 +680,9 @@ describe("memory actor transcript", () => {
       appended?.kind !== "metadata" ||
       !appended.value.reload?.ok ||
       appended.value.reload.value.kind !== "bounded"
-    )
+    ) {
       throw new Error("Expected bounded reload");
+    }
     const context = appended.value.reload.value.snapshot;
     expect(context.events).toMatchObject([
       { type: "session" },

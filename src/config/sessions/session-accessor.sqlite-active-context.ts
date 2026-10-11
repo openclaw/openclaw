@@ -268,11 +268,9 @@ export function readSessionTranscriptBoundedActiveContextCore(
         .orderBy("active.active_position", "desc")
         .limit(maxEvents + 1),
     );
-    let { selectedRows, serializedBytes, truncated } = selectBoundedContextRows(
-      metadata,
-      headerBytes,
-      { maxBytes, maxEvents },
-    );
+    const selection = selectBoundedContextRows(metadata, headerBytes, { maxBytes, maxEvents });
+    const { selectedRows } = selection;
+    let { serializedBytes, truncated } = selection;
     const selectedSequences = selectedRows.map((row) => row.event_seq);
     let boundary = executeSqliteQueryTakeFirstSync(
       projection.database.db,

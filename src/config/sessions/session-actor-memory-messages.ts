@@ -110,7 +110,7 @@ export function createSessionActorMemoryMessages(
             sourceRow.message_json !== source.messageJson ||
             sourceRow.state !== "queued" ||
             (sourceRow.consumed_event_id !== null &&
-              sourceRow.consumed_event_id !== facts?.inputId)))
+              sourceRow.consumed_event_id !== facts?.transcriptInputId)))
       ) {
         throw new SessionPendingInputCustodyError(
           "Pending input custody changed before transcript promotion",
@@ -125,7 +125,7 @@ export function createSessionActorMemoryMessages(
     });
     const promoted =
       usesCustody &&
-      accepted.every((value) => !value || value.consumed_event_id === facts?.inputId);
+      accepted.every((value) => !value || value.consumed_event_id === facts?.transcriptInputId);
     const relocating = promoted && input.custody?.relocation !== undefined;
     const acceptedMessage =
       usesCustody && facts ? parseSessionPendingInputMessage(facts.messageJson) : undefined;

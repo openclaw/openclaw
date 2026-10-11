@@ -21,6 +21,7 @@ import type { SessionActorAppend, SessionActorAppendCommitted } from "./session-
 import { createSessionActorMemoryEvents } from "./session-actor-memory-events.js";
 import { createSessionActorMemoryGoals } from "./session-actor-memory-goals.js";
 import { readSessionActorMemoryHistory } from "./session-actor-memory-history.js";
+import { initializeSessionActorMemoryEntry } from "./session-actor-memory-initialize.js";
 import { createSessionActorMemoryMessages } from "./session-actor-memory-messages.js";
 import { createSessionActorMemoryPending } from "./session-actor-memory-pending.js";
 import type { SessionActorMemoryState } from "./session-actor-memory-state.js";
@@ -199,53 +200,12 @@ export function createSessionActorMemoryTranscript(options: {
       return withCliWriter(append.input.cliWriter, append.input.scope.sessionId, () => {
         let initialEntry: InitialSessionEntryCommit | undefined;
         if (append.initialization) {
-          const input = append.initialization;
-          if (
-            input.scope.sessionId !== append.input.scope.sessionId ||
-            input.entry.sessionId !== input.scope.sessionId ||
-            (input.scope.agentId !== undefined && input.scope.agentId !== agentId) ||
-            (input.scope.sessionKey !== undefined &&
-              input.scope.sessionKey !== state.hot.target.sessionKey) ||
-            (input.scope.storePath !== undefined && input.scope.storePath !== path)
-          ) {
+          if (append.initialization.scope.sessionId !== append.input.scope.sessionId) {
             throw new SessionTranscriptWriterClaimReboundError();
           }
-          if (state.hot.entry) {
-            if (
-              input.initialWriterRunId !== undefined ||
-              state.hot.entry.sessionId !== input.entry.sessionId
-            ) {
-              throw new SessionTranscriptWriterClaimReboundError();
-            }
-            initialEntry = { owned: true };
-          } else {
-            if (
-              input.scope.expectedWriterRunId !== undefined &&
-              input.initialWriterRunId === undefined
-            ) {
-              throw new SessionTranscriptWriterClaimReboundError();
-            }
-            state.hot.entry = {
-              ...structuredClone(input.entry),
-              ...(input.initialWriterRunId !== undefined
-                ? { activeWriterRunId: input.initialWriterRunId }
-                : {}),
-            };
-            initialEntry = {
-              owned: true,
-              ...(input.initialWriterRunId !== undefined
-                ? {
-                    fence: {
-                      expectedLifecycleRevision: state.hot.entry.lifecycleRevision,
-                      expectedWriterRunId: input.initialWriterRunId,
-                    },
-                  }
-                : {}),
-              identity: {
-                previous: new Map(),
-                current: new Map([[state.hot.target.sessionKey, structuredClone(state.hot.entry)]]),
-              },
-            };
+          initialEntry = initializeSessionActorMemoryEntry(options, append.initialization);
+          if (!initialEntry.owned) {
+            throw new SessionTranscriptWriterClaimReboundError();
           }
         }
         const header = append.header
@@ -398,7 +358,9 @@ export function createSessionActorMemoryTranscript(options: {
         const goal = mutation
           ? applySessionGoalOperation(entry, mutation.operation, Date.now())
           : undefined;
-        if (goal && opts.preparedGoalId) goal.id = opts.preparedGoalId;
+        if (goal && opts.preparedGoalId) {
+          goal.id = opts.preparedGoalId;
+        }
         const transactionVersion = version();
         for (const append of opts.messages) {
           if (!append.preparedMessage?.prepared) {

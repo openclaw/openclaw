@@ -52,6 +52,7 @@ function fixture() {
     pendingInputs: new Map(),
     completions: new Map(),
     goalReceipts: new Map(),
+    historicalWindows: new Map(),
   };
   const grants: Array<{ stage: string; grant: PendingInputCustodyGrant }> = [];
   const pending = createSessionActorMemoryPending(state, {

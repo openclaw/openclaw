@@ -87,7 +87,7 @@ export function createSqliteSessionActorExecutor(
     replica: ReturnType<typeof createSessionActorReplica>;
   } & SessionActorExecutorGuards,
 ): SessionActorExecutor {
-  const { target, assertAccepted, assertReadable } = params;
+  const { target } = params;
   let generation: { assertCurrent(): void } | undefined;
   let fenced = false;
   const checkGeneration = (scope: TransportScope) => {
@@ -128,7 +128,7 @@ export function createSqliteSessionActorExecutor(
       native: NativeAdmission,
       grant: () => boolean,
     ) => {
-      assertAccepted();
+      params.assertAccepted();
       authority.assertCurrent();
       const facts =
         isRecord(request.facts) &&
@@ -156,7 +156,7 @@ export function createSqliteSessionActorExecutor(
         throw new Error("Session actor command omitted its admission evidence");
       }
       authority.assertCurrent();
-      assertAccepted();
+      params.assertAccepted();
       if (!grant()) {
         throw new Error("Session actor authority expired");
       }
@@ -165,7 +165,7 @@ export function createSqliteSessionActorExecutor(
   const read = (authority: SessionActorAuthority) =>
     params.transport.run(async (scope) => {
       checkGeneration(scope);
-      assertReadable();
+      params.assertReadable();
       authority.assertCurrent();
       let snapshot = params.replica.read();
       if (!snapshot) {
@@ -181,11 +181,11 @@ export function createSqliteSessionActorExecutor(
           pending.cancel();
         }
       }
-      assertReadable();
+      params.assertReadable();
       authority.assertCurrent();
       authority.authorize("commit", snapshot);
       authority.assertCurrent();
-      assertReadable();
+      params.assertReadable();
       if (!isInstalled(snapshot)) {
         throw new Error("Session actor changed before read disclosure");
       }
@@ -324,7 +324,7 @@ export function createSqliteSessionActorExecutor(
                 authority.assertCurrent();
                 authority.authorize("commit", structuredClone(result.postimage));
                 authority.assertCurrent();
-                assertAccepted();
+                params.assertAccepted();
               } catch (error) {
                 result = { kind: "rolled-back", error: errorFacts(error) };
               }
@@ -399,7 +399,7 @@ export function createSqliteSessionActorExecutor(
     return outcome;
   };
   const snapshot = (authority: SessionActorAuthority): SessionActorHotState | undefined => {
-    assertReadable();
+    params.assertReadable();
     authority.assertCurrent();
     try {
       generation?.assertCurrent();
@@ -411,7 +411,7 @@ export function createSqliteSessionActorExecutor(
     if (installed) {
       authority.authorize("commit", installed);
       authority.assertCurrent();
-      assertReadable();
+      params.assertReadable();
       if (!isInstalled(installed)) {
         return undefined;
       }
