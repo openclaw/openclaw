@@ -58,6 +58,7 @@ export function stripThoughtSignatures<T>(
   }
   const allowBase64Only = options?.allowBase64Only ?? false;
   const includeCamelCase = options?.includeCamelCase ?? false;
+  const signatureKeys = ["thought_signature", ...(includeCamelCase ? ["thoughtSignature"] : [])];
   const shouldStripSignature = (value: unknown): boolean => {
     if (!allowBase64Only) {
       return typeof value === "string" && value.startsWith("msg_");
@@ -69,17 +70,13 @@ export function stripThoughtSignatures<T>(
       return block;
     }
     const rec = block as ContentBlockWithSignature;
-    const stripSnake = shouldStripSignature(rec.thought_signature);
-    const stripCamel = includeCamelCase ? shouldStripSignature(rec.thoughtSignature) : false;
-    if (!stripSnake && !stripCamel) {
+    const strippedKeys = signatureKeys.filter((key) => shouldStripSignature(rec[key]));
+    if (strippedKeys.length === 0) {
       return block;
     }
     const next = { ...rec };
-    if (stripSnake) {
-      delete next.thought_signature;
-    }
-    if (stripCamel) {
-      delete next.thoughtSignature;
+    for (const key of strippedKeys) {
+      delete next[key];
     }
     return next;
   }) as T;

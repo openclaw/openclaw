@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import {
   finishInterruptedUpdateBeforeActivation,
   getUpdateRun,
@@ -10,7 +9,6 @@ import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../../utils/absolute-deadline.js";
 import {
   exitAfterSignalExitBarriers,
@@ -22,10 +20,7 @@ import type { UpdateCommandOptions } from "./shared.js";
 
 type Run = NonNullable<UpdateCommandOptions["run"]>;
 type MutableAdmission = {
-  record: UpdateRunRecord;
   env: NodeJS.ProcessEnv;
-  dev: number;
-  ino: number;
   active?: true;
   sealed?: true;
   settlements: Set<Promise<void>>;
@@ -161,14 +156,7 @@ export function captureMutableUpdateCompensation(opts: UpdateCommandOptions) {
     if (!admission) {
       return await operation();
     }
-    if (
-      !run ||
-      opts.run !== run ||
-      admissions.get(run) !== admission ||
-      run.runId !== admission.record.runId ||
-      !admission.active ||
-      admission.sealed
-    ) {
+    if (!admission.active || admission.sealed) {
       throw new Error("Update compensation admission is no longer current.");
     }
     const completion = createDeferredCore();
@@ -187,15 +175,8 @@ export function captureMutableUpdateCompensation(opts: UpdateCommandOptions) {
 
 export function admitMutableUpdateSignalRun(run: Run, record: UpdateRunRecord): void {
   const env = { ...run.env };
-  const file = fs.lstatSync(resolveOpenClawStateSqlitePath(env));
-  if (!file.isFile()) {
-    throw new Error("Update admission requires its regular state database.");
-  }
   admissions.set(run, {
-    record,
     env,
-    dev: file.dev,
-    ino: file.ino,
     settlements: new Set(),
     phase: record.phase,
     forward: new Set(),
@@ -217,11 +198,9 @@ export async function withMutableUpdateSignals<T>(
   }
   admission.active = true;
   const { env } = admission;
-  const pathname = resolveOpenClawStateSqlitePath(env);
   const prepareSettlement = () => {
     const { executorFence, runId } = run;
     if (
-      admissions.get(run) !== admission ||
       process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" ||
       process.env.OPENCLAW_UPDATE_POST_CORE === "1" ||
       !executorFence
@@ -229,23 +208,8 @@ export async function withMutableUpdateSignals<T>(
       return undefined;
     }
     const assertCurrent = () => {
-      if (
-        opts.run !== run ||
-        admissions.get(run) !== admission ||
-        run.runId !== runId ||
-        run.executorFence !== executorFence ||
-        process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" ||
-        process.env.OPENCLAW_UPDATE_POST_CORE === "1"
-      ) {
-        throw new Error("Interrupted update has no live installation owner.");
-      }
       executorFence.assertCurrent();
-      const file = fs.lstatSync(pathname);
-      if (!file.isFile() || file.dev !== admission.dev || file.ino !== admission.ino) {
-        throw new Error("Interrupted update's current state generation changed.");
-      }
     };
-    assertCurrent();
     return () => {
       assertCurrent();
       if (admission.unconfirmedWrite) {
@@ -255,8 +219,7 @@ export async function withMutableUpdateSignals<T>(
       if (
         !expected ||
         expected.status !== "running" ||
-        !["requested", "staging", "validating"].includes(expected.phase) ||
-        expected.createdAtMs !== admission.record.createdAtMs
+        !["requested", "staging", "validating"].includes(expected.phase)
       ) {
         return;
       }

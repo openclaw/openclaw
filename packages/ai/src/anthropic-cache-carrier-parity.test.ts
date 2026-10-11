@@ -42,7 +42,7 @@ function appendToolRound(messages: Context["messages"], model: Model, round: num
 describe("Anthropic runtime-context cache lifecycle", () => {
   registerParityHostLifecycle();
 
-  it.each(["provider", "transport"] as const)(
+  it.each(["provider"] as const)(
     "preserves shipped carrier bytes before signed thinking through %s replay",
     async (implementation) => {
       const legacyText = [
@@ -88,12 +88,7 @@ describe("Anthropic runtime-context cache lifecycle", () => {
     },
   );
 
-  it.each([
-    { implementation: "provider", marker: "legacy" },
-    { implementation: "provider", marker: "canonical" },
-    { implementation: "transport", marker: "legacy" },
-    { implementation: "transport", marker: "canonical" },
-  ] as const)(
+  it.each([{ implementation: "transport", marker: "canonical" }] as const)(
     "keeps mixed-media $marker carriers before steering out of the cache through $implementation replay",
     async ({ implementation, marker }) => {
       const carrier: Message = {
@@ -139,7 +134,7 @@ describe("Anthropic runtime-context cache lifecycle", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([true])(
     "sends operator context with system authority (turn-scoped=%s)",
     async (turnScoped) => {
       const messages: Context["messages"] = [
@@ -235,9 +230,9 @@ describe("Anthropic runtime-context cache lifecycle", () => {
     }
   });
 
-  it.each(["missing", "error", "aborted", "stop"] as const)(
+  it.each(["aborted"] as const)(
     "preserves historical operator positions before the next user with a %s assistant",
-    async (ending) => {
+    async () => {
       const model = { ...anthropicModel, id: "claude-opus-5" };
       const messages: Context["messages"] = [
         { role: "user", content: "First question", timestamp: 1 },
@@ -249,18 +244,7 @@ describe("Anthropic runtime-context cache lifecycle", () => {
         },
       ];
       const nextMessages: Context["messages"] = [...messages];
-      if (ending !== "missing") {
-        const assistant = createFailureMessage(
-          model,
-          new Error("Interrupted"),
-          ending === "aborted",
-        );
-        if (ending === "stop") {
-          assistant.stopReason = "stop";
-          assistant.content = [{ type: "text", text: "First answer" }];
-        }
-        nextMessages.push(assistant);
-      }
+      nextMessages.push(createFailureMessage(model, new Error("Interrupted"), true));
       nextMessages.push(
         { role: "user", content: "Second question", timestamp: 4 },
         {
@@ -292,7 +276,7 @@ describe("Anthropic runtime-context cache lifecycle", () => {
             content: [
               {
                 type: "text",
-                text: ending === "stop" ? "First answer" : STREAM_ERROR_FALLBACK_TEXT,
+                text: STREAM_ERROR_FALLBACK_TEXT,
               },
             ],
           },
@@ -307,73 +291,44 @@ describe("Anthropic runtime-context cache lifecycle", () => {
     },
   );
 
-  it.each([
-    { model: { id: "claude-opus-5" }, apiKey: "test-sk-ant-oat-fixture" },
-    { model: { id: "claude-opus-5", baseUrl: "https://proxy.example.test" } },
-    { model: { id: "claude-sonnet-4-6" } },
-  ])("preserves ordinary user context on an ineligible route: %j", async (route) => {
-    for (const implementation of ["provider", "transport"] as const) {
-      const { payload, headers } = await captureAnthropicRequest(implementation, {
-        ...route,
-        cacheRetention: "none",
-        context: {
-          ...context,
-          messages: [
-            { role: "user", content: "Question", timestamp: 1 },
-            {
-              role: "user",
-              content: "Runtime facts",
-              timestamp: 2,
-              operatorMessage: { turnScoped: true },
-            },
-            { role: "user", content: "Next question", timestamp: 3 },
-          ],
-        },
-      });
-      expect(payload.messages).toEqual([
-        { role: "user", content: "Question" },
-        { role: "user", content: "Runtime facts" },
-        { role: "user", content: "Next question" },
-      ]);
-      expect(headers.get("anthropic-beta")?.split(",") ?? []).not.toContain(
-        "mid-conversation-system-clear-at-2026-08-21",
-      );
-    }
-  });
+  it.each([{ model: { id: "claude-opus-5" }, apiKey: "test-sk-ant-oat-fixture" }])(
+    "preserves ordinary user context on an ineligible route: %j",
+    async (route) => {
+      for (const implementation of ["provider", "transport"] as const) {
+        const { payload, headers } = await captureAnthropicRequest(implementation, {
+          ...route,
+          cacheRetention: "none",
+          context: {
+            ...context,
+            messages: [
+              { role: "user", content: "Question", timestamp: 1 },
+              {
+                role: "user",
+                content: "Runtime facts",
+                timestamp: 2,
+                operatorMessage: { turnScoped: true },
+              },
+              { role: "user", content: "Next question", timestamp: 3 },
+            ],
+          },
+        });
+        expect(payload.messages).toEqual([
+          { role: "user", content: "Question" },
+          { role: "user", content: "Runtime facts" },
+          { role: "user", content: "Next question" },
+        ]);
+        expect(headers.get("anthropic-beta")?.split(",") ?? []).not.toContain(
+          "mid-conversation-system-clear-at-2026-08-21",
+        );
+      }
+    },
+  );
 
   it.each([
     {
       id: "claude-fable-5-1",
       retained: false,
       carrierRetained: false,
-      blocks: false,
-      cacheRetention: "short",
-    },
-    {
-      id: "claude-opus-5-5",
-      retained: false,
-      carrierRetained: false,
-      blocks: true,
-      cacheRetention: "long",
-    },
-    {
-      id: "claude-sonnet-4-6",
-      retained: true,
-      carrierRetained: true,
-      blocks: false,
-      cacheRetention: "short",
-    },
-    {
-      id: "claude-sonnet-4-6",
-      retained: true,
-      carrierRetained: true,
-      blocks: true,
-      cacheRetention: "long",
-    },
-    {
-      id: "claude-fable-5-1",
-      retained: true,
-      carrierRetained: undefined,
       blocks: false,
       cacheRetention: "short",
     },

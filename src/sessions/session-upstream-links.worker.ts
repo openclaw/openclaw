@@ -40,35 +40,29 @@ export function executeSessionUpstreamCommand(
           throw new Error("Session upstream source changed during initialization");
         }
       };
-      const admit = (stage: "transaction" | "commit") => {
-        assertSource();
-        requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
-        assertSource();
-      };
-      admit("transaction");
-      const result =
-        command.type === "sessionUpstream.upsert"
-          ? upsertSessionUpstreamLinkInDatabase(
-              db,
-              command.input.link,
-              command.input.now,
-              command.input.ifAbsent,
-            )
-          : deleteSessionUpstreamLinkInDatabase(
-              db,
-              command.input.sessionKey,
-              command.input.agentId,
-              command.input.expected,
-            );
-      admit("commit");
-      return result;
+      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      assertSource();
+      return command.type === "sessionUpstream.upsert"
+        ? upsertSessionUpstreamLinkInDatabase(
+            db,
+            command.input.link,
+            command.input.now,
+            command.input.ifAbsent,
+          )
+        : deleteSessionUpstreamLinkInDatabase(
+            db,
+            command.input.sessionKey,
+            command.input.agentId,
+            command.input.expected,
+          );
     }, options);
   }
   const { expected, settlement, sessionEntryCurrentSource } = command.input;
-  const admit = (stage: "transaction" | "commit") =>
-    requestSessionEntryCurrentAdmission(sessionEntryCurrentSource, { stage, facts: undefined });
   return runOpenClawStateWriteTransaction(({ db }) => {
-    admit("transaction");
+    requestSessionEntryCurrentAdmission(sessionEntryCurrentSource, {
+      stage: "transaction",
+      facts: undefined,
+    });
     if (!isSessionStateUpstreamCurrentInDatabase(db, expected)) {
       return false;
     }
@@ -95,7 +89,6 @@ export function executeSessionUpstreamCommand(
           .where("agent_id", "=", expected.agentId),
       );
     }
-    admit("commit");
     return true;
   }, options);
 }

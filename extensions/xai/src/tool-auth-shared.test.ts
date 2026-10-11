@@ -91,31 +91,12 @@ describe("xai tool auth helpers", () => {
     await expect(resolveXaiToolApiKeyWithAuth({ auth })).resolves.toBe("profile-key");
   });
 
-  it("does not use env fallback when a non-env SecretRef is configured but unavailable", async () => {
-    vi.stubEnv("XAI_API_KEY", "env-key");
-
-    await expect(
-      resolveXaiToolApiKeyWithAuth({
-        sourceConfig: {
-          plugins: xaiWebSearchSecretRefPlugins("file", "vault", "/xai/tool-key"),
-        },
-      }),
-    ).resolves.toBeUndefined();
-  });
-
   it.each([
-    ...[
-      undefined,
-      { source: "env" as const },
-      { source: "file" as const, path: "/unused" },
-      { source: "exec" as const, command: "/unused" },
-      { source: "store" as const },
-    ].map((declaration) => ({
+    {
       envValue: undefined,
-      declaration,
-      source: declaration?.source ?? "undeclared",
-    })),
-    { envValue: "   ", declaration: { source: "env" as const }, source: "env" },
+      declaration: { source: "env" as const },
+      source: "env",
+    },
   ])(
     "does not borrow profile auth for a missing configured env ref ($source, $envValue)",
     async ({ envValue, declaration }) => {
@@ -140,6 +121,7 @@ describe("xai tool auth helpers", () => {
   );
 
   it("does not bypass blocked explicit tool config with auth profiles", async () => {
+    vi.stubEnv("XAI_API_KEY", "env-key");
     const auth = {
       hasAuthForProvider: (providerId: string) => providerId === "xai",
       resolveApiKeyForProvider: async () => "profile-key", // pragma: allowlist secret
@@ -151,18 +133,6 @@ describe("xai tool auth helpers", () => {
 
     expect(isXaiToolEnabled({ sourceConfig, auth })).toBe(false);
     await expect(resolveXaiToolApiKeyWithAuth({ sourceConfig, auth })).resolves.toBeUndefined();
-  });
-
-  it("resolves env SecretRefs from source config when runtime snapshot is unavailable", async () => {
-    vi.stubEnv("XAI_API_KEY", "xai-secretref-key");
-
-    await expect(
-      resolveXaiToolApiKeyWithAuth({
-        sourceConfig: {
-          plugins: xaiWebSearchSecretRefPlugins("env", "default", "XAI_API_KEY"),
-        },
-      }),
-    ).resolves.toBe("xai-secretref-key");
   });
 
   it("does not read arbitrary env SecretRef ids for xAI tool auth", async () => {

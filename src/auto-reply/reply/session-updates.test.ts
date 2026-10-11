@@ -11,7 +11,6 @@ const {
   shouldRefreshSnapshotForVersionMock,
   getRemoteSkillEligibilityMock,
   updateSessionEntryMock,
-  loadSessionEntryMock,
 } = vi.hoisted(() => ({
   buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]) => ({
     prompt: "",
@@ -27,7 +26,6 @@ const {
     hasAnyBin: () => false,
   })),
   updateSessionEntryMock: vi.fn(),
-  loadSessionEntryMock: vi.fn(),
 }));
 
 // mock-isolation: Session classification is outside skill snapshot publication.
@@ -76,16 +74,7 @@ vi.mock("../../config/sessions.js", () => ({
 
 // mock-isolation: Skill-refresh cases control persistence acknowledgments without opening SQLite.
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  patchSessionEntryCore: async (...args: unknown[]) => {
-    const entry = await updateSessionEntryMock(...args);
-    loadSessionEntryMock.mockReturnValue(entry ?? undefined);
-    return entry;
-  },
-}));
-
-// mock-isolation: Skill-refresh cases read the fixture's acknowledged row without starting workers.
-vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
-  readSessionEntryInWorker: loadSessionEntryMock,
+  patchSessionEntryCore: (...args: unknown[]) => updateSessionEntryMock(...args),
 }));
 
 const { ensureSkillSnapshot } = await import("./session-updates.js");
@@ -103,7 +92,6 @@ describe("ensureSkillSnapshot", () => {
       hasAnyBin: () => false,
     });
     updateSessionEntryMock.mockReset();
-    loadSessionEntryMock.mockReset();
     updateSessionEntryMock.mockResolvedValue(null);
   });
 
@@ -151,42 +139,8 @@ describe("ensureSkillSnapshot", () => {
     expect(sessionStore[sessionKey]).toBeUndefined();
   });
 
-  it("adopts a rebound first-turn session entry instead of overwriting it", async () => {
-    const sessionKey = "agent:main:main";
-    const sessionEntry = {
-      sessionId: "old-session",
-      updatedAt: 10,
-    };
-    const reboundEntry = {
-      sessionId: "new-session",
-      updatedAt: 20,
-    };
-    const sessionStore = { [sessionKey]: sessionEntry };
-    updateSessionEntryMock.mockImplementationOnce(async (_scope, update) => {
-      const patch = await update(reboundEntry);
-      expect(patch).toBeNull();
-      return reboundEntry;
-    });
-
-    const result = await ensureSkillSnapshot({
-      agentId: "main",
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      sessionId: "old-session",
-      storePath: "/tmp/sessions.json",
-      isFirstTurnInSession: true,
-      workspaceDir: TEST_WORKSPACE_DIR,
-      cfg: {},
-    });
-
-    expect(result.sessionEntry).toEqual(reboundEntry);
-    expect(result.systemSent).toBe(false);
-    expect(sessionStore[sessionKey]).toEqual(reboundEntry);
-  });
-
   it.each([true, false])(
-    "persists skill snapshots as a guarded partial update (first turn: %s)",
+    "persists only owned skill fields as a partial update (first turn: %s)",
     async (isFirstTurnInSession) => {
       const sessionKey = "agent:main:main";
       const sessionEntry = {
@@ -206,7 +160,7 @@ describe("ensureSkillSnapshot", () => {
           sendPolicy: "deny",
         };
         const patch = await update(concurrentEntry);
-        expect(patch).toMatchObject({ sessionId: "session-1" });
+        expect(patch).not.toHaveProperty("sessionId");
         if (isFirstTurnInSession) {
           expect(patch).toHaveProperty("systemSent", true);
         } else {

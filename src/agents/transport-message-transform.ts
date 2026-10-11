@@ -106,20 +106,13 @@ export function transformTransportMessages(
         if (modelBoundThinkingReplayMode === "drop") {
           continue;
         }
-        if (block.redacted) {
-          if (isSameModel) {
-            content.push(block);
-          }
-          continue;
+        if (
+          block.redacted
+            ? isSameModel
+            : (isSameModel && block.thinkingSignature) || block.thinking.trim()
+        ) {
+          content.push(isSameModel ? block : { type: "text", text: block.thinking });
         }
-        if (isSameModel && block.thinkingSignature) {
-          content.push(block);
-          continue;
-        }
-        if (!block.thinking.trim()) {
-          continue;
-        }
-        content.push(isSameModel ? block : { type: "text", text: block.thinking });
         continue;
       }
       if (block.type === "text") {

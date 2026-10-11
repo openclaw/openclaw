@@ -19,6 +19,10 @@ export class InvocationFrame implements PluginExecutionFrame {
     this.sourceCaptureStorage = scopes.sourceCaptureStorage;
   }
 
+  get runtimePluginId(): string | undefined {
+    return undefined;
+  }
+
   withScopes(scopes: PluginExecutionScopes): InvocationFrame {
     return new InvocationFrame(scopes);
   }

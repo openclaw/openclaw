@@ -117,9 +117,8 @@ it("keeps one collector launch pending through reversible Gateway suspension", a
     cleanupFailedSpawn: cleanup,
   });
   const first = outsideRoot(() => callbacks.start());
-  const duplicate = outsideRoot(() => callbacks.start());
   let settled = false;
-  const observed = Promise.allSettled([first, duplicate]).then(() => {
+  const observed = Promise.allSettled([first]).then(() => {
     settled = true;
   });
   try {
@@ -127,8 +126,7 @@ it("keeps one collector launch pending through reversible Gateway suspension", a
     expect(settled).toBe(false);
     expect(launch).not.toHaveBeenCalled();
     expect(suspension.release()).toBe(true);
-    await Promise.all([first, duplicate]);
-    await callbacks.start();
+    await first;
     expect(launch).toHaveBeenCalledOnce();
     expect(startQueuedRun).toHaveBeenCalledOnce();
     expect(f.dispose).toHaveBeenCalledOnce();

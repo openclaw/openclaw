@@ -1,5 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
-import "../../../components/mcp-app-catalog.ts";
+import "../../../components/mcp-app-catalog.tsx";
 import { keyed } from "lit/directives/keyed.js";
 import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
 import { icons } from "../../../components/icons.ts";

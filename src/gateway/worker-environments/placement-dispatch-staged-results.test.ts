@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, vi } from "vitest";
@@ -27,14 +26,12 @@ import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
+import { stagePendingWorkerWorkspaceResult } from "./workspace-recovery.test-support.js";
 import {
   applyStagedWorkerWorkspaceResult,
   cleanupWorkerWorkspaceResultRef,
-  workerWorkspaceResultRef,
-  workerWorkspaceResultStaging,
 } from "./workspace-result-staging.js";
 
-const { stageWorkerWorkspaceResult } = workerWorkspaceResultStaging;
 const it = createCommandTest();
 
 describe("worker placement result recovery", () => {
@@ -121,66 +118,6 @@ describe("worker placement result recovery", () => {
     return { active, claim };
   }
 
-  async function stagePendingResult(params: {
-    store: PlacementStore;
-    claim: Awaited<ReturnType<PlacementStore["claimTurn"]>>;
-    workspacePath: string;
-    base?: string;
-    current: string;
-    record?: boolean;
-  }): Promise<{ baseManifestRef: string; currentManifestRef: string; stagedResultRef: string }> {
-    await fs.mkdir(params.workspacePath, { recursive: true });
-    const initialized = await runCommandWithTimeout(
-      ["git", "-C", params.workspacePath, "init", "--quiet"],
-      { timeoutMs: 10_000 },
-    );
-    expect(initialized.code).toBe(0);
-    const payload = path.join(params.workspacePath, ".staged-payload");
-    await fs.mkdir(payload);
-    await fs.writeFile(path.join(payload, "result.txt"), params.current);
-    if (params.base !== undefined) {
-      await fs.writeFile(path.join(params.workspacePath, "result.txt"), params.base);
-    }
-    const encode = (content: string | undefined) => {
-      const raw = JSON.stringify({
-        version: 1,
-        baseCommit: null,
-        entries:
-          content === undefined
-            ? []
-            : [
-                {
-                  path: "result.txt",
-                  type: "file",
-                  mode: 0o644,
-                  size: Buffer.byteLength(content),
-                  sha256: createHash("sha256").update(content).digest("hex"),
-                },
-              ],
-      });
-      return { raw, ref: `sha256:${createHash("sha256").update(raw).digest("hex")}` };
-    };
-    const base = encode(params.base);
-    const current = encode(params.current);
-    await params.store.updateWorkspaceBaseManifest({ claim: params.claim, manifestRef: base.ref });
-    await params.store.markWorkspaceResultPending(params.claim);
-    const stagedResultRef = workerWorkspaceResultRef(params.claim.claimId);
-    await stageWorkerWorkspaceResult({
-      root: params.workspacePath,
-      stagingRoot: payload,
-      stagedResultRef,
-      baseManifestRef: base.ref,
-      currentManifestRef: current.ref,
-      baseManifestRaw: base.raw,
-      currentManifestRaw: current.raw,
-    });
-    if (params.record !== false) {
-      await params.store.recordStagedWorkspaceResult(params.claim, stagedResultRef);
-    }
-    await fs.rm(payload, { recursive: true, force: true });
-    return { baseManifestRef: base.ref, currentManifestRef: current.ref, stagedResultRef };
-  }
-
   it("applies a staged pending result without a tunnel and reclaims the worker", async () => {
     const workspacePath = path.join(root, "same-worker-staged-result");
     const priorConflictRef = "refs/openclaw/worker-results/prior-conflict";
@@ -196,7 +133,7 @@ describe("worker placement result recovery", () => {
     });
     const { active, claim } = await seedWorkerTurn(harness);
     harness.markEnvironmentOwnerEpoch(2);
-    const staged = await stagePendingResult({
+    const staged = await stagePendingWorkerWorkspaceResult({
       store: placementStore,
       claim,
       workspacePath,
@@ -280,7 +217,7 @@ describe("worker placement result recovery", () => {
             placementGeneration: owned.turnClaim.generation,
             owner: placementTurnOwner(owned),
           };
-          const staged = await stagePendingResult({
+          const staged = await stagePendingWorkerWorkspaceResult({
             store: placementStore,
             claim,
             workspacePath,
@@ -415,7 +352,7 @@ describe("worker placement result recovery", () => {
     const harness = createHarness(database, placementStore, { workspacePath });
     const { active, claim } = await seedWorkerTurn(harness);
     harness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
-    await stagePendingResult({
+    await stagePendingWorkerWorkspaceResult({
       store: placementStore,
       claim,
       workspacePath,
@@ -492,7 +429,7 @@ describe("worker placement result recovery", () => {
       const workspacePath = path.join(root, "dead-worker-staged-result");
       const originalHarness = createHarness(database, placementStore, { workspacePath });
       const { active, claim } = await seedWorkerTurn(originalHarness);
-      const staged = await stagePendingResult({
+      const staged = await stagePendingWorkerWorkspaceResult({
         store: placementStore,
         claim,
         workspacePath,
@@ -604,7 +541,7 @@ describe("worker placement result recovery", () => {
       if (placementState === "draining") {
         await drain();
       }
-      const staged = await stagePendingResult({
+      const staged = await stagePendingWorkerWorkspaceResult({
         store: placementStore,
         claim,
         workspacePath,
@@ -729,7 +666,7 @@ describe("worker placement result recovery", () => {
     const workspacePath = path.join(root, "published-unrecorded-result");
     const originalHarness = createHarness(database, placementStore, { workspacePath });
     const { claim } = await seedWorkerTurn(originalHarness);
-    const staged = await stagePendingResult({
+    const staged = await stagePendingWorkerWorkspaceResult({
       store: placementStore,
       claim,
       workspacePath,
@@ -758,7 +695,7 @@ describe("worker placement result recovery", () => {
     const workspacePath = path.join(root, "diverged-staged-result");
     const originalHarness = createHarness(database, placementStore, { workspacePath });
     const { active, claim } = await seedWorkerTurn(originalHarness);
-    const staged = await stagePendingResult({
+    const staged = await stagePendingWorkerWorkspaceResult({
       store: placementStore,
       claim,
       workspacePath,
@@ -862,7 +799,7 @@ describe("worker placement result recovery", () => {
     const workspacePath = path.join(root, "accepted-clean-local-advance");
     const originalHarness = createHarness(database, placementStore, { workspacePath });
     const { claim } = await seedWorkerTurn(originalHarness);
-    const staged = await stagePendingResult({
+    const staged = await stagePendingWorkerWorkspaceResult({
       store: placementStore,
       claim,
       workspacePath,
@@ -906,7 +843,7 @@ describe("worker placement result recovery", () => {
     const workspacePath = path.join(root, "unchanged-hash-conflict");
     const originalHarness = createHarness(database, placementStore, { workspacePath });
     const { active, claim } = await seedWorkerTurn(originalHarness);
-    await stagePendingResult({
+    await stagePendingWorkerWorkspaceResult({
       store: placementStore,
       claim,
       workspacePath,

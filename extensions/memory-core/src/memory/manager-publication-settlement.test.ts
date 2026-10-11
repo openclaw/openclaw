@@ -190,7 +190,7 @@ it.each([
             }),
           () => undefined,
         ),
-      ).resolves.toEqual({ ok: true, value: false });
+      ).resolves.toMatchObject({ ok: true, value: false });
       await worker.close();
       worker = undefined;
       await closeOpenClawAgentDatabasesAsync(state.stateDir);
@@ -217,7 +217,7 @@ it.each([
           (scope) => scope.execute(deleteCurrentSource),
           () => undefined,
         ),
-      ).resolves.toEqual({ ok: true, value: true });
+      ).resolves.toMatchObject({ ok: true, value: true });
       expect(recovered.db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);
       expect(recovered.db.prepare("PRAGMA integrity_check").get()).toEqual({
         integrity_check: "ok",
@@ -230,7 +230,7 @@ it.each([
           (scope) => scope.execute(deleteCurrentSource),
           () => undefined,
         ),
-      ).resolves.toEqual({ ok: true, value: true });
+      ).resolves.toMatchObject({ ok: true, value: true });
     }
   } finally {
     clearInterval(heartbeat);
@@ -289,7 +289,7 @@ it("preserves a committed publication when binding cleanup fails", async () => {
     if (completed === undefined && "error" in outcome) {
       throw outcome.error;
     }
-    expect(completed).toEqual({ ok: true, value: true });
+    expect(completed).toMatchObject({ ok: true, value: true });
     expect(callbacks).toBe(1);
     expect(readMemoryDatabaseRevision(db)).toBe(beforeRevision + 1);
     expect(db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);

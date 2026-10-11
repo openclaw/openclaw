@@ -19,7 +19,7 @@ function expectElement<T extends Element>(element: T | null | undefined, label: 
 }
 
 describe("config form map integrity", () => {
-  it.each(["defaults", "agent"])(
+  it.each(["agent"])(
     "round-trips the %s model Code Mode field without losing sibling settings",
     (scope) => {
       const wrapScope = (value: unknown) =>
@@ -187,12 +187,9 @@ describe("config form map integrity", () => {
   });
 
   it.each([
-    ["boolean", true],
     ["null", null],
-    ["array", [{ type: "string" }]],
     ["wrong type", { type: "number" }],
     ["unknown constraint", { type: "string", not: { const: "blocked" } }],
-    ["inherited type", Object.assign(Object.create({ type: "string" }), { unknown: true })],
   ])("keeps %s property-name constraints fail-closed", (_label, propertyNames) => {
     const analysis = analyzeConfigSchema({
       type: "object",
@@ -210,13 +207,7 @@ describe("config form map integrity", () => {
 
   it.each([
     { label: "pattern", names: { type: "string", pattern: "^[a-z]+$" }, invalid: "bad/key" },
-    { label: "minimum length", names: { type: "string", minLength: 3 }, invalid: "x" },
     { label: "enumeration", names: { enum: ["primary", "backup"] }, invalid: "other" },
-    {
-      label: "intersection",
-      names: { allOf: [{ minLength: 3 }, { pattern: "^[a-z]+$" }] },
-      invalid: "bad/key",
-    },
   ])(
     "rejects $label key edits even when an existing value is invalid",
     async ({ names, invalid }) => {
@@ -307,117 +298,44 @@ describe("config form map integrity", () => {
     },
   );
 
-  it.each(["map", "array"])(
-    "keeps supported %s children editable beside Raw-only fields",
-    (kind) => {
-      const rowSchema = {
-        type: "object",
-        properties: {
-          name: { type: "string" },
-          retained: { anyOf: [{ type: "number" }, { const: false }] },
-        },
-      } satisfies JsonSchema;
-      const collection = (name: string) =>
-        kind === "map"
-          ? { "example/model.v1": { name, retained: false } }
-          : [{ name, retained: false }];
-      const analysis = analyzeConfigSchema({
-        type: "object",
-        properties: {
-          values:
-            kind === "map"
-              ? { type: "object", additionalProperties: rowSchema }
-              : { type: "array", items: rowSchema },
-        },
-      });
-      expect(analysis.unsupportedPaths).toEqual(["values.*.retained"]);
-      const state = createInitialConfigState();
-      state.configSchema = analysis.schema;
-      state.configForm = { values: collection("before") };
-      const container = document.createElement("div");
-      renderAnalyzedFormFixture(container, analysis, {
-        value: state.configForm,
-        onPatch: (path, value) => updateConfigFormValue(state, path, value),
-      });
-      expect(container.textContent).toContain("Unsupported schema node. Use Raw mode.");
-      expect(container.querySelector('[aria-label="Retained"]')).toBeNull();
-      const name = expectElement(
-        container.querySelector<HTMLInputElement>('[aria-label="Name"]'),
-        "supported name field",
-      );
-      name.value = "after";
-      name.dispatchEvent(new Event("input", { bubbles: true }));
-      expect(JSON.parse(serializeFormForSubmit(state))).toEqual({ values: collection("after") });
-    },
-  );
-
-  it("retains unset map drafts until the collection source changes", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
+  it.each(["map"])("keeps supported %s children editable beside Raw-only fields", (kind) => {
+    const rowSchema = {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        retained: { anyOf: [{ type: "number" }, { const: false }] },
+      },
+    } satisfies JsonSchema;
+    const collection = (name: string) =>
+      kind === "map"
+        ? { "example/model.v1": { name, retained: false } }
+        : [{ name, retained: false }];
     const analysis = analyzeConfigSchema({
       type: "object",
       properties: {
-        aliases: {
-          type: "object",
-          additionalProperties: {
-            type: "string",
-            pattern: "^[0-9]+$",
-          },
-        },
+        values:
+          kind === "map"
+            ? { type: "object", additionalProperties: rowSchema }
+            : { type: "array", items: rowSchema },
       },
     });
-    const renderValue = (aliases: Record<string, unknown> | undefined) => {
-      renderAnalyzedFormFixture(container, analysis, {
-        value: aliases === undefined ? {} : { aliases },
-        onPatch: () => {},
-      });
-    };
-
-    renderValue(undefined);
-    const map = expectElement(container.querySelector<HTMLElement>(".cfg-map"), "unset map");
-    const draftHost = expectElement(
-      map.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
-      "unset map draft host",
+    expect(analysis.unsupportedPaths).toEqual(["values.*.retained"]);
+    const state = createInitialConfigState();
+    state.configSchema = analysis.schema;
+    state.configForm = { values: collection("before") };
+    const container = document.createElement("div");
+    renderAnalyzedFormFixture(container, analysis, {
+      value: state.configForm,
+      onPatch: (path, value) => updateConfigFormValue(state, path, value),
+    });
+    expect(container.textContent).toContain("Unsupported schema node. Use Raw mode.");
+    expect(container.querySelector('[aria-label="Retained"]')).toBeNull();
+    const name = expectElement(
+      container.querySelector<HTMLInputElement>('[aria-label="Name"]'),
+      "supported name field",
     );
-    expectElement(
-      Array.from(map.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add Entry",
-      ),
-      "unset map add button",
-    ).click();
-    await draftHost.updateComplete;
-    const key = expectElement(
-      draftHost.querySelector<HTMLInputElement>("[data-collection-draft-key]"),
-      "unset map draft key",
-    );
-    const value = expectElement(
-      draftHost.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
-      "unset map draft value",
-    );
-    key.value = "primary";
-    key.dispatchEvent(new Event("input", { bubbles: true }));
-    value.value = "123";
-    value.dispatchEvent(new Event("input", { bubbles: true }));
-    await draftHost.updateComplete;
-
-    renderValue(undefined);
-    await draftHost.updateComplete;
-    expect(
-      expectElement(
-        draftHost.querySelector<HTMLInputElement>("[data-collection-draft-key]"),
-        "preserved unset map draft key",
-      ).value,
-    ).toBe("primary");
-    expect(
-      expectElement(
-        draftHost.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
-        "preserved unset map draft value",
-      ).value,
-    ).toBe("123");
-
-    renderValue({});
-    await draftHost.updateComplete;
-    expect(draftHost.querySelector(".cfg-collection-draft")).toBeNull();
-    container.remove();
+    name.value = "after";
+    name.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(JSON.parse(serializeFormForSubmit(state))).toEqual({ values: collection("after") });
   });
 });

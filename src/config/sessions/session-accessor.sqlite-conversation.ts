@@ -254,10 +254,12 @@ export function linkSessionConversation(params: {
         .limit(1),
     ).rows[0];
   const existingAssociation =
-    readAssociation(sessionId) ??
-    (params.previousSessionId && params.previousSessionId !== sessionId
-      ? readAssociation(params.previousSessionId)
-      : undefined);
+    conversation.routeContext === undefined
+      ? (readAssociation(sessionId) ??
+        (params.previousSessionId && params.previousSessionId !== sessionId
+          ? readAssociation(params.previousSessionId)
+          : undefined))
+      : undefined;
   const routeContextJson =
     conversation.routeContext === undefined
       ? existingAssociation
