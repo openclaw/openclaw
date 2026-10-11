@@ -380,7 +380,7 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
 
 type PersonReferenceProperties = { profileId: string; label: string };
 export type PersonReferenceElement = SolidBridgeElement<PersonReferenceProperties>;
-export const PersonReference = defineSolidBridge<PersonReferenceProperties>(
+defineSolidBridge<PersonReferenceProperties>(
   "openclaw-person-reference",
   (props, host) => {
     host.style.display = "contents";

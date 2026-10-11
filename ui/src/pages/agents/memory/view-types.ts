@@ -5,7 +5,7 @@ import type {
   WikiPagePreview,
 } from "./dreaming.ts";
 
-export type DreamingPhaseInfo = {
+type DreamingPhaseInfo = {
   enabled: boolean;
   cron: string;
   nextRunAtMs?: number;
