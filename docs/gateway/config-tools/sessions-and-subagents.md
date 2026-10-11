@@ -117,6 +117,8 @@ is on by default. Use `agent`, `tree`, or `self` to narrow visibility.
     sessions: {
       // "self" | "tree" | "agent" | "all"
       visibility: "all",
+      // Opt in to sessions_send targets in threads/topics (default false)
+      allowThreadTargets: false,
     },
   },
 }

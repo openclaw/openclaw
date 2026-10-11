@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta-readonly.js";
 import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
@@ -95,7 +96,10 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
     displaySummary: SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
     description: opts?.workerPlacement
       ? PLACED_SESSIONS_SEND_DESCRIPTION
-      : describeSessionsSendTool(),
+      : describeSessionsSendTool({
+          allowThreadTargets:
+            (opts?.config ?? getRuntimeConfig()).tools?.sessions?.allowThreadTargets === true,
+        }),
     parameters: opts?.workerPlacement ? PlacedSessionsSendSchema : SessionsSendToolSchema,
     outputSchema: SessionsSendOutputSchema,
     execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args) => {
@@ -396,10 +400,13 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           runId,
         );
       }
-      if (resolveSessionThreadInfo(resolvedKey).threadId) {
+      if (
+        cfg.tools?.sessions?.allowThreadTargets !== true &&
+        resolveSessionThreadInfo(resolvedKey).threadId
+      ) {
         return sendFailure(
           "error",
-          "sessions_send cannot target a thread session for inter-agent coordination. Use the parent channel session key instead.",
+          "sessions_send cannot target a thread session for inter-agent coordination. Use the parent channel session key instead, or enable tools.sessions.allowThreadTargets.",
           unresolvedDisplayKey,
         );
       }

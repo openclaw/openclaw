@@ -823,6 +823,49 @@ describe("sessions_send gating", () => {
     expect(requireGatewayRequest(1).method).toBe("sessions.resolve");
   });
 
+  it("allows thread session targets when tools.sessions.allowThreadTargets is set", async () => {
+    setActivePluginRegistry(createSessionConversationTestRegistry());
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all", allowThreadTargets: true },
+      },
+    });
+    const threadSessionKey = "agent:main:telegram:group:-100123:topic:42";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: threadSessionKey },
+      { sessionId: threadSessionKey, updatedAt: 1 },
+    );
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.resolve") {
+        return { key: threadSessionKey };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-thread-opt-in", acceptedAt: 123 };
+      }
+      return {};
+    });
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-thread-opt-in", {
+      label: "topic",
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    expect(tool.description).not.toContain("Thread chats rejected");
+    expect(requireDetails(result)).toMatchObject({ status: "accepted" });
+    expect(
+      callGatewayMock.mock.calls.some(
+        ([request]) =>
+          (request as { method?: string; params?: { sessionKey?: string } }).method === "agent" &&
+          (request as { params?: { sessionKey?: string } }).params?.sessionKey === threadSessionKey,
+      ),
+    ).toBe(true);
+  });
+
   it("does not disclose a resolved thread session key from a sessionId target", async () => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
     loadConfigMock.mockReturnValue({
