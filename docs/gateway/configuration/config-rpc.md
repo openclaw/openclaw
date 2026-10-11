@@ -61,9 +61,10 @@ from an unrelated write even when secret values are redacted.
 `config.patch` also accepts `response: "summary"` for callers that only need a
 commit acknowledgment. It omits the full config from the response. A summary
 for a change requiring no runtime reload work also omits the restart sentinel.
-The Control UI uses this for preference writes; ordinary config editors keep
-the default full response. Validation, persistence, and runtime application
-complete before acknowledgment in either mode.
+Clients that maintain an editable config draft, including the Control UI, keep
+the default full response so they can adopt the committed revision without
+losing pending edits. Validation, persistence, and runtime application complete
+before acknowledgment in either mode.
 
 Both `config.apply` and `config.patch` accept `raw`, `baseHash`, `sessionKey`,
 `note`, and `restartDelayMs`. `baseHash` is required for both methods once a

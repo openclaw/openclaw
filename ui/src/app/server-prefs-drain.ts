@@ -1,5 +1,6 @@
 import { sleepWithAbort } from "@openclaw/retry";
 import type { BackgroundPreference } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
+import type { ConfigPatchAck } from "../lib/config/config-draft-model.ts";
 import { showToast } from "../lib/toast.ts";
 import { readConfirmedPrefs, publishConfirmedPrefs } from "./server-prefs-confirmation.ts";
 import { foldSidebarEntriesBase, hasSidebarOrderIntent } from "./server-prefs-intent.ts";
@@ -215,14 +216,14 @@ export async function drainPendingPrefs(
                 // ui.prefs is a deliberately narrow hashless LWW surface enforced by
                 // hasHashlessPatchLwwStructure in the gateway. Serialization still
                 // matters: a pending whole-config save must commit before this merge.
-                client.request<{ ok: true }>("config.patch", {
+                client.request<ConfigPatchAck>("config.patch", {
                   raw: JSON.stringify({ ui: { prefs: batch } }),
                   note: "control-ui prefs sync",
-                  response: "summary",
                 }),
               {
                 waitForWritesResumed: true,
-                // Preferences reconcile their own intent; config.changed refreshes the editor.
+                // The shared Settings draft adopts the receipt before its trailing save.
+                configWriteAck: (value) => value,
                 shouldRefresh: () => false,
                 canDispatch: () => {
                   if (

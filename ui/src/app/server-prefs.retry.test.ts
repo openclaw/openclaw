@@ -187,7 +187,6 @@ it.each(["push", "flush"] as const)(
     expect(request).toHaveBeenCalledWith("config.patch", {
       raw: JSON.stringify({ ui: { prefs: { locale: "de" } } }),
       note: "control-ui prefs sync",
-      response: "summary",
     });
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "users.prefs.set",

@@ -320,7 +320,6 @@ describe("personal navigation preference boundary", () => {
     expect(request).toHaveBeenCalledExactlyOnceWith("config.patch", {
       raw: JSON.stringify({ ui: { prefs: { themeMode: "dark" } } }),
       note: "control-ui prefs sync",
-      response: "summary",
     });
   });
 

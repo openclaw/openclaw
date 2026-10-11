@@ -308,7 +308,6 @@ describe("profile-bound appearance preferences", () => {
         expect(request).toHaveBeenCalledExactlyOnceWith("config.patch", {
           raw: JSON.stringify({ ui: { prefs: { theme: "dash" } } }),
           note: "control-ui prefs sync",
-          response: "summary",
         }),
       );
       expect(loadSettings()).toMatchObject({ fontUi: "geist", fontChat: "lora" });
