@@ -217,7 +217,7 @@ suite.define(() => {
       await expect
         .poll(() =>
           panel.evaluate((element) => {
-            const canvas = element.shadowRoot?.querySelector<HTMLCanvasElement>("canvas");
+            const canvas = element.querySelector<HTMLCanvasElement>("canvas");
             return [...(canvas?.getContext("2d")?.getImageData(0, 0, 1, 1).data ?? [])].join(",");
           }),
         )
@@ -865,14 +865,18 @@ suite.define(() => {
       await page.keyboard.press("Tab");
       expect(
         await panel.evaluate((element) =>
-          element.shadowRoot?.activeElement?.getAttribute("aria-label"),
+          (element.getRootNode() as Document | ShadowRoot).activeElement?.getAttribute(
+            "aria-label",
+          ),
         ),
       ).toBe("Back");
       await page.keyboard.press("Shift+Tab");
       await page.keyboard.press("Shift+Tab");
       expect(
         await panel.evaluate((element) =>
-          element.shadowRoot?.activeElement?.getAttribute("aria-label"),
+          (element.getRootNode() as Document | ShadowRoot).activeElement?.getAttribute(
+            "aria-label",
+          ),
         ),
       ).toBe("Take control");
       await page.keyboard.press("Enter");
@@ -891,7 +895,9 @@ suite.define(() => {
       await panel.getByRole("button", { name: "Keyboard", exact: true }).click();
       expect(
         await panel.evaluate((element) =>
-          element.shadowRoot?.activeElement?.classList.contains("desktop-keyboard-input"),
+          (element.getRootNode() as Document | ShadowRoot).activeElement?.classList.contains(
+            "desktop-keyboard-input",
+          ),
         ),
       ).toBe(true);
       await page.keyboard.type("k");

@@ -29,7 +29,7 @@ export function DesktopDocumentView(props: DesktopDocumentViewOptions) {
     <section class="desktop-document" aria-label={t("desktop.title")}>
       <DesktopPanelContent
         {...props}
-        connection={
+        connection={() => (
           <div class="desktop-stage">
             {/* noVNC owns this island; controls remain Solid-owned siblings. */}
             <div class="desktop-surface" />
@@ -45,7 +45,7 @@ export function DesktopDocumentView(props: DesktopDocumentViewOptions) {
               tabIndex={-1}
               aria-label={t("desktop.keyboardInput")}
               disabled={props.state !== "connected" || !props.controlling}
-              prop:value={props.keyboardInputValue}
+              value={props.keyboardInputValue}
               onKeyDown={props.onKeyboardEvent}
               onKeyUp={props.onKeyboardEvent}
               onInput={props.onKeyboardInput}
@@ -106,7 +106,7 @@ export function DesktopDocumentView(props: DesktopDocumentViewOptions) {
               </button>
             </nav>
           </div>
-        }
+        )}
       />
     </section>
   );

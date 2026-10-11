@@ -3,14 +3,27 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { DockLayoutController } from "../dock-layout-controller.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
+import "../panel-elements.ts";
 import { PanelTabStrip } from "../panel-tab-strip-solid.tsx";
 import { Icon } from "../solid/icon.tsx";
-import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
+import type { PanelEmptyStateElement, PanelEmptyStateProps } from "../solid/panel-empty-state.tsx";
+import "../solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import "../tooltip.ts";
 import type { TerminalSessionInfo } from "./terminal-connection.ts";
 import { terminalPanelHostedTabs, type TerminalPanelTab } from "./terminal-panel-tabs.ts";
 import type { TerminalPanelUploadController } from "./terminal-panel-upload.ts";
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-panel-empty-state": HTMLAttributes<PanelEmptyStateElement> & {
+        "prop:heading": PanelEmptyStateProps["heading"];
+        "prop:description": PanelEmptyStateProps["description"];
+      };
+    }
+  }
+}
 
 export type TerminalSessionPickerState = {
   hosted: boolean;
@@ -399,20 +412,22 @@ export function TerminalPanelView(props: { view: () => TerminalPanelViewState })
               : undefined
           }
           aria-label={props.view().hosted ? t("terminal.title") : undefined}
-          onDragEnter={(event) => props.view().upload.handleDragEnter(event)}
-          onDragOver={(event) => props.view().upload.handleDragOver(event)}
-          onDragLeave={(event) => props.view().upload.handleDragLeave(event)}
-          onDrop={(event) => props.view().upload.handleDrop(event)}
+          onDragEnter={(event: DragEvent) => props.view().upload.handleDragEnter(event)}
+          onDragOver={(event: DragEvent) => props.view().upload.handleDragOver(event)}
+          onDragLeave={(event: DragEvent) => props.view().upload.handleDragLeave(event)}
+          onDrop={(event: DragEvent) => props.view().upload.handleDrop(event)}
         >
           <Show when={props.view().connecting}>
             <Loading overlay label={t("terminal.connecting")} />
           </Show>
           <Show when={!props.view().activeId && !props.view().connecting && !props.view().error}>
-            <PanelEmptyState
-              heading={t("chat.sidePanel.terminal")}
-              description={t("chat.sidePanel.terminalEmpty")}
-              icon={<Icon name="terminal" />}
-            />
+            {/* Defer the nested bridge mount until this parent's insertion is complete. */}
+            <openclaw-panel-empty-state
+              prop:heading={t("chat.sidePanel.terminal")}
+              prop:description={t("chat.sidePanel.terminalEmpty")}
+            >
+              <Icon name="terminal" />
+            </openclaw-panel-empty-state>
           </Show>
           <Show when={props.view().upload.uploadsEnabled()}>
             <input

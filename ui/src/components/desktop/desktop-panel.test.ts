@@ -129,12 +129,14 @@ describe("embedded desktop panel presentation", () => {
 
     updatePanel(panel, { requestedSource: null });
     await panel.updateComplete;
-    expect(disconnect).toHaveBeenCalledTimes(2);
-    expect(connect).toHaveBeenCalledTimes(2);
-    expect(request.mock.calls.some(([method]) => method === "sessions.describe")).toBe(false);
-    expect(request.mock.calls.some(([method]) => method === "environments.list")).toBe(false);
-    expect(panel.renderRoot.querySelector(".desktop-picker")).toBeNull();
-    expect(panel.renderRoot.textContent).toContain("The requested desktop is unavailable");
+    await waitForSolid(() => {
+      expect(disconnect).toHaveBeenCalledTimes(2);
+      expect(connect).toHaveBeenCalledTimes(2);
+      expect(request.mock.calls.some(([method]) => method === "sessions.describe")).toBe(false);
+      expect(request.mock.calls.some(([method]) => method === "environments.list")).toBe(false);
+      expect(panel.renderRoot.querySelector(".desktop-picker")).toBeNull();
+      expect(panel.renderRoot.textContent).toContain("The requested desktop is unavailable");
+    });
   });
 
   it.each([
@@ -238,8 +240,10 @@ describe("embedded desktop panel presentation", () => {
       online = false;
       updatePanel(panel, { client: gateway.client, available: true });
       await panel.updateComplete;
-      expect(panel.renderRoot.querySelector(".desktop-picker")).not.toBeNull();
-      expect(panel.renderRoot.querySelectorAll(".desktop-environment")).toHaveLength(0);
+      await waitForSolid(() => {
+        expect(panel.renderRoot.querySelector(".desktop-picker")).not.toBeNull();
+        expect(panel.renderRoot.querySelectorAll(".desktop-environment")).toHaveLength(0);
+      });
       const observations = () =>
         request.mock.calls.filter(([method]) => method === "desktop.observe");
       expect(observations()).toHaveLength(2);
@@ -377,8 +381,9 @@ describe("embedded desktop panel presentation", () => {
     };
     const retired = { session: { key: session.key, placement: { state: "reclaimed" } } };
     try {
-      await panel.updateComplete;
-      expect(panel.renderRoot.querySelector(".desktop-picker")).not.toBeNull();
+      await waitForSolid(() =>
+        expect(panel.renderRoot.querySelector(".desktop-picker")).not.toBeNull(),
+      );
       await startOldSessionRead();
       inventory = nextInventory.promise;
       gateway.emit("presence", {
@@ -924,7 +929,7 @@ describe("embedded desktop panel presentation", () => {
           "Reconnect",
         );
       }
-      expect(previous.disconnect).toHaveBeenCalledOnce();
+      await waitForSolid(() => expect(previous.disconnect).toHaveBeenCalledOnce());
       if (pending) {
         expect(pending.isCurrent()).toBe(false);
         expect(next.disconnect).toHaveBeenCalledOnce();

@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createEffect, createMemo, flush, onSettled } from "solid-js";
-import type { PanelTabStripTab } from "./panel-tab-strip.ts";
+import { For, Show, createEffect, createMemo, flush, onSettled, untrack } from "solid-js";
+import "./panel-elements.ts";
+import type { PanelTabStripTab } from "./panel-tab-strip-types.ts";
 import { Icon } from "./solid/icon.tsx";
 import "./tooltip.ts";
 import "./web-awesome-tabs.ts";
@@ -199,27 +200,42 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
   createEffect(
     () => ({ key: layoutKey(), focusedId: deepestActiveElementId() }),
     ({ focusedId }) => {
-      const selected = group.querySelector<HTMLElement>("wa-tab[active]");
-      if (!selected) {
-        return;
-      }
-      // The compute phase captures focus before keyed movement; wait for WA's layout
-      // after Solid commits, then recover only focus lost by that movement.
-      void group.updateComplete.then(() => {
-        if (!selected.isConnected) {
-          return;
-        }
-        selected.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-        if (focusedId === selected.id && focusNeedsRecovery(selected, activeElementFor(selected))) {
-          selected.focus({ preventScroll: true });
-        }
-      });
+      const tabs = [
+        ...group.querySelectorAll<HTMLElement & { updateComplete: Promise<unknown> }>("wa-tab"),
+      ];
+      // A new WA tab resets tabIndex during its first update even when the group's
+      // active tab stays unchanged. Reconcile after both owners have committed.
+      void Promise.all([group.updateComplete, ...tabs.map((tab) => tab.updateComplete)]).then(
+        () => {
+          if (!group.isConnected) {
+            return;
+          }
+          const activeId = untrack(() => props.activeId);
+          const currentTabs = [...group.querySelectorAll<HTMLElement>("wa-tab")];
+          const selected = currentTabs.find((tab) => tab.getAttribute("panel") === activeId);
+          for (const tab of currentTabs) {
+            tab.tabIndex = tab === selected ? 0 : -1;
+          }
+          if (!selected) {
+            return;
+          }
+          // Recover only focus lost by keyed movement, never newer user focus.
+          selected.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+          if (
+            focusedId === selected.id &&
+            focusNeedsRecovery(selected, activeElementFor(selected))
+          ) {
+            selected.focus({ preventScroll: true });
+          }
+        },
+      );
     },
   );
 
   async function closeTab(event: MouseEvent, tab: T) {
     const button = event.currentTarget;
-    const renderRoot = button instanceof Node ? (button.getRootNode() as ParentNode) : null;
+    const root = button instanceof Node ? button.getRootNode() : null;
+    const renderRoot = root instanceof Document || root instanceof ShadowRoot ? root : null;
     const restoreFocus =
       button instanceof Element &&
       (keyboardCloseActivations.delete(button) || activeElementFor(button) === button);
@@ -387,7 +403,7 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
                   slot="nav"
                   class="rail-header__action tabstrip-tab__close"
                   type="button"
-                  prop:tabIndex={selected() ? 0 : -1}
+                  tabIndex={selected() ? 0 : -1}
                   aria-label={tab().closeLabel}
                   onKeyDown={(event: KeyboardEvent) => {
                     if (

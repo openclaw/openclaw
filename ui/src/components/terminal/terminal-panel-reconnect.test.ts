@@ -357,6 +357,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     panel.client = client;
     panel.available = true;
     document.body.append(panel);
+    await panel.updateComplete;
 
     panel.available = false;
     await panel.updateComplete;
@@ -497,6 +498,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     panel.client = client;
     panel.available = true;
     document.body.append(panel);
+    await panel.updateComplete;
 
     panel.client = null;
     panel.available = false;
@@ -551,6 +553,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     panel.client = client;
     panel.available = true;
     document.body.append(panel);
+    await panel.updateComplete;
 
     panel.client = null;
     panel.available = false;
@@ -605,6 +608,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     stalePanel.client = client;
     stalePanel.available = true;
     document.body.append(stalePanel);
+    await stalePanel.updateComplete;
 
     stalePanel.client = null;
     stalePanel.available = false;

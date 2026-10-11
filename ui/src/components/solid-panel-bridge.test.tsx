@@ -9,9 +9,11 @@ type Inputs = { value: number };
 class CounterPanel extends SolidPanelController {
   value = 0;
   connections = 0;
+  connectedInDocument = false;
   disconnections = 0;
   connectedCallback() {
     this.connections += 1;
+    this.connectedInDocument = this.element.isConnected;
   }
   disconnectedCallback() {
     this.disconnections += 1;
@@ -58,6 +60,7 @@ it("shares synchronous inputs with the controller and commits imperative changes
     await element.updateComplete;
     expect(element.textContent).toBe("5");
     expect(controllers[0]?.connections).toBe(1);
+    expect(controllers[0]?.connectedInDocument).toBe(true);
   } finally {
     element.remove();
     await Promise.resolve();
@@ -76,6 +79,7 @@ it("connects a Solid-owned host and reacts to its caller's new inputs", async ()
     await waitForSolid(() => expect(view.container.textContent).toBe("9"));
     expect(controllers[0]?.value).toBe(9);
     expect(controllers[0]?.connections).toBe(1);
+    expect(controllers[0]?.connectedInDocument).toBe(true);
   } finally {
     view.unmount();
   }

@@ -1,25 +1,24 @@
-import type { JSX } from "@solidjs/web";
-
-type ElementAttributes = JSX.HTMLAttributes<HTMLElement>;
+export type { JSX } from "@solidjs/web";
 
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "wa-tab-group": ElementAttributes & {
+      "wa-tab-group": HTMLAttributes<HTMLElement> & {
         "prop:active"?: string;
         activation?: "auto" | "manual";
         "without-scroll-controls"?: boolean;
         "onWa-tab-show"?: (event: CustomEvent<{ name: string }>) => void;
       };
-      "wa-tab": ElementAttributes & {
+      "wa-tab": HTMLAttributes<HTMLElement> & {
         panel?: string;
         active?: boolean;
+        "prop:tabIndex"?: number;
       };
-      "wa-tab-panel": ElementAttributes & {
+      "wa-tab-panel": HTMLAttributes<HTMLElement> & {
         name?: string;
         active?: boolean;
       };
-      "resizable-divider": Omit<ElementAttributes, "onResize"> & {
+      "resizable-divider": Omit<HTMLAttributes<HTMLElement>, "onResize"> & {
         "prop:orientation": "horizontal" | "vertical";
         "prop:label": string;
         "prop:splitRatio": number;

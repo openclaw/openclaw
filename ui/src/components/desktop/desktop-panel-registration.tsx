@@ -1,7 +1,7 @@
 import { definePanelBridge } from "../solid-panel-bridge.tsx";
 import { DesktopClient } from "./desktop-client.ts";
+import type { DesktopPanelController } from "./desktop-panel-controller.ts";
 import { DesktopPanelContent } from "./desktop-panel-solid.tsx";
-import type { DesktopPanelController } from "./desktop-panel.ts";
 import dockStyles from "../dock-panel-solid.css?inline";
 import desktopStyles from "./desktop-panel.css?inline";
 

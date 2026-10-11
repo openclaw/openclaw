@@ -1,8 +1,10 @@
 import { createMemo } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
+import { Match, Switch } from "solid-js";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import "../panel-elements.ts";
 import { Icon } from "../solid/icon.tsx";
 import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
@@ -30,7 +32,7 @@ function BrowserIconButton(props: {
       data-new-tab-action={props.newTab ? "" : undefined}
       title={props.title ?? props.label}
       aria-label={props.label}
-      aria-busy={props.busy === undefined ? undefined : String(props.busy)}
+      aria-busy={props.busy === undefined ? undefined : props.busy ? "true" : "false"}
       disabled={props.disabled}
       onClick={() => props.onClick()}
     >
@@ -155,7 +157,7 @@ function Toolbar(props: ControllerProps & { embedded: boolean }) {
         autocomplete="off"
         disabled={Boolean(props.controller.host.fixedTab && !props.controller.activeTargetId)}
         placeholder={t("browser.urlPlaceholder")}
-        prop:value={props.controller.urlDraft}
+        value={props.controller.urlDraft}
         onFocus={(event) => {
           props.controller.urlDraftEditing = true;
           event.currentTarget.select();
@@ -307,19 +309,22 @@ function InspectTooltip(props: ControllerProps) {
 
 function ViewportContent(props: ControllerProps) {
   return (
-    <>
-      {props.controller.native.activeTab && props.controller.mode === "interact" ? (
+    <Switch>
+      <Match
+        when={Boolean(props.controller.native.activeTab) && props.controller.mode === "interact"}
+      >
         <div
           class="bp-stage bp-stage--native"
-          aria-busy={String(props.controller.native.activeTab.loading)}
+          aria-busy={props.controller.native.activeTab?.loading ? "true" : "false"}
         >
-          {props.controller.native.activeTab.loading ? (
+          {props.controller.native.activeTab?.loading ? (
             <span class="bp-native-loading" role="status">
               {t("browser.loading")}
             </span>
           ) : null}
         </div>
-      ) : !props.controller.native.activeTab && props.controller.running === false ? (
+      </Match>
+      <Match when={!props.controller.native.activeTab && props.controller.running === false}>
         <PanelEmptyState
           icon={<Icon name="globe" />}
           heading={t("chat.sidePanel.browser")}
@@ -336,26 +341,28 @@ function ViewportContent(props: ControllerProps) {
             )
           }
         />
-      ) : !props.controller.view && props.controller.unavailableTabText ? (
+      </Match>
+      <Match when={!props.controller.view && Boolean(props.controller.unavailableTabText)}>
         <div class="bp-status" role="status">
           {props.controller.unavailableTabText}
         </div>
-      ) : !props.controller.view ? (
-        props.controller.loading ? (
-          <PanelLoadingSkeleton variant="browser" label={t("browser.loading")} />
-        ) : (
-          <PanelEmptyState
-            icon={<Icon name="globe" />}
-            heading={t("chat.sidePanel.browser")}
-            description={t("chat.sidePanel.browserEmpty")}
-          />
-        )
-      ) : (
+      </Match>
+      <Match when={!props.controller.view && props.controller.loading}>
+        <PanelLoadingSkeleton variant="browser" label={t("browser.loading")} />
+      </Match>
+      <Match when={!props.controller.view}>
+        <PanelEmptyState
+          icon={<Icon name="globe" />}
+          heading={t("chat.sidePanel.browser")}
+          description={t("chat.sidePanel.browserEmpty")}
+        />
+      </Match>
+      <Match when={Boolean(props.controller.view)}>
         <div class="bp-stage">
           <img
             class="bp-shot"
-            src={props.controller.view.dataUrl}
-            alt={props.controller.view.metrics?.title || ""}
+            src={props.controller.view!.dataUrl}
+            alt={props.controller.view?.metrics?.title || ""}
           />
           <canvas
             class={[
@@ -395,8 +402,8 @@ function ViewportContent(props: ControllerProps) {
           ) : null}
           <InspectTooltip controller={props.controller} />
         </div>
-      )}
-    </>
+      </Match>
+    </Switch>
   );
 }
 

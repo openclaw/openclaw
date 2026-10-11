@@ -30,7 +30,7 @@ it("keeps panel state synchronous and resolves its render fence after the DOM co
   expect(lifecycle[0]).toBe("connected");
   expect(mounted.container.textContent).toBe("0");
   panel.value = 7;
-  panel.requestUpdate("value", 0);
+  panel.invalidate();
   expect(panel.value).toBe(7);
   expect(mounted.container.textContent).toBe("0");
   const committed = panel.updateComplete;
@@ -52,7 +52,7 @@ it("commits an update requested by the panel's committed-DOM callback", async ()
   panel.updated = () => {
     if (panel.value === 1) {
       panel.value = 2;
-      panel.requestUpdate("value", 1);
+      panel.invalidate();
     }
   };
   const mounted = mountSolid(
@@ -64,7 +64,7 @@ it("commits an update requested by the panel's committed-DOM callback", async ()
   );
   await waitForSolid(() => expect(panel.hasUpdated).toBe(true));
   panel.value = 1;
-  panel.requestUpdate("value", 0);
+  panel.invalidate();
   await waitForSolid(() => expect(container.textContent).toBe("2"));
   await expect(panel.updateComplete).resolves.toBe(true);
   mounted.unmount();
@@ -72,18 +72,22 @@ it("commits an update requested by the panel's committed-DOM callback", async ()
 });
 
 it("settles a pending update when its view is disposed", async () => {
-  const panel = Object.assign(new SolidPanelController(document.createElement("section")), {
-    value: 0,
-  });
-  const mounted = mountSolid(() => {
-    usePanelController(panel);
-    return <output>{panel.read().value}</output>;
-  });
+  const container = document.createElement("section");
+  document.body.append(container);
+  const panel = Object.assign(new SolidPanelController(container), { value: 0 });
+  const mounted = mountSolid(
+    () => {
+      usePanelController(panel);
+      return <output>{panel.read().value}</output>;
+    },
+    { container },
+  );
   flush();
   await panel.updateComplete;
   panel.value = 1;
-  panel.requestUpdate("value", 0);
+  panel.invalidate();
   const pending = panel.updateComplete;
   mounted.unmount();
   await expect(pending).resolves.toBe(false);
+  container.remove();
 });

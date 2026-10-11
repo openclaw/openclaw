@@ -431,15 +431,13 @@ suite.define(() => {
               JSON.stringify(
                 {
                   panel: await panel.evaluate((element) => ({
-                    html: element.shadowRoot?.innerHTML,
+                    html: element.innerHTML,
                     bounds: element.getBoundingClientRect().toJSON(),
-                    canvases: [...(element.shadowRoot?.querySelectorAll("canvas") ?? [])].map(
-                      (surface) => ({
-                        width: surface.width,
-                        height: surface.height,
-                        bounds: surface.getBoundingClientRect().toJSON(),
-                      }),
-                    ),
+                    canvases: [...element.querySelectorAll("canvas")].map((surface) => ({
+                      width: surface.width,
+                      height: surface.height,
+                      bounds: surface.getBoundingClientRect().toJSON(),
+                    })),
                   })),
                   sockets: await page.evaluate(() =>
                     (

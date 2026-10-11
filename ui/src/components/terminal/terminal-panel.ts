@@ -18,7 +18,6 @@ import {
 import { SolidPanelController } from "../solid-panel-controller.ts";
 import type { TerminalGatewayClient, TerminalSessionInfo } from "./terminal-connection.ts";
 import { updateTerminalFont } from "./terminal-fonts.ts";
-import type { TerminalInputs } from "./terminal-panel-registration.tsx";
 import { TerminalPanelSessionController } from "./terminal-panel-session-controller.ts";
 import {
   reattachTerminalSessionHosts,
@@ -89,11 +88,11 @@ export class TerminalPanelController extends SolidPanelController {
     const client = this.client;
     if (!client || !this.available) {
       this.pickerLoading = false;
-      this.requestUpdate();
+      this.invalidate();
       return;
     }
     this.pickerLoading = true;
-    this.requestUpdate();
+    this.invalidate();
     const sessions = await this.terminalSessions.listSessions();
     if (generation !== this.pickerGeneration || client !== this.client || !this.available) {
       return;
@@ -102,7 +101,7 @@ export class TerminalPanelController extends SolidPanelController {
       this.pickerSessions = sessions;
     }
     this.pickerLoading = false;
-    this.requestUpdate();
+    this.invalidate();
   }
   readonly terminalPanelUploadController = new TerminalPanelUploadController({
     activeTab: () =>
@@ -118,7 +117,7 @@ export class TerminalPanelController extends SolidPanelController {
       this.terminalSessions.tabs.includes(tab as TerminalPanelSessionTab) && tab.status === "live",
     fileInput: () => this.renderRoot.querySelector<HTMLInputElement>(".tp-file-input"),
     setError: (message) => this.terminalSessions.setError(message),
-    requestUpdate: () => this.requestUpdate(),
+    requestUpdate: () => this.invalidate(),
   });
   get terminalFontFamily(): string {
     return terminalFontFamily(this.context?.theme.settings.terminalFontFamily);
@@ -379,7 +378,7 @@ export class TerminalPanelController extends SolidPanelController {
       return;
     }
     this.sessionPickerOpen = true;
-    this.requestUpdate();
+    this.invalidate();
     void this.loadSessionPicker();
     void this.updateComplete.then(() => {
       if (this.sessionPickerOpen) {
@@ -393,7 +392,7 @@ export class TerminalPanelController extends SolidPanelController {
       return;
     }
     this.sessionPickerOpen = false;
-    this.requestUpdate();
+    this.invalidate();
     if (restoreFocus) {
       void this.updateComplete.then(() => {
         this.sessionPickerTrigger.value?.focus();
@@ -434,7 +433,7 @@ export class TerminalPanelController extends SolidPanelController {
     owner?: TerminalSessionInfo["owner"],
   ): Promise<void> {
     this.sessionPickerOpen = false;
-    this.requestUpdate();
+    this.invalidate();
     await this.terminalSessions.attachSessionById(sessionId, owner?.startsWith("agent:") === true);
   }
 
@@ -564,9 +563,23 @@ export class TerminalPanelController extends SolidPanelController {
 
 /** Public custom-element surface retained for the shell and panel hosts. */
 export type OpenClawTerminalPanel = HTMLElement &
-  TerminalInputs &
   Pick<
     TerminalPanelController,
+    | "client"
+    | "agentId"
+    | "sessionKey"
+    | "available"
+    | "suppressed"
+    | "themeMode"
+    | "basePath"
+    | "fullscreen"
+    | "embedded"
+    | "onClose"
+    | "tabsInHeader"
+    | "page"
+    | "routeTarget"
+    | "createTerminalController"
+    | "catalogReadyTimeoutMs"
     | "activateTerminalHost"
     | "toggle"
     | "closeTerminalPanel"

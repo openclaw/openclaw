@@ -81,10 +81,19 @@ export class SolidPanelController {
     });
   }
 
-  requestUpdate(name?: string, oldValue?: unknown): void {
-    if (name !== undefined && !this.changes.has(name)) {
+  inputsChanged(name: string, oldValue: unknown): void {
+    if (!this.changes.has(name)) {
       this.changes.set(name, oldValue);
     }
+    this.invalidate();
+  }
+
+  /** Legacy controllers consume this structural host method until their callers migrate. */
+  requestUpdate(): void {
+    this.invalidate();
+  }
+
+  invalidate(): void {
     if (!this.complete) {
       this.completion = new Promise((resolve) => {
         this.complete = resolve;
@@ -108,12 +117,12 @@ export class SolidPanelController {
 
   connect(): void {
     this.connected = true;
-    this.stopLocale = i18n.subscribe(() => this.requestUpdate());
+    this.stopLocale = i18n.subscribe(() => this.invalidate());
     for (const controller of this.controllers) {
       controller.hostConnected?.();
     }
     this.connectedCallback();
-    this.requestUpdate();
+    this.invalidate();
   }
 
   prepare(): void {
@@ -166,6 +175,21 @@ export function usePanelController(controller: SolidPanelController): void {
     () => controller.revision(),
     () => controller.prepare(),
   );
-  onSettled(() => controller.connect());
-  onCleanup(() => controller.disconnect());
+  let disposed = false;
+  onSettled(() => {
+    if (controller.element.isConnected) {
+      controller.connect();
+    } else {
+      // A direct bridge render settles before its parent inserts the host.
+      queueMicrotask(() => {
+        if (!disposed && controller.element.isConnected) {
+          controller.connect();
+        }
+      });
+    }
+  });
+  onCleanup(() => {
+    disposed = true;
+    controller.disconnect();
+  });
 }

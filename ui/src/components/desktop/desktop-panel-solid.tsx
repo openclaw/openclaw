@@ -1,6 +1,6 @@
 import { untrack } from "solid-js";
 import { usePanelController } from "../solid-panel-controller.ts";
-import type { DesktopPanelController } from "./desktop-panel.ts";
+import type { DesktopPanelController } from "./desktop-panel-controller.ts";
 import { DesktopPresentation } from "./desktop-presentation.tsx";
 
 export function DesktopPanelContent(props: { controller: DesktopPanelController }) {

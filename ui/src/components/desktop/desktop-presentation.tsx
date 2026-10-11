@@ -106,7 +106,6 @@ function PictureInPictureButton(props: {
 
 /** Compose the document and dock views without owning connection state. */
 export function DesktopPresentation(props: { view: DesktopPresentationOptions }) {
-  // Getters keep the connection subtree mounted when only state or toolbar data changes.
   const content = {
     get state(): DesktopPanelState {
       return props.view.content.state === "picker" &&
@@ -116,7 +115,7 @@ export function DesktopPresentation(props: { view: DesktopPresentationOptions })
         ? "connecting"
         : props.view.content.state;
     },
-    get notice(): JSX.Element {
+    notice(): JSX.Element {
       return (
         <>
           <DesktopNotice
@@ -138,13 +137,13 @@ export function DesktopPresentation(props: { view: DesktopPresentationOptions })
         </>
       );
     },
-    get picker(): JSX.Element {
+    picker(): JSX.Element {
       return <DesktopPicker {...props.view.content.picker} loading={props.view.content.loading} />;
     },
-    get credentials(): JSX.Element {
+    credentials(): JSX.Element {
       return <DesktopCredentials {...props.view.content.credentials} />;
     },
-    get recovery(): JSX.Element {
+    recovery(): JSX.Element {
       return (
         <DesktopPanelRecovery
           {...props.view.content.recovery}

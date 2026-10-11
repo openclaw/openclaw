@@ -4,7 +4,7 @@ import type {
   WorkerDesktopAppId,
 } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
-import { For } from "solid-js";
+import { For, Show, untrack } from "solid-js";
 import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { Icon } from "../solid/icon.tsx";
@@ -100,7 +100,7 @@ export function DesktopPanelView(props: {
       )}
       <DesktopPanelContent
         {...props.content}
-        connection={
+        connection={() => (
           <DesktopConnection
             {...props.connection}
             state={props.content.state}
@@ -118,7 +118,7 @@ export function DesktopPanelView(props: {
               )
             }
           />
-        }
+        )}
       />
     </section>
   );
@@ -126,22 +126,29 @@ export function DesktopPanelView(props: {
 
 export function DesktopPanelContent(props: {
   state: DesktopPanelState;
-  notice: JSX.Element;
-  picker: JSX.Element;
-  credentials: JSX.Element;
-  recovery: JSX.Element;
-  connection: JSX.Element;
+  notice: () => JSX.Element;
+  picker: () => JSX.Element;
+  credentials: () => JSX.Element;
+  recovery: () => JSX.Element;
+  connection: () => JSX.Element;
 }) {
+  const notice = untrack(() => props.notice());
   return (
     <div class="desktop-content">
-      {props.notice}
-      {props.state === "picker"
-        ? props.picker
-        : props.state === "inventory-error" || props.state === "disconnected"
-          ? props.recovery
-          : props.state === "credentials"
-            ? props.credentials
-            : props.connection}
+      {notice}
+      <Show when={props.state === "picker"}>
+        {(shown) => untrack(() => shown() && props.picker())}
+      </Show>
+      <Show when={props.state === "inventory-error" || props.state === "disconnected"}>
+        {(shown) => untrack(() => shown() && props.recovery())}
+      </Show>
+      <Show when={props.state === "credentials"}>
+        {(shown) => untrack(() => shown() && props.credentials())}
+      </Show>
+      {/* Connection transitions update siblings without remounting noVNC's island. */}
+      <Show when={props.state === "connecting" || props.state === "connected"}>
+        {(shown) => untrack(() => shown() && props.connection())}
+      </Show>
     </div>
   );
 }
@@ -248,7 +255,7 @@ export function DesktopCredentials(props: {
               name="username"
               type="text"
               autocomplete="off"
-              prop:value={props.username}
+              value={props.username}
               required
             />
           </label>
@@ -388,14 +395,14 @@ export function DesktopSizing(props: DesktopSizingOptions) {
         }
       }}
     >
-      <option value="fit" prop:selected={props.mode === "fit"}>
+      <option value="fit" selected={props.mode === "fit"}>
         {t("desktop.fit")}
       </option>
-      <option value="actual" prop:selected={props.mode === "actual"}>
+      <option value="actual" selected={props.mode === "actual"}>
         {t("desktop.actual")}
       </option>
       {(props.canResize || props.mode === "match") && (
-        <option value="match" prop:selected={props.mode === "match"} disabled={!props.canResize}>
+        <option value="match" selected={props.mode === "match"} disabled={!props.canResize}>
           {t("desktop.match")}
         </option>
       )}

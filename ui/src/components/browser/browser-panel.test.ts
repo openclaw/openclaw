@@ -5,7 +5,13 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import "./browser-panel.ts";
-import { createBrowserClient, createView } from "./browser-panel-controller-test-support.ts";
+import {
+  createBrowserClient,
+  createBrowserPanelTestMetrics,
+  createBrowserPanelTestTab,
+  createView,
+  stubScreenshotMedia,
+} from "./browser-panel-controller-test-support.ts";
 import type { BrowserPanelController } from "./browser-panel-controller.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
@@ -148,6 +154,58 @@ describe("normalizeBrowserUrlDraft", () => {
     await empty?.updateComplete;
     expect(empty?.querySelector(".empty-state__title")?.textContent).toBe("Browser");
     expect(empty?.querySelector("svg")).not.toBeNull();
+  });
+
+  it("renders the initial asynchronous refresh and retains the page while its screenshot updates", async () => {
+    stubScreenshotMedia();
+    const response = createDeferred<unknown>();
+    let refreshed = false;
+    const url = "https://example.test/page";
+    const panel = document.createElement("openclaw-browser-panel");
+    panel.available = true;
+    panel.embedded = true;
+    panel.presented = true;
+    panel.client = createBrowserClient(async (envelope) => {
+      if (envelope.path === "/tabs") {
+        return response.promise;
+      }
+      if (envelope.path === "/screenshot") {
+        return { path: refreshed ? "/fresh.png" : "/old.png", targetId: "raw-tab-a", url };
+      }
+      if (envelope.path === "/act") {
+        return createBrowserPanelTestMetrics(url, refreshed ? "Updated page" : "First page");
+      }
+      throw new Error(`Unexpected browser route: ${envelope.path}`);
+    }).client;
+    mountSolid(() => panel);
+    await waitForSolid(() => {
+      expect(panel.browserPanelController.loading).toBe(true);
+      expect(panel.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull();
+      expect(panel.querySelector(".bp-viewport")?.getAttribute("aria-busy")).toBe("true");
+    });
+
+    response.resolve({
+      running: true,
+      tabs: [createBrowserPanelTestTab("tab-a", url, "First page")],
+    });
+    await waitForSolid(() => {
+      expect(panel.browserPanelController.loading).toBe(false);
+      expect(panel.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
+      expect(panel.querySelector(".bp-shot")?.getAttribute("alt")).toBe("First page");
+    });
+    const stage = panel.querySelector(".bp-stage");
+    const image = panel.querySelector(".bp-shot");
+    const input = panel.querySelector(".bp-input");
+    const previousSource = image?.getAttribute("src");
+    refreshed = true;
+    await panel.browserPanelController.refreshView("tab-a");
+    await waitForSolid(() => {
+      expect(image?.getAttribute("src")).not.toBe(previousSource);
+      expect(image?.getAttribute("alt")).toBe("Updated page");
+    });
+    expect(panel.querySelector(".bp-stage")).toBe(stage);
+    expect(panel.querySelector(".bp-shot")).toBe(image);
+    expect(panel.querySelector(".bp-input")).toBe(input);
   });
 
   it.each([true, false])(

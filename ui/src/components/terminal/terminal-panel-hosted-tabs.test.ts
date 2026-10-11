@@ -158,11 +158,14 @@ describe("Terminal panel hosted tabs", () => {
     const { panel, sessions } = await mount();
     await sessions.openSession();
     const firstId = sessions.tabs[0]!.id;
+    const closedHost = sessions.tabs[0]!.host;
+    const remainingHost = sessions.tabs[1]!.host;
     panel.selectHostedTab(firstId);
     expect(panel.activeHostedTabId).toBe(firstId);
     await panel.closeHostedTab(firstId);
     expect(panel.hostedTabs.some((tab) => tab.id === firstId)).toBe(false);
-    expect(panel.renderRoot.querySelector(".tp-host")).toBeNull();
+    expect(panel.renderRoot.contains(closedHost)).toBe(false);
+    expect(panel.renderRoot.contains(remainingHost)).toBe(true);
   });
 
   it("notifies on tab, selection, booting and header handoff changes, without repeating unrelated renders", async () => {

@@ -28,6 +28,7 @@ export function definePanelBridge<
 ) {
   type Host = SolidBridgeElement<Props, Pick<Controller, Method>>;
   const controllers = new WeakMap<HTMLElement, Controller>();
+  // SAFETY: the property spec is keyed by Props; Object.keys loses that key relationship.
   const properties = Object.keys(options.properties) as (keyof Props & string)[];
   const controllerFor = (host: Host): Controller => {
     let controller = controllers.get(host);
@@ -54,15 +55,19 @@ export function definePanelBridge<
     let prototype = Object.getPrototypeOf(host);
     let bridgeCompletion: PropertyDescriptor["get"];
     while (prototype && !bridgeCompletion) {
-      bridgeCompletion = Object.getOwnPropertyDescriptor(prototype, "updateComplete")?.get;
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, "updateComplete");
+      if (descriptor?.get) {
+        bridgeCompletion = descriptor.get.bind(host);
+      }
       prototype = Object.getPrototypeOf(prototype);
     }
     if (!bridgeCompletion) {
       throw new Error("Solid panel bridge requires the bridge commit fence");
     }
+    const readBridgeCompletion = bridgeCompletion;
     Object.defineProperty(host, "updateComplete", {
       configurable: true,
-      get: () => Promise.resolve(bridgeCompletion.call(host)).then(() => controller.updateComplete),
+      get: () => Promise.resolve(readBridgeCompletion()).then(() => controller.updateComplete),
     });
     controllers.set(host, controller);
     return controller;
@@ -79,6 +84,7 @@ export function definePanelBridge<
         return Reflect.apply(method, controller, args);
       },
     ]),
+    // SAFETY: each selected method is forwarded to that same key on its controller.
   ) as BridgeSpec<Props, Pick<Controller, Method>>["methods"];
   return defineSolidBridge<Props, Pick<Controller, Method>>(
     tag,
@@ -90,7 +96,7 @@ export function definePanelBridge<
         (values) => {
           properties.forEach((key, index) => {
             if (!previous || !Object.is(previous[index], values[index])) {
-              controller.requestUpdate(key, previous?.[index]);
+              controller.inputsChanged(key, previous?.[index]);
             }
           });
           previous = values;

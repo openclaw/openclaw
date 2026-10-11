@@ -36,7 +36,7 @@ function mountTerminalPanel(client: TerminalGatewayClient): OpenClawTerminalPane
   return panel;
 }
 
-async function startPanelWithPendingOpen(sessionKey?: string) {
+async function startPanelWithPendingOpen(sessionKey?: string, hosted = false) {
   let createOptions: CreateOptions | undefined;
   createGhosttyTerminalMock.mockImplementation(async (options: CreateOptions) => {
     createOptions = options;
@@ -56,8 +56,12 @@ async function startPanelWithPendingOpen(sessionKey?: string) {
   panel.client = client;
   panel.sessionKey = sessionKey ?? null;
   panel.available = true;
+  panel.embedded = hosted;
+  panel.tabsInHeader = hosted;
   document.body.append(panel);
-  panel.toggle();
+  if (!hosted) {
+    panel.toggle();
+  }
   await waitForFast(() =>
     expect(requests.some(({ method }) => method === "terminal.open")).toBe(true),
   );
@@ -436,18 +440,22 @@ describe("OpenClawTerminalPanel", () => {
   });
 
   it("discards buffered startup input when open fails", async () => {
-    const { createOptions, open, requests } = await startPanelWithPendingOpen();
+    const { createOptions, open, panel, requests } = await startPanelWithPendingOpen(
+      undefined,
+      true,
+    );
     createOptions.onData?.(new TextEncoder().encode("never send"));
 
     open.reject(new Error("terminal open refused"));
 
     await waitForFast(() => {
-      const panel = document.querySelector(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
       expect(panel.renderRoot.querySelector(".tp-error")?.textContent).toContain(
         "terminal open refused",
       );
     });
     expect(requests.some(({ method }) => method === "terminal.input")).toBe(false);
+    await panel.updateComplete;
+    expect(panel.renderRoot.querySelector("openclaw-panel-empty-state")).toBeNull();
   });
 
   it("closes a session-scoped terminal cancelled after its open response", async () => {

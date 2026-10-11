@@ -2309,7 +2309,6 @@ jobs:
     timeout-minutes: 25
     env:
       OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1"
-      CHECKOUT_GIT_COMMITS_JSON: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'solid2/w-pg-5a' && matrix.task == 'control-ui' && matrix.shard == 1 && '["53b8118647525c9e855a6d276ed3eef5dfef9464"]' || '[]' }}
     strategy:
       fail-fast: false
       max-parallel: 14
@@ -2367,28 +2366,6 @@ jobs:
             --configLoader runner \
             --maxWorkers "${OPENCLAW_VITEST_MAX_WORKERS:-2}" \
             --shard "$VITEST_SHARD_INDEX/$VITEST_SHARD_COUNT"
-
-      - name: Capture temporary Solid panel parity
-        id: panel_parity
-        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'solid2/w-pg-5a' && matrix.task == 'control-ui' && matrix.shard == 1 }}
-        timeout-minutes: 10
-        env:
-          EXPECTED_CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-          EXPECTED_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          EXPECTED_BASELINE_SHA: 53b8118647525c9e855a6d276ed3eef5dfef9464
-        run: node scripts/capture-panel-parity.mjs
-
-      - name: Upload temporary synthetic panel parity
-        if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'solid2/w-pg-5a' && matrix.task == 'control-ui' && matrix.shard == 1 && steps.panel_parity.outcome != 'skipped' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: panel-parity-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            .artifacts/panel-parity/*/baseline/wpg5a-*/*.png
-            .artifacts/panel-parity/*/candidate/wpg5a-*/*.png
-            .artifacts/panel-parity/*/manifest.json
-          if-no-files-found: error
-          retention-days: 14
 
       - name: Upload Control UI E2E timeout diagnostics
         if: failure() && matrix.task == 'control-ui'

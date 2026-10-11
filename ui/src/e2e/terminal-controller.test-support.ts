@@ -8,9 +8,11 @@ type TerminalFactory = (
   options: CreateGhosttyTerminalOptions,
 ) => Promise<GhosttyTerminalController>;
 
-type ObservedTerminalWindow = Window & {
-  terminalControllersForTest: WeakMap<HTMLElement, GhosttyTerminalController>;
-};
+declare global {
+  interface Window {
+    terminalControllersForTest: WeakMap<HTMLElement, GhosttyTerminalController>;
+  }
+}
 
 /** Observe the public factory before connection, including after full-page navigation. */
 export async function observeTerminalControllers(page: Page): Promise<void> {
@@ -18,7 +20,7 @@ export async function observeTerminalControllers(page: Page): Promise<void> {
     const controllers = new WeakMap<HTMLElement, GhosttyTerminalController>();
     const observedHosts = new WeakSet<HTMLElement>();
     Object.defineProperty(window, "terminalControllersForTest", { value: controllers });
-    const define = customElements.define;
+    const define = customElements.define.bind(customElements);
     customElements.define = function (name, constructor, options) {
       if (name === "openclaw-terminal-panel") {
         const prototype = constructor.prototype as HTMLElement & {
@@ -40,7 +42,7 @@ export async function observeTerminalControllers(page: Page): Promise<void> {
         };
         customElements.define = define;
       }
-      define.call(this, name, constructor, options);
+      define(name, constructor, options);
     };
   });
 }
@@ -52,7 +54,7 @@ export function readTerminalCanvasState(canvas: Locator) {
     if (!(element instanceof HTMLCanvasElement) || !(host instanceof HTMLElement)) {
       throw new Error("Expected a terminal canvas inside its .tp-host island");
     }
-    const controller = (window as ObservedTerminalWindow).terminalControllersForTest.get(host);
+    const controller = window.terminalControllersForTest.get(host);
     const terminal = controller?.terminal;
     const renderer = terminal?.renderer;
     const wasmTerm = terminal?.wasmTerm;

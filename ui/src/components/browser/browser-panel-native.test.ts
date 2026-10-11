@@ -332,6 +332,7 @@ describe("native Browser panel ownership", () => {
     panel.available = true;
     panel.remoteAvailable = false;
     mountSolid(() => panel);
+    await panel.updateComplete;
     const routing = startNativeLinkRouting({ shouldOpenInControlUiBrowser: () => false });
     const link = document.createElement("a");
     link.href = "https://example.test/article";

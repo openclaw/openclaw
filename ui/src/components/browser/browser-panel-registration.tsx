@@ -1,28 +1,11 @@
 import { definePanelBridge } from "../solid-panel-bridge.tsx";
+import type { BrowserPanelInputs, BrowserPanelPresentation } from "./browser-panel-presentation.ts";
 import { BrowserPanelContent } from "./browser-panel-solid.tsx";
-import type { BrowserPanelPresentation } from "./browser-panel.ts";
 import dockStyles from "../dock-panel-solid.css?inline";
 import tabStyles from "../panel-tab-strip-solid.css?inline";
 import browserStyles from "./browser-panel.css?inline";
 
-export type BrowserPanelInputs = Pick<
-  BrowserPanelPresentation,
-  | "client"
-  | "available"
-  | "remoteAvailable"
-  | "suppressed"
-  | "resourceBasePath"
-  | "authToken"
-  | "embedded"
-  | "tabsInHeader"
-  | "presented"
-  | "refreshOnPresentation"
-  | "sessionKey"
-  | "sessionTabs"
-  | "preferredTab"
-  | "fixedTab"
-  | "dashboardTarget"
->;
+export type { BrowserPanelInputs } from "./browser-panel-presentation.ts";
 
 export function defineBrowserPanelElement(
   createController: (element: HTMLElement) => BrowserPanelPresentation,

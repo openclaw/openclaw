@@ -102,6 +102,7 @@ describe("terminal panel pending cancellation", () => {
       panels.push(panel);
       document.body.append(panel);
       if (!page) {
+        await panel.updateComplete;
         window.dispatchEvent(
           new CustomEvent("openclaw:terminal-toggle", {
             detail: {

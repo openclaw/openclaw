@@ -4,8 +4,8 @@ import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gatew
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import type { DesktopConnectionHandle } from "./desktop-client.ts";
+import { DesktopPanelController } from "./desktop-panel-controller.ts";
 import { DesktopPanelContent } from "./desktop-panel-solid.tsx";
-import { DesktopPanelController } from "./desktop-panel.ts";
 
 type DesktopPanelElement = DesktopPanelController;
 const mountedPanels = new WeakMap<DesktopPanelController, ReturnType<typeof mountSolid>>();
@@ -89,7 +89,7 @@ export function updatePanel(
       continue;
     }
     Object.assign(panel, { [key]: changes[key] });
-    panel.requestUpdate(key, previous);
+    panel.inputsChanged(key, previous);
   }
 }
 
