@@ -1,8 +1,9 @@
 /** Resolves model fallback chains for isolated cron runs and preflight. */
-import type { RunEntryModelResolve } from "../../agents/embedded-agent-runner/run-entry-model-selection.js";
+import type { RunEntryModelResolve } from "../../agents/embedded-agent-runner/run-entry.types.js";
 import { resolveModelCandidateChain } from "../../agents/model-fallback-candidates.js";
 import type { ModelCandidate } from "../../agents/model-fallback.types.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -12,7 +13,6 @@ import {
   resolveEffectiveModelFallbacks,
   resolveSubagentModelFallbacksOverride,
 } from "./run-execution.runtime.js";
-import type { CronRunExecutionParams } from "./run-execution.types.js";
 import { logWarn } from "./run.runtime.js";
 
 const cronModelPreflightRuntimeLoader = createLazyImportLoader(
@@ -21,10 +21,15 @@ const cronModelPreflightRuntimeLoader = createLazyImportLoader(
 
 /** Prepare one channel projection for both model routing hooks and embedded execution. */
 export async function prepareCronModelResolveInput(
-  params: Pick<
-    CronRunExecutionParams,
-    "cwd" | "cronSession" | "job" | "runSessionKey" | "resolvedDelivery"
-  > & { prompt: string; messageChannel: string | undefined },
+  params: Pick<RunEntryModelResolve, "cwd" | "prompt"> & {
+    cronSession: { sessionEntry: Pick<SessionEntry, "modelSelectionLocked"> };
+    job: Pick<CronJob, "id">;
+    runSessionKey: string;
+    resolvedDelivery: Pick<Parameters<typeof resolveCurrentChannelTarget>[0], "to" | "threadId"> & {
+      accountId?: string;
+    };
+    messageChannel: string | undefined;
+  },
 ) {
   const currentChannelId = await resolveCurrentChannelTarget({
     channel: params.messageChannel,

@@ -1,5 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngineHostSupport } from "../../context-engine/host-compat.js";
+import type { PluginHookAgentContext } from "../../plugins/hook-agent-context.types.js";
+import type { PluginHookBeforeModelResolveResult } from "../../plugins/hook-before-agent-start.types.js";
 import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
 import type { AssistantErrorTranscript } from "../assistant-error-transcript.js";
 import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
@@ -13,15 +15,24 @@ import type {
 } from "../model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import type {
-  ResolvedRunEntryModelSelection,
-  RunEntryModelResolve,
-} from "./run-entry-model-selection.js";
-import type {
   EmbeddedAgentRunEntryTerminal,
   RunEntryTerminalBehavior,
 } from "./run-entry-terminal.js";
 import type { AuthProfileFailurePolicy } from "./run/auth-profile-failure-policy.types.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
+
+export type RunEntryModelResolve = {
+  prompt: string;
+  images?: readonly { mimeType?: string }[];
+  cwd?: string;
+  modelSelectionLocked?: boolean;
+  context?: PluginHookAgentContext;
+};
+
+export type ResolvedRunEntryModelSelection = {
+  provider: string;
+  modelId: string;
+} & Pick<PluginHookBeforeModelResolveResult, "fallbacksOverride">;
 
 export type RunEntryCandidateOptions = {
   resolvedModelSelection?: ResolvedRunEntryModelSelection;

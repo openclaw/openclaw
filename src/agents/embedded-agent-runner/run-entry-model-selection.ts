@@ -1,25 +1,17 @@
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
 } from "../prepared-model-runtime-generation-scope.js";
 import { prepareAgentPromptProjects } from "../prompt-projects.js";
-import type { EmbeddedAgentRunEntryParams } from "./run-entry.types.js";
+import type {
+  EmbeddedAgentRunEntryParams,
+  ResolvedRunEntryModelSelection,
+} from "./run-entry.types.js";
 import { buildBeforeModelResolveAttachments, resolveHookModelSelection } from "./run/setup.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
-
-export type RunEntryModelResolve = {
-  prompt: string;
-  images?: readonly { mimeType?: string }[];
-  cwd?: string;
-  modelSelectionLocked?: boolean;
-  context?: PluginHookAgentContext;
-};
-
-export type ResolvedRunEntryModelSelection = Awaited<ReturnType<typeof resolveHookModelSelection>>;
 
 /** Resolve run routing in the retained plugin generation, before candidate preparation. */
 export async function resolveRunEntryModelSelection(

@@ -9,7 +9,7 @@ import type { PreparedModelRuntimePluginGeneration } from "../../prepared-model-
 import type { BoundAgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { CompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
-import type { ResolvedRunEntryModelSelection } from "../run-entry-model-selection.js";
+import type { ResolvedRunEntryModelSelection } from "../run-entry.types.js";
 import type { DeferredEmbeddedRunLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import type { EmbeddedRunCompletionCheck } from "./terminal-retry-state.js";
