@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   captureAgentLifecycleBinding,
   matchesAgentLifecycleBinding,
 } from "../../agents/agent-lifecycle-registry.js";
+import * as sqliteQueries from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import type { WorkerSshEndpoint as WorkerEnvironmentSshEndpoint } from "../../plugins/types.js";
 import { recordAgentProvenance } from "../../state/agent-provenance.js";
@@ -19,6 +20,7 @@ import {
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createEnvironmentStoreFixture } from "./placement-test-fixtures.js";
+import { findWorkerEnvironment, listRows } from "./store-row-codec.js";
 import { ensureWorkerEnvironmentStoreSchema } from "./store-schema.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
 
@@ -86,6 +88,9 @@ describe("worker environment store", () => {
     async ({ fallbackPorts }) => {
       await seedBootstrapping("worker-unrelated", "lease-unrelated");
       await seedBootstrapping("worker-endpoint-change", "lease-endpoint-change");
+      nowMs = 900;
+      await createIntent("worker-without-ports");
+      nowMs = 1_000;
       const replacement = { ...SSH_ENDPOINT, fallbackPorts };
       const expected: WorkerEnvironmentSshEndpoint = { ...replacement };
       if (fallbackPorts.length === 0) {
@@ -111,12 +116,26 @@ describe("worker environment store", () => {
       database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
       store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
       expect(store.get("worker-endpoint-change")?.sshEndpoint).toStrictEqual(expected);
+      const expectedRecords = [
+        ["worker-without-ports", null],
+        ["worker-endpoint-change", expected],
+        ["worker-unrelated", SSH_ENDPOINT],
+      ];
       for (const records of [store.list(), store.listForReconcile()]) {
-        expect(records.map((record) => [record.environmentId, record.sshEndpoint])).toEqual([
-          ["worker-endpoint-change", expected],
-          ["worker-unrelated", SSH_ENDPOINT],
-        ]);
+        expect(records.map((record) => [record.environmentId, record.sshEndpoint])).toEqual(
+          expectedRecords,
+        );
       }
+      using queries = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
+      expect(findWorkerEnvironment(database.db, "worker-endpoint-change")?.sshEndpoint).toStrictEqual(
+        expected,
+      );
+      expect(queries).toHaveBeenCalledTimes(1);
+      queries.mockClear();
+      expect(
+        listRows(database.db).map((record) => [record.environmentId, record.sshEndpoint]),
+      ).toEqual(expectedRecords);
+      expect(queries).toHaveBeenCalledTimes(1);
     },
   );
 
