@@ -27,7 +27,7 @@ import {
 import { icons } from "./icons.ts";
 import type { PersonActivityData } from "./person-activity-data.ts";
 import { personActivityLink, type PersonActivityRouting } from "./person-activity-link.ts";
-import "./elapsed-time.ts";
+import "./elapsed-time.tsx";
 import "./viewer-facepile.ts";
 
 export type ScopedSession = { row: GatewaySessionRow; agentId: string };

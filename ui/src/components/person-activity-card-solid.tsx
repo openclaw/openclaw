@@ -23,7 +23,7 @@ import {
 import { personActivityLink } from "./person-activity-link.ts";
 import { Icon } from "./solid/icon.tsx";
 import { ViewerAvatar } from "./solid/viewer-facepile.tsx";
-import "./elapsed-time.ts";
+import "./elapsed-time.tsx";
 
 function Elapsed(props: {
   timestamp: number;
