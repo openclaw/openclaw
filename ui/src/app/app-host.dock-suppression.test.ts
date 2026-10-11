@@ -26,7 +26,7 @@ afterEach(async () => {
 });
 
 describe("OpenClaw shell dock suppression", () => {
-  it("applies route ownership to shell panels without session-gating desktop", () => {
+  it("applies route ownership to shell panels without session-gating desktop", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal(
       "matchMedia",
@@ -157,6 +157,7 @@ describe("OpenClaw shell dock suppression", () => {
     shell.routeState = { routeId: "appearance" };
     mountShellView(shell);
     refreshShellView(shell);
+    await Promise.resolve();
     expect(
       container.querySelector<HTMLElement & { pageRouteId: RouteId }>("openclaw-assistant-panel")
         ?.pageRouteId,

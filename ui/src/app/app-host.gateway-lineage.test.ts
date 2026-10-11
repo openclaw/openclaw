@@ -102,7 +102,13 @@ function createGatewayHarness() {
   return { gateway, clients };
 }
 
-function createGatewaySurface(
+async function settleRootContent(): Promise<void> {
+  flush();
+  await Promise.resolve();
+  flush();
+}
+
+async function createGatewaySurface(
   gateway: ApplicationGateway,
   pathname = "/chat",
   pendingGatewayUrl: string | null = null,
@@ -127,17 +133,20 @@ function createGatewaySurface(
     dispose();
     container.remove();
   });
-  const draw = () => flush();
-  draw();
+  const draw = settleRootContent;
+  await draw();
   return { runtime, container, draw };
 }
 
-function renderGatewaySurface(
+async function renderGatewaySurface(
   gateway: ApplicationGateway,
   documentView?: "desktop" | "terminal",
-): string {
-  return createGatewaySurface(gateway, documentView ? `/focus/${documentView}` : undefined)
-    .container.innerHTML;
+): Promise<string> {
+  const surface = await createGatewaySurface(
+    gateway,
+    documentView ? `/focus/${documentView}` : undefined,
+  );
+  return surface.container.innerHTML;
 }
 
 afterEach(() => {
@@ -154,42 +163,45 @@ describe("Control UI Gateway target lineage", () => {
     { pathname: "/settings/connection", phase: "connecting" },
     { pathname: "/settings/connection", phase: "stopped" },
     { pathname: "/approve/pending", phase: "connected" },
-  ])("keeps Gateway confirmation actionable at $pathname while $phase", ({ pathname, phase }) => {
-    const { gateway, clients } = createGatewayHarness();
-    gateway.start();
-    if (phase === "connected") {
-      clients[0]!.opts.onHello?.(HELLO);
-    } else if (phase === "stopped") {
-      clients[0]!.opts.onClose?.({ code: 1006, reason: "login required", willRetry: false });
-    }
-    for (const action of ["onConfirm", "onCancel"] as const) {
-      const pendingGatewayUrl = "wss://pending-gateway.example";
-      const { runtime, container, draw } = createGatewaySurface(
-        gateway,
-        pathname,
-        pendingGatewayUrl,
-      );
-      const confirmations = container.querySelectorAll("openclaw-gateway-url-confirmation");
-      expect(confirmations).toHaveLength(1);
-      const confirmation = confirmations[0] as HTMLElement & {
-        props: { pendingGatewayUrl: string; onConfirm(): void; onCancel(): void };
-      };
-      expect(confirmation.closest("openclaw-tooltip-provider")).not.toBeNull();
-      expect(confirmation.props.pendingGatewayUrl).toBe(pendingGatewayUrl);
-      if (pathname.startsWith("/approve/")) {
-        expect(container.querySelector("openclaw-approval-page")).toBeNull();
+  ])(
+    "keeps Gateway confirmation actionable at $pathname while $phase",
+    async ({ pathname, phase }) => {
+      const { gateway, clients } = createGatewayHarness();
+      gateway.start();
+      if (phase === "connected") {
+        clients[0]!.opts.onHello?.(HELLO);
+      } else if (phase === "stopped") {
+        clients[0]!.opts.onClose?.({ code: 1006, reason: "login required", willRetry: false });
       }
-      confirmation.props[action]();
-      draw();
-      expect(container.querySelector("openclaw-gateway-url-confirmation")).toBeNull();
-      expect(
-        action === "onConfirm"
-          ? runtime.confirmPendingGatewayConnection
-          : runtime.cancelPendingGatewayConnection,
-      ).toHaveBeenCalledOnce();
-    }
-    gateway.stop();
-  });
+      for (const action of ["onConfirm", "onCancel"] as const) {
+        const pendingGatewayUrl = "wss://pending-gateway.example";
+        const { runtime, container, draw } = await createGatewaySurface(
+          gateway,
+          pathname,
+          pendingGatewayUrl,
+        );
+        const confirmations = container.querySelectorAll("openclaw-gateway-url-confirmation");
+        expect(confirmations).toHaveLength(1);
+        const confirmation = confirmations[0] as HTMLElement & {
+          props: { pendingGatewayUrl: string; onConfirm(): void; onCancel(): void };
+        };
+        expect(confirmation.closest("openclaw-tooltip-provider")).not.toBeNull();
+        expect(confirmation.props.pendingGatewayUrl).toBe(pendingGatewayUrl);
+        if (pathname.startsWith("/approve/")) {
+          expect(container.querySelector("openclaw-approval-page")).toBeNull();
+        }
+        confirmation.props[action]();
+        await draw();
+        expect(container.querySelector("openclaw-gateway-url-confirmation")).toBeNull();
+        expect(
+          action === "onConfirm"
+            ? runtime.confirmPendingGatewayConnection
+            : runtime.cancelPendingGatewayConnection,
+        ).toHaveBeenCalledOnce();
+      }
+      gateway.stop();
+    },
+  );
 
   it.each([
     { incognito: false, nextRecovery: "synthetic-recovery-a" },
@@ -236,13 +248,15 @@ describe("Control UI Gateway target lineage", () => {
       pane.applyGatewaySnapshot(gateway.snapshot);
       const releasePane = gateway.subscribe(pane.applyGatewaySnapshot.bind(pane));
       const releaseOutbox = chatOutboxOwner(state).subscribe(state);
-      const { container: shellContainer, draw: drawShell } = createGatewaySurface(gateway);
-      drawShell();
+      const { container: shellContainer, draw: drawShell } = await createGatewaySurface(gateway);
+      await drawShell();
       await vi.dynamicImportSettled();
-      flush();
+      await settleRootContent();
       const originalShell = shellContainer.querySelector("openclaw-app-shell");
       expect(originalShell).not.toBeNull();
-      const releaseShell = gateway.subscribe(drawShell);
+      const releaseShell = gateway.subscribe(() => {
+        void drawShell();
+      });
       const composer = createComposerContainer();
       try {
         expect(
@@ -270,6 +284,7 @@ describe("Control UI Gateway target lineage", () => {
         expect(activeQueuedMessageEdit(state)).toBe(captured);
         gateway.connect();
         expect(gateway.snapshot.phase).toBe("reconnecting");
+        await drawShell();
         expect(shellContainer.querySelector("openclaw-app-shell")).toBe(originalShell);
         // Hello precedes recovery resolution. Neither a replacement transport nor
         // pending authentication can act on the old owner's retained correction.
@@ -347,24 +362,24 @@ describe("Control UI Gateway target lineage", () => {
     },
   );
 
-  it("returns to the login gate when a newly selected Gateway's first attempt fails", () => {
+  it("returns to the login gate when a newly selected Gateway's first attempt fails", async () => {
     const { gateway, clients } = createGatewayHarness();
     gateway.start();
     clients[0]?.opts.onHello?.(HELLO);
     gateway.connect({ gatewayUrl: "wss://other-gateway.example.test" });
     clients[1]?.opts.onClose?.({ code: 1006, reason: "remote refused", willRetry: true });
 
-    const surface = renderGatewaySurface(gateway);
+    const surface = await renderGatewaySurface(gateway);
 
     expect(surface).toContain("<openclaw-login-gate");
     expect(surface).not.toContain("<openclaw-app-shell");
   });
 
-  it("re-scopes credentials when the login draft changes Gateway", () => {
+  it("re-scopes credentials when the login draft changes Gateway", async () => {
     const { gateway, clients } = createGatewayHarness();
     gateway.connect({ token: "old-token", password: "old-password" });
     clients[0]?.opts.onClose?.({ code: 1006, reason: "login required", willRetry: true });
-    const { container } = createGatewaySurface(gateway);
+    const { container } = await createGatewaySurface(gateway);
     const loginGate = container.querySelector("openclaw-login-gate") as unknown as {
       props: {
         onGatewayUrlChange: (value: string) => void;
@@ -373,7 +388,7 @@ describe("Control UI Gateway target lineage", () => {
     };
 
     loginGate.props.onGatewayUrlChange("wss://other-gateway.example.test");
-    flush();
+    await settleRootContent();
     loginGate.props.onConnect();
 
     expect(clients[1]?.opts.token).toBeUndefined();
@@ -388,7 +403,7 @@ describe("Control UI Gateway target lineage", () => {
       reason: "manual connection required",
       willRetry: true,
     });
-    const { container, draw } = createGatewaySurface(gateway);
+    const { container, draw } = await createGatewaySurface(gateway);
     const loginGate = container.querySelector("openclaw-login-gate") as unknown as {
       props: { onConnect: () => void };
     };
@@ -406,21 +421,21 @@ describe("Control UI Gateway target lineage", () => {
         retryAfterMs: 250,
       },
     });
-    draw();
+    await draw();
 
     expect(container.innerHTML).toContain("Gateway starting…");
     expect(container.innerHTML).not.toContain("<openclaw-login-gate");
 
     clients[1]?.opts.onHello?.(HELLO);
-    draw();
+    await draw();
     await vi.dynamicImportSettled();
-    flush();
+    await settleRootContent();
     expect(container.innerHTML).toContain("<openclaw-app-shell");
   });
 
   it.each(["desktop", "terminal"] as const)(
     "shows retryable Gateway startup in the standalone %s document",
-    (documentView) => {
+    async (documentView) => {
       const { gateway, clients } = createGatewayHarness();
       gateway.start();
       clients[0]?.opts.onClose?.({
@@ -436,7 +451,7 @@ describe("Control UI Gateway target lineage", () => {
         },
       });
 
-      const surface = renderGatewaySurface(gateway, documentView);
+      const surface = await renderGatewaySurface(gateway, documentView);
 
       expect(surface).toContain('class="connect-splash connect-splash--skeleton"');
       expect(surface).toContain("Gateway starting…");
