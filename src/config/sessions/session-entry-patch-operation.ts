@@ -12,10 +12,6 @@ import {
   projectSessionEntryUsageUpdate,
   type SessionEntryUsageUpdate,
 } from "./session-entry-usage.js";
-import {
-  projectPendingFinalDeliverySettlement,
-  type PendingFinalDeliverySettlementInput,
-} from "./session-pending-final-settlement.js";
 import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
@@ -30,8 +26,33 @@ import {
 type ExpectedSession = Pick<SessionEntry, "sessionId"> &
   Partial<Pick<SessionEntry, "lifecycleRevision" | "activeWriterRunId">>;
 
+export type SessionEntryBookkeepingReducer =
+  | { kind: "activity"; updatedAt: number }
+  | { kind: "usage"; update: SessionEntryUsageUpdate; updatedAt: number }
+  | { kind: "group-intro"; needsSystemIntro: boolean }
+  | { kind: "fallback-notice"; notice: SessionEntry["fallbackNotice"] }
+  | {
+      kind: "live-model";
+      expected: Partial<
+        Pick<
+          SessionEntry,
+          | "modelProvider"
+          | "model"
+          | "agentHarnessId"
+          | "providerOverride"
+          | "modelOverride"
+          | "agentRuntimeOverride"
+          | "authProfileOverride"
+          | "authProfileOverrideSource"
+          | "liveModelSwitchPending"
+        >
+      >;
+      next: Pick<SessionEntry, "modelProvider" | "model" | "agentHarnessId">;
+      clearPending?: true;
+    };
+
 /** Closed internal operations; arbitrary updater callbacks retain prepare/CAS. */
-export type SessionEntryPatchOperation = (
+type SessionEntryPatchStep = (
   | { kind: "fields"; patch: Partial<SessionEntry> }
   | { kind: "public-fields"; patch: Partial<SessionEntry> }
   | { kind: "ambient-transcript-watermark"; watermark: AmbientTranscriptWatermarkUpdate }
@@ -40,8 +61,6 @@ export type SessionEntryPatchOperation = (
       sessionId: string;
       creation: ReturnType<typeof buildSessionCreationStamp>;
     }
-  | { kind: "usage-accounting"; usage: SessionEntryUsageUpdate }
-  | { kind: "pending-final-settle"; settlement: PendingFinalDeliverySettlementInput }
   | {
       kind: "restart-admission";
       sessionId: string;
@@ -75,8 +94,67 @@ export type SessionEntryPatchOperation = (
     }
 ) & { expected?: ExpectedSession | null };
 
-export function reduceSessionEntryPatch(
-  operation: SessionEntryPatchOperation,
+export type SessionEntryPatchOperation =
+  | SessionEntryPatchStep
+  | { kind: "compound"; operations: readonly SessionEntryPatchStep[] };
+
+/** Each reducer observes its predecessor's postimage; callers persist only the result. */
+export function projectSessionEntryPatch(
+  params: Omit<Parameters<typeof mergeSessionEntryPatch>[0], "patch"> & {
+    operation: SessionEntryPatchOperation;
+  },
+): SessionEntry | undefined {
+  const operations =
+    params.operation.kind === "compound" ? params.operation.operations : [params.operation];
+  let existing = params.existing;
+  let writeBase = params.writeBase;
+  let next: SessionEntry | undefined;
+  for (const operation of operations) {
+    const patch = reduceSessionEntryPatch(operation, writeBase, existing);
+    if (patch === null) {
+      continue;
+    }
+    next = mergeSessionEntryPatch({ ...params, existing, writeBase, patch });
+    if (next) {
+      existing = writeBase = next;
+    }
+  }
+  return next;
+}
+
+/** Shared by the actor and its retained native/SDK patch adapter. */
+export function reduceSessionBookkeeping(
+  entry: SessionEntry,
+  reducer: SessionEntryBookkeepingReducer,
+): Partial<SessionEntry> | null {
+  switch (reducer.kind) {
+    case "activity":
+      return entry.updatedAt === 0
+        ? null
+        : { updatedAt: Math.max(entry.updatedAt, reducer.updatedAt) };
+    case "usage":
+      return projectSessionEntryUsageUpdate(entry, reducer.update, reducer.updatedAt);
+    case "group-intro":
+      return { groupActivationNeedsSystemIntro: reducer.needsSystemIntro };
+    case "fallback-notice":
+      return { fallbackNotice: structuredClone(reducer.notice) };
+    case "live-model":
+      // SAFETY: This internal reducer's closed expected record contains only SessionEntry keys.
+      for (const key of Object.keys(reducer.expected) as Array<keyof typeof reducer.expected>) {
+        if (entry[key] !== reducer.expected[key]) {
+          return null;
+        }
+      }
+      return {
+        ...reducer.next,
+        ...(reducer.clearPending ? { liveModelSwitchPending: undefined } : {}),
+      };
+  }
+  return reducer satisfies never;
+}
+
+function reduceSessionEntryPatch(
+  operation: SessionEntryPatchStep,
   entry: SessionEntry,
   existingEntry: SessionEntry | undefined,
 ): Partial<SessionEntry> | null {
@@ -112,10 +190,6 @@ export function reduceSessionEntryPatch(
       return projectAmbientTranscriptWatermark(entry, operation.watermark);
     case "compaction-accounting":
       return projectCompactionAccountingPatch(entry, operation.accounting);
-    case "usage-accounting":
-      return projectSessionEntryUsageUpdate(entry, operation.usage);
-    case "pending-final-settle":
-      return projectPendingFinalDeliverySettlement(entry, operation.settlement).patch;
     case "restart-admission":
       return sessionMatchesExpectedTranscriptTurn(
         { entry },

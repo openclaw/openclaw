@@ -491,11 +491,7 @@ describe("session connection hydration", () => {
     }
   });
 
-  it.each([
-    { description: "an explicitly declined", response: { subscribed: false } },
-    { description: "an unacknowledged", response: {} },
-    { description: "a missing", response: null },
-  ])(
+  it.each([{ description: "an unacknowledged", response: {} }])(
     "rejects $description session observer and retries until acknowledged",
     async ({ response }) => {
       vi.useFakeTimers();

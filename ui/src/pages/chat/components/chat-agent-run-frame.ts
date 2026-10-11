@@ -86,7 +86,9 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
   );
   const workPreviews = renderWorkGroupBrowserTabPreviews(
     frame.parts.flatMap((part) =>
-      part.kind === "work-group" && !opts.isWorkExpanded(part.key) ? [part] : [],
+      !opts.streamOptions.bubbleMode && part.kind === "work-group" && !opts.isWorkExpanded(part.key)
+        ? [part]
+        : [],
     ),
     opts.renderGroupOptions(shell),
   );
@@ -107,6 +109,7 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
           return html`
             ${renderWorkGroupSummary(part, {
               expanded,
+              bubbleMode: opts.streamOptions.bubbleMode,
               onToggle: () => opts.onToggleWork(part.key, expanded),
               presentation: "continuation",
               browserTabPreviews: workPreviews.get(part.key),
