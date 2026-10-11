@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { createComponent, createSignal } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import { i18n } from "../i18n/index.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
@@ -38,11 +38,11 @@ async function renderApproval(
     busy: boolean;
     canGrant: boolean;
     errors: ReadonlyMap<string, string>;
-    onDecision: ReturnType<typeof vi.fn>;
+    onDecision: Mock<ExecApprovalProps["onDecision"]>;
   }> = {},
 ) {
   const queue = Array.isArray(requestOrQueue) ? requestOrQueue : [requestOrQueue];
-  const onDecision = overrides.onDecision ?? vi.fn();
+  const onDecision = overrides.onDecision ?? vi.fn<ExecApprovalProps["onDecision"]>();
   const props = {
     queue,
     busy: overrides.busy ?? false,
