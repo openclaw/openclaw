@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import type { MessagePort, Transferable, Worker } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
+import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { trackNativeWorkerForCpu } from "./worker-cpu.js";
 import { decodeNativeWorkerFailure } from "./worker-native-error.js";
 import type {
@@ -16,6 +17,7 @@ import type {
 } from "./worker-native-lifecycle.types.js";
 import { bindNativeWorkerResource } from "./worker-native-resource.js";
 import { NativeWorkerTaskPort } from "./worker-native-task-port.js";
+import { workerRequestKind } from "./worker-request-kind.js";
 
 type HeapStatistics = Awaited<ReturnType<Worker["getHeapStatistics"]>>;
 type NativeDelivery =
@@ -67,8 +69,12 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
   ) {
     super();
     if (taskPort) {
+      const label = `worker:${
+        !evalSource && filename instanceof URL ? workerRequestKind(filename) : "other"
+      }`;
       this.taskPort = new NativeWorkerTaskPort(taskPort, {
-        message: (value) => this.runInContext(() => this.emit("message", value)),
+        message: (value) =>
+          this.runInContext(() => runWithMainThreadTask(label, () => this.emit("message", value))),
         messageerror: (error) => this.runInContext(() => this.emit("messageerror", error)),
         unavailable: () => this.observeTaskPortLoss(),
       });

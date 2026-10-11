@@ -7,12 +7,11 @@ import {
   onSettled,
 } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, LitContent, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { LinkReaderContent } from "./link-reader-content.tsx";
 import { LinkReaderPanelOwner, type LinkReaderPanelProps } from "./link-reader-panel-owner.ts";
 import {
   linkReaderViewStyles,
-  ReaderPanelPart,
   tabTarget,
   tabLabel,
   type ReaderTab,
@@ -164,32 +163,34 @@ function PanelView(
           }}
         >
           {!props.embedded && (
-            <ReaderPanelPart
-              content={view().dockLayout.renderResizer("bp", t("linkReader.resize"))}
+            <LitContent
+              render={() => view().dockLayout.renderResizer("bp", t("linkReader.resize"))}
             />
           )}
           {!(props.embedded && props.tabsInHeader) && (
             <header class="rail-header bp-header lr-tab-header">
-              <ReaderPanelPart
-                content={renderPanelTabStrip({
-                  tabs: view().hostedTabs.map((item) => ({
-                    id: item.id,
-                    label: item.label,
-                    url: item.url,
-                    title: item.title,
-                    icon: item.icon,
-                    className: item.className,
-                    domId: item.id + "-label",
-                    closeLabel: t("linkReader.closeTab", { title: item.label }),
-                  })),
-                  activeId: view().activeId,
-                  ariaControls: "link-reader-tab-panel",
-                  onSelect: (id) => owner.selectHostedTab(id),
-                  onClose: (id) => owner.closeTab(id),
-                  onNew: () => owner.createTab(),
-                  newLabel: t("linkReader.newTab"),
-                  newDisabled: view().tabs.length >= 10,
-                })}
+              <LitContent
+                render={() =>
+                  renderPanelTabStrip({
+                    tabs: view().hostedTabs.map((item) => ({
+                      id: item.id,
+                      label: item.label,
+                      url: item.url,
+                      title: item.title,
+                      icon: item.icon,
+                      className: item.className,
+                      domId: item.id + "-label",
+                      closeLabel: t("linkReader.closeTab", { title: item.label }),
+                    })),
+                    activeId: view().activeId,
+                    ariaControls: "link-reader-tab-panel",
+                    onSelect: (id) => owner.selectHostedTab(id),
+                    onClose: (id) => owner.closeTab(id),
+                    onNew: () => owner.createTab(),
+                    newLabel: t("linkReader.newTab"),
+                    newDisabled: view().tabs.length >= 10,
+                  })
+                }
               />
               {!props.embedded && action("x", t("linkReader.close"), () => owner.closePanel())}
             </header>

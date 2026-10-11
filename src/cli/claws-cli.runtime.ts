@@ -55,7 +55,7 @@ import {
   resolveCronJobsStorePath,
 } from "../cron/store.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { defaultRuntime, ExitError, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { authorizeLegacyV1Resume } from "./claws-cli-legacy-resume.js";
 import {
   emitClawFailure,
@@ -602,6 +602,9 @@ async function runClawsRemoveCommandLocal(
       runtime.exit(1);
     }
   } catch (error) {
+    if (error instanceof ExitError) {
+      throw error;
+    }
     const code = error instanceof ClawRemoveError ? error.code : "remove_failed";
     const message = error instanceof Error ? error.message : String(error);
     emitClawFailure(runtime, opts.json, message, {

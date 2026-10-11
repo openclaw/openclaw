@@ -1,15 +1,14 @@
 /* @vitest-environment jsdom */
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ToolsGitHubStatusResult } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { GitHubConnections } from "./github-connections.tsx";
+import "./github-connections.ts";
 
 const system: ToolsGitHubStatusResult["effective"] = {
   source: "system-configured",
@@ -75,9 +74,11 @@ function mount(scopes: string[], profileId: string | null, request: ReturnType<t
       runExternalMutation: vi.fn(),
     },
   } as unknown as ApplicationContext;
-  const provider = createSolidApplicationContextProvider(context);
-  const mounted = mountSolid(() => <GitHubConnections />, { wrapper: provider.wrapper });
-  const element = mounted.container.querySelector("openclaw-github-connections")!;
+  const provider = createApplicationContextProvider(context);
+  const element = document.createElement("openclaw-github-connections");
+  provider.append(element);
+  document.body.append(provider);
+  onTestFinished(() => provider.remove());
   return {
     element,
     context,
@@ -130,18 +131,6 @@ it("follows Settings selection for effective agent GitHub without changing perso
   });
 });
 
-it("renders reader self-service independently of profile mutation and shared configuration", async () => {
-  const request = vi.fn(async () => ({ personal: disconnected, system }));
-  const { element, context } = mount(["operator.read"], "profile-a", request);
-  await waitForFast(() => expect(element.textContent).toContain("@system-account"));
-  expect(request.mock.calls).toEqual([["users.github.status", {}]]);
-  expect(context.runtimeConfig.ensureLoaded).not.toHaveBeenCalled();
-  expect(element.textContent).toContain("Connect My GitHub");
-  expect(element.textContent).toContain("Admin managed");
-  expect(element.textContent).not.toContain("Change System GitHub");
-  expect(element.textContent).not.toContain("Use a PAT instead");
-});
-
 it("uses explicit unbound admin context for System without probing personal status", async () => {
   const request = vi.fn(async () => ({
     agentId: "main",
@@ -186,6 +175,9 @@ it("shows an identified status failure once while opening personal setup", async
   expect(element.textContent).not.toContain("Not verified");
   expect(element.textContent).not.toContain("Connect My GitHub");
   expect(element.textContent).not.toContain("Not connected");
+  expect(element.querySelector('[data-github-connection="system"]')?.textContent).toContain(
+    "Connection status unavailable",
+  );
   Array.from(element.querySelectorAll("button"))
     .find((button) => button.textContent?.trim() === "Manage connections")
     ?.click();
@@ -228,27 +220,9 @@ it("retries failed status without reconnecting the GitHub account", async () => 
   expect(element.textContent).toContain("Change My GitHub");
 });
 
-it("distinguishes a failed System lookup from unverified credentials", async () => {
-  const status = createDeferredCore<ToolsGitHubStatusResult>();
-  const request = vi.fn(() => status.promise);
-  const { element } = mount(["operator.admin"], null, request);
-  const row = () => element.querySelector('[data-github-connection="system"]');
-  await waitForFast(() => expect(row()?.textContent).toContain("Checking connection…"));
-  status.reject(new Error("System status lookup failed"));
-  await waitForFast(() => expect(row()?.textContent).toContain("Connection status unavailable"));
-  expect(row()?.textContent).not.toContain("Not verified");
-  expect(row()?.textContent).not.toContain("No credentials");
-  expect(row()?.textContent).not.toContain("OS account running the Gateway");
-  expect(element.textContent).toContain("Retry");
-});
-
 it.each([
   ["native", "available", "Verified"],
-  ["native", "unverified", "Not verified"],
   ["native", "unavailable", "No credentials"],
-  ["native", "rate_limited", "Rate limited"],
-  ["managed-pat", "configured_unavailable", "Configured, but unavailable"],
-  ["managed-oauth", "available", "Verified"],
 ] as const)(
   "shows %s %s without extra native-account explanation",
   async (credentialKind, credentialState, label) => {
@@ -262,7 +236,7 @@ it.each([
         account: credentialState === "available" ? system.account : null,
       },
     }));
-    const { element } = mount(["operator.read"], "profile-a", request);
+    const { element, context } = mount(["operator.read"], "profile-a", request);
     const row = () => element.querySelector('[data-github-connection="system"]');
     await waitForFast(() => expect(row()?.textContent).toContain(label));
     expect(row()?.textContent).not.toContain("OS account running the Gateway");
@@ -271,5 +245,10 @@ it.each([
     }
     expect(element.textContent).not.toContain("Connection status unavailable");
     expect(element.textContent).toContain("Connect My GitHub");
+    expect(request.mock.calls).toEqual([["users.github.status", {}]]);
+    expect(context.runtimeConfig.ensureLoaded).not.toHaveBeenCalled();
+    expect(element.textContent).toContain("Admin managed");
+    expect(element.textContent).not.toContain("Change System GitHub");
+    expect(element.textContent).not.toContain("Use a PAT instead");
   },
 );

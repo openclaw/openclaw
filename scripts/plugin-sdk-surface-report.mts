@@ -221,9 +221,10 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +7: approved prepared/data-only session patches and their authority contracts.
       // +4: CLI state-owner routing, Gateway owner guards, target selection, and timeout parsing.
       // +1: requester-bound transport effects for owner-routed plugin commands.
-      // +12: async command authorization and native approval contracts (#168482).
-      // +4: async conversation inspection, routing, and V2 adapter registration (#168483).
-      3672,
+      // +5: approved sync-to-async replacements: inspectConversationBinding,
+      // resolveCommandAuthorization, createApproverRestrictedNativeApprovalCapability,
+      // createChannelApprovalNativeRuntimeAdapter, and createLazyChannelApprovalNativeRuntimeAdapter.
+      3661,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -240,9 +241,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: approved prepared/data-only session patches and authority-bound routes.
       // +4: the same four CLI state-owner and transport functions.
       // +1: runWithLocalStateMutationOwner shares the existing transport authority scope.
-      // +8: async command authorization and native approval helpers (#168482).
-      // +3: async conversation inspection, routing, and V2 adapter registration (#168483).
-      2133,
+      // +5: the five awaited inspection, authorization, and approval factory replacements above.
+      2127,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

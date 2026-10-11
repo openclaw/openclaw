@@ -213,9 +213,7 @@ export async function noteSessionTranscriptHeaderHealth(params: {
             }
             const events = parseCanonicalHeaderlessEvents(currentRows, sessionId);
             if (!events) {
-              throw new Error(
-                `transcript is no longer a canonical headerless session: ${sessionId}`,
-              );
+              throw new Error(`transcript is no longer a stored headerless session: ${sessionId}`);
             }
             const context = readHeaderRepairContext(database, sessionId);
             if (!context || context.sessionKey !== snapshot.sessionKey) {
@@ -268,7 +266,7 @@ export async function noteSessionTranscriptHeaderHealth(params: {
   } else if (!params.shouldRepair && found > 0) {
     note(
       [
-        `- Found ${countLabel(found, "canonical session transcript")} without a header.`,
+        `- Found ${countLabel(found, "stored session transcript")} without a header.`,
         `- Run "openclaw doctor --fix" to repair ${found === 1 ? "it" : "them"} before resuming the session.`,
       ].join("\n"),
       NOTE_TITLE,
