@@ -58,15 +58,13 @@ openclaw triage --agent codex
 Use `openclaw triage --non-interactive` to collect diagnostics without starting
 an agent. Add `--update-result <path>` to include a saved update-failure artifact.
 
-When another process saves configuration during database admission, OpenClaw
-warns and reads the current configuration again. It validates and uses that
-configuration before continuing, retaining concurrent changes when applying
-the requested update. If the root config or an included file changes after
-candidate checks, it repeats those checks against the current configuration
-before activation. A candidate that cannot accept the current configuration
-still fails validation; a concurrent save alone is not a refusal.
-If the save changes an implicitly selected update channel, OpenClaw resolves
-the target again before execution. An explicit `--channel` keeps its selection.
+OpenClaw retains the selected update target and candidate admission result.
+Concurrent edits to configuration, included files, or the stored update channel
+do not reselect the target or restart candidate validation. Activation-time
+configuration and schema checks, and config-write conflict checks, still apply.
+Avoid editing configuration during an update; if a later edit causes startup to
+fail, correct it or run `openclaw doctor` before restarting. A candidate that
+rejects the selected configuration still fails validation.
 
 Validation failures leave the serving Gateway untouched. If stopping the managed
 service unloads it and then fails before activation, OpenClaw attempts to restore

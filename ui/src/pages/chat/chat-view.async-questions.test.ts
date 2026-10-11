@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
@@ -20,7 +21,7 @@ import {
 } from "./components/chat-transcript.test-support.ts";
 import { reduceChatSessionProjection } from "./history-merge.ts";
 
-const container = document.createElement("div");
+const container = createComposerContainer();
 const audience = {
   role: "assistant",
   content: "Which audience?",
@@ -198,7 +199,7 @@ it.each(["discard", "consumed"] as const)(
       sendError: "Synthetic rejection",
     };
     const panes = ["first", "second"].map((paneId) => {
-      const element = document.createElement("div");
+      const element = createComposerContainer();
       document.body.append(element);
       const host = makeChatHost({
         requestHandlers: {},

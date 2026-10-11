@@ -13,6 +13,7 @@ import { executePreparedReplyAgentRun } from "./agent-runner-execute.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
 import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
+import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 import { createMockReplyOperation, createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
@@ -46,8 +47,13 @@ it("keeps a cron context prefix readable when an inbound turn persists before qu
       input: { text: "incoming DM", idempotencyKey: "channel-user:v1:synthetic-dm" },
       target: { ...target, sessionEntry: entry },
     });
+    await using actor = createReplyRecoveryActorFixture({
+      ...target,
+      getSessionId: () => target.sessionId,
+    });
     const recovery = createReplyRestartRecoveryClaimController({
       ...target,
+      acquireSessionActor: () => actor.acquireSessionActor(),
       admissionRunId: "inbound-run",
       sourceTurnId: "channel-user:v1:synthetic-dm",
       lifecycleGeneration: getAgentEventLifecycleGeneration(),

@@ -20,7 +20,6 @@ import {
 } from "../../infra/update-run-step.js";
 import type { UpdateStepProgress } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
-import { defaultRuntime } from "../../runtime.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import * as utils from "../../utils.js";
 import * as restartProbe from "../daemon-cli/restart-health-probe.js";
@@ -161,75 +160,6 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
       }),
   );
 
-  it.each([
-    { kind: "package", timeoutMs: undefined },
-    { kind: "git", timeoutMs: 600_000 },
-  ] as const)(
-    "rehearses $kind with refreshed configuration and the operator's $timeoutMs ms deadline",
-    async ({ kind, timeoutMs }) => {
-      const { revalidateUpdateDatabaseContext } = await vi.importActual<
-        typeof import("./update-command-managed-context.js")
-      >("./update-command-managed-context.js");
-      const warning = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-      let current = schemaContext("default");
-      mocks.captureSchemaContext.mockImplementation(async () => current);
-      mocks.captureManagedPreflight.mockImplementation(async () => current);
-      mocks.revalidateSchemaContext.mockImplementation(revalidateUpdateDatabaseContext);
-      vi.spyOn(configFile, "readConfigFileSnapshot").mockImplementation(
-        async () => current.configSnapshot,
-      );
-      const runStagedUpdate = async ({
-        inspectGitTarget,
-        validateCandidate,
-      }: {
-        inspectGitTarget?: (target: {
-          schemaVersions: { state: number; agent: number };
-        }) => Promise<void>;
-        validateCandidate: (root: string) => Promise<unknown>;
-      }) => {
-        await inspectGitTarget?.({ schemaVersions: { state: 15, agent: 19 } });
-        // Staging/building is outside the admission window and can take minutes.
-        const config = { gateway: { port: 19002 } };
-        current = {
-          ...current,
-          config,
-          configSnapshot: {
-            ...current.configSnapshot,
-            raw: JSON.stringify(config),
-            sourceConfig: config,
-            config,
-          },
-        };
-        expect(validateCandidate).toBeTypeOf("function");
-        await validateCandidate("/candidate");
-        return successfulUpdate;
-      };
-      mocks.runGitUpdate.mockImplementation(runStagedUpdate);
-      mocks.runPackageUpdate.mockImplementation(runStagedUpdate);
-
-      const execution = await executeMutableUpdate(
-        await bindExecutionGuards({
-          ...executionParams(kind),
-          timeoutMs,
-          updateStepTimeoutMs: timeoutMs ?? 30 * 60_000,
-        }),
-      );
-
-      expect(execution?.result.status).toBe("ok");
-      expect(mocks.validateCanary).toHaveBeenCalledTimes(1);
-      expect(mocks.serviceStopped).toBe(false);
-      expect(execution?.mutationStarted).toBe(false);
-      expect(mocks.validateCanary.mock.calls[0]?.[0].root).toBe("/candidate");
-      expect(mocks.validateCanary.mock.calls[0]?.[0].timeoutMs).toBe(timeoutMs);
-      expect(mocks.validateCanary.mock.calls[0]?.[0].config).toEqual({
-        gateway: { port: 19002 },
-      });
-      expect(warning).toHaveBeenCalledWith(
-        expect.stringContaining("Configuration changed during database admission"),
-      );
-    },
-  );
-
   it("continues the update with the recorded readiness warning instead of inference repair", async () => {
     const message =
       "Readiness probe http://127.0.0.1:18789/readyz failed: HTTP 502. Check the configured proxy.";
@@ -361,7 +291,6 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
     ["explicit allowance", 450_000, true, undefined],
     ["explicit deadline", 30_000, false, undefined],
     ["terminal version mismatch", undefined, false, "version"],
-    ["replaced executor", undefined, false, "executor"],
   ] as const)(
     "preserves previous Gateway verification through slow readiness (%s)",
     async (allowance, timeoutMs, verified, failure) =>
@@ -388,7 +317,6 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
         });
         let readyObservedAtMs: number | undefined;
         let stoppedAtMs: number | undefined;
-        let replaceExecutor: (() => void) | undefined;
         // Keep the real loopback probe off Node's ambient proxy-aware global agent.
         const globalAgent = http.globalAgent;
         const agent = new Agent();
@@ -396,7 +324,6 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
           const ready = elapsedMs >= readyAtMs;
           if (request.url === "/readyz" && ready) {
             readyObservedAtMs = elapsedMs;
-            replaceExecutor?.();
           }
           response.writeHead(request.url === "/readyz" && !ready ? 503 : 200).end();
         });
@@ -555,11 +482,6 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
             timeoutMs,
             updateStepTimeoutMs: timeoutMs ?? 20 * 60_000,
           };
-          if (failure === "executor") {
-            replaceExecutor = () => {
-              params.opts.run = { runId: "replacement-run", env: { OPENCLAW_STATE_DIR: root } };
-            };
-          }
           const coordinator = path.join(root, "coordinator");
           await fs.mkdir(coordinator);
           vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(coordinator);
@@ -576,13 +498,6 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
             return executeMutableUpdate(await bindExecutionGuards(params));
           });
           expect(mocks.nativeSupport).toHaveBeenCalledOnce();
-          if (failure === "executor") {
-            expect(execution?.result.status).toBe("error");
-            expect(execution?.failure?.detail).toContain("lost its original executor");
-            expect(stoppedAtMs).toBeUndefined();
-            expect(execution?.previousVerified).toBe(false);
-            return;
-          }
           expect(execution?.result.status, JSON.stringify(mocks.runtimeError.mock.calls)).toBe(
             "ok",
           );

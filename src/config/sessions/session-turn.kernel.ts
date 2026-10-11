@@ -64,7 +64,7 @@ export function createSessionTranscriptTurnKernel(
       "Session initialization requires its new identity and no existing writer state.",
     );
   }
-  const resolveExpectedEntry = (selected: ResolvedSessionEntryRow | undefined) => {
+  const resolveExpectedEntry = (selected: { entry: SessionEntry } | undefined) => {
     if (
       options.selectedSessionId !== undefined &&
       ((selected?.entry.sessionId ?? null) !== options.selectedSessionId ||
