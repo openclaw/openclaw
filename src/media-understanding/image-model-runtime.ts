@@ -1,11 +1,8 @@
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveCompletionModelAuth } from "../agents/completion-model-auth.js";
 import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
 import { isMinimaxVlmModel } from "../agents/minimax-vlm.js";
-import {
-  applySecretRefHeaderSentinels,
-  getApiKeyForModelCore,
-  requireApiKey,
-} from "../agents/model-auth.js";
+import { applySecretRefHeaderSentinels, requireApiKey } from "../agents/model-auth.js";
 import { normalizeModelRef } from "../agents/model-selection.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -17,6 +14,7 @@ import { applyPreparedRuntimeAuthToModel } from "../agents/provider-request-conf
 import { protectPreparedProviderRuntimeAuth } from "../agents/provider-runtime-auth-protection.js";
 import { providerUsesCredentialScopedModelMetadata } from "../agents/runtime-plan/credential-scoped-model.js";
 import { getModelRegistryRuntime } from "../agents/sessions/model-registry-runtime.js";
+import type { SimpleCompletionModelResolver } from "../agents/simple-completion-scope.js";
 import { bindModelLlmRuntime } from "../llm/model-runtime-binding.js";
 import type { Model } from "../llm/types.js";
 import {
@@ -119,18 +117,45 @@ async function prepareResolvedImageRuntime(
       modelRuntime.llmRuntime,
     );
   };
-  const apiKeyInfo = await getApiKeyForModelCore({
+  const modelResolver: SimpleCompletionModelResolver = (
+    provider,
+    modelId,
+    agentDir,
+    cfg,
+    options,
+  ) =>
+    resolveModelAsync(provider, modelId, agentDir, cfg, {
+      ...options,
+      authStorage,
+      modelRegistry,
+      preparedModelRuntime: preparedRuntime,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    });
+  const selected = await resolveCompletionModelAuth({
     model,
     cfg: params.cfg,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     agentDir: params.agentDir,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     profileId: params.profile,
     preferredProfile: params.preferredProfile,
-    store: params.authStore,
-    secretSentinels: true,
+    authStore: params.authStore,
+    metadataSnapshot: preparedRuntime.metadataSnapshot,
+    modelResolver,
+    signal: params.signal,
   });
+  const apiKeyInfo = selected.auth;
   params.signal?.throwIfAborted();
-  if (
+  if (selected.routed) {
+    // The selected credential owns its route; the image capability belongs to that route's model.
+    model = requireImageCapableModel({
+      model: selected.model,
+      resolvedProvider: model.provider,
+      resolvedModel: model.id,
+      requestedProvider: params.provider,
+      requestedModel: params.model,
+    });
+  } else if (
     providerUsesCredentialScopedModelMetadata({
       provider: model.provider,
       modelId: model.id,
@@ -140,7 +165,7 @@ async function prepareResolvedImageRuntime(
     })
   ) {
     const authProfileMode = resolveProviderModelMaterializationAuthMode(apiKeyInfo.mode);
-    const authoritative = await resolveModelAsync(
+    const authoritative = await modelResolver(
       model.provider,
       model.id,
       params.agentDir,
@@ -148,12 +173,8 @@ async function prepareResolvedImageRuntime(
       {
         abortSignal: params.signal,
         modelIdSource: "selected",
-        authStorage,
-        modelRegistry,
         skipAgentDiscovery: true,
         allowBundledStaticCatalogFallback: true,
-        preparedModelRuntime: params.preparedModelRuntime as PreparedModelRuntimeSnapshot,
-        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
         ...(apiKeyInfo.profileId
           ? { authProfileId: apiKeyInfo.profileId }
           : authProfileMode

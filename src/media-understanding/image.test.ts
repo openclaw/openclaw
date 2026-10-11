@@ -374,6 +374,13 @@ describe("image runtime cancellation and retries", () => {
   ])(
     "applies caller transforms after retry stripping ($asyncTransform, $replace)",
     async ({ asyncTransform, replace }) => {
+      // OpenAI picks its route from the credential, so the Platform route needs a Platform key.
+      vi.stubEnv("OPENAI_API_KEY", "test-token");
+      getApiKeyForModelMock.mockResolvedValue({
+        apiKey: "test-token",
+        source: "test",
+        mode: "api-key",
+      });
       mockImageModel({
         api: "openai-responses",
         provider: "openai",
@@ -428,16 +435,16 @@ describe("image runtime cancellation and retries", () => {
     const controller = new AbortController();
     mockImageModel({
       api: "openai-responses",
-      provider: "openai",
+      provider: "acme",
       id: "gpt-5.4-mini",
-      baseUrl: "https://api.openai.com/v1",
+      baseUrl: "https://llm.example.com/v1",
     });
     completeMock.mockImplementationOnce(async () => {
       controller.abort(new Error("caller cancelled image description"));
       return {
         role: "assistant",
         api: "openai-responses",
-        provider: "openai",
+        provider: "acme",
         model: "gpt-5.4-mini",
         stopReason: "stop",
         timestamp: Date.now(),
@@ -448,7 +455,7 @@ describe("image runtime cancellation and retries", () => {
     await expect(
       describeImageWithModelCore({
         ...imageRequestDefaults(),
-        provider: "openai",
+        provider: "acme",
         model: "gpt-5.4-mini",
         prompt: "Describe the image.",
         signal: controller.signal,
@@ -467,15 +474,15 @@ describe("image runtime cancellation and retries", () => {
     vi.useFakeTimers();
     mockImageModel({
       api: "openai-responses",
-      provider: "openai",
+      provider: "acme",
       id: "gpt-5.4-mini",
-      baseUrl: "https://api.openai.com/v1",
+      baseUrl: "https://llm.example.com/v1",
     });
     completeMock.mockImplementation(() => new Promise(() => {}));
 
     const result = describeImageWithModelCore({
       ...imageRequestDefaults(),
-      provider: "openai",
+      provider: "acme",
       model: "gpt-5.4-mini",
       prompt: "Describe the image.",
       timeoutMs: 25,
@@ -498,9 +505,9 @@ describe("image runtime cancellation and retries", () => {
   it("retains the prepared runtime until an aborted provider actually settles", async () => {
     mockImageModel({
       api: "openai-responses",
-      provider: "openai",
+      provider: "acme",
       id: "gpt-5.4-mini",
-      baseUrl: "https://api.openai.com/v1",
+      baseUrl: "https://llm.example.com/v1",
     });
     const completion = createDeferred();
     completeMock.mockImplementation(async () => {
@@ -510,7 +517,7 @@ describe("image runtime cancellation and retries", () => {
     const controller = new AbortController();
     const result = describeImageWithModelCore({
       ...imageRequestDefaults(),
-      provider: "openai",
+      provider: "acme",
       model: "gpt-5.4-mini",
       prompt: "Describe the image.",
       timeoutMs: 60_000,
@@ -535,9 +542,9 @@ describe("image runtime cancellation and retries", () => {
     const slowSetupMs = 400;
     mockImageModel({
       api: "openai-responses",
-      provider: "openai",
+      provider: "acme",
       id: "gpt-5.4-mini",
-      baseUrl: "https://api.openai.com/v1",
+      baseUrl: "https://llm.example.com/v1",
     });
     resolveModelAsyncMock.mockImplementationOnce(
       async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) => {
@@ -562,7 +569,7 @@ describe("image runtime cancellation and retries", () => {
 
     const result = describeImageWithModelCore({
       ...imageRequestDefaults(),
-      provider: "openai",
+      provider: "acme",
       model: "gpt-5.4-mini",
       prompt: "Describe the image.",
     });
@@ -619,7 +626,7 @@ describe("image runtime cancellation and retries", () => {
       const resolved = {
         authStorage: preparedAuthStorage,
         model: {
-          provider: "openai",
+          provider: "acme",
           id: "gpt-5.4-mini",
           api: "openai-responses",
           input: ["text", "image"],
@@ -660,7 +667,7 @@ describe("image runtime cancellation and retries", () => {
       const pending = work.track(() =>
         describeImageWithModelCore({
           ...imageRequestDefaults(),
-          provider: "openai",
+          provider: "acme",
           model: "gpt-5.4-mini",
           prompt: "Describe the image.",
           timeoutMs: 25,

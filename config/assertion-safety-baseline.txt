@@ -2256,7 +2256,7 @@ src/mcp/openclaw-tools-serve-config.ts	1
 src/mcp/plugin-tools-handlers.ts	2
 src/media-generation/provider-registry.ts	1
 src/media-understanding/entry-capabilities.ts	1
-src/media-understanding/image-model-runtime.ts	3
+src/media-understanding/image-model-runtime.ts	2
 src/media-understanding/runner.entries.ts	1
 src/media-understanding/shared.ts	1
 src/media/audio-transcode.ts	1
