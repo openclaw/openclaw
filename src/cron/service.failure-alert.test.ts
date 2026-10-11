@@ -65,6 +65,7 @@ describe("CronService failure alerts", () => {
         const alert = alertCallArg(sendCronFailureAlert);
         expect(alert.text).toContain("local model provider is unreachable");
         expect(alert.text).toContain("Start the provider or check its configured endpoint");
+        expect(alert.text).toContain("will check again on a later scheduled run");
         expect(alert.text).not.toContain("private diagnostic");
         expect(runCronFailureRepair).not.toHaveBeenCalled();
 
@@ -83,6 +84,36 @@ describe("CronService failure alerts", () => {
         expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
         expect(cron.getJob(job.id)?.state.failureAlertIncident).toBeUndefined();
         expect(cron.getJob(job.id)?.state.lastFailureAlertAtMs).toBeUndefined();
+
+        runIsolatedAgentJob.mockResolvedValue(blocked);
+        for (const mode of ["due", "force"] as const) {
+          const atMs = Date.now() + 60_000;
+          const oneShot = await addJob(`one-shot ${mode}`, {
+            schedule: { kind: "at", at: new Date(atMs).toISOString() },
+            delivery: createTelegramDelivery(),
+            failureAlert: { after: 1 },
+          });
+          if (mode === "due") {
+            vi.setSystemTime(atMs);
+          }
+          await expect(cron.run(oneShot.id, mode)).resolves.toEqual({ ok: true, ran: true });
+          const saved = cron.getJob(oneShot.id);
+          expect(saved?.enabled).toBe(mode === "force");
+          expect(saved?.state.nextRunAtMs).toBe(mode === "force" ? atMs : undefined);
+          const guidance = alertCallArg(sendCronFailureAlert).text;
+          if (mode === "due") {
+            expect(guidance).toContain("use Run Now or reschedule");
+            expect(guidance).not.toContain("will check again on a later scheduled run");
+          } else {
+            expect(guidance).toContain("will check again on a later scheduled run");
+          }
+        }
+
+        await cron.update(job.id, { enabled: false, failureAlert: { after: 1 } });
+        await cron.run(job.id, "force");
+        expect(cron.getJob(job.id)?.enabled).toBe(false);
+        expect(cron.getJob(job.id)?.state.nextRunAtMs).toBeUndefined();
+        expect(alertCallArg(sendCronFailureAlert).text).toContain("use Run Now or reschedule");
         expect(runCronFailureRepair).not.toHaveBeenCalled();
       },
       { failureAlert: undefined, runResult: blocked },
