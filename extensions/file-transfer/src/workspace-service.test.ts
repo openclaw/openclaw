@@ -623,6 +623,27 @@ describe("registered node workspace service", () => {
     ).rejects.toThrow("Invalid dir.list continuation");
   });
 
+  it("stops a directory listing that never ends", async () => {
+    await service.start(context());
+    let pages = 0;
+    invoke.mockImplementation(async () => {
+      pages += 1;
+      return {
+        payload: {
+          ok: true,
+          path: remote,
+          entries: [{ name: `f${pages}.txt`, isDir: false, isFile: true, size: 0, mtime: 1 }],
+          truncated: true,
+          nextPageToken: String(pages * 4096),
+        },
+      };
+    });
+    await expect(
+      getAgentWorkspaceAccess(local)!.bridge.readDirectory!({ filePath: "." }),
+    ).rejects.toThrow("Directory listing exceeded 32 pages");
+    expect(pages).toBe(32);
+  });
+
   it("preserves bootstrap reads through in-workspace parent aliases", async () => {
     const nested = path.join(remote, "nested");
     await fs.mkdir(nested);
