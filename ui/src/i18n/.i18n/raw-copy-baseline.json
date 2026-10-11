@@ -478,6 +478,13 @@
       "text": "Duplicate runner"
     },
     {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/plugin/logbook-view.tsx",
+      "text": "0s"
+    },
+    {
       "count": 1,
       "kind": "object-property",
       "name": "description",
@@ -607,7 +614,7 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/systems/systems-backups.ts",
+      "path": "ui/src/pages/systems/systems-backups.tsx",
       "text": "openclaw backup enable --to &lt;location&gt;"
     }
   ]
