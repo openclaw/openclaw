@@ -160,7 +160,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "agent-media-payload": 3,
   // +2: deprecated media projection type and builder.
   "reply-payload": 2,
-  "agent-runtime": 4,
+  // +5: released auth-store and TTS methods retain synchronous compatibility.
+  "agent-runtime": 9,
   "memory-host-core": 2,
   // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
   // +4: legacy AgentHarness, attempt, embedded-run, and side-question contracts remain
@@ -170,7 +171,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "agent-harness": 3,
   // +1: owner-approved synchronous watched-session compatibility during async migration.
   // +1: owner-approved synchronous agent-end compatibility during async migration.
-  "agent-harness-runtime": 12,
+  // +1: synchronous model-auth selection during the auth worker migration.
+  "agent-harness-runtime": 13,
   // +4: deprecated media projection type, builder, and turn aliases.
   "channel-inbound": 21,
   "inbound-envelope": 3,
@@ -193,7 +195,9 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +2: shipped Slack and Discord setup helpers retained through their package migration window.
   "setup-runtime": 2,
   "reply-history": 6,
-  "provider-auth": 15,
+  // +7: released auth read/write/availability helpers during async migration.
+  "provider-auth": 22,
+  "models-provider-runtime": 1,
   // Released synchronous command discovery remains while plugins adopt worker-backed preparation.
   "command-auth-native": 1,
   "skill-commands-runtime": 2,
@@ -228,7 +232,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // resolveCommandAuthorization, createApproverRestrictedNativeApprovalCapability,
       // createChannelApprovalNativeRuntimeAdapter, and createLazyChannelApprovalNativeRuntimeAdapter.
       // +3: approved async skill-command preparation pairs on two existing entrypoints.
-      3664,
+      // +14: approved async auth, model, and TTS replacement pairs.
+      3678,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -247,7 +252,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: runWithLocalStateMutationOwner shares the existing transport authority scope.
       // +5: the five awaited inspection, authorization, and approval factory replacements above.
       // +3: the same skill-command preparation replacements.
-      2130,
+      // +14: the same auth, model, and TTS replacement pairs.
+      2144,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -258,7 +264,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +6: released session callbacks and provider replay contracts during async migration.
       // +4: released synchronous conversation binding contracts during V2 migration.
       // +3: released synchronous skill-command list helpers during async migration.
-      161,
+      // +14: retained synchronous auth, model, and TTS compatibility exports.
+      175,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

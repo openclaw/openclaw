@@ -11,6 +11,7 @@ describe("Codex auth profile selection", () => {
       },
     };
     const selection = createCodexAuthProfileSelection({
+      ensureAuthProfileStore: vi.fn().mockReturnValue(store),
       ensureAuthProfileStoreAsync: vi.fn().mockResolvedValue(store),
       resolveAuthProfileOrder,
     });
@@ -23,6 +24,7 @@ describe("Codex auth profile selection", () => {
   it("preserves an explicit profile selection without reopening its store", async () => {
     const ensureAuthProfileStoreAsync = vi.fn().mockRejectedValue(new Error("store unavailable"));
     const selection = createCodexAuthProfileSelection({
+      ensureAuthProfileStore: vi.fn(),
       ensureAuthProfileStoreAsync,
       resolveAuthProfileOrder,
     });

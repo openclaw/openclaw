@@ -42,6 +42,7 @@ import { resolveTalkSessionAgentId } from "../../../talk/agent-target.js";
 import {
   projectInternalRealtimeVoicePublicConfig,
   projectInternalRealtimeVoicePublicProjection,
+  type InternalRealtimeVoiceProviderCapabilities,
 } from "../../../talk/provider-internal.js";
 import {
   canonicalizeRealtimeVoiceProviderId,
@@ -419,7 +420,7 @@ async function buildTalkCatalog(config: OpenClawConfig, params: TalkCatalogParam
             available && rawConfigWithModel.model === undefined
               ? defaultProviderConfig
               : await resolveConfig(rawConfigWithModel);
-          const capabilities = available
+          const capabilities: InternalRealtimeVoiceProviderCapabilities | undefined = available
             ? await resolveRealtimeVoiceProviderCapabilitiesAsync({
                 provider,
                 providerConfig,

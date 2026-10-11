@@ -193,7 +193,7 @@ export async function createOpenClawToolsWithPreparation(
       ] as const
     ).map(
       async ([tool, providerKey, kind]) =>
-        mediaPlan[tool] &&
+        mediaPlan[tool] === true &&
         (await hasGenerationToolAvailabilityAsync({
           cfg: availabilityConfig,
           agentDir: captured.agentDir,

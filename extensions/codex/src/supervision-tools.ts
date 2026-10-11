@@ -138,6 +138,9 @@ type CodexSupervisionToolsOptions = {
   resolveAuthProfileId: ReturnType<
     typeof createCodexAuthProfileSelection
   >["resolveCodexAppServerAuthProfileIdForAgent"];
+  resolveAuthProfileIdAtEffect: ReturnType<
+    typeof createCodexAuthProfileSelection
+  >["resolveCodexAppServerAuthProfileIdAtEffect"];
   resolveRuntimeOptions: ReturnType<
     typeof createCodexAppServerConfig
   >["resolveCodexSupervisionAppServerRuntimeOptions"];
@@ -299,13 +302,11 @@ function readLegacyEnvEndpoints(env: NodeJS.ProcessEnv): CodexSupervisionEndpoin
     .filter((entry): entry is CodexSupervisionEndpoint => Boolean(entry));
 }
 
-function resolveEndpoints(
+function normalizeEndpoints(
   pluginConfig: unknown,
   options: CodexSupervisionToolsOptions,
-): ResolvedSupervisionEndpoint[] {
+): NormalizedSupervisionEndpoint[] {
   const env = options.env ?? process.env;
-  const runtimeConfig = options.getRuntimeConfig?.();
-  const { resolveAuthProfileId, resolveRuntimeOptions } = options;
   const configured = readCodexPluginConfig(pluginConfig).supervision?.endpoints;
   const endpoints = configured?.length ? configured : readLegacyEnvEndpoints(env);
   const normalized: NormalizedSupervisionEndpoint[] = endpoints
@@ -327,9 +328,20 @@ function resolveEndpoints(
     }
     seen.add(endpoint.id);
   }
-  return normalized.map((endpoint) =>
-    Object.assign({}, endpoint, {
-      connectionKey: supervisionEndpointConnectionKey({
+  return normalized;
+}
+
+async function resolveEndpoints(
+  pluginConfig: unknown,
+  options: CodexSupervisionToolsOptions,
+): Promise<ResolvedSupervisionEndpoint[]> {
+  const env = options.env ?? process.env;
+  const runtimeConfig = options.getRuntimeConfig?.();
+  const { resolveAuthProfileId, resolveRuntimeOptions } = options;
+  return await Promise.all(
+    normalizeEndpoints(pluginConfig, options).map(async (endpoint) => ({
+      ...endpoint,
+      connectionKey: await supervisionEndpointConnectionKey({
         endpoint,
         pluginConfig,
         env,
@@ -337,7 +349,7 @@ function resolveEndpoints(
         resolveAuthProfileId,
         resolveRuntimeOptions,
       }),
-    }),
+    })),
   );
 }
 
@@ -388,26 +400,38 @@ function resolveEndpointStartOptions(params: {
   return startOptions;
 }
 
-function supervisionEndpointConnectionKey(params: {
+type EndpointConnectionParams = {
   endpoint: NormalizedSupervisionEndpoint;
   pluginConfig: unknown;
   env: NodeJS.ProcessEnv;
   runtimeConfig: OpenClawConfig | undefined;
   resolveAuthProfileId: CodexSupervisionToolsOptions["resolveAuthProfileId"];
   resolveRuntimeOptions: CodexSupervisionToolsOptions["resolveRuntimeOptions"];
-}): string {
+};
+
+function endpointConnectionContext(params: EndpointConnectionParams) {
   // Endpoint probes report unsafe connections as unhealthy; the actual request path still
   // validates security before connecting, while this path only fingerprints live ownership.
   const startOptions = resolveEndpointStartOptions({ ...params, validateSecurity: false });
   const usesNativeAuth =
     params.endpoint.configured !== undefined || startOptions.homeScope === "user";
   const agentDir = usesNativeAuth ? undefined : resolveDefaultAgentDir(params.runtimeConfig ?? {});
+  return { startOptions, usesNativeAuth, agentDir };
+}
+
+async function supervisionEndpointConnectionKey(params: EndpointConnectionParams): Promise<string> {
+  const { startOptions, usesNativeAuth, agentDir } = endpointConnectionContext(params);
   const authProfileId = usesNativeAuth
     ? undefined
-    : params.resolveAuthProfileId({
-        agentDir,
-        config: params.runtimeConfig,
-      });
+    : await params.resolveAuthProfileId({ agentDir, config: params.runtimeConfig });
+  return encodeEndpointConnectionKey(startOptions, agentDir, authProfileId);
+}
+
+function encodeEndpointConnectionKey(
+  startOptions: CodexAppServerStartOptions,
+  agentDir: string | undefined,
+  authProfileId: string | undefined,
+): string {
   const fallbackApiKeyCacheKey = authProfileId
     ? undefined
     : resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions });
@@ -430,7 +454,7 @@ function createPolicyGuardedRequest(
     method: string,
     requestParams?: unknown,
   ) => {
-    const currentEndpoint = requireCurrentEndpoint(options, policy, endpoint);
+    const currentEndpoint = await requireCurrentEndpoint(options, policy, endpoint);
     if (options.request) {
       return await options.request<T>(currentEndpoint, method, requestParams);
     }
@@ -451,7 +475,7 @@ function createPolicyGuardedRequest(
       startOptions,
       // Client acquisition and queued writes can outlive the policy that admitted this request.
       assertCurrent: () => {
-        requireCurrentEndpoint(options, policy, currentEndpoint);
+        assertCurrentEndpointAtEffect(options, policy, currentEndpoint);
       },
       ...(endpoint.configured || startOptions.homeScope === "user" ? { authProfileId: null } : {}),
       ...(config ? { config } : {}),
@@ -808,10 +832,18 @@ function sanitizeSessionListResult(
   };
 }
 
-function requireLiveToolPolicy(
+async function requireLiveToolPolicy(
   options: CodexSupervisionToolsOptions,
   policy: CodexSupervisionRequestPolicy,
-): { pluginConfig: unknown; endpoints: ResolvedSupervisionEndpoint[] } {
+): Promise<{ pluginConfig: unknown; endpoints: ResolvedSupervisionEndpoint[] }> {
+  const pluginConfig = requireLiveToolPolicyConfig(options, policy);
+  return { pluginConfig, endpoints: await resolveEndpoints(pluginConfig, options) };
+}
+
+function requireLiveToolPolicyConfig(
+  options: CodexSupervisionToolsOptions,
+  policy: CodexSupervisionRequestPolicy,
+): unknown {
   options.assertInvocationCurrent?.();
   if (!options.senderIsOwner) {
     throw new CodexSupervisionPolicyError(
@@ -820,10 +852,7 @@ function requireLiveToolPolicy(
   }
   const pluginConfig = options.getPluginConfig();
   requireToolPolicy(pluginConfig, policy);
-  return {
-    pluginConfig,
-    endpoints: resolveEndpoints(pluginConfig, options),
-  };
+  return pluginConfig;
 }
 
 function requireToolPolicy(pluginConfig: unknown, policy: CodexSupervisionRequestPolicy): void {
@@ -841,12 +870,12 @@ function requireToolPolicy(pluginConfig: unknown, policy: CodexSupervisionReques
   }
 }
 
-function requireCurrentEndpoint(
+async function requireCurrentEndpoint(
   options: CodexSupervisionToolsOptions,
   policy: CodexSupervisionRequestPolicy,
   endpoint: ResolvedSupervisionEndpoint,
-): ResolvedSupervisionEndpoint {
-  const { endpoints } = requireLiveToolPolicy(options, policy);
+): Promise<ResolvedSupervisionEndpoint> {
+  const { endpoints } = await requireLiveToolPolicy(options, policy);
   const currentEndpoint = endpoints.find((candidate) => candidate.id === endpoint.id);
   if (!currentEndpoint || currentEndpoint.connectionKey !== endpoint.connectionKey) {
     throw new CodexSupervisionPolicyError(
@@ -856,11 +885,47 @@ function requireCurrentEndpoint(
   return currentEndpoint;
 }
 
-function requireCurrentEndpointSet(
+function assertCurrentEndpointAtEffect(
+  options: CodexSupervisionToolsOptions,
+  policy: CodexSupervisionRequestPolicy,
+  endpoint: ResolvedSupervisionEndpoint,
+): void {
+  const pluginConfig = requireLiveToolPolicyConfig(options, policy);
+  const current = normalizeEndpoints(pluginConfig, options).find(
+    (candidate) => candidate.id === endpoint.id,
+  );
+  if (!current) {
+    throw new CodexSupervisionPolicyError(
+      `Codex supervision endpoint ${endpoint.id} was removed or changed during the request.`,
+    );
+  }
+  const runtimeConfig = options.getRuntimeConfig?.();
+  const { startOptions, usesNativeAuth, agentDir } = endpointConnectionContext({
+    endpoint: current,
+    pluginConfig,
+    env: options.env ?? process.env,
+    runtimeConfig,
+    resolveAuthProfileId: options.resolveAuthProfileId,
+    resolveRuntimeOptions: options.resolveRuntimeOptions,
+  });
+  // A queued external request must recheck its current account synchronously at dispatch.
+  const authProfileId = usesNativeAuth
+    ? undefined
+    : options.resolveAuthProfileIdAtEffect({ agentDir, config: runtimeConfig });
+  if (
+    encodeEndpointConnectionKey(startOptions, agentDir, authProfileId) !== endpoint.connectionKey
+  ) {
+    throw new CodexSupervisionPolicyError(
+      `Codex supervision endpoint ${endpoint.id} was removed or changed during the request.`,
+    );
+  }
+}
+
+async function requireCurrentEndpointSet(
   options: CodexSupervisionToolsOptions,
   expected: ResolvedSupervisionEndpoint[],
-): { pluginConfig: unknown } {
-  const current = requireLiveToolPolicy(options, "enabled");
+): Promise<{ pluginConfig: unknown }> {
+  const current = await requireLiveToolPolicy(options, "enabled");
   const unchanged =
     current.endpoints.length === expected.length &&
     expected.every((endpoint) =>
@@ -890,7 +955,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
   // Recheck owner authorization when directly constructed tools execute.
   const current = () => requireLiveToolPolicy(options, "enabled");
   const controlActiveTurn = async (rawParams: unknown, action: "steer" | "interrupt") => {
-    const { endpoints, pluginConfig } = current();
+    const { endpoints, pluginConfig } = await current();
     requireToolPolicy(pluginConfig, "write-controls");
     const params = isRecord(rawParams) ? rawParams : {};
     const threadId = readStringParam(params, "thread_id", { required: true });
@@ -919,7 +984,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
       threadId,
       includeTurns: true,
     });
-    requireCurrentEndpoint(options, "write-controls", endpoint);
+    await requireCurrentEndpoint(options, "write-controls", endpoint);
     if (statusType(thread) !== "active") {
       throw action === "steer"
         ? idleContinuationError(threadId)
@@ -956,7 +1021,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
       description: "Check configured Codex app-server endpoints.",
       parameters: EmptyParamsSchema,
       execute: async () => {
-        const { pluginConfig, endpoints } = current();
+        const { pluginConfig, endpoints } = await current();
         const health: CodexSupervisorEndpointHealth[] = [];
         for (const endpoint of endpoints) {
           try {
@@ -969,7 +1034,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
             health.push({ endpointId: endpoint.id, ok: false });
           }
         }
-        requireCurrentEndpointSet(options, endpoints);
+        await requireCurrentEndpointSet(options, endpoints);
         return jsonResult({
           summary: `codex endpoints: ${health.filter((entry) => entry.ok).length}/${health.length} ok`,
           endpoints: endpoints.map((endpoint) =>
@@ -991,14 +1056,14 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
       parameters: SessionsListParamsSchema,
       execute: async (_toolCallId, rawParams) => {
         const params = isRecord(rawParams) ? rawParams : {};
-        const { endpoints } = current();
+        const { endpoints } = await current();
         const result = await listSessionSnapshot({
           endpoints,
           request,
           includeStored: params.include_stored === true,
           maxStoredSessions: readIntegerParam(params, "max_stored_sessions"),
         });
-        const { pluginConfig } = requireCurrentEndpointSet(options, endpoints);
+        const { pluginConfig } = await requireCurrentEndpointSet(options, endpoints);
         return jsonResult({
           summary: `codex sessions: ${result.sessions.length}`,
           ...sanitizeSessionListResult(
@@ -1014,7 +1079,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
       description: "Read one Codex session transcript from app-server.",
       parameters: SessionReadParamsSchema,
       execute: async (_toolCallId, rawParams) => {
-        const { endpoints, pluginConfig } = current();
+        const { endpoints, pluginConfig } = await current();
         requireToolPolicy(pluginConfig, "raw-transcripts");
         const params = isRecord(rawParams) ? rawParams : {};
         const threadId = readStringParam(params, "thread_id", { required: true });
@@ -1030,7 +1095,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
           threadId,
           includeTurns: params.include_turns === true,
         });
-        requireCurrentEndpoint(options, "raw-transcripts", endpoint);
+        await requireCurrentEndpoint(options, "raw-transcripts", endpoint);
         return jsonResult({
           summary: `codex session: ${threadId}`,
           response: redactCodexSupervisionValue({ thread }),
