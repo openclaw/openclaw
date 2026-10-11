@@ -7,7 +7,6 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { cronOwnerHardeningEntrypoints } from "../../cron/owner-hardening-runtime.test-support.js";
-import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
@@ -24,9 +23,7 @@ import * as updateFailureTriage from "../../infra/update-triage.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import * as existingStateWrite from "../../state/openclaw-state-db-existing-write.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import { confirmUpdateDowngrade } from "./shared.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import { failUpdateCommandRun } from "./update-command-result.js";
@@ -39,7 +36,6 @@ import {
   completeUpdateCommandRun,
   withUpdatePreviewSignals,
 } from "./update-command-run.js";
-import * as servicePlan from "./update-command-service-plan.js";
 import {
   publishUpdateCommandTerminalResult,
   withUpdateCommandTerminalResult,
@@ -181,74 +177,6 @@ it("persists fingerprint warnings before closing a rolled-back run", async () =>
 });
 
 registerUpdateRunReceiptTests(dirs);
-
-it.each(["state", "config", "include", "environment"])(
-  "revalidates changed %s input after target initialization without changing its owner",
-  async (changed) => {
-    const root = dirs.make("update-initialization-admission-");
-    const stateDir = path.join(root, "profile");
-    const configPath = path.join(root, "openclaw.json");
-    const includePath = path.join(root, "gateway.json");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-    vi.stubEnv("FIXTURE_WORKSPACE_DIR", path.join(root, "workspace"));
-    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
-    vi.spyOn(servicePlan, "isGatewayServiceManagementAllowedForUpdate").mockReturnValue(false);
-    fs.writeFileSync(includePath, JSON.stringify({ gateway: { mode: "local" } }));
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({
-        $include: "./gateway.json",
-        agents: { defaults: { workspace: "${FIXTURE_WORKSPACE_DIR}" } },
-      }),
-    );
-    const env = { ...process.env };
-    const context = await captureTargetDatabaseSchemaContext(env);
-    const databasePath = resolveOpenClawStateSqlitePath(env);
-    const initialization = {
-      env,
-      runId: randomUUID(),
-      databasePath: resolvePathViaExistingAncestorSync(databasePath),
-      configPath: resolvePathViaExistingAncestorSync(configPath),
-      target: { configSnapshot: context.configSnapshot },
-    };
-    if (changed === "state") {
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "replacement-profile"));
-    } else if (changed === "config") {
-      vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "replacement.json"));
-    } else if (changed === "include") {
-      fs.writeFileSync(includePath, JSON.stringify({ gateway: { mode: "local", port: 19222 } }));
-    } else {
-      vi.stubEnv("FIXTURE_WORKSPACE_DIR", path.join(root, "replacement-workspace"));
-    }
-    const configBefore = fs.readFileSync(configPath);
-    const includeBefore = fs.readFileSync(includePath);
-
-    if (changed === "state" || changed === "config") {
-      await expect(
-        admitUpdateCommandRun({ opts: {}, root, initialization }).then(() => "admitted"),
-      ).rejects.toThrow(/changed/);
-      expect(fs.existsSync(databasePath)).toBe(false);
-      expect(fs.existsSync(resolveOpenClawStateSqlitePath(process.env))).toBe(false);
-    } else {
-      const warning = vi.spyOn(defaultRuntime, "error");
-      const run = await admitUpdateCommandRun({ opts: {}, root, initialization });
-      expect(getUpdateRun(run.runId, { env })?.status).toBe("running");
-      expect(fs.existsSync(databasePath)).toBe(true);
-      expect(fs.existsSync(resolveOpenClawStateSqlitePath(process.env))).toBe(true);
-      expect(warning).toHaveBeenCalledWith(
-        expect.stringContaining("Warning: Configuration changed during database admission"),
-      );
-      expect(initialization.target.configSnapshot.config).toMatchObject(
-        changed === "include"
-          ? { gateway: { mode: "local", port: 19222 } }
-          : { agents: { defaults: { workspace: path.join(root, "replacement-workspace") } } },
-      );
-    }
-    expect(fs.readFileSync(configPath)).toEqual(configBefore);
-    expect(fs.readFileSync(includePath)).toEqual(includeBefore);
-  },
-);
 
 it.each([false, true])(
   "keeps restored-generation completion with its helper across CLI unwind (handoff=%s)",

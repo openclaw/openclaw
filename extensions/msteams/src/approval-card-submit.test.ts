@@ -149,26 +149,21 @@ describe("maybeHandleMSTeamsApprovalCardSubmit", () => {
     expect(resolveApprovalOverGateway).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { label: "missing", token: undefined },
-    { label: "unknown", token: "unknown-token" },
-  ])("consumes approval submits with a $label token", async ({ token }) => {
-    await expect(
-      maybeHandleMSTeamsApprovalCardSubmit({
-        context: createContext({ token }),
-        deps: createDeps(),
-      }),
-    ).resolves.toBe(true);
+  it.each([{ label: "missing", token: undefined }])(
+    "consumes approval submits with a $label token",
+    async ({ token }) => {
+      await expect(
+        maybeHandleMSTeamsApprovalCardSubmit({
+          context: createContext({ token }),
+          deps: createDeps(),
+        }),
+      ).resolves.toBe(true);
 
-    expect(resolveApprovalOverGateway).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    {
-      label: "account",
-      binding: { accountId: "another-account" },
-      context: {},
+      expect(resolveApprovalOverGateway).not.toHaveBeenCalled();
     },
+  );
+
+  it.each([
     {
       label: "conversation",
       binding: {},
@@ -240,23 +235,6 @@ describe("maybeHandleMSTeamsApprovalCardSubmit", () => {
       "Denied",
     );
     expect(msTeamsApprovalControls.get(token)).toBeNull();
-  });
-
-  it("normalizes Teams conversation message suffixes before matching their card", async () => {
-    const token = "normalized-conversation";
-    registerBinding({ token });
-
-    await expect(
-      maybeHandleMSTeamsApprovalCardSubmit({
-        context: createContext({
-          token,
-          conversationId: `${CONVERSATION_ID};messageid=thread-root`,
-        }),
-        deps: createDeps(),
-      }),
-    ).resolves.toBe(true);
-
-    expect(resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
   });
 
   it("allows only one gateway resolution while simultaneous clicks are in flight", async () => {

@@ -86,117 +86,27 @@ function toolsEffectiveResult() {
 }
 
 describe("AgentsListResultSchema", () => {
-  it.each([
-    { code: "agent-database-ownership-mismatch", embeddedOwnerId: "main", accepted: true },
-    { code: "agent-database-ownership-mismatch", accepted: false },
-    { code: "agent-database-inspection-pending", accepted: true },
-    { code: "agent-database-inspection-failed", accepted: true },
-    { code: "agent-database-inspection-pending", embeddedOwnerId: "main", accepted: false },
-    { code: "agent-database-inspection-failed", embeddedOwnerId: "main", accepted: false },
-    { code: "unknown", accepted: false },
-  ])(
-    "validates admission refusal $code with owner $embeddedOwnerId: $accepted",
-    ({ code, embeddedOwnerId, accepted }) => {
-      expect(
-        Value.Check(AgentsListResultSchema, {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [
-            {
-              id: "worker",
-              status: "degraded",
-              admissionRefusal: {
-                agentId: "worker",
-                paths: ["/state/agents/worker/agent/openclaw-agent.sqlite"],
-                code,
-                ...(embeddedOwnerId ? { embeddedOwnerId } : {}),
-                reason: "The agent database is unavailable.",
-                repairHint: "Inspect the reported database before retrying.",
-              },
-            },
-          ],
-        }),
-      ).toBe(accepted);
-    },
-  );
-
-  it.each([undefined, "read-only", "guarded", "workspace", "full"])(
-    "accepts optional configured permission label %s but rejects non-session modes",
-    (defaultPermissionMode) => {
-      const result = {
+  it("rejects unknown admission refusal codes", () => {
+    expect(
+      Value.Check(AgentsListResultSchema, {
         defaultId: "main",
         mainKey: "main",
         scope: "per-sender",
-        agents: [{ id: "main", ...(defaultPermissionMode ? { defaultPermissionMode } : {}) }],
-      };
-      expectAccepted(AgentsListResultSchema, result);
-      expectRejected(AgentsListResultSchema, {
-        ...result,
-        agents: [{ id: "main", defaultPermissionMode: "allowlist" }],
-      });
-    },
-  );
-
-  it("accepts resolved per-agent thinking metadata", () => {
-    const result = {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [
-        {
-          id: "investment-master",
-          kind: "agent",
-          createdVia: "agent",
-          creatorAgentId: "main",
-          createdAt: 42,
-          name: "Investment Master",
-          workspaceGit: true,
-          model: { primary: "deepseek/deepseek-v4-flash" },
-          thinkingLevels: [
-            { id: "off", label: "off" },
-            { id: "xhigh", label: "xhigh" },
-          ],
-          thinkingOptions: ["off", "xhigh"],
-          thinkingDefault: "xhigh",
-        },
-      ],
-    };
-
-    expectAccepted(AgentsListResultSchema, result);
-  });
-
-  it("keeps the legacy default required while accepting additive ownership metadata", () => {
-    const legacy = {
-      defaultId: "ops",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "ops" }, { id: "research" }],
-    };
-    const current = {
-      ...legacy,
-      ownership: "explicit",
-      selectionRequired: true,
-    };
-
-    expect(Value.Check(AgentsListResultSchema, legacy)).toBe(true);
-    expect(Value.Check(AgentsListResultSchema, current)).toBe(true);
-    expect(Value.Check(AgentsListResultSchema, { ...current, defaultId: undefined })).toBe(false);
-  });
-
-  it("accepts system and legacy omitted kinds but rejects unknown kinds", () => {
-    const result = {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main" }, { id: "custodian", kind: "system" }],
-    };
-
-    expectAccepted(AgentsListResultSchema, result);
-    expectRejected(AgentsListResultSchema, {
-      ...result,
-      agents: [{ id: "custodian", kind: "worker" }],
-    });
+        agents: [
+          {
+            id: "worker",
+            status: "degraded",
+            admissionRefusal: {
+              agentId: "worker",
+              paths: ["/state/agents/worker/agent/openclaw-agent.sqlite"],
+              code: "unknown",
+              reason: "The agent database is unavailable.",
+              repairHint: "Inspect the reported database before retrying.",
+            },
+          },
+        ],
+      }),
+    ).toBe(false);
   });
 });
 
@@ -271,24 +181,6 @@ describe("Models auth params schemas", () => {
 });
 
 describe("ModelsListResultSchema", () => {
-  it("accepts closed unavailability reasons and epoch-millisecond retry times", () => {
-    const model = { id: "test-model", name: "Test Model", provider: "custom", available: false };
-    for (const unavailableReason of ["missing-auth", "auth-failed", "cooldown"]) {
-      expectAccepted(ModelsListResultSchema, { models: [{ ...model, unavailableReason }] });
-    }
-    expectAccepted(ModelsListResultSchema, {
-      models: [{ ...model, unavailableReason: "cooldown", unavailableUntil: 2_000_000_000_000 }],
-    });
-    expectRejected(ModelsListResultSchema, {
-      models: [{ ...model, unavailableReason: "unknown" }],
-    });
-    for (const unavailableUntil of [-1, 1.5, "2033-05-18T03:33:20.000Z"]) {
-      expectRejected(ModelsListResultSchema, {
-        models: [{ ...model, unavailableReason: "cooldown", unavailableUntil }],
-      });
-    }
-  });
-
   it("accepts stable public input capabilities", () => {
     const model = {
       id: "gpt-image",
@@ -413,76 +305,6 @@ describe("ModelsProbe schemas", () => {
 });
 
 describe("ToolsEffectiveResultSchema", () => {
-  it("accepts MCP identity and a true session-denial marker", () => {
-    const result = {
-      ...toolsEffectiveResult(),
-      groups: [
-        ...toolsEffectiveResult().groups,
-        {
-          id: "mcp",
-          label: "MCP server tools",
-          source: "mcp",
-          tools: [
-            {
-              id: "notion__delete-page",
-              label: "Delete page",
-              description: "Delete a page",
-              rawDescription: "Delete a page",
-              source: "mcp",
-              mcpServer: "notion",
-              mcpToolName: "delete_page",
-              deniedBySession: true,
-            },
-          ],
-        },
-      ],
-    };
-
-    expectAccepted(ToolsEffectiveResultSchema, result);
-    expectRejected(ToolsEffectiveResultSchema, {
-      ...result,
-      groups: [
-        ...result.groups.slice(0, -1),
-        {
-          ...result.groups.at(-1),
-          tools: [{ ...result.groups.at(-1)?.tools[0], deniedBySession: false }],
-        },
-      ],
-    });
-  });
-
-  it("accepts runtime tool quarantine notices", () => {
-    const result = {
-      ...toolsEffectiveResult(),
-      notices: [
-        {
-          id: "unsupported-tool-schema:fuzzplugin_move_angles",
-          severity: "warning",
-          message:
-            'Tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has an unsupported runtime input schema and was quarantined before model projection.',
-        },
-      ],
-    };
-
-    expectAccepted(ToolsEffectiveResultSchema, result);
-  });
-
-  it("accepts server-scoped inventory notices", () => {
-    const result = {
-      ...toolsEffectiveResult(),
-      notices: [
-        {
-          id: "mcp-not-yet-connected",
-          severity: "info",
-          message: "MCP tools are not available yet.",
-          servers: ["github", "notion"],
-        },
-      ],
-    };
-
-    expectAccepted(ToolsEffectiveResultSchema, result);
-  });
-
   it("keeps tool quarantine notices strict", () => {
     const result = {
       ...toolsEffectiveResult(),

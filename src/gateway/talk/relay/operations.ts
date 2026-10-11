@@ -169,13 +169,14 @@ function finishRelaySessionClose(
   closeVoice: () => Promise<void>,
   options?: RealtimeVoiceCloseOptions & { eventReason?: "output-cancelled" },
 ): Promise<void> {
+  session.runAuthority?.release();
   const disposition =
     options?.disposition ??
     (isTalkVoiceSessionReplacing(session.id, session.connId, session.sessionTarget.agentId)
       ? "detach"
       : "abort");
   unregisterTalkVoiceSession(session.id, session.connId, session.sessionTarget.agentId);
-  session.confirmationReadiness.close();
+  session.transcriptReadiness.close();
   session.harness.close();
   session.outputOwnership.drain?.resolve();
   relaySessions.delete(session.id);

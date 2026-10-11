@@ -226,23 +226,19 @@ async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void
   }
   await new Promise<void>((resolve, reject) => {
     const cleanup = () => {
-      if (timer) {
-        clearTimeout(timer);
-      }
-      if (onAbort) {
-        signal?.removeEventListener("abort", onAbort);
-      }
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
     };
     const onResolve = () => {
       cleanup();
       resolve();
     };
-    const onAbort: (() => void) | undefined = () => {
+    const onAbort = () => {
       cleanup();
       reject(createAbortError(signal?.reason));
     };
     // An active poll must outlive the child's last handle so one-shot callers receive its result.
-    const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(onResolve, ms);
+    const timer = setTimeout(onResolve, ms);
     signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
@@ -371,6 +367,12 @@ export function createProcessTool(
       const scopedSession = isInScope(session) ? session : undefined;
       const scopedFinished = isInScope(finished) ? finished : undefined;
 
+      const sessionControlError = (candidate: ProcessSession) =>
+        !candidate.backgrounded
+          ? `Session ${params.sessionId} is not backgrounded.`
+          : candidate.finalizing
+            ? `Session ${params.sessionId} is finalizing.`
+            : undefined;
       const resolveBackgroundedWritableStdin = () => {
         if (!scopedSession) {
           return {
@@ -378,16 +380,11 @@ export function createProcessTool(
             result: failText(`No active session found for ${params.sessionId}`),
           };
         }
-        if (!scopedSession.backgrounded) {
+        const controlError = sessionControlError(scopedSession);
+        if (controlError) {
           return {
             ok: false as const,
-            result: failText(`Session ${params.sessionId} is not backgrounded.`),
-          };
-        }
-        if (scopedSession.finalizing) {
-          return {
-            ok: false as const,
-            result: failText(`Session ${params.sessionId} is finalizing.`),
+            result: failText(controlError),
           };
         }
         const stdin = scopedSession.stdin;
@@ -571,11 +568,9 @@ export function createProcessTool(
         case "clear":
         case "remove": {
           if (params.action !== "clear" && scopedSession) {
-            if (!scopedSession.backgrounded) {
-              return failText(`Session ${params.sessionId} is not backgrounded.`);
-            }
-            if (scopedSession.finalizing) {
-              return failText(`Session ${params.sessionId} is finalizing.`);
+            const controlError = sessionControlError(scopedSession);
+            if (controlError) {
+              return failText(controlError);
             }
             const removing = params.action === "remove";
             if (!cancelBackgroundExecSession(scopedSession.id)) {
