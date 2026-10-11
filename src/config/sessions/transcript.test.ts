@@ -294,6 +294,14 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       "/debug set channels.telegram.botToken=synthetic-private-token",
       '/debug set channels.telegram.botToken="__OPENCLAW_REDACTED__"',
     ],
+    [
+      '/debug: set models.providers.local.headers.X-Service-Access="q7m2n9v4p6r8x5"',
+      '/debug set models.providers.local.headers.X-Service-Access="__OPENCLAW_REDACTED__"',
+    ],
+    [
+      '/config@OpenClawBot: set models.providers.local.headers.X-Service-Access="q7m2n9v4p6r8x5"',
+      '/config set models.providers.local.headers.X-Service-Access="__OPENCLAW_REDACTED__"',
+    ],
     ['/debug set logging.level="debug"', '/debug set logging.level="debug"'],
   ])("redacts configuration input %s before recording", async (commandText, expected) => {
     await writeTranscriptStore();
@@ -312,21 +320,25 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       content: [{ type: "text", text: expected }],
     });
     expect(JSON.stringify(events)).not.toContain("synthetic-private-token");
+    expect(JSON.stringify(events)).not.toContain("q7m2n9v4p6r8x5");
   });
 
-  it.each(["/btw hello", "/side hello"])("keeps %s ephemeral", async (commandText) => {
-    await writeTranscriptStore();
-    const before = await loadFixtureMessages();
-    await recordDeliveredCommandExchange({
-      sessionKey,
-      storePath: fixture.storePath(),
-      commandText,
-      replyText: "Side answer",
-      commandId: "side-command",
-      replyId: "reply",
-    });
-    expect(await loadFixtureMessages()).toEqual(before);
-  });
+  it.each(["/btw hello", "/side hello", "/btw: hello", "/side@OpenClawBot: hello"])(
+    "keeps %s ephemeral",
+    async (commandText) => {
+      await writeTranscriptStore();
+      const before = await loadFixtureMessages();
+      await recordDeliveredCommandExchange({
+        sessionKey,
+        storePath: fixture.storePath(),
+        commandText,
+        replyText: "Side answer",
+        commandId: "side-command",
+        replyId: "reply",
+      });
+      expect(await loadFixtureMessages()).toEqual(before);
+    },
+  );
 
   it("uses configured session.store when storePath is omitted", async () => {
     const tempDir = sessionDirs.make();

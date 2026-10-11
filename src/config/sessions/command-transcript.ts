@@ -1,3 +1,4 @@
+import { normalizeCommandBody } from "../../auto-reply/commands-registry-normalize.js";
 import { parseSlashCommandOrNull } from "../../auto-reply/reply/commands-slash-parse.js";
 import { parseConfigCommand } from "../../auto-reply/reply/config-commands.js";
 import { parseDebugCommand } from "../../auto-reply/reply/debug-commands.js";
@@ -50,7 +51,10 @@ export async function recordDeliveredCommandExchange(
     replyId: string;
   },
 ) {
-  const commandText = params.commandText.trim();
+  const commandText = normalizeCommandBody(params.commandText, {
+    targetedCommandMode: "pre-identity",
+    preserveArguments: true,
+  }).trim();
   if (/^\/(?:btw|side)(?:@\S+)?(?:\s|$)/i.test(commandText)) {
     return { ok: false as const, reason: "ephemeral command" };
   }
