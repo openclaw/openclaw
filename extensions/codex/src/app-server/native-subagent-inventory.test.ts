@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { captureSessionEntryCurrentCheck } from "openclaw/plugin-sdk/session-binding-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { createNativeSubagentAssignmentStore } from "./native-subagent-assignment-store.js";
+import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import {
   fixture,
   completeInForeground,
@@ -18,7 +22,9 @@ import {
   turnStartedNotification,
 } from "./native-subagent-monitor.test-support.js";
 import { readCodexNativeSubagentSubmissions } from "./native-subagent-submission.js";
+import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
 import { setupRunAttemptTestHooks } from "./run-attempt-test-harness.js";
+import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 
 setupRunAttemptTestHooks();
 
@@ -32,7 +38,94 @@ async function startAssignment(observeTurn = true) {
   return { f, client, parent };
 }
 
+async function capturePhysicalOwner(f: Awaited<ReturnType<typeof fixture>>) {
+  const current = await captureSessionEntryCurrentCheck({
+    agentId: f.identity.agentId,
+    sessionKey: f.identity.sessionKey,
+    storePath: resolveStorePath(undefined, { agentId: f.identity.agentId }),
+  });
+  assert.equal(current.entry?.sessionId, f.identity.sessionId);
+  assert.equal(current.entry.lifecycleRevision, f.historyOwner().lifecycleRevision);
+  return current.assertCurrent;
+}
+
 describe("native pending assignment inventory through registered monitor admission", () => {
+  it.each(["session", "lifecycle", "connection", "missing-owner"] as const)(
+    "refuses rotated delivery when the physical owner loses %s continuity",
+    async (change) => {
+      const f = await fixture();
+      const assertLifecycleCurrent = await capturePhysicalOwner(f);
+      const assignmentStore = createNativeSubagentAssignmentStore({
+        bindingStore: f.store,
+        identity: f.identity,
+        owner: f.historyOwner(),
+        ...(change === "missing-owner" ? {} : { assertLifecycleCurrent }),
+      });
+      await f.store.mutate(f.identity, {
+        kind: "replace-thread",
+        expectedThreadId: "parent-thread",
+        binding: {
+          ...f.binding,
+          threadId: "rotated-parent",
+          appServerRuntimeFingerprint:
+            change === "connection" ? "connection-B" : f.binding.appServerRuntimeFingerprint,
+        },
+      });
+      if (change === "session" || change === "lifecycle") {
+        await seedRunSessionOwnerForTest(
+          change === "session" ? "physical-2" : f.identity.sessionId,
+          f.identity.sessionKey,
+          { lifecycleRevision: change === "lifecycle" ? "revision-2" : "inventory-generation" },
+        );
+      }
+      expect(() => assignmentStore.assertDeliveryOwner?.()).toThrow();
+      expect(() => assignmentStore.assertCurrent()).toThrow();
+    },
+  );
+
+  it("refuses a pending supervision branch even with the same physical owner and connection", async () => {
+    const f = await fixture();
+    const store = createCodexTestBindingStore();
+    const binding = {
+      ...f.binding,
+      threadId: "rotated-parent",
+      connectionScope: "supervision" as const,
+      supervisionSourceThreadId: "rotated-parent",
+      preserveNativeModel: true as const,
+      conversationSourceTransferComplete: true as const,
+      model: "test-model",
+      modelProvider: "test-provider",
+    };
+    expect(await store.mutate(f.identity, { kind: "set", binding })).toBe(true);
+    const owner = createCodexNativeSubagentHistoryOwner({
+      parentThreadId: "parent-thread",
+      sessionId: f.identity.sessionId,
+      lifecycleRevision: f.historyOwner().lifecycleRevision,
+      binding,
+    });
+    assert(owner);
+    const assignmentStore = createNativeSubagentAssignmentStore({
+      bindingStore: store,
+      identity: f.identity,
+      owner,
+      assertLifecycleCurrent: await capturePhysicalOwner(f),
+    });
+    expect(() => assignmentStore.assertDeliveryOwner?.()).not.toThrow();
+    expect(
+      await store.mutate(f.identity, {
+        kind: "set",
+        binding: {
+          ...binding,
+          pendingSupervisionBranch: {
+            sourceThreadId: "rotated-parent",
+            connectionFingerprint: owner.connectionFingerprint,
+          },
+        },
+      }),
+    ).toBe(true);
+    expect(() => assignmentStore.assertDeliveryOwner?.()).toThrow();
+  });
+
   it.each(["committed", "rejected", "failed", "source-revoked", "binding-retired"] as const)(
     "withholds native inference authority until its exact assignment is acknowledged (%s)",
     async (outcome) => {

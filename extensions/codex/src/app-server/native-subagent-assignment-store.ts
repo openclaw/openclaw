@@ -1,4 +1,7 @@
-import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
+import {
+  codexNativeSubagentHistoryConnectionFingerprint,
+  type CodexNativeSubagentHistoryOwner,
+} from "./native-subagent-history-owner.js";
 import type { CodexNativeSubagentAssignmentStore } from "./native-subagent-pending-assignments.js";
 import { matchesCodexNativeSubagentSubmissionBinding } from "./session-binding-record.js";
 import type {
@@ -20,6 +23,26 @@ export function createNativeSubagentAssignmentStore(params: {
       throw new Error("Native assignment binding is no longer current.");
     }
   };
+  const assertDeliveryOwner = () => {
+    params.assertLifecycleCurrent?.();
+    const binding = bindingStore.read(identity);
+    if (binding?.threadId === owner.parentThreadId) {
+      assertCurrent();
+      return;
+    }
+    // Completion can outlive its native parent, not its physical requester or
+    // connection. Assignment reads and writes still require the original thread.
+    if (
+      !params.assertLifecycleCurrent ||
+      identity.kind !== "session" ||
+      identity.sessionId !== owner.sessionId ||
+      !binding ||
+      binding.pendingSupervisionBranch ||
+      codexNativeSubagentHistoryConnectionFingerprint(binding) !== owner.connectionFingerprint
+    ) {
+      throw new Error("Native completion delivery owner is no longer current.");
+    }
+  };
   const mutate =
     (
       kind: "record-native-subagent-assignment" | "consume-native-subagent-assignment",
@@ -31,6 +54,7 @@ export function createNativeSubagentAssignmentStore(params: {
       });
   return {
     assertCurrent,
+    assertDeliveryOwner,
     read: async () => {
       const assignments =
         (await bindingStore.readNativeSubagentAssignments?.(identity, owner)) ?? [];
