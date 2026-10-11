@@ -298,6 +298,10 @@ export class ModelProvidersController extends ModelPageController {
   }
 
   override beforeUpdate() {
+    // Initial Gateway synchronization must finish before adopting a cached route snapshot.
+    if (!this.isConnected) {
+      return;
+    }
     super.beforeUpdate();
     const data = this.routeData;
     const previous = this.previousRouteData;

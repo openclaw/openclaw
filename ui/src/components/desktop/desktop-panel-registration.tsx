@@ -25,7 +25,7 @@ export type DesktopPanelInputs = Pick<
   | "desktopClientFactory"
 > & { sessions: DesktopPanelController["sessions"] | undefined };
 
-export type DesktopPanelElement = HTMLElement &
+type DesktopPanelElement = HTMLElement &
   Pick<
     DesktopPanelController,
     | keyof DesktopPanelInputs

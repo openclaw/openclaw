@@ -80,9 +80,9 @@ it.runIf(process.platform === "win32")(
     const close = vi.spyOn(job, "close");
     try {
       await closed;
-      await expect(testing.stopGatewayProcess(child, Date.now() + 5_000, 2_000)).resolves.toBe(
-        true,
-      );
+      await expect(
+        testing.stopWindowsGatewayProcess(child, Date.now() + 5_000, 2_000),
+      ).resolves.toBe(true);
       expect(close).toHaveBeenCalledOnce();
       expect(() => job.inspect()).toThrow("Windows command Job is closed");
     } finally {
