@@ -139,7 +139,7 @@ export async function withPreparedSqliteSnapshot<T>(
   } catch (cause) {
     outcome = { cause };
   }
-  if (!(await snapshot.cleanupAsync())) {
+  if (!(await snapshot.cleanupAsync().catch(() => false))) {
     // An exit retry is best-effort, not proof that this private copy was removed.
     const readFailure =
       "cause" in outcome

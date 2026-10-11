@@ -218,17 +218,27 @@ function startSnapshotFlight(
   selected.references++;
   lifecycle?.trackProducer?.(selected.settled.result);
   let closed = false;
+  let withdrew = false;
   let closing: RetainedOperation<void> | undefined;
   const retained = createRetainedOperation<PreparedSnapshot>(() => {
     if (retained.operation.read().status !== "pending") {
       return;
     }
     if (closed || signal?.aborted) {
-      selected.references--;
+      if (!withdrew) {
+        withdrew = true;
+        selected.references--;
+      }
       if (selected.references === 0) {
         selected.controller.abort(signal?.reason);
         if (flights.get(key) === selected) {
           flights.delete(key);
+        }
+        if (!lifecycle?.trackProducer) {
+          selected.settled.service();
+          if (selected.settled.read().status === "pending") {
+            return;
+          }
         }
       }
       retained.reject(signal?.reason ?? new Error("SQLite snapshot preparation closed"));
@@ -250,6 +260,7 @@ function startSnapshotFlight(
     selected.settled.service();
   });
   const service = () => retained.operation.service();
+  serviceWhenSettled(selected.settled, service);
   selected.listeners.add(service);
   signal?.addEventListener("abort", service, { once: true });
   queueMicrotask(service);
