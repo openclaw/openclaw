@@ -539,9 +539,6 @@ export async function processCompletionsStream(
           }
         } else {
           const hasLaterVisibleText = contentDeltaIndex < lastVisibleTextIndex;
-          if (reasoningTagTextPartitioner.hasPending()) {
-            reasoningTagTextPartitioner.markStrict();
-          }
           if (!hasLaterVisibleText || !reasoningTagTextPartitioner.hasPendingSyntax()) {
             flushReasoningTagTextPartitioner();
           }

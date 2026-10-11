@@ -52,6 +52,35 @@ describe("reasoning-first completions", () => {
     },
   );
 
+  it("streams structured text after buffered markdown before reading another chunk", async () => {
+    const model = makeCompletionsModel();
+    const output = createAssistantOutput(model);
+    const text: string[] = [];
+    async function* chunks() {
+      // The trailing "<" stays held as possible tag syntax, so the reasoning
+      // transition below runs with pending buffered text.
+      yield makeCompletionsChunk({ content: "Knock knock. <" });
+      yield makeCompletionsChunk({
+        content: [
+          { type: "thinking", thinking: "Reconsider." },
+          { type: "text", text: "Answer" },
+        ],
+      });
+      expect(text.join("")).toBe("Knock knock. <Answer");
+      yield makeCompletionsChunk({ content: " continues." });
+      expect(text.join("")).toBe("Knock knock. <Answer continues.");
+      yield makeCompletionsChunk({}, "stop");
+    }
+    await processCompletionsStream(chunks(), output, model, {
+      push(event) {
+        if (event.type === "text_delta") {
+          text.push(event.delta);
+        }
+      },
+    });
+    expect(output.stopReason).toBe("stop");
+  });
+
   it.each(["", "Answer. "])("keeps unfinished reasoning private after %j", async (prefix) => {
     const model = makeCompletionsModel();
     const output = createAssistantOutput(model);
