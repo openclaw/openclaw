@@ -195,7 +195,7 @@ function requireExecApprovalsBaseHash(
   }
 }
 
-function handleSystemWhich(rawBins: unknown[], env?: Record<string, string>) {
+async function handleSystemWhich(rawBins: unknown[], env?: Record<string, string>) {
   const extensions =
     process.platform === "win32"
       ? (
