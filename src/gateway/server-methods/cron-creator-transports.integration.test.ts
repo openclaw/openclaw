@@ -200,7 +200,11 @@ describe("original caller through Cron creator transports", () => {
                     await created;
                     const before = await fixture.read();
                     expect(before).toMatchObject([
-                      { name: "Recovered caller job", enabled: false },
+                      {
+                        name: "Recovered caller job",
+                        enabled: false,
+                        createdActor: { type: "human", source: "profile", id: profile.id },
+                      },
                     ]);
                     if (revocation !== "none") {
                       hold = true;

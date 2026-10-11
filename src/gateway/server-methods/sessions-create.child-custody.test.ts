@@ -32,7 +32,10 @@ import {
 import { resolveSessionPublicShare } from "../../config/sessions/session-public-share.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { initializeGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import {
+  bindGatewayContextResolver,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import type { PluginHookBeforeMessageWriteEvent } from "../../plugins/types.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
@@ -42,6 +45,7 @@ import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { withOperatorToolGatewayAuthority } from "../server-plugin-in-process-dispatch.js";
+import { dispatchGatewayMethodInProcess } from "../server-plugins.js";
 import { resolveSessionMutationAuthorization } from "../session-sharing.js";
 import {
   dispatchInboundMessageMock,
@@ -201,6 +205,12 @@ async function createHostedChildFixture(
           owner: { kind: "core", area: "sessions" },
           handler: expectDefined(sessionCreateHandlers["sessions.create"], "creation owner"),
         },
+        {
+          name: "sessions.patch",
+          scope: "operator.write",
+          owner: { kind: "core", area: "sessions" },
+          handler: expectDefined(sessionMutationHandlers["sessions.patch"], "mutation owner"),
+        },
       ],
       registry,
     );
@@ -353,6 +363,15 @@ async function createHostedChildFixture(
     },
     send,
     sendNested,
+    patchAs: (profileId: string, request: Record<string, unknown>) =>
+      withPluginRuntimeGatewayRequestScope(
+        { context, client: identifiedClient(profileId), isWebchatConnect: () => false },
+        () =>
+          dispatchGatewayMethodInProcess("sessions.patch", request, {
+            resolveGatewayContext: () => context,
+          }),
+      ),
+    readChild: () => loadSessionEntry({ agentId: "main", sessionKey: childKey, storePath }),
     scope,
     context,
     parentScope: { agentId: "main", sessionKey: parentKey, storePath },
@@ -507,31 +526,21 @@ describe("hosted creation transfers accepted child input", () => {
       archived: true,
     };
     const other = ensureProfileForEmail("unrelated-viewer@example.test");
-    const forbidden = resolveSessionMutationAuthorization({
-      client: identifiedClient(other.id),
-      method: "sessions.patch",
-      requestParams: request,
-      context: fixture.context,
-    });
-    expect(forbidden.error).toMatchObject({ code: "FORBIDDEN" });
-    const client = identifiedClient(fixture.profileId);
-    const allowed = resolveSessionMutationAuthorization({
-      client,
-      method: "sessions.patch",
-      requestParams: request,
-      context: fixture.context,
-    });
-    expect(allowed.error).toBeNull();
-    const respond = vi.fn();
-    await sessionMutationHandlers["sessions.patch"]?.({
-      params: request,
-      client,
-      context: fixture.context,
-      sessionMutationAuthorization: allowed.authorization,
-      respond,
-    } as never);
-    expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+    const before = fixture.readChild();
+    await expect(fixture.patchAs(other.id, request)).rejects.toThrow(
+      "Only the session creator or an admin",
+    );
+    expect(fixture.readChild()).toEqual(before);
+    await expect(fixture.patchAs(fixture.profileId, request)).resolves.toMatchObject({ ok: true });
     expect(loadSessionEntry(fixture.scope())?.archivedAt).toEqual(expect.any(Number));
+  });
+
+  it("rejects a revoked requester before durable creation", async () => {
+    await using fixture = await createHostedChildFixture();
+    fixture.revokeSource();
+    await expect(fixture.send()).rejects.toThrow("original operator source revoked");
+    expect(fixture.readChild()).toBeUndefined();
+    expect(fixture.provider).not.toHaveBeenCalled();
   });
 
   it("does not attribute autonomous work to an ordinary conversation creator", async () => {
