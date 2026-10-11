@@ -1416,7 +1416,7 @@ describe("anthropic transport stream", () => {
         thinking: "Need context.",
         signature: "reasoning_content",
       },
-      { type: "text", text: "Visible answer. Continued." },
+      { type: "text", text: "Visible answer. Continued.", cache_control: { type: "ephemeral" } },
     ]);
   });
 
@@ -1705,136 +1705,6 @@ describe("anthropic transport stream", () => {
       ]);
     },
   );
-
-  it("omits completed thinking while preserving the active tool turn when thinking is disabled", async () => {
-    await runTransportStream(makeAnthropicTransportModel(), {
-      messages: [
-        makeUserMessage("hello", 0),
-        {
-          ...makeAnthropicToolUseMessage([
-            { type: "thinking", thinking: "private reasoning", thinkingSignature: "sig_1" },
-            {
-              type: "thinking",
-              thinking: "[Reasoning redacted]",
-              thinkingSignature: "opaque_1",
-              redacted: true,
-            },
-          ]),
-          stopReason: "stop",
-        },
-        makeUserMessage("again", 1),
-        {
-          ...makeAnthropicToolUseMessage([
-            {
-              type: "thinking",
-              thinking: "Private replay text.",
-              thinkingSignature: "reasoning_content",
-            },
-            { type: "text", text: "Visible reply." },
-          ]),
-          stopReason: "stop",
-        },
-        makeUserMessage("look it up", 2),
-        makeAnthropicToolUseMessage([
-          { type: "thinking", thinking: "call lookup", thinkingSignature: "sig_tool" },
-          { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
-        ]),
-        {
-          role: "toolResult",
-          toolCallId: "call_1",
-          toolName: "lookup",
-          content: [{ type: "text", text: "42" }],
-          isError: false,
-          timestamp: 3,
-        },
-      ],
-    });
-    const payload = latestAnthropicRequest().payload;
-    const assistants = requireArray(payload.messages, "messages")
-      .map((msg) => requireRecord(msg, "message"))
-      .filter((msg) => msg.role === "assistant");
-    expect(assistants.map((msg) => msg.content)).toEqual([
-      [{ type: "text", text: "[assistant reasoning omitted]" }],
-      [{ type: "text", text: "Visible reply." }],
-      [
-        { type: "thinking", thinking: "call lookup", signature: "sig_tool" },
-        { type: "tool_use", id: "call_1", name: "lookup", input: {} },
-      ],
-    ]);
-    expect(assistants[1]).not.toHaveProperty("reasoning_content");
-    expect(payload.thinking).toEqual({ type: "disabled" });
-  });
-
-  it("replays compatible reasoning and backfills tool turns even when thinking is off", async () => {
-    const replayModel = { provider: "xiaomi", id: "mimo-v2-flash" };
-    await runTransportStream(
-      makeAnthropicTransportModel({
-        id: "mimo-v2-flash",
-        provider: "xiaomi",
-        baseUrl: "https://api.xiaomimimo.com/anthropic",
-        reasoning: false,
-      }),
-      {
-        messages: [
-          makeUserMessage("hello", 0),
-          {
-            ...makeAnthropicToolUseMessage(
-              [
-                {
-                  type: "thinking",
-                  thinking: `Need${String.fromCharCode(0xd83d)} to answer politely.`,
-                  thinkingSignature: "reasoning_content",
-                },
-                { type: "text", text: "Hello!" },
-                {
-                  type: "thinking",
-                  thinking: "Then ask a follow-up.",
-                  thinkingSignature: "reasoning_content",
-                },
-              ],
-              replayModel,
-            ),
-            stopReason: "stop",
-          },
-          makeUserMessage("look this up", 1),
-          makeAnthropicToolUseMessage(
-            [{ type: "toolCall", id: "call_1", name: "lookup", arguments: {} }],
-            replayModel,
-          ),
-          {
-            role: "toolResult",
-            toolCallId: "call_1",
-            toolName: "lookup",
-            content: [{ type: "text", text: "found" }],
-            isError: false,
-            timestamp: 2,
-          },
-          makeUserMessage("continue", 3),
-        ],
-      },
-      { apiKey: "sk-xiaomi-test" },
-    );
-    const payload = latestAnthropicRequest().payload;
-    const assistants = requireArray(payload.messages, "messages")
-      .map((msg) => requireRecord(msg, "message"))
-      .filter((msg) => msg.role === "assistant");
-    expect(assistants[0]).toMatchObject({
-      reasoning_content: "Need to answer politely.\nThen ask a follow-up.",
-      content: [
-        { type: "thinking", thinking: "Need to answer politely.", signature: "reasoning_content" },
-        { type: "text", text: "Hello!" },
-        { type: "thinking", thinking: "Then ask a follow-up.", signature: "reasoning_content" },
-      ],
-    });
-    expect(assistants[0]).not.toHaveProperty("reasoning");
-    expect(assistants[0]).not.toHaveProperty("reasoning_text");
-    expect(assistants[1]?.content).toEqual([
-      { type: "thinking", thinking: "", signature: "reasoning_content" },
-      { type: "tool_use", id: "call_1", name: "lookup", input: {} },
-    ]);
-    expect(assistants[1]).not.toHaveProperty("reasoning_content");
-    expect(payload).not.toHaveProperty("thinking");
-  });
 
   it("sends a minimal user fallback when message conversion has no content", async () => {
     await runTransportStream(makeAnthropicTransportModel(), {

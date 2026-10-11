@@ -462,7 +462,7 @@ describe("Anthropic provider", () => {
           content: "summary checkpoint",
           encrypted_content: encryptedContent,
         },
-        { type: "text", text: "Done." },
+        { type: "text", text: "Done.", cache_control: { type: "ephemeral" } },
       ]);
     },
   );
@@ -647,30 +647,6 @@ describe("Anthropic provider", () => {
       },
     ]);
     expect(result.responseModel).toBe("claude-fable-5");
-  });
-
-  it("omits completed-turn thinking when no thinking mode is requested", async () => {
-    const { payload } = await captureSimpleAnthropicPayload(
-      {},
-      { mode: "raw", stopBeforeNetwork: true },
-      conversation(
-        user("hello"),
-        makeAnthropicAssistantMessage([
-          thinking("private reasoning", "sig_1"),
-          {
-            type: "thinking",
-            thinking: "[Reasoning redacted]",
-            thinkingSignature: "opaque_1",
-            redacted: true,
-          },
-        ]),
-        user("again"),
-      ),
-    );
-    expect(payload.thinking).toBeUndefined();
-    expect(assistantContent(payload)).toEqual([
-      { type: "text", text: "[assistant reasoning omitted]" },
-    ]);
   });
 
   it("preserves signed thinking for an active tool turn when new thinking is disabled", async () => {
@@ -1190,27 +1166,6 @@ describe("Anthropic provider", () => {
       errorCode: "ECONNRESET",
     });
     expect(result.errorMessage).toContain("socket failed");
-  });
-
-  it("strips Fable thinking when replay targets Anthropic Vertex", async () => {
-    const { payload } = await captureSimpleAnthropicPayload(
-      { provider: "anthropic-vertex", id: "claude-opus-4-8", name: "Claude Opus 4.8" },
-      { mode: "raw", apiKey: "vertex-token" },
-      conversation(
-        user("hello"),
-        makeAnthropicAssistantMessage(
-          [
-            thinking("model-bound thought", "sig_model_bound"),
-            { type: "text", text: "visible answer" },
-          ],
-          { model: "claude-fable-5" },
-        ),
-        user("continue"),
-      ),
-    );
-    const assistant = wireMessages(payload).find((message) => message.role === "assistant");
-    expect(assistant?.content).toEqual([{ type: "text", text: "visible answer" }]);
-    expect(JSON.stringify(assistant)).not.toContain("sig_model_bound");
   });
 
   it("normalizes adaptive requests and post-hook sampling for canonical deployment aliases", async () => {

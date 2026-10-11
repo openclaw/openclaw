@@ -23,6 +23,11 @@ import {
   stripSystemPromptCacheBoundary,
   stripSystemPromptRelocatableBoundary,
 } from "../utils/system-prompt-cache-boundary.js";
+import {
+  findStableHistoryBoundaries,
+  resolveUserCheckpoint,
+  startsNewUserTurn,
+} from "./anthropic-cache-checkpoints.js";
 import { resolveProviderEndpoint, resolveProviderRequestCapabilities } from "./host-policy.js";
 import { parsePositiveInteger } from "./transport-utils.js";
 
@@ -323,7 +328,13 @@ function normalizeAnthropicSystemBlocks(
   }
 }
 
-/** Apply one shared deepest-stable-message cache breakpoint policy. */
+/**
+ * Allocate message breakpoints before the earliest transient message, in priority order. Tool
+ * loop: the newest and previous user checkpoints, then the stable history boundaries. First call
+ * of a new user turn: the boundaries first, then the user checkpoints. Each request writes the
+ * entry the next request reads at its previous boundary, so history stays cached even though the
+ * newest turn's tail does not replay identically.
+ */
 function applyAnthropicCacheControlToMessages(
   messages: unknown,
   cacheControl: AnthropicEphemeralCacheControl,
@@ -334,42 +345,32 @@ function applyAnthropicCacheControlToMessages(
     return;
   }
 
+  // Nothing at or after the earliest opted-out (transient) message takes a marker.
   let stableEnd = messages.length;
   for (const index of cacheBreakpointOptOutMessageIndexes) {
     stableEnd = Math.min(stableEnd, index);
   }
-  let marked = 0;
-  for (let i = stableEnd - 1; i >= 0 && marked < Math.min(markerLimit, 2); i--) {
-    const record = messages[i];
-    if (!isRecord(record) || record.role !== "user") {
-      continue;
-    }
+  const stable = messages.slice(0, stableEnd);
 
-    const content = record.content;
-    const blocks = typeof content === "string" ? [{ type: "text", text: content }] : content;
-    if (!Array.isArray(blocks)) {
-      continue;
+  // The newest two user messages' last cacheable blocks: the advancing checkpoint and the one the
+  // previous request wrote, which keeps it reachable after an append longer than the lookback.
+  const userCheckpoints: (() => void)[] = [];
+  for (let i = stable.length - 1; i >= 0 && userCheckpoints.length < 2; i--) {
+    const checkpoint = resolveUserCheckpoint(stable[i], cacheControl);
+    if (checkpoint) {
+      userCheckpoints.push(checkpoint);
     }
-
-    for (let j = blocks.length - 1; j >= 0; j--) {
-      const blockRecord = blocks[j];
-      if (!isRecord(blockRecord)) {
-        continue;
-      }
-      if (
-        blockRecord.type === "text" ||
-        blockRecord.type === "image" ||
-        blockRecord.type === "tool_result"
-      ) {
-        // Keep a prior write reachable beyond the 20-block lookback, before transient context.
-        blockRecord.cache_control = cacheControl;
-        if (typeof content === "string") {
-          record.content = blocks;
-        }
-        marked++;
-        break;
-      }
-    }
+  }
+  const boundaries = findStableHistoryBoundaries(stable).map((block) => () => {
+    block.cache_control = cacheControl;
+  });
+  // A tool loop keeps both user checkpoints first; the first call of a new turn spends the
+  // budget on the history boundaries, because the previous turn is re-rendered.
+  const targets = startsNewUserTurn(stable)
+    ? [...boundaries, ...userCheckpoints]
+    : [...userCheckpoints, ...boundaries];
+  for (const mark of targets.slice(0, markerLimit)) {
+    mark();
   }
 }
 

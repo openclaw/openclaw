@@ -258,4 +258,43 @@ describe("Anthropic cache checkpoint transport parity", () => {
       }
     },
   );
+  it("keeps the assistant message before the newest turn as a stable history checkpoint", async () => {
+    const assistantMessage = (timestamp: number, text: string): Context["messages"][number] => ({
+      role: "assistant",
+      api: anthropicModel.api,
+      provider: anthropicModel.provider,
+      model: anthropicModel.id,
+      timestamp,
+      stopReason: "stop",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      content: [{ type: "text", text }],
+    });
+    const messages: Context["messages"] = [
+      ...context.messages,
+      assistantMessage(2, "First answer."),
+      { role: "user", content: "Second question.", timestamp: 3 },
+      assistantMessage(4, "Second answer."),
+      { role: "user", content: "Third question.", timestamp: 5 },
+    ];
+    for (const implementation of ["provider", "transport"] as const) {
+      const { payload } = await captureAnthropicRequest(implementation, {
+        cacheRetention: "short",
+        context: { ...context, messages },
+      });
+      // system + tools take two markers; the two message slots go to the end of the assistant
+      // message before the newest turn (written now) and before the previous turn (read now).
+      expect(
+        markers(payload)
+          .map((marker) => marker.path)
+          .toSorted(),
+      ).toEqual(["messages[1].content[0]", "messages[3].content[0]", "system[0]", "tools[0]"]);
+    }
+  });
 });
