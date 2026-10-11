@@ -30,9 +30,9 @@ import {
 import { t } from "../../i18n/index.ts";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { isCronJobActiveFailure, isCronJobRunning } from "../../lib/cron-status.ts";
-import { parseCronDurationMs } from "../../lib/cron/decimal.ts";
+import { describeFormSchedule } from "../../lib/cron/form-schedule.ts";
 import type { CronFieldErrors, CronFieldKey, CronFormState } from "../../lib/cron/types.ts";
-import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
+import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
@@ -1172,41 +1172,6 @@ function renderGeneralSection(props: CronProps) {
       })}
     `,
   );
-}
-
-const EVERY_SUMMARY_KEYS = {
-  seconds: ["cron.form.summaryEverySecondOne", "cron.form.summaryEverySeconds"],
-  minutes: ["cron.form.summaryEveryMinuteOne", "cron.form.summaryEveryMinutes"],
-  hours: ["cron.form.summaryEveryHourOne", "cron.form.summaryEveryHours"],
-  days: ["cron.form.summaryEveryDayOne", "cron.form.summaryEveryDays"],
-} as const;
-
-// Human-readable schedule summary; null while invalid so it never disagrees with the saved value.
-function describeFormSchedule(form: CronFormState): string | null {
-  if (form.scheduleKind === "every") {
-    const amount = form.everyAmount.trim();
-    if (parseCronDurationMs(amount, form.everyUnit) === undefined) {
-      return null;
-    }
-    const [singular, plural] = EVERY_SUMMARY_KEYS[form.everyUnit];
-    return Number(amount) === 1 ? t(singular) : t(plural, { amount });
-  }
-  if (form.scheduleKind === "at") {
-    const ms = Date.parse(form.scheduleAt);
-    return Number.isFinite(ms) ? t("cron.form.summaryOnce", { at: formatMs(ms) }) : null;
-  }
-  if (form.scheduleKind === "cron") {
-    const expr = form.cronExpr.trim();
-    if (!expr) {
-      return null;
-    }
-    const tz = form.cronTz.trim();
-    return tz ? t("cron.form.summaryCronTz", { expr, tz }) : t("cron.form.summaryCron", { expr });
-  }
-  if (form.scheduleKind === "on-exit") {
-    return t("cron.form.repeatOnExit");
-  }
-  return form.scheduleKind === "stream" ? t("cron.form.repeatStream") : null;
 }
 
 function renderDurationRow(props: CronProps, kind: "every" | "stagger") {

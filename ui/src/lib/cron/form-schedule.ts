@@ -1,8 +1,18 @@
 import { resolveDefaultCronStaggerMs } from "../../../../src/cron/stagger.js";
+import { parseOffsetlessIsoDateTimeInTimeZone } from "../../../../src/infra/format-time/parse-offsetless-zoned-datetime.js";
 import type { CronJob } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { formatMs } from "../format.ts";
 import { parseCronDurationMs } from "./decimal.ts";
 import type { CronFormState } from "./types.ts";
+
+export function parseCronScheduleAt(input: string): string | undefined {
+  const parsed = parseOffsetlessIsoDateTimeInTimeZone(
+    input,
+    Intl.DateTimeFormat().resolvedOptions().timeZone,
+  );
+  return parsed.ok ? parsed.iso : undefined;
+}
 
 export function formatDateTimeLocal(input: string): string {
   const ms = Date.parse(input);
@@ -93,11 +103,11 @@ export function hasUnchangedCronSchedule(form: CronFormState, job: CronJob): boo
 
 export function buildCronSchedule(form: CronFormState, previous?: CronJob["schedule"]) {
   if (form.scheduleKind === "at") {
-    const ms = Date.parse(form.scheduleAt);
-    if (!Number.isFinite(ms)) {
+    const at = parseCronScheduleAt(form.scheduleAt);
+    if (!at) {
       throw new Error(t("cron.errors.invalidRunTime"));
     }
-    return { kind: "at" as const, at: new Date(ms).toISOString() };
+    return { kind: "at" as const, at };
   }
   if (form.scheduleKind === "every") {
     const everyMs = parseCronDurationMs(form.everyAmount, form.everyUnit);
@@ -126,4 +136,39 @@ export function buildCronSchedule(form: CronFormState, previous?: CronJob["sched
     }
   }
   return { kind: "cron" as const, expr, tz: form.cronTz.trim() || undefined, staggerMs };
+}
+
+const EVERY_SUMMARY_KEYS = {
+  seconds: ["cron.form.summaryEverySecondOne", "cron.form.summaryEverySeconds"],
+  minutes: ["cron.form.summaryEveryMinuteOne", "cron.form.summaryEveryMinutes"],
+  hours: ["cron.form.summaryEveryHourOne", "cron.form.summaryEveryHours"],
+  days: ["cron.form.summaryEveryDayOne", "cron.form.summaryEveryDays"],
+} as const;
+
+// Human-readable schedule summary; null while invalid so it never disagrees with the saved value.
+export function describeFormSchedule(form: CronFormState): string | null {
+  if (form.scheduleKind === "every") {
+    const amount = form.everyAmount.trim();
+    if (parseCronDurationMs(amount, form.everyUnit) === undefined) {
+      return null;
+    }
+    const [singular, plural] = EVERY_SUMMARY_KEYS[form.everyUnit];
+    return Number(amount) === 1 ? t(singular) : t(plural, { amount });
+  }
+  if (form.scheduleKind === "at") {
+    const at = parseCronScheduleAt(form.scheduleAt);
+    return at ? t("cron.form.summaryOnce", { at: formatMs(Date.parse(at)) }) : null;
+  }
+  if (form.scheduleKind === "cron") {
+    const expr = form.cronExpr.trim();
+    if (!expr) {
+      return null;
+    }
+    const tz = form.cronTz.trim();
+    return tz ? t("cron.form.summaryCronTz", { expr, tz }) : t("cron.form.summaryCron", { expr });
+  }
+  if (form.scheduleKind === "on-exit") {
+    return t("cron.form.repeatOnExit");
+  }
+  return form.scheduleKind === "stream" ? t("cron.form.repeatStream") : null;
 }
