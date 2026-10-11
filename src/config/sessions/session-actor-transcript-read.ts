@@ -1,11 +1,10 @@
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import path from "node:path";
+import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.types.js";
 import type { SessionActor } from "./session-actor-contract.js";
 import type { SessionActorMemoryHistoryReads } from "./session-actor-memory-history-contract.js";
-import {
-  captureSessionActorStorageOwner,
-  getSessionActorStorageBinding,
-} from "./session-actor-storage-binding.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 
@@ -21,8 +20,10 @@ export function captureSessionActorTranscriptRead(
   if (!selected) {
     return undefined;
   }
-  const namespace = captureSessionActorStorageOwner(scope)!;
-  const sameOwner = namespace.agentId === selected.agentId;
+  const agentId =
+    scope.agentId ??
+    (scope.sessionKey ? resolveAgentIdFromSessionKey(scope.sessionKey) : selected.agentId);
+  const sameOwner = agentId === selected.agentId;
   if (sameOwner) {
     getSessionActorStorageBinding({ ...scope, sessionKey: undefined });
   }
@@ -31,23 +32,28 @@ export function captureSessionActorTranscriptRead(
         { type: "session.entry.readById", input: { sessionId: scope.sessionId } },
         selected.authority,
       )
-    : namespace.owner?.readSessionById(scope.sessionId, namespace.authority);
+    : undefined;
   const sessionKey = stored?.sessionKey ?? scope.sessionKey ?? "";
   const direct = sameOwner && sessionKey === selected.actor.target.sessionKey;
   const target = captureSessionTranscriptTargetBinding({
-    agentId: namespace.agentId,
+    agentId,
     sessionKey,
     sessionId: scope.sessionId,
-    storePath: sameOwner ? selected.path : namespace.path,
+    storePath: sameOwner
+      ? selected.path
+      : resolveIncognitoOpenClawAgentSqlitePath({
+          agentId,
+          env: { OPENCLAW_STATE_DIR: path.resolve(selected.path, "../../../..") },
+        }),
     env: scope.env,
   });
   const receipt = resolveSessionTranscriptReadFence(target);
   const admission = receipt && structuredClone(receipt);
   const authority = {
-    ...namespace.authority,
+    ...selected.authority,
     assertCurrent: () => {
       signal?.throwIfAborted();
-      namespace.authority.assertCurrent();
+      selected.authority.assertCurrent();
     },
   };
   return {
@@ -59,12 +65,12 @@ export function captureSessionActorTranscriptRead(
             { type: "session.entry.read", input: { sessionKey } },
             selected.authority,
           )
-        : namespace.owner?.readSession(sessionKey, namespace.authority)?.entry;
+        : undefined;
     },
     assertCurrent: () => {
       signal?.throwIfAborted();
       selected.actor.assertReadable();
-      namespace.authority.assertCurrent();
+      selected.authority.assertCurrent();
     },
     async read<Key extends keyof SessionActorMemoryHistoryReads>(
       type: Key,
@@ -76,17 +82,7 @@ export function captureSessionActorTranscriptRead(
       }
       let actor: SessionActor | undefined;
       try {
-        actor = direct
-          ? selected.actor
-          : sameOwner
-            ? await selected.actor.storage!.acquire(sessionKey)
-            : await namespace.owner?.acquireExisting(sessionKey, {
-                assertCurrent: authority.assertCurrent,
-                assertReadable: authority.assertCurrent,
-              });
-        if (!actor) {
-          throw new Error("Session transcript window is unavailable");
-        }
+        actor = direct ? selected.actor : await selected.actor.storage!.acquire(sessionKey);
         return await actor.storage!.read(
           { type, input: { ...input, sessionId: target.sessionId, admission } },
           authority,

@@ -1,8 +1,5 @@
 import path from "node:path";
-import {
-  captureSessionActorStorageOwner,
-  getSessionActorStorageBinding,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { attachSessionEntrySnapshots } from "../config/sessions/session-entry-snapshot-values.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import {
@@ -54,27 +51,25 @@ export function prepareIncognitoGatewaySessionStoreTarget(
     agentId,
     env: params.env ?? { OPENCLAW_STATE_DIR: path.resolve(memory.path, "../../../..") },
   });
-  const captured = captureSessionActorStorageOwner({
-    agentId,
-    storePath,
-    sessionKey: canonicalKey,
-  });
+  const sameOwner = agentId === memory.agentId && storePath === memory.path;
   return {
     reads: [],
     resolve() {
       memory.actor.assertReadable();
-      const hot =
-        memory.actor.target.sessionKey === canonicalKey
-          ? memory.actor.snapshot(memory.authority)
-          : captured?.owner?.readSession(canonicalKey, memory.authority);
-      const entry = hot?.entry && attachSessionEntrySnapshots(hot.entry, {}, params.projection);
+      const current = sameOwner
+        ? memory.actor.storage.readCurrent(
+            { type: "session.entry.read", input: { sessionKey: canonicalKey } },
+            memory.authority,
+          )
+        : undefined;
+      const entry = current && attachSessionEntrySnapshots(current, {}, params.projection);
       return {
         agentId,
         canonicalKey,
-        storePath: captured?.path ?? storePath,
+        storePath,
         storeKeys: [canonicalKey],
         store: entry ? { [canonicalKey]: entry } : {},
-        readSource: { agentId, path: captured?.path ?? storePath },
+        readSource: { agentId, path: storePath },
       };
     },
   };
