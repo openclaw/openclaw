@@ -154,11 +154,6 @@ export async function prewarmContextWindowCacheAfterReady(params: {
     const caches = await prepareContextWindowCaches({
       config: owner.config,
       modelCatalog,
-      assertCurrent: () => {
-        if (!isCurrent()) {
-          throw new Error("context window cache prewarm cancelled");
-        }
-      },
     });
     if (!isCurrent()) {
       return;
