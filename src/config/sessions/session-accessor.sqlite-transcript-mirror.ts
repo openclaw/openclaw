@@ -111,6 +111,7 @@ export function readTranscriptMirrorFacts(
             )
             .orderBy("event.seq", "asc"),
         ).rows;
+        // SAFETY: event_json reconstructs the stored TranscriptEvent via transcriptEventJsonSql.
         facts.sourceEvents = rows.map((row) => JSON.parse(row.event_json) as TranscriptEvent);
       }
       let anchorsReady: boolean | undefined;
