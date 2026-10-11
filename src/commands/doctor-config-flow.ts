@@ -108,12 +108,15 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   };
   const { createDoctorPluginMetadataSnapshotScope } =
     await import("./doctor/shared/plugin-metadata-snapshot-scope.js");
-  await using pluginMetadataSnapshotScope = createDoctorPluginMetadataSnapshotScope({
-    getBaseSnapshot: () => pluginMetadataSnapshotState.current,
-    env: process.env,
-    getDeferredPluginIds: () =>
-      preflight.deferredPluginMigrations?.map((pending) => pending.pluginId) ?? [],
-  });
+  await using preparingResources = new AsyncDisposableStack();
+  const pluginMetadataSnapshotScope = preparingResources.use(
+    createDoctorPluginMetadataSnapshotScope({
+      getBaseSnapshot: () => pluginMetadataSnapshotState.current,
+      env: process.env,
+      getDeferredPluginIds: () =>
+        preflight.deferredPluginMigrations?.map((pending) => pending.pluginId) ?? [],
+    }),
+  );
   const runWithPluginMetadataSnapshot = pluginMetadataSnapshotScope.run;
   const invalidatePluginMetadataSnapshot = () => {
     // Filesystem/install repairs replace the authoritative plugin generation.
@@ -628,8 +631,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   // write drops them — its blocking note already states nothing was changed.
   const pendingChangePanels = changesPanelSink.drain();
   const providerRenames = legacyStep.blocksWrite ? [] : plannedProviderRenames;
+  // Later Doctor contributions and service finalization consume these callbacks.
+  const resources = preparingResources.move();
 
   return {
+    [Symbol.asyncDispose]: () => resources.disposeAsync(),
     ...finalized,
     ...(shouldWriteConfig && sessionStoreOwnerRecovery.changes.length > 0
       ? {

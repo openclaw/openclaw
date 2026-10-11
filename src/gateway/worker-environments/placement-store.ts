@@ -9,7 +9,6 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { startWorkerPlacementDispatch } from "./placement-dispatch-store.js";
 import { createPlacementLifecycleWorkerOps } from "./placement-lifecycle-store.js";
 import { createPlacementMoveOps } from "./placement-move-intent.js";
 import { readWorkerPlacementMoveAuthorityInDatabase } from "./placement-read-projection.js";
@@ -19,7 +18,6 @@ import { createPlacementReadStore } from "./placement-read-store.js";
 import {
   normalizeEpoch,
   required,
-  type WorkerSessionPlacementDispatchIdentity,
   type WorkerSessionPlacementRecord,
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
@@ -381,13 +379,6 @@ export function createWorkerSessionPlacementStore(
         claim: { ...claim },
       });
       sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey });
-    },
-
-    startDispatch(
-      input: WorkerSessionPlacementDispatchIdentity,
-      dispatchOptions: { assertCurrent?: () => void } = {},
-    ): Promise<WorkerSessionPlacementRecord> {
-      return startWorkerPlacementDispatch(path, input, now(), dispatchOptions.assertCurrent);
     },
 
     async adoptActive(input: {

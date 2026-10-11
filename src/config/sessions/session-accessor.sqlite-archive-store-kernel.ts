@@ -3,6 +3,11 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import {
+  sqliteSessionIdWriteScope,
+  withSqliteDatabaseWriteScope,
+  withoutSqliteDatabaseWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
@@ -45,10 +50,12 @@ export function deleteAllSessionTranscriptArchivesInTransaction(
   if (!tableExists(database.db, SESSION_TRANSCRIPT_ARCHIVES_TABLE)) {
     return;
   }
-  executeSqliteQuerySync(
-    database.db,
-    getNodeSqliteKysely<TranscriptArchiveDatabase>(database.db).deleteFrom(
-      "session_transcript_archives",
+  withoutSqliteDatabaseWriteScope(database.db, () =>
+    executeSqliteQuerySync(
+      database.db,
+      getNodeSqliteKysely<TranscriptArchiveDatabase>(database.db).deleteFrom(
+        "session_transcript_archives",
+      ),
     ),
   );
 }
@@ -132,14 +139,16 @@ export function prepareSessionTranscriptArchivePublishPlans(
     if (archiveName === archive.archive_name) {
       continue;
     }
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .updateTable("session_transcript_archives")
-        .set({ archive_name: archiveName })
-        .where("session_id", "=", archive.session_id)
-        .where("generation", "=", archive.generation)
-        .where("published_at", "is", null),
+    withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(archive.session_id)], () =>
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .updateTable("session_transcript_archives")
+          .set({ archive_name: archiveName })
+          .where("session_id", "=", archive.session_id)
+          .where("generation", "=", archive.generation)
+          .where("published_at", "is", null),
+      ),
     );
   }
   const archives = uniqueTranscriptArchives([
@@ -167,18 +176,20 @@ export function recordSessionTranscriptArchivePublishResults(
   ensureSessionTranscriptArchiveSchema(database.db);
   const db = getNodeSqliteKysely<TranscriptArchiveDatabase>(database.db);
   for (const result of results) {
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .updateTable("session_transcript_archives")
-        .set((eb) => ({
-          last_publish_attempt_at: nowMs,
-          last_publish_error: result.error?.slice(0, 1024) ?? null,
-          publish_attempts: eb("publish_attempts", "+", 1),
-          ...(result.archivedPath ? { published_at: nowMs } : {}),
-        }))
-        .where("session_id", "=", result.sessionId)
-        .where("generation", "=", result.generation),
+    withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(result.sessionId)], () =>
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .updateTable("session_transcript_archives")
+          .set((eb) => ({
+            last_publish_attempt_at: nowMs,
+            last_publish_error: result.error?.slice(0, 1024) ?? null,
+            publish_attempts: eb("publish_attempts", "+", 1),
+            ...(result.archivedPath ? { published_at: nowMs } : {}),
+          }))
+          .where("session_id", "=", result.sessionId)
+          .where("generation", "=", result.generation),
+      ),
     );
   }
 }
@@ -198,25 +209,30 @@ export function persistSessionTranscriptArchive(
   }
   ensureSessionTranscriptArchiveSchema(database.db);
   const db = getNodeSqliteKysely<TranscriptArchiveDatabase>(database.db);
-  const inserted = executeSqliteQuerySync(
+  const inserted = withSqliteDatabaseWriteScope(
     database.db,
-    db
-      .insertInto("session_transcript_archives")
-      .values({
-        archive_blob: archive.bytes,
-        archive_name: archive.archiveName,
-        archive_sha256: archive.sha256,
-        created_at: archive.createdAt,
-        encoding: archive.encoding,
-        generation,
-        last_publish_attempt_at: null,
-        last_publish_error: null,
-        published_at: null,
-        reason: plan.reason,
-        session_id: plan.sessionId,
-        session_key: sessionKey,
-      })
-      .onConflict((conflict) => conflict.columns(["session_id", "generation"]).doNothing()),
+    [sqliteSessionIdWriteScope(plan.sessionId)],
+    () =>
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .insertInto("session_transcript_archives")
+          .values({
+            archive_blob: archive.bytes,
+            archive_name: archive.archiveName,
+            archive_sha256: archive.sha256,
+            created_at: archive.createdAt,
+            encoding: archive.encoding,
+            generation,
+            last_publish_attempt_at: null,
+            last_publish_error: null,
+            published_at: null,
+            reason: plan.reason,
+            session_id: plan.sessionId,
+            session_key: sessionKey,
+          })
+          .onConflict((conflict) => conflict.columns(["session_id", "generation"]).doNothing()),
+      ),
   );
   if (inserted.numAffectedRows === 1n) {
     return;
