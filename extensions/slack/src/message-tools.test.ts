@@ -280,7 +280,6 @@ describe("Slack message tools", () => {
       "send",
       "react",
       "reactions",
-      "channel-create",
       "conversation-open",
       "read",
       "edit",
