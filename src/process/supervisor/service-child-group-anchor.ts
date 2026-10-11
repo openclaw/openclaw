@@ -9,7 +9,10 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { spawnWithInheritedOomScore } from "../linux-oom-score.js";
 import type { SpawnStdioEntry } from "../spawn-secret-input.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
-import { hasLiveOwnedProcessGroupMembers } from "./service-child-group-ownership.js";
+import {
+  hasLiveOwnedProcessGroupMembers,
+  killOwnedProcessGroupMembers,
+} from "./service-child-group-ownership.js";
 import {
   encodeServiceChildMessage,
   type ServiceChildAnchorMessage,
@@ -263,6 +266,9 @@ export function runServiceChildGroupAnchor(): void {
       }
       if (!rootExit) {
         command?.kill("SIGKILL");
+      }
+      if (!lineageClosed) {
+        killOwnedProcessGroupMembers();
       }
       // Nested command relays can outlive the application. Keep their reader alive
       // until they close lineage; killing this observer would discard that custody.

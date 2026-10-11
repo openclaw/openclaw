@@ -6,7 +6,7 @@ import {
 } from "../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "../agents/agent-scope.js";
 import { applyToolAvailabilityDescriptions } from "../agents/agent-tools.deferred-followup.js";
-import { createOpenClawCodingToolsAsync } from "../agents/agent-tools.js";
+import { createOpenClawCodingToolsInternalAsync } from "../agents/agent-tools.js";
 import { filterToolsByMessageProvider } from "../agents/agent-tools.message-provider-policy.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
@@ -55,6 +55,7 @@ import {
 } from "../agents/tools/sessions-operator-authority.js";
 import type { SkillWorkshopRunOptions } from "../agents/tools/skill-workshop-tool-factory.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
@@ -96,6 +97,7 @@ export async function resolveGatewayScopedTools(
     agentThreadId?: string;
     senderIsOwner?: boolean;
     admittedRunContext?: AdmittedRunContext;
+    sessionEventSourcePolicy?: SessionEventSourcePolicy;
     conversationReadOrigin?: ConversationReadInvocationOrigin;
     allowGatewaySubagentBinding?: boolean;
     allowMediaInvokeCommands?: boolean;
@@ -460,8 +462,9 @@ export async function resolveGatewayScopedTools(
   const includeMediatedShellTools = mediatedToolFamilies.has("shell");
   const mediatedCodingTools =
     surface === "loopback" && (includeMediatedBaseCodingTools || includeMediatedShellTools)
-      ? await createOpenClawCodingToolsAsync({
+      ? await createOpenClawCodingToolsInternalAsync({
           ...commonToolOptions(),
+          sessionEventSourcePolicy: params.sessionEventSourcePolicy,
           agentId: policyAgentId,
           sessionKey: runtimePolicySessionKey,
           runSessionKey: params.sessionKey,

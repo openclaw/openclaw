@@ -181,7 +181,7 @@ Custom/local provider entries trust their exact configured `baseUrl` origin for 
 
 Set `input: ["text", "image"]` on local or proxied vision models so image attachments get injected into agent turns. Interactive custom-provider onboarding infers common vision model IDs and only asks about unknown names. Non-interactive onboarding uses the same inference, with `--custom-image-input` / `--custom-text-input` to override it.
 
-Use `models.providers.<id>.timeoutSeconds` for slow local/remote model servers before raising `agents.defaults.timeoutSeconds`. The provider timeout covers connect, headers, body streaming, and the total guarded-fetch abort for model HTTP requests only. If the agent or run timeout is lower, raise that too. The provider timeout cannot extend the whole run.
+Use `models.providers.<id>.timeoutSeconds` for slow local/remote model servers before raising `agents.defaults.timeoutSeconds`. The provider timeout covers connect, headers, body streaming, and the total guarded-fetch abort for model HTTP requests only. If the agent or run-specific timeout is lower, raise that too: the provider timeout cannot extend the current model attempt's budget. Each configured fallback gets a fresh attempt budget.
 
 <Note>
 For custom OpenAI-compatible providers, a non-secret local marker such as `apiKey: "ollama-local"` is accepted when `baseUrl` resolves to loopback, a private LAN, `.local`, or a bare hostname. OpenClaw treats it as a valid local credential instead of reporting a missing key. Use a real value for any provider that accepts a public hostname.

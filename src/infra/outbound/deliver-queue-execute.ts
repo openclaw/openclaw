@@ -2,7 +2,10 @@
 import type { AuditMessageFailureStage } from "../../audit/audit-event-types.js";
 import { assertSessionWriterDeliveryAuthorized } from "../../auto-reply/reply/session-writer-delivery-authority.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { isProvenDeliveryNotSentError } from "../delivery-recovery.shared.js";
+import {
+  isAmbiguousDeliveryTransportError,
+  isProvenDeliveryNotSentError,
+} from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import type {
@@ -130,8 +133,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
   const failAfterPlatformSend = async (
     owner: QueuedDeliveryOwner,
     error: string,
+    ambiguousTransportError?: true,
   ): Promise<void> => {
-    await owner.fail(failDeliveryAfterPlatformSend, error);
+    await owner.fail(failDeliveryAfterPlatformSend, error, ambiguousTransportError);
     queuedPostSendState = "failed";
   };
   const emitTerminals = (
@@ -591,8 +595,14 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
             await finishAck(() => failedTerminals("queue"));
           }
         } else if (!platformResultsReturned) {
+          const ambiguousFinalTransport =
+            params.retryAmbiguousFinalText === true &&
+            platformSendStarted &&
+            deliveredResults.length === 0 &&
+            isAmbiguousDeliveryTransportError(err);
           const sendEvidence =
             deliveredResults.length > 0 ||
+            ambiguousFinalTransport ||
             (!failureIsProvenNotSent &&
               (platformDispatchedPayloads.size > 0 ||
                 (err instanceof OutboundDeliveryError && err.sentBeforeError)));
@@ -600,7 +610,11 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
             try {
               queuedPostSendState ??= await persistPostSendState(queueOwner);
               if (queuedPostSendState === "marked") {
-                await failAfterPlatformSend(queueOwner, formatErrorMessage(err));
+                await failAfterPlatformSend(
+                  queueOwner,
+                  formatErrorMessage(err),
+                  ambiguousFinalTransport ? true : undefined,
+                );
               }
             } catch (persistErr: unknown) {
               // Do not convert concrete send evidence back into a generic retry.

@@ -153,30 +153,25 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     if (
       command.input &&
       "key" in command.input &&
-      (command.type === "pluginState.observe" ||
-        command.type === "pluginState.compareUpdate" ||
-        command.type === "pluginState.compareDelete")
+      command.type === "pluginState.observe" &&
+      !currentEntries
     ) {
       const identity = context.admission.identity.key;
       const current = readPluginStateObservationCache(identity, command.input);
-      if (command.type === "pluginState.observe" && !currentEntries) {
-        context.admission.assertCurrent();
-        if (current) {
-          assertStateDatabaseReadAllowed(databasePath);
-          assertAdmission?.();
-          const observation = observationFromCachedPluginState(
-            identity,
-            databasePath,
-            command.input,
-            current,
-          );
-          // SAFETY: This branch handles only the observe command's observation output.
-          return observation as PluginStateWorkerRequests[Key]["output"];
-        }
-        installObservation = preparePluginStateObservationCacheRead(identity, command.input);
-      } else if (command.type !== "pluginState.observe" && current) {
-        Object.assign(command.input, { current });
+      context.admission.assertCurrent();
+      if (current) {
+        assertStateDatabaseReadAllowed(databasePath);
+        assertAdmission?.();
+        const observation = observationFromCachedPluginState(
+          identity,
+          databasePath,
+          command.input,
+          current,
+        );
+        // SAFETY: This branch handles only the observe command's observation output.
+        return observation as PluginStateWorkerRequests[Key]["output"];
       }
+      installObservation = preparePluginStateObservationCacheRead(identity, command.input);
     }
     // A write-only await here would let later reads overtake it before broker admission.
     const [
