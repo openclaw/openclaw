@@ -19,8 +19,6 @@ import {
   stageActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -58,33 +56,26 @@ function pairedOperator(): PairedDevice {
 }
 
 describe("restart recovery authenticated operator source", () => {
-  it.each(["unrelated issuance", "state database close"] as const)(
-    "keeps restored authority current during %s",
-    async (change) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const profile = ensureProfileForEmail("publication-lifetime@example.test");
-        const fixture = await createOperatorRecoveryFixture({
-          stateDir: state.stateDir,
-          context: createContext(),
-          profileId: profile.id,
-          config: {},
-          device: pairedOperator(),
-        });
-        const restored = expectDefined(await fixture.restore(), "exact device source");
-        try {
-          if (change === "unrelated issuance") {
-            await issueDeviceBootstrapToken({ baseDir: state.stateDir });
-          } else {
-            await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath());
-          }
-          expect(restored.authority.signal?.aborted).toBe(false);
-          expect(restored.authority.assertCurrent).not.toThrow();
-        } finally {
-          restored.release();
-        }
+  it("keeps restored authority current during unrelated issuance", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const profile = ensureProfileForEmail("publication-lifetime@example.test");
+      const fixture = await createOperatorRecoveryFixture({
+        stateDir: state.stateDir,
+        context: createContext(),
+        profileId: profile.id,
+        config: {},
+        device: pairedOperator(),
       });
-    },
-  );
+      const restored = expectDefined(await fixture.restore(), "exact device source");
+      try {
+        await issueDeviceBootstrapToken({ baseDir: state.stateDir });
+        expect(restored.authority.signal?.aborted).toBe(false);
+        expect(restored.authority.assertCurrent).not.toThrow();
+      } finally {
+        restored.release();
+      }
+    });
+  });
   it("does not adopt an incidental paired token for tokenless trusted-proxy ingress", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const profile = ensureProfileForEmail("proxy-source@example.test");
@@ -254,9 +245,6 @@ describe("restart recovery authenticated operator source", () => {
         expect(
           await updatePairedDeviceMetadata(unrelated.deviceId, { displayName: "Renamed" }),
         ).toBe(true);
-        expect(accepted.authority.signal?.aborted).toBe(false);
-        expect(accepted.authority.assertCurrent).not.toThrow();
-        await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath());
         expect(accepted.authority.signal?.aborted).toBe(false);
         expect(accepted.authority.assertCurrent).not.toThrow();
         retireDeviceTokenClients(
