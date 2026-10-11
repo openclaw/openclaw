@@ -153,8 +153,11 @@ export function updateSlashMenu(
     resetSlashMenuState(state);
   }
 
+  const caret = host.getTextarea()?.selectionStart ?? value.length;
+  const completion = findInlineSlashCompletion(value, caret);
+  // A caret-local inline token takes precedence over a leading command's argument tail.
   const argMatch = value.match(/^\/(\S+)\s(.*)$/);
-  if (argMatch) {
+  if (argMatch && !completion?.inline) {
     if (!opts.skipSlashIntent) {
       requestSlashCommandRefresh(state, host, requestUpdate);
     }
@@ -179,8 +182,6 @@ export function updateSlashMenu(
     return;
   }
 
-  const caret = host.getTextarea()?.selectionStart ?? value.length;
-  const completion = findInlineSlashCompletion(value, caret);
   if (!completion) {
     closeSlashMenuIfNeeded(state, requestUpdate);
     return;
@@ -388,7 +389,8 @@ function submitInlineSlashArgument(
 }
 
 function beginDirectInlineSlashArgument(state: SlashMenuState, host: SlashMenuHost): boolean {
-  if (!host.runInlineCommand) {
+  // The visible inline completion owns Enter before preceding text can become an argument.
+  if (!host.runInlineCommand || (state.slashMenuOpen && state.slashMenuCompletion?.inline)) {
     return false;
   }
   const current = host.getTextarea()?.value ?? host.getDraft();
