@@ -54,7 +54,7 @@ afterEach(async () => {
 
 describe("OAuth refresh generation fence", () => {
   it("keeps serialized provider I/O outside locks and settles after observer timeout", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const profileId = "openai:default";
     const expired = createCredential({
       access: "serialized-access",
@@ -771,7 +771,7 @@ describe("OAuth refresh generation fence", () => {
   });
 
   it("rejects a late settlement after an identity-less generation is restored and reclaimed", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const profileId = "openai:default";
     const firstCredential = createCredential({
       access: "first-access",

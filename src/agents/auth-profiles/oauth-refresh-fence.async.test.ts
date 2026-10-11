@@ -56,7 +56,9 @@ describe("awaited OAuth persistence", () => {
         if (scenario === "stalled read") {
           await vi.advanceTimersByTimeAsync(100);
         } else {
-          vi.setSystemTime(Date.now() + 101);
+          // Advance the monotonic clock past the deadline so the observer times out.
+          // The late settlement (resolved/rejected below) must not override the timeout.
+          await vi.advanceTimersByTimeAsync(101);
           if (scenario === "expired rejection") {
             reading.reject(new Error("synthetic late read failure"));
           } else {
@@ -254,4 +256,61 @@ describe("awaited OAuth persistence", () => {
       });
     },
   );
+
+  // Behavioral regression: a wall-clock rewind during the polling loop must
+  // not inflate the remaining observation budget. The polling loop in
+  // observeOAuthRefreshFenceSettlement recomputes `remainingMs = deadline -
+  // <clock>` each iteration and keeps sleeping while it is positive. With the
+  // pre-fix Date.now() deadline, rewinding the wall clock keeps remainingMs
+  // positive far past timeoutMs, so the observer never times out on schedule.
+  // With the monotonic deadline, remainingMs tracks real elapsed time and the
+  // observer rejects at ~timeoutMs regardless of wall-clock jumps.
+  it("times out on schedule when the wall clock rewinds mid-poll", async () => {
+    vi.useFakeTimers();
+    // Drive Date.now backward to simulate a wall-clock rewind; performance.now
+    // stays on the fake monotonic clock advanced by advanceTimersByTimeAsync.
+    let wallClock = 10_000;
+    const dateSpy = vi.spyOn(Date, "now").mockImplementation(() => wallClock);
+    let pending = true;
+    const observing = observeOAuthRefreshFenceSettlement({
+      label: "rewind poll observer",
+      timeoutMs: 100,
+      read: () => Promise.resolve({ pending }),
+      isPending: (s) => s.pending,
+      resolve: vi.fn(async () => "synthetic-access"),
+    });
+    try {
+      // Let the first poll read { pending: true }, then rewind the wall clock
+      // by 5,000 ms while only ~50 ms of monotonic time has elapsed.
+      await vi.advanceTimersByTimeAsync(0);
+      wallClock -= 5_000;
+      // Advance monotonic time past the 100 ms budget. Under the old Date.now()
+      // deadline the rewound wall clock keeps remainingMs ~5,050 ms and the
+      // loop keeps sleeping; under the monotonic deadline it reaches 0 and the
+      // observer rejects on schedule. Attach the rejection handler BEFORE
+      // advancing so the rejection is never reported as unhandled.
+      const settled = observing.then(
+        () => "settled" as const,
+        () => "rejected" as const,
+      );
+      await vi.advanceTimersByTimeAsync(100);
+      // Under the pre-fix Date.now() deadline the observer is still pending
+      // because the rewound wall clock keeps remainingMs positive; under the
+      // monotonic deadline it has rejected on schedule.
+      const stillPolling = Symbol("still polling");
+      const outcome = await Promise.race([settled, Promise.resolve(stillPolling)]);
+      expect(outcome).toBe("rejected");
+    } finally {
+      // Restore the wall clock past the deadline and advance fake time so any
+      // still-pending loop (pre-fix) exits on its next iteration instead of
+      // hanging the suite. pending=false lets the loop resolve once the sleep
+      // fires; the large advance guarantees the sleep queue drains.
+      wallClock = 20_000;
+      pending = false;
+      await vi.advanceTimersByTimeAsync(1_000);
+      await observing.catch(() => {});
+      dateSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
 });
