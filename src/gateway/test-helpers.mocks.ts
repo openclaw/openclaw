@@ -165,6 +165,16 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
         (model) => model.provider === provider && model.id === modelId,
       );
     }
+
+    fork(authStorage: unknown) {
+      if (!agentDiscoveryMock.enabled) {
+        return (
+          this.actualRegistry as unknown as { fork: (nextAuthStorage: unknown) => unknown }
+        ).fork(authStorage);
+      }
+      // Production prepared-model-runtime forks even when this test catalog is static.
+      return new MockModelRegistry(authStorage, "captured-test-models.json");
+    }
   }
 
   return {

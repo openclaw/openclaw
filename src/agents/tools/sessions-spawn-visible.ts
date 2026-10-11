@@ -62,6 +62,7 @@ import {
   summarizeVisibleSessionSpawnError,
 } from "./sessions-spawn-visible-cleanup.js";
 import { resolveVisibleSessionOwner } from "./sessions-spawn-visible-owner.js";
+import { resolveVisibleSpawnThinkingLevel } from "./sessions-spawn-visible-thinking.js";
 import { SessionsSpawnPlacementSchema } from "./sessions-spawn-visible.schema.js";
 
 type VisibleSessionsSpawnOptions = SessionsSpawnToolOptions & {
@@ -78,6 +79,7 @@ function correctedVisibleSpawnCall(raw: Record<string, unknown>): string {
       "label",
       "agentId",
       "model",
+      "thinking",
       "runTimeoutSeconds",
       "cwd",
       "expectsCompletionMessage",
@@ -175,11 +177,6 @@ export async function maybeSpawnVisibleSession(params: {
       "runtime",
       params.runtime === "subagent" ? undefined : params.runtime,
       'supports runtime="subagent" only',
-    ],
-    [
-      "thinking",
-      readToolStringParam(params.raw, "thinking"),
-      "thinking overrides are not wired to the sessions.create path",
     ],
     [
       "thread",
@@ -386,6 +383,7 @@ export async function maybeSpawnVisibleSession(params: {
     return { status: "error", error: modelPlan.error };
   }
   const { resolvedModel, inheritedModel, initialSessionPatch } = modelPlan;
+  const thinkingLevel = resolveVisibleSpawnThinkingLevel(resolvedModel, params.raw);
   const { authProfileOverride } = initialSessionPatch;
   const resolvedModelRef = authProfileOverride
     ? `${resolvedModel}@${authProfileOverride}`
@@ -473,6 +471,7 @@ export async function maybeSpawnVisibleSession(params: {
         // sessions.create persists the group under the legacy wire field `category`.
         ...(group ? { category: group } : {}),
         model: resolvedModelRef,
+        ...(thinkingLevel ? { thinkingLevel } : {}),
         ...(placement ? { titleSource } : { task: taskMessage }),
         timeoutMs:
           runTimeoutSeconds === 0
