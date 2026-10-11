@@ -6,7 +6,7 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import { i18n } from "../../i18n/index.ts";
 import type { PluginDiscoveryEntry } from "../../lib/plugins/index.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createModelSetupIconLoader } from "../model-setup/model-setup-icon-loader.ts";
+import { createModelSetupIconLoader } from "../model-setup/model-setup-icon-loader.tsx";
 import type { ModelSetupPageState } from "../model-setup/state.ts";
 import {
   createClient,
