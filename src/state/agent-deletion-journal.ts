@@ -259,6 +259,10 @@ function fromRow(
   };
 }
 
+function isJournalExactIdentityField(value: unknown): value is string | null | undefined {
+  return value === null || value === undefined || typeof value === "string";
+}
+
 export function parseCleanupPaths(value: string): AgentDeletionJournalCleanupPath[] {
   const parsed: unknown = JSON.parse(value);
   if (
@@ -272,6 +276,8 @@ export function parseCleanupPaths(value: string): AgentDeletionJournalCleanupPat
         (entry.kind === "target" || entry.kind === "symlink") &&
         (entry.dev === null || typeof entry.dev === "number") &&
         (entry.ino === null || typeof entry.ino === "number") &&
+        isJournalExactIdentityField(entry.devExact) &&
+        isJournalExactIdentityField(entry.inoExact) &&
         typeof entry.coversDescendants === "boolean" &&
         typeof entry.done === "boolean" &&
         (entry.note === undefined || typeof entry.note === "string") &&

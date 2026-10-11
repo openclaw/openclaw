@@ -119,6 +119,8 @@ import {
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
+export { testing } from "./agents-delete-filesystem.js";
+
 function respondAgentNotFound(respond: RespondFn, agentId: string): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `agent "${agentId}" not found`));
 }
@@ -528,8 +530,14 @@ export const agentsHandlers: GatewayRequestHandlers = {
                       parentPath: cleanupPath.parentPath,
                       kind: cleanupPath.kind,
                       sourcePaths: cleanupPath.sourcePaths,
-                      dev: cleanupPath.preparedIdentity?.dev ?? null,
-                      ino: cleanupPath.preparedIdentity?.ino ?? null,
+                      dev: cleanupPath.preparedIdentity
+                        ? Number(cleanupPath.preparedIdentity.dev)
+                        : null,
+                      ino: cleanupPath.preparedIdentity
+                        ? Number(cleanupPath.preparedIdentity.ino)
+                        : null,
+                      devExact: cleanupPath.preparedIdentity?.dev ?? null,
+                      inoExact: cleanupPath.preparedIdentity?.ino ?? null,
                       coversDescendants: cleanupPath.trashCoversDescendants,
                       done: cleanupPath.done,
                     };

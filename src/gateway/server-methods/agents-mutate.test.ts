@@ -455,7 +455,7 @@ vi.mock("node:fs/promises", async () => {
   return { ...patched, default: patched };
 });
 
-const { agentsHandlers } = await import("./agents.js");
+const { agentsHandlers, testing: agentsTesting } = await import("./agents.js");
 
 beforeEach(() => {
   vi.mocked(root).mockReset();
@@ -709,6 +709,7 @@ describe("agents.update", () => {
 describe("agents.delete", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    agentsTesting.setExactStatForTests();
     mocks.resolveAgentDir.mockImplementation((_cfg?: unknown, agentId?: string) =>
       agentId === "main" ? "/agents/main/agent" : "/agents/test-agent",
     );
@@ -1700,6 +1701,127 @@ describe("agents.delete", () => {
     expect(trashedPaths).toContain(walPath);
     expect(trashedPaths).toContain(shmPath);
     expect(trashedPaths).toContain(agentDir);
+    expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
+  });
+
+  // Root.stat types the file id as a double, so a large NTFS id arrives rounded.
+  // These cover the exact recheck, the collision it must keep rejecting, and a
+  // child that disappears between the two stats.
+  function mockNtfsCleanupStats(present: Map<string, { dev: bigint; ino: bigint }>) {
+    mocks.fsLstat.mockImplementation(async (pathname: unknown) => {
+      const stat = present.get(String(pathname));
+      if (!stat) {
+        throw createEnoentError();
+      }
+      return {
+        dev: stat.dev,
+        ino: stat.ino,
+        isFile: () => false,
+        isSymbolicLink: () => false,
+        nlink: 1,
+      } as unknown as import("node:fs").Stats;
+    });
+    mocks.rootStat.mockImplementation(async ({ rootDir, relativePath }) => {
+      const stat = present.get(path.join(rootDir, relativePath));
+      if (!stat) {
+        throw createEnoentError();
+      }
+      return {
+        dev: Number(stat.dev),
+        ino: Number(stat.ino),
+        isFile: false,
+        isSymbolicLink: false,
+        mtimeMs: 0,
+        nlink: 1,
+        size: 0,
+      };
+    });
+  }
+
+  it("deletes agent files whose NTFS ids exceed Number.MAX_SAFE_INTEGER", async () => {
+    const agentDir = "/agents/test-agent";
+    const ntfsIno = 1152921504606847267n;
+    const present = new Map<string, { dev: bigint; ino: bigint }>([
+      [agentDir, { dev: 1n, ino: ntfsIno }],
+      ["/workspace/test-agent", { dev: 1n, ino: ntfsIno + 1n }],
+      ["/transcripts/test-agent", { dev: 1n, ino: ntfsIno + 2n }],
+    ]);
+    mockNtfsCleanupStats(present);
+    agentsTesting.setExactStatForTests(async (target) => {
+      const stat = present.get(target);
+      if (!stat) {
+        throw createEnoentError();
+      }
+      return { dev: stat.dev, ino: stat.ino } as unknown as import("node:fs").BigIntStats;
+    });
+
+    const respond = await call("agents.delete", { agentId: "test-agent" });
+
+    expectRespondOk(respond, { failed: [] });
+    expectTrashedWithinParent(agentDir);
+    expectTrashedWithinParent("/workspace/test-agent");
+    expectTrashedWithinParent("/transcripts/test-agent");
+    expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
+  });
+
+  it("does not trash an NTFS replacement whose id only matches once rounded", async () => {
+    const agentDir = "/agents/test-agent";
+    const prepared = 1152921504606847267n;
+    // Distinct file, same double: both round to the same Number().
+    const replacement = 1152921504606847268n;
+    expect(Number(prepared)).toBe(Number(replacement));
+    const present = new Map<string, { dev: bigint; ino: bigint }>([
+      [agentDir, { dev: 1n, ino: prepared }],
+    ]);
+    mockNtfsCleanupStats(present);
+    agentsTesting.setExactStatForTests(async (target) => {
+      const stat = present.get(target);
+      if (!stat) {
+        throw createEnoentError();
+      }
+      return { dev: stat.dev, ino: replacement } as unknown as import("node:fs").BigIntStats;
+    });
+
+    const respond = await call("agents.delete", { agentId: "test-agent" });
+
+    expect(mocks.movePathToTrash.mock.calls.some(([pathname]) => pathname === agentDir)).toBe(
+      false,
+    );
+    void respond;
+  });
+
+  it("treats a vanished large-id child as missing without protecting ancestors", async () => {
+    const agentDir = "/agents/test-agent";
+    const child = "/agents/test-agent/openclaw-agent.sqlite";
+    const ntfsIno = 1152921504606847267n;
+    const present = new Map<string, { dev: bigint; ino: bigint }>([
+      [agentDir, { dev: 1n, ino: ntfsIno }],
+      ["/workspace/test-agent", { dev: 1n, ino: ntfsIno + 1n }],
+      ["/transcripts/test-agent", { dev: 1n, ino: ntfsIno + 2n }],
+      [child, { dev: 1n, ino: ntfsIno + 3n }],
+    ]);
+    mockNtfsCleanupStats(present);
+    agentsTesting.setExactStatForTests(async (target) => {
+      if (target === child) {
+        throw createEnoentError();
+      }
+      const stat = present.get(target);
+      if (!stat) {
+        throw createEnoentError();
+      }
+      return { dev: stat.dev, ino: stat.ino } as unknown as import("node:fs").BigIntStats;
+    });
+
+    const respond = await call("agents.delete", { agentId: "test-agent" });
+
+    const result = expectRespondOk(respond, { failed: [] });
+    expect(result.removed).toEqual(
+      expect.arrayContaining([
+        { path: child, method: "missing" },
+        { path: agentDir, method: "trash" },
+      ]),
+    );
+    expectTrashedWithinParent(agentDir);
     expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
   });
 
