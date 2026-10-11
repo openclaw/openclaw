@@ -19,3 +19,7 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+button:where(.oc-tab) {
+  font-weight: var(--control-ui-font-weight-semibold);
+}
