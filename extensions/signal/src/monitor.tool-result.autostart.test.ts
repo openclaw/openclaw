@@ -100,6 +100,70 @@ describe("monitorSignalProvider autostart", () => {
     );
   });
 
+  it("binds a URL-only local HTTP port for both the daemon and the readiness probe", async () => {
+    setSignalAutoStartConfig({
+      transport: {
+        kind: "managed-native",
+        url: "http://127.0.0.1:8082",
+      },
+    });
+    waitForTransportReadyMock.mockImplementationOnce(
+      async ({ check }: { check: () => Promise<unknown> }) => {
+        await check();
+      },
+    );
+    const abortController = createAutoAbortController();
+    await runMonitorWithMocks({
+      abortSignal: abortController.signal,
+    });
+    expect(spawnSignalDaemonMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpHost: "127.0.0.1",
+        httpPort: 8082,
+      }),
+    );
+    expect(signalCheckMock).toHaveBeenCalledWith("http://127.0.0.1:8082", expect.any(Number));
+  });
+
+  it("rewrites the daemon bind and readiness URL when a sibling reserves the URL port", async () => {
+    setSignalAutoStartConfig({
+      accounts: {
+        sibling: {
+          account: "+10000000001",
+          transport: { kind: "external-native", url: "http://127.0.0.1:8082" },
+        },
+        managed: {
+          account: "+10000000002",
+          transport: { kind: "managed-native", url: "http://127.0.0.1:8082" },
+        },
+      },
+    });
+    let spawnedHost = "";
+    let spawnedPort = 0;
+    spawnSignalDaemonMock.mockImplementationOnce(
+      (opts: { httpHost?: string; httpPort?: number }) => {
+        spawnedHost = opts.httpHost ?? "";
+        spawnedPort = opts.httpPort ?? 0;
+        return createMockSignalDaemonHandle();
+      },
+    );
+    waitForTransportReadyMock.mockImplementationOnce(
+      async ({ check }: { check: () => Promise<unknown> }) => {
+        await check();
+      },
+    );
+    const abortController = createAutoAbortController();
+    await runMonitorWithMocks({
+      abortSignal: abortController.signal,
+      accountId: "managed",
+    });
+    expect(spawnedPort).not.toBe(8082);
+    expect(signalCheckMock).toHaveBeenCalledWith(
+      `http://${spawnedHost}:${spawnedPort}`,
+      expect.any(Number),
+    );
+  });
+
   it("refuses HTTP overrides for an opted-in private transport", async () => {
     setSignalAutoStartConfig({
       transport: { kind: "managed-native", socketPath: "/private/signal/rpc" },
