@@ -4,7 +4,6 @@ export const {
   createAuthProfileStoreReadScope,
   updateAuthProfileStoreWithLock,
   loadAuthProfileStore,
-  loadAuthProfileStoreForRuntime,
   loadAuthProfileStoreForRuntimeAsync,
   prepareAuthProfileProvider,
   findPersistedAuthProfileCredentialAsync,
@@ -18,6 +17,10 @@ export const {
   saveAuthProfileStoreWithPreparedOwner,
   saveAuthProfileStoreIfPersistenceSnapshotMatches,
 } = nativePluginBindings.authStore;
+
+/** @deprecated Use loadAuthProfileStoreForRuntimeAsync. Removed at the next Plugin SDK major. */
+export const loadAuthProfileStoreForRuntime =
+  nativePluginBindings.authStore.loadAuthProfileStoreForRuntime;
 
 /** @deprecated Use loadAuthProfileStoreWithoutExternalProfilesAsync. Removed at the next Plugin SDK major. */
 export const loadAuthProfileStoreWithoutExternalProfiles =

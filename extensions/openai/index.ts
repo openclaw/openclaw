@@ -24,11 +24,6 @@ export default definePluginEntry({
   name: "OpenAI Provider",
   description: "Bundled OpenAI provider plugins",
   register(api) {
-    const {
-      ensureAuthProfileStoreAsync,
-      listProfilesForProvider,
-      isProviderApiKeyConfiguredAsync,
-    } = api.runtime.modelAuth;
     const openAIToolCompatHooks = buildProviderToolCompatFamilyHooks("openai");
     const provider = buildOpenAIProvider();
     api.registerProvider({
@@ -50,13 +45,7 @@ export default definePluginEntry({
       },
     });
     api.registerEmbeddingProvider(openAiMemoryEmbeddingProviderAdapter);
-    api.registerImageGenerationProvider(
-      buildOpenAIImageGenerationProvider({
-        ensureAuthProfileStoreAsync,
-        listProfilesForProvider,
-        isProviderApiKeyConfiguredAsync,
-      }),
-    );
+    api.registerImageGenerationProvider(buildOpenAIImageGenerationProvider(api.runtime.modelAuth));
     api.registerRealtimeTranscriptionProvider(buildOpenAIRealtimeTranscriptionProvider);
     api.registerRealtimeVoiceProvider((context) => {
       const quicksilverSession =

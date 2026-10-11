@@ -730,7 +730,7 @@ async function runWithModelFallbackInternal<T>(
       `${attempt.provider}/${attempt.model}: ${attempt.error}${
         attempt.reason ? ` (${attempt.reason})` : ""
       }`,
-    soonestCooldownExpiry: resolveFallbackSoonestCooldownExpiry({
+    soonestCooldownExpiry: await resolveFallbackSoonestCooldownExpiry({
       authRuntime,
       userLockedAuthProfileId,
       agentDir: params.agentDir,

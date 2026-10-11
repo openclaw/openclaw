@@ -50,7 +50,7 @@ import {
 } from "./runtime-snapshots.js";
 import { getSetupCredentialRuntimeProfile, isSetupCredentialAccessible } from "./setup-access.js";
 import {
-  loadAuthProfileStoreForSecretsRuntime,
+  loadAuthProfileStoreForRuntimeAsync,
   resolvePersistedAuthProfileOwnerAgentDirAsync,
 } from "./store-runtime.js";
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
@@ -429,7 +429,11 @@ async function resolveApiKeyForProfileOwned(
         ? error.getRefreshedStore()
         : personalStore
           ? await personalStore.read()
-          : loadAuthProfileStoreForSecretsRuntime(params.agentDir, { profileId });
+          : await loadAuthProfileStoreForRuntimeAsync(params.agentDir, {
+              profileId,
+              readOnly: true,
+              allowKeychainPrompt: false,
+            });
     const surfacedCause =
       error instanceof OAuthManagerRefreshError && error.cause ? error.cause : error;
     if (isRefreshTokenReusedError(surfacedCause)) {
@@ -469,7 +473,11 @@ async function resolveApiKeyForProfileOwned(
       if (clearedLastGood) {
         refreshedStore = personalStore
           ? await personalStore.read()
-          : loadAuthProfileStoreForSecretsRuntime(params.agentDir, { profileId });
+          : await loadAuthProfileStoreForRuntimeAsync(params.agentDir, {
+              profileId,
+              readOnly: true,
+              allowKeychainPrompt: false,
+            });
       }
     }
     const fallbackProfileId =

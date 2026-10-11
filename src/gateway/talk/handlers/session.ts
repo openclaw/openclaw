@@ -403,6 +403,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
             requestedModel: normalizeOptionalString(params.model),
             defaultModel: transcriptionConfig.model,
           });
+          requester.assertCurrent();
           const session = createTalkTranscriptionRelaySession({
             context,
             connId,

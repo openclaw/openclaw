@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   ImageGenerationOutputFormat,
   ImageGenerationProvider,
+  ImageGenerationProviderConfiguredContext,
   ImageGenerationResult,
 } from "openclaw/plugin-sdk/image-generation";
 import type { resolveClosestSize } from "openclaw/plugin-sdk/media-generation-runtime";
@@ -300,7 +301,11 @@ function shouldAllowPrivateImageEndpoint(req: {
 
 type OpenAIImageModelAuth = Pick<
   OpenClawPluginApi["runtime"]["modelAuth"],
-  "ensureAuthProfileStoreAsync" | "listProfilesForProvider" | "isProviderApiKeyConfiguredAsync"
+  | "ensureAuthProfileStore"
+  | "ensureAuthProfileStoreAsync"
+  | "listProfilesForProvider"
+  | "isProviderApiKeyConfigured"
+  | "isProviderApiKeyConfiguredAsync"
 >;
 
 async function resolveRequestAuthStore(
@@ -357,6 +362,26 @@ function hasCodexResponseTransportProfileConfigured(
 function hasExplicitOpenAIImageApiKeyConfig(cfg: OpenClawConfig | undefined): boolean {
   const providerConfig = cfg?.models?.providers?.openai;
   return providerConfig?.apiKey !== undefined || providerConfig?.auth === "api-key";
+}
+
+function hasDirectOpenAIImageRoute(cfg: OpenClawConfig | undefined): boolean {
+  return (
+    isPublicOpenAIImageBaseUrl(resolveConfiguredOpenAIBaseUrl(cfg)) ||
+    hasExplicitOpenAIImageApiKeyConfig(cfg) ||
+    Boolean(process.env.OPENAI_API_KEY?.trim())
+  );
+}
+
+function hasOpenAIImageProfileRoute(
+  cfg: OpenClawConfig | undefined,
+  authStore: AuthProfileStore | undefined,
+  modelAuth: OpenAIImageModelAuth,
+): boolean {
+  return (
+    hasOpenAIImageApiKeyProfile(authStore, modelAuth) ||
+    (hasChatGPTImageRouteConfig(cfg) &&
+      hasCodexResponseTransportProfileConfigured(authStore, modelAuth))
+  );
 }
 
 function hasExplicitDirectOpenAIImageConfig(cfg: OpenClawConfig | undefined): boolean {
@@ -679,14 +704,29 @@ export function buildOpenAIImageGenerationProvider(
         backgrounds: [...OPENAI_BACKGROUNDS],
       },
     },
-    async isConfiguredAsync({ cfg, agentDir }) {
-      const publicOpenAIBaseUrl = isPublicOpenAIImageBaseUrl(resolveConfiguredOpenAIBaseUrl(cfg));
-      const directApiKeyConfigured =
-        hasExplicitOpenAIImageApiKeyConfig(cfg) || Boolean(process.env.OPENAI_API_KEY?.trim());
+    // Released synchronous discovery must retain the image-specific auth policy.
+    isConfigured({ cfg, agentDir }: ImageGenerationProviderConfiguredContext) {
+      const directRoute = hasDirectOpenAIImageRoute(cfg);
       const authStore =
-        publicOpenAIBaseUrl || directApiKeyConfigured
+        directRoute || !agentDir?.trim()
           ? undefined
-          : await resolveRequestAuthStore({ agentDir }, modelAuth);
+          : modelAuth.ensureAuthProfileStore(agentDir.trim(), { allowKeychainPrompt: false });
+      return (
+        modelAuth.isProviderApiKeyConfigured({
+          provider: "openai",
+          agentDir,
+          cfg,
+          store: authStore,
+          capability: "image-generation",
+        }) &&
+        (directRoute || hasOpenAIImageProfileRoute(cfg, authStore, modelAuth))
+      );
+    },
+    async isConfiguredAsync({ cfg, agentDir }) {
+      const directRoute = hasDirectOpenAIImageRoute(cfg);
+      const authStore = directRoute
+        ? undefined
+        : await resolveRequestAuthStore({ agentDir }, modelAuth);
       const configured = await modelAuth.isProviderApiKeyConfiguredAsync({
         provider: "openai",
         agentDir,
@@ -694,14 +734,7 @@ export function buildOpenAIImageGenerationProvider(
         store: authStore,
         capability: "image-generation",
       });
-      return (
-        configured &&
-        (publicOpenAIBaseUrl ||
-          directApiKeyConfigured ||
-          hasOpenAIImageApiKeyProfile(authStore, modelAuth) ||
-          (hasChatGPTImageRouteConfig(cfg) &&
-            hasCodexResponseTransportProfileConfigured(authStore, modelAuth)))
-      );
+      return configured && (directRoute || hasOpenAIImageProfileRoute(cfg, authStore, modelAuth));
     },
     async generateImage(req) {
       const inputImages = req.inputImages ?? [];

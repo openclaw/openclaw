@@ -160,8 +160,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "agent-media-payload": 3,
   // +2: deprecated media projection type and builder.
   "reply-payload": 2,
-  // +5: released auth-store and TTS methods retain synchronous compatibility.
-  "agent-runtime": 10,
+  // +7: released auth-store and TTS methods retain synchronous compatibility.
+  "agent-runtime": 11,
   "memory-host-core": 2,
   // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
   // +4: legacy AgentHarness, attempt, embedded-run, and side-question contracts remain
@@ -191,7 +191,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "security-runtime": 1,
   // +2: approved released upstream-link writes retained during worker migration.
   "session-catalog": 2,
-  "session-store-runtime": 6,
+  "session-store-runtime": 7,
   // +2: shipped Slack and Discord setup helpers retained through their package migration window.
   "setup-runtime": 2,
   "reply-history": 6,
@@ -235,9 +235,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved final-delivery capture ownership predicate for channel transcript mirrors.
       // +7: approved GitHub publication V2 requester/action contracts: five types and two preparers.
       // +3: approved async skill-command preparation pairs on two existing entrypoints.
-      // +14: approved async auth, model, and TTS replacement pairs.
-      // +6: approved async session, command-menu, model-override, and TTS-path replacements.
-      3692,
+      // +15: approved async auth, model, and TTS replacement pairs.
+      // +7: approved async session, command-menu, model-override, TTS-path, and list replacements.
+      3694,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -258,9 +258,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the same final-delivery capture ownership predicate.
       // +2: prepareGitHubPublicationRequesterV2 and preparePersonalGitHubSessionActionV2.
       // +3: the same skill-command preparation replacements.
-      // +14: the same auth, model, and TTS replacement pairs.
-      // +6: the same session, command-menu, model-override, and TTS-path replacements.
-      2153,
+      // +15: the same auth, model, and TTS replacement pairs.
+      // +7: the same session, command-menu, model-override, TTS-path, and list replacements.
+      2155,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -271,9 +271,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +6: released session callbacks and provider replay contracts during async migration.
       // +4: released synchronous conversation binding contracts during V2 migration.
       // +3: released synchronous skill-command list helpers during async migration.
-      // +14: retained synchronous auth, model, and TTS compatibility exports.
-      // +6: retained synchronous session, command-menu, model-override, and TTS-path exports.
-      181,
+      // +15: retained synchronous auth, model, and TTS compatibility exports.
+      // +7: retained synchronous session, command-menu, model-override, TTS-path, and list exports.
+      183,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

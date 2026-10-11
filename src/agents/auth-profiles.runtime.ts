@@ -4,7 +4,7 @@ export {
   ensureAuthProfileStore,
   ensureAuthProfileStoreAsync,
   ensureAuthProfileStoreWithoutExternalProfilesAsync,
-  loadAuthProfileStoreForRuntime,
+  loadAuthProfileStoreForRuntimeAsync,
   prepareAuthProfileProvider,
 } from "./auth-profiles/store-runtime.js";
 export {

@@ -220,8 +220,10 @@ function authResolutionCall(callIndex = 0): AuthResolutionCall {
 
 describe("openai image generation provider", () => {
   const provider = buildOpenAIImageGenerationProvider({
+    ensureAuthProfileStore: vi.fn<() => AuthProfileStore>(() => ({ version: 1, profiles: {} })),
     ensureAuthProfileStoreAsync: ensureAuthProfileStoreAsyncMock,
     listProfilesForProvider: listProfilesForProviderMock,
+    isProviderApiKeyConfigured: vi.fn(() => false),
     isProviderApiKeyConfiguredAsync: isProviderApiKeyConfiguredAsyncMock,
   });
   const emptyConfig: OpenClawConfig = {};
