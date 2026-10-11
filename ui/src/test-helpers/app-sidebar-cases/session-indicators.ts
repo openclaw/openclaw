@@ -146,7 +146,9 @@ describe("AppSidebar session indicators", () => {
     expect(avatar?.querySelector(".channel-avatar")?.getAttribute("src")).toBe(
       "blob:channel-avatar",
     );
-    expect(avatar?.querySelector(".session-owner-chip")).toBeNull();
+    expect(
+      avatar?.querySelector<HTMLElement>("openclaw-channel-avatar > span")?.style.display,
+    ).toBe("none");
 
     const owner = sidebar.querySelector(`[data-session-key="${ownerKey}"]`);
     expect(owner?.querySelector("openclaw-channel-avatar")).toBeNull();
@@ -238,8 +240,10 @@ describe("AppSidebar session indicators", () => {
     );
     // Once the avatar renders, the chip fallback yields to the real image.
     expect(
-      sidebar.querySelector(`[data-session-key="${avatarKey}"] .session-owner-chip`),
-    ).toBeNull();
+      sidebar.querySelector<HTMLElement>(
+        `[data-session-key="${avatarKey}"] openclaw-channel-avatar > span`,
+      )?.style.display,
+    ).toBe("none");
   });
 
   it("keeps the owner chip when avatar auth is not ready", async () => {
