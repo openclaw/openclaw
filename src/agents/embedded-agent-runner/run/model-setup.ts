@@ -148,7 +148,10 @@ async function prepareNativeSessionRuntime(
     }
     const reader = getReplyOperationSessionReader(runParams.replyOperation);
     if (reader) {
-      publication.prepareSource(reader.database, readDatabasePathIdentitySync(reader.database.path));
+      publication.prepareSource(
+        reader.database,
+        readDatabasePathIdentitySync(reader.database.path),
+      );
       const prepared = await reader.withRead(
         {
           sessionKeys: [admission.sessionKey],
