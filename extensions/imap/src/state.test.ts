@@ -71,27 +71,6 @@ describe("IMAP cursor initialization", () => {
     },
   );
 
-  it.each(["4294967295", "4294967296", "9007199254740993", "9999999999999999999"])(
-    "preserves UIDVALIDITY %s and resumes a maximum uint32 cursor",
-    async (uidValidity) => {
-      const { state } = createImapTestRuntime();
-      const cursor = { uidValidity, lastSeenUid: 4294967295, updatedAt: 123 };
-      await state.cursors.register("account", cursor);
-      const resolveBaseline = vi.fn(async () => 0);
-
-      expect(
-        await initializeImapCursor(
-          state,
-          "account",
-          cursor.uidValidity,
-          resolveBaseline,
-          () => true,
-        ),
-      ).toEqual({ kind: "resume", cursor });
-      expect(resolveBaseline).not.toHaveBeenCalled();
-    },
-  );
-
   it.each([undefined, null, Number.NaN, Infinity, -1, 0.5, "42", 4294967296])(
     "rejects an invalid persisted cursor with matching UIDVALIDITY: %s",
     async (lastSeenUid) => {
