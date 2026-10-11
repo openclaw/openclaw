@@ -7,6 +7,7 @@ import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveThinkingProfile } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import {
   createLlmCompleteError as completionError,
   createLlmOperatorAuthorizationError,
@@ -31,6 +32,17 @@ const ISOLATED_COMPLETION_ERRORS = new Map<unknown, readonly [LlmCompleteErrorCo
     ["LLM_COMPLETION_OUTPUT_REJECTED", "Isolated completion output was rejected."],
   ],
 ]);
+// Keep native and prompt-fallback schemas within the model-context budget.
+const MAX_OUTPUT_SCHEMA_UTF8_BYTES = 1_024;
+
+function selectOutputSchema(
+  schema: LlmIsolatedAgentRuntimeCompleteParams["outputSchema"],
+): LlmIsolatedAgentRuntimeCompleteParams["outputSchema"] {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    return undefined;
+  }
+  return boundedJsonUtf8Bytes(schema, MAX_OUTPUT_SCHEMA_UTF8_BYTES).complete ? schema : undefined;
+}
 
 function requireIsolatedUserPrompt(params: LlmCompleteParams): string {
   if (
@@ -143,6 +155,7 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
 }): Promise<IsolatedCompletionResult> {
   params.assertCurrent?.();
   const prompt = requireIsolatedUserPrompt(params.request);
+  const outputSchema = selectOutputSchema(params.request.outputSchema);
   const timeoutMs = resolveIsolatedTimeoutMs(params.request.execution.timeoutMs);
   assertIsolatedReasoningSupported({
     cfg: params.cfg,
@@ -181,6 +194,7 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
         timeoutMs,
         abortSignal: controller.signal,
         thinkLevel: params.request.reasoning,
+        ...(outputSchema ? { outputSchema } : {}),
         streamParams: {
           maxTokens: asFiniteNumber(params.request.maxTokens),
           temperature: asFiniteNumber(params.request.temperature),

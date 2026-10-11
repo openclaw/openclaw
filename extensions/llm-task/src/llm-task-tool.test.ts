@@ -3,6 +3,10 @@ import { createLlmTaskTool } from "./llm-task-tool.js";
 
 type LlmTaskApi = Parameters<typeof createLlmTaskTool>[0];
 type Complete = LlmTaskApi["runtime"]["llm"]["complete"];
+type IsolatedCompleteRequest = Extract<
+  Parameters<Complete>[0],
+  { execution: { mode: "isolated-agent-runtime" } }
+>;
 
 function completionResult(params: Parameters<Complete>[0], text = "{}") {
   const [provider = "openai", model = "gpt-5.5"] = (params.model ?? "openai/gpt-5.5").split(
@@ -83,12 +87,12 @@ async function executeIsolatedCompletion(input: Record<string, unknown>, api = f
   return firstIsolatedCompletionCall();
 }
 
-function firstIsolatedCompletionCall() {
+function firstIsolatedCompletionCall(): IsolatedCompleteRequest {
   const call = complete.mock.calls[0]?.[0];
-  if (!call) {
+  if (call?.execution?.mode !== "isolated-agent-runtime") {
     throw new Error("expected isolated completion");
   }
-  return call;
+  return call as IsolatedCompleteRequest;
 }
 
 describe("llm-task tool (json-only)", () => {
@@ -105,6 +109,19 @@ describe("llm-task tool (json-only)", () => {
     );
     const res = await tool.execute("id", { prompt: "return ok" });
     expect(res.details.json).toEqual({ ok: true });
+  });
+
+  it("validates schema", async () => {
+    mockIsolatedCompletionJson({ foo: "bar" });
+    const schema = {
+      type: "object",
+      properties: { foo: { type: "string" } },
+      required: ["foo"],
+      additionalProperties: false,
+    };
+    const res = await tool.execute("id", { prompt: "return foo", schema });
+    expect(res.details.json).toEqual({ foo: "bar" });
+    expect(firstIsolatedCompletionCall().outputSchema).toBe(schema);
   });
 
   it("validates caller schemas with repeated $id independently across calls", async () => {
