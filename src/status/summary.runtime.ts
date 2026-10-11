@@ -9,7 +9,7 @@ import {
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
 import { resolveSessionStorePathForAcp } from "../acp/runtime/session-meta.js";
 import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
-import { resolveAgentConfig } from "../agents/agent-scope-config.js";
+import { resolveAgentConfig, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import {
   resolveAuthoredModelContextTokens,
   resolveContextTokensForModelFromCache as resolveContextTokensForModel,
@@ -62,11 +62,14 @@ async function createStatusModelContextResolver(cfg: OpenClawConfig) {
     if (!provider || !model) {
       return {};
     }
-    const catalog = getPreparedModelCatalogSnapshot({
-      config: cfg,
-      agentId,
-      workspaceDir: sessionEntry?.spawnedWorkspaceDir,
-    });
+    const ownerAgentId = agentId ?? tryResolveAmbientOwnerAgentId(cfg);
+    const catalog = ownerAgentId
+      ? getPreparedModelCatalogSnapshot({
+          config: cfg,
+          agentId: ownerAgentId,
+          workspaceDir: sessionEntry?.spawnedWorkspaceDir,
+        })
+      : undefined;
     if (catalog) {
       const logicalEntry = findModelInCatalog(catalog.entries, provider, model);
       const entry =

@@ -3,7 +3,11 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import type { ModelsListResult } from "../../packages/gateway-protocol/src/schema/model-catalog.js";
+import type {
+  ModelChoice,
+  ModelRuntimeChoice,
+  ModelsListResult,
+} from "../../packages/gateway-protocol/src/schema/model-catalog.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
@@ -11,7 +15,7 @@ import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
 import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
 import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
-import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import {
   prepareCliProviderClassifier,
@@ -54,6 +58,24 @@ import {
 type SessionCandidate = { agentId: string; entry: SessionEntry; sessionKey: string };
 
 const DEFAULT_SESSIONS_LIMIT = 100;
+
+function toSessionCatalogEntry(
+  model: ModelChoice,
+  runtime: ModelChoice | ModelRuntimeChoice = model,
+): ModelCatalogEntry {
+  return {
+    id: model.id,
+    name: model.name,
+    provider: model.provider,
+    contextWindow: runtime.contextWindow,
+    contextTokens: runtime.contextTokens,
+    contextWindows: runtime.contextWindows,
+    contextWindowDefault: runtime.contextWindowDefault,
+    ...(runtime.agentRuntime && !["auto", "openclaw"].includes(runtime.agentRuntime.id)
+      ? { nativeRuntime: runtime.agentRuntime.id }
+      : {}),
+  };
+}
 
 /** True ACP sessions use the child runtime's model, not the configured fallback. */
 function applyAcpModelOverlayIfNeeded(
@@ -359,19 +381,12 @@ export async function sessionsCommand(
               },
             })
               .then(({ models }) => ({
-                entries: models.map((model) => ({
-                  id: model.id,
-                  name: model.name,
-                  provider: model.provider,
-                  contextWindow: model.contextWindow,
-                  contextTokens: model.contextTokens,
-                  contextWindows: model.contextWindows,
-                  contextWindowDefault: model.contextWindowDefault,
-                  ...(model.agentRuntime && !["auto", "openclaw"].includes(model.agentRuntime.id)
-                    ? { nativeRuntime: model.agentRuntime.id }
-                    : {}),
-                })),
-                routeVariants: [],
+                entries: models.map((model) => toSessionCatalogEntry(model)),
+                routeVariants: models.flatMap((model) =>
+                  [model, ...(model.runtimeChoices ?? [])].map((choice) =>
+                    toSessionCatalogEntry(model, choice),
+                  ),
+                ),
               }))
               .catch(() => {
                 if (!catalogWarningShown) {

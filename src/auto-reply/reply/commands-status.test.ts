@@ -25,7 +25,12 @@ import * as statusText from "../../status/status-text.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { buildStatusPluginsReply, buildStatusReply, buildStatusText } from "./commands-status.js";
-import { buildKiraStatusReply, buildStatusReplyForTest } from "./commands-status.test-support.js";
+import {
+  buildKiraStatusReply,
+  buildStatusReplyForTest,
+  createStatusSessionParams,
+  createStatusDisplayParams,
+} from "./commands-status.test-support.js";
 import { baseCommandTestConfig, buildCommandTestParams } from "./commands.test-harness.js";
 
 // Tests status command rendering for sessions, agents, and diagnostics.
@@ -112,32 +117,6 @@ const codexStatusModel: ModelDefinitionConfig = {
   contextTokens: 1_000_000,
   maxTokens: 128_000,
 };
-
-type StatusTextParams = Parameters<typeof buildStatusText>[0];
-
-function createStatusSessionParams(statusChannel = "mobilechat") {
-  return {
-    sessionKey: "agent:main:main",
-    parentSessionKey: "agent:main:main",
-    sessionScope: "per-sender",
-    statusChannel,
-  } satisfies Partial<StatusTextParams>;
-}
-
-function createStatusDisplayParams(
-  resolvedFastMode = false,
-  resolveDefaultThinkingLevel: StatusTextParams["resolveDefaultThinkingLevel"] = async () =>
-    undefined,
-) {
-  return {
-    resolvedFastMode,
-    resolvedVerboseLevel: "off",
-    resolvedReasoningLevel: "off",
-    resolveDefaultThinkingLevel,
-    isGroup: false,
-    defaultGroupActivation: () => "mention",
-  } satisfies Partial<StatusTextParams>;
-}
 
 function registerStatusCodexHarness(): void {
   const codexProviders = new Set(["codex", "openai"]);
@@ -430,7 +409,7 @@ describe("buildStatusReply subagent summary", () => {
     expect(reply?.text).toContain("🤖 Subagents: 1 active");
   });
 
-  it("uses transcript usage fallback in /status output", async () => {
+  it("uses transcript usage fallback while capacity is unknown in /status output", async () => {
     await withTempHome(async (dir) => {
       const sessionId = "sess-status-transcript";
       await writeTranscriptUsageLog({
@@ -463,7 +442,7 @@ describe("buildStatusReply subagent summary", () => {
         activeModelAuthOverride: "api-key",
       });
 
-      expect(normalizeTestText(text)).toContain("Context: 1.0k/200k");
+      expect(normalizeTestText(text)).toContain("Context: 1.0k/?");
     });
   });
 
@@ -555,7 +534,7 @@ describe("buildStatusReply subagent summary", () => {
       rejectedContext: "Context: 45k/200k",
     },
     {
-      name: "keeps a cross-route qualified transcript model unbound",
+      name: "binds a namespaced transcript model to its current provider entry",
       sessionId: "sess-status-recovered-cross-route-model-context",
       provider: "openrouter",
       model: "google/gemini-2.5-pro",
@@ -567,9 +546,15 @@ describe("buildStatusReply subagent summary", () => {
           contextWindow: 1_000_000,
           contextTokens: 1_000_000,
         },
+        {
+          provider: "google",
+          id: "gemini-2.5-pro",
+          contextWindow: 200_000,
+          contextTokens: 200_000,
+        },
       ],
-      expectedContext: "Context: 45k/200k",
-      rejectedContext: "Context: 45k/1.0m",
+      expectedContext: "Context: 45k/1.0m",
+      rejectedContext: "Context: 45k/200k",
     },
   ])("$name", async (testCase) => {
     await withTempHome(async (dir) => {
@@ -1280,7 +1265,7 @@ describe("buildStatusReply subagent summary", () => {
     );
   });
 
-  it("uses live runtime context for unresolved active fallback notices", async () => {
+  it("uses admitted capacity for an active fallback absent from config", async () => {
     const selectedModel: ModelDefinitionConfig = {
       id: "mimo-v2-flash",
       name: "MiMo V2 Flash",
@@ -1324,7 +1309,15 @@ describe("buildStatusReply subagent summary", () => {
       ...createStatusSessionParams(),
       provider: "xiaomi",
       model: "mimo-v2-flash",
-      contextTokens: 123_456,
+      contextTokens: 1_048_576,
+      thinkingCatalog: [
+        {
+          provider: "custom-runtime",
+          id: "unknown-fallback-model",
+          contextWindow: 123_456,
+          contextTokens: 123_456,
+        },
+      ],
       ...createStatusDisplayParams(),
       modelAuthOverride: "api-key",
       activeModelAuthOverride: "api-key",

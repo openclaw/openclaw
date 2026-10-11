@@ -257,9 +257,13 @@ describe("sessionsCommand", () => {
     expect(row).toContain("11/1.0m (0%)");
   });
 
-  it.each([32_768, undefined])(
-    "reports the selected local model's admitted Gateway capacity (%s) without a default denominator",
-    async (capacity) => {
+  it.each([
+    { capacity: 32_768, runtimeId: "openclaw" },
+    { capacity: undefined, runtimeId: "openclaw" },
+    { capacity: 96_000, runtimeId: "native-fixture" },
+  ])(
+    "reports admitted Gateway capacity $capacity for $runtimeId without a default denominator",
+    async ({ capacity, runtimeId }) => {
       catalogState.readActiveGatewayLockIdentity.mockResolvedValue({
         pid: 123,
         port: 19461,
@@ -275,7 +279,19 @@ describe("sessionsCommand", () => {
                   id: "qwen3:4b",
                   name: "qwen3:4b",
                   contextWindow: 262_144,
-                  contextTokens: capacity,
+                  contextTokens: runtimeId === "openclaw" ? capacity : 32_768,
+                  agentRuntime: { id: "openclaw", source: "model" },
+                  ...(runtimeId !== "openclaw"
+                    ? {
+                        runtimeChoices: [
+                          {
+                            agentRuntime: { id: runtimeId, source: "model" },
+                            contextWindow: 128_000,
+                            contextTokens: capacity,
+                          },
+                        ],
+                      }
+                    : {}),
                 },
               ],
       });
@@ -284,17 +300,22 @@ describe("sessionsCommand", () => {
           sessionId: "local-model-switch",
           updatedAt: Date.now(),
           modelProvider: "ollama",
-          model: "qwen3:8b",
+          model: runtimeId === "openclaw" ? "qwen3:8b" : "qwen3:4b",
           providerOverride: "ollama",
           modelOverride: "qwen3:4b",
-          agentHarnessId: "openclaw",
+          agentHarnessId: runtimeId,
           contextTokens: 128_000,
           contextTokensSource: "resolved-v1",
         },
       });
       setMockSessionsConfig(() => ({
         session: { store },
-        agents: { defaults: { model: { primary: "ollama/qwen3:8b" } } },
+        agents: {
+          defaults: {
+            model: { primary: "ollama/qwen3:8b" },
+            models: { "ollama/qwen3:4b": { agentRuntime: { id: runtimeId } } },
+          },
+        },
         models: {
           providers: {
             ollama: { models: [{ id: "qwen3:8b", contextTokens: 128_000 }] },
@@ -310,6 +331,7 @@ describe("sessionsCommand", () => {
         modelProvider: "ollama",
         model: "qwen3:4b",
         contextTokens: capacity ?? null,
+        agentRuntime: { id: runtimeId },
       });
       expect(catalogState.callGateway).toHaveBeenCalledWith(
         expect.objectContaining({
