@@ -13,7 +13,9 @@ import { createLazyChannelApprovalNativeRuntimeAdapterAsync } from "./approval-h
 import { startChannelApprovalHandlerBootstrap } from "./approval-handler-bootstrap.js";
 import { createApprovalNativeRuntimeAdapterStubs } from "./approval-handler.test-helpers.js";
 import { createApprovalNativeRouteCoordinator } from "./approval-native-route-coordinator.js";
+import { normalizeApprovalRequest } from "./approval-types.js";
 import { ExecApprovalChannelRuntimeTerminalStartError } from "./exec-approval-channel-runtime.js";
+import type { SystemAgentApprovalRequest } from "./system-agent-approvals.js";
 
 const { handlerFactory } = vi.hoisted(() => ({ handlerFactory: vi.fn() }));
 
@@ -93,22 +95,150 @@ describe("startChannelApprovalHandlerBootstrap", () => {
       ...overrides,
     });
 
-  const registerApprovalContext = (app: unknown = { ok: true }) =>
+  const registerApprovalContext = (app: unknown = { ok: true }, abortSignal?: AbortSignal) =>
     channelRuntime.runtimeContexts.register({
       channelId: "slack",
       accountId: "default",
       capability: "approval.native",
       context: { app },
+      abortSignal,
     });
 
-  const startFailingHandler = async (handler: ReturnType<typeof makeHandler>) => {
+  const startFailingHandler = async (
+    handler: ReturnType<typeof makeHandler>,
+    abortSignal?: AbortSignal,
+  ) => {
     const { logger, failed } = loggedFailure();
     handlerFactory.mockResolvedValue(handler);
-    const cleanup = await startTestBootstrap(logger);
+    const cleanup = await startTestBootstrap(logger, { abortSignal });
     const lease = registerApprovalContext();
     await failed.promise;
     return { logger, cleanup, lease };
   };
+
+  it("delivers once after aborted accounts are replaced before provider cleanup settles", async () => {
+    const actual = await vi.importActual<typeof import("./approval-handler-runtime.js")>(
+      "./approval-handler-runtime.js",
+    );
+    handlerFactory.mockImplementation(actual.createChannelApprovalHandlerFromCapability);
+    const subscribers = new Set<GatewayApprovalEventSubscriber>();
+    const routeCoordinator = createApprovalNativeRouteCoordinator();
+    let subscribed = createDeferred();
+    const delivered = createDeferred();
+    let expectedDeliveries = 0;
+    let deliveryCount = 0;
+    const gatewayRuntime: GatewayNativeApprovalRuntime = {
+      getRuntimeConfig: () => ({}),
+      request: async <T>() => [] as T,
+      requestRoute: vi.fn(),
+      routeCoordinator,
+      subscribe: (subscriber) => {
+        subscribers.add(subscriber);
+        subscribed.resolve();
+        return () => subscribers.delete(subscriber);
+      },
+    };
+    const deliverPending = vi.fn(async () => {
+      if (++deliveryCount === expectedDeliveries) {
+        delivered.resolve();
+      }
+      return { messageId: "pending" };
+    });
+    const plugin: Parameters<typeof startChannelApprovalHandlerBootstrap>[0]["plugin"] = {
+      id: "slack",
+      meta: {
+        id: "slack",
+        label: "Slack",
+        selectionLabel: "Slack",
+        docsPath: "/channels/slack",
+        blurb: "test channel",
+      },
+      approvalCapability: {
+        native: {
+          describeDeliveryCapabilities: () => ({
+            enabled: true,
+            preferredSurface: "approver-dm" as const,
+            supportsOriginSurface: false,
+            supportsApproverDmSurface: true,
+          }),
+          resolveApproverDmTargets: () => [{ to: "approver" }],
+        },
+        nativeRuntime: createApprovalNativeRuntimeAdapterStubs({
+          eventKinds: ["system-agent"],
+          deliverPending,
+        }),
+      },
+    };
+    const cleanups: Array<() => Promise<void>> = [];
+    try {
+      for (let index = 0; index < 5; index += 1) {
+        const abort = new AbortController();
+        subscribed = createDeferred();
+        cleanups.push(
+          await startChannelApprovalHandlerBootstrap({
+            scheduler,
+            plugin,
+            cfg: {},
+            accountId: "default",
+            channelRuntime,
+            gatewayRuntime,
+            abortSignal: abort.signal,
+          }),
+        );
+        registerApprovalContext({ index }, abort.signal);
+        await subscribed.promise;
+        if (index < 4) {
+          abort.abort();
+          await flushTransitions();
+          // A hung provider withholds task cleanup until after its replacement starts.
+        }
+      }
+      const request: SystemAgentApprovalRequest = {
+        id: "account-replacement",
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 60_000,
+        request: {
+          title: "OpenClaw change",
+          description: "Change an agent name",
+          command: "rename the test agent",
+          proposalHash: "a".repeat(64),
+          allowedDecisions: ["allow-once", "deny"],
+          sessionId: "test-delegation",
+          turnSourceChannel: "slack",
+          turnSourceAccountId: "default",
+          turnSourceTo: "origin-chat",
+        },
+      };
+      const normalizedRequest = normalizeApprovalRequest(request);
+      expectedDeliveries = subscribers.size;
+      for (const subscriber of subscribers) {
+        if (await subscriber.shouldHandle(normalizedRequest)) {
+          subscriber.onRequested(normalizedRequest);
+        }
+      }
+      await delivered.promise;
+      expect(deliverPending).toHaveBeenCalledOnce();
+    } finally {
+      for (const cleanup of cleanups) {
+        await cleanup();
+      }
+      routeCoordinator.close();
+    }
+  });
+
+  it("does not activate approvals for an already-aborted account", async () => {
+    const abort = new AbortController();
+    abort.abort();
+    const cleanup = await startTestBootstrap(undefined, { abortSignal: abort.signal });
+    const lease = registerApprovalContext();
+    try {
+      await flushTransitions();
+      expect(handlerFactory).not.toHaveBeenCalled();
+    } finally {
+      await cleanup();
+      lease.dispose();
+    }
+  });
 
   it("starts immediately when the runtime context was already registered", async () => {
     const { start, stop } = makeHandler();
@@ -235,27 +365,36 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     await cleanup();
   });
 
-  it("does not start a handler after the runtime context is unregistered mid-boot", async () => {
-    const { promise: runtimePromise, resolve: resolveRuntime } =
-      createDeferred<ReturnType<typeof makeHandler>>();
-    handlerFactory.mockReturnValue(runtimePromise);
+  it.each(["unregister", "abort"] as const)(
+    "does not start a handler after %s during its factory",
+    async (action) => {
+      const abort = new AbortController();
+      const { promise: runtimePromise, resolve: resolveRuntime } =
+        createDeferred<ReturnType<typeof makeHandler>>();
+      handlerFactory.mockReturnValue(runtimePromise);
 
-    const cleanup = await startTestBootstrap();
+      const cleanup = await startTestBootstrap(undefined, { abortSignal: abort.signal });
 
-    const lease = registerApprovalContext();
-    await flushTransitions();
+      const lease = registerApprovalContext();
+      await flushTransitions();
 
-    const { start, stop } = makeHandler();
+      const { start, stop } = makeHandler();
 
-    lease.dispose();
-    resolveRuntime?.({ start, stop });
-    await flushTransitions();
+      if (action === "abort") {
+        abort.abort();
+      } else {
+        lease.dispose();
+      }
+      resolveRuntime?.({ start, stop });
+      await flushTransitions();
 
-    expect(start).not.toHaveBeenCalled();
-    expect(stop).toHaveBeenCalledTimes(1);
+      expect(start).not.toHaveBeenCalled();
+      expect(stop).toHaveBeenCalledTimes(1);
 
-    await cleanup();
-  });
+      await cleanup();
+      lease.dispose();
+    },
+  );
 
   it.each([false, true])("replaces a context with stale retry=%s", async (retryPending) => {
     const first = makeHandler();
@@ -350,23 +489,29 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     await cleanup();
   });
 
-  it.each(["unregister", "cleanup"] as const)("cancels a pending retry on %s", async (action) => {
-    const start = vi.fn().mockRejectedValue(new Error("boom"));
-    const { stop } = makeHandler();
-    const { cleanup, lease } = await startFailingHandler({ start, stop });
+  it.each(["unregister", "cleanup", "abort"] as const)(
+    "cancels a pending retry on %s",
+    async (action) => {
+      const abort = new AbortController();
+      const start = vi.fn().mockRejectedValue(new Error("boom"));
+      const { stop } = makeHandler();
+      const { cleanup, lease } = await startFailingHandler({ start, stop }, abort.signal);
 
-    if (action === "unregister") {
-      lease.dispose();
-    } else {
+      if (action === "unregister") {
+        lease.dispose();
+      } else if (action === "abort") {
+        abort.abort();
+      } else {
+        await cleanup();
+      }
+      await clock.advanceBy(1_000);
+
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(scheduler.nextWakeAtMs).toBeNull();
       await cleanup();
-    }
-    await clock.advanceBy(1_000);
-
-    expect(start).toHaveBeenCalledTimes(1);
-    expect(scheduler.nextWakeAtMs).toBeNull();
-    await cleanup();
-    lease.dispose();
-  });
+      lease.dispose();
+    },
+  );
 
   it("joins an in-flight retry on scheduler shutdown without starting its retired handler", async () => {
     const { logger, failed } = loggedFailure();

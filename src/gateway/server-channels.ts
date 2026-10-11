@@ -671,6 +671,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                   accountId: id,
                   channelRuntime: channelRuntimeForTask,
                   gatewayRuntime: opts.getNativeApprovalRuntime?.(),
+                  abortSignal: abort.signal,
                   logger: log,
                 }),
             );
@@ -1003,10 +1004,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     const cfg = getRuntimeConfig();
     // Enter the registered owner's cleanup scope before accessing config getters.
     const configuredAccountIds =
-      !accountId || optsLocal.routeHandoff
-        ? plugin
-          ? runPluginCleanup(plugin, () => plugin.config.listAccountIds(cfg))
-          : []
+      (!accountId || optsLocal.routeHandoff) && plugin
+        ? runPluginCleanup(plugin, () => plugin.config.listAccountIds(cfg))
         : [];
     const knownIds = new Set<string>(
       accountId ? [accountId] : [...lifecycleIds, ...configuredAccountIds],
