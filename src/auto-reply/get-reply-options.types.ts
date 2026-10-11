@@ -205,8 +205,6 @@ export type GetReplyOptions = {
   /** Called when the typing controller cleans up (e.g., run ended with NO_REPLY). */
   onTypingCleanup?: () => void;
   onTypingController?: (typing: TypingController) => void;
-  /** A queued follow-up now owns the typing controller; the dispatch must not close it. */
-  onTypingHandoff?: () => void;
   /** If false, send only the initial typing signal without periodic keepalive refreshes. */
   typingKeepalive?: boolean;
   isHeartbeat?: boolean;
