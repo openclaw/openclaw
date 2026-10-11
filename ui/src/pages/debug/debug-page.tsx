@@ -40,7 +40,7 @@ function DebugPageContent() {
   const events = projectGatewayEventLog(context.gateway);
   const selection = projectAgentSelection(context.settingsAgentSelection);
   const lifecycle = createGatewayConnectionLifecycle(context.gateway.snapshot);
-  const [revision, setRevision] = createSignal(0);
+  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const publish = () => setRevision((value) => value + 1);
   const state: {
     data: DebugData;

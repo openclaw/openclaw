@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
 import type {
   UserModelAccount,
   UserProfileAuthLink,
@@ -7,6 +7,7 @@ import type {
   UsersAuthConnectStatusResult,
   UsersListAuthLinksResult,
   UsersListModelAccountsResult,
+  WizardStep,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context-types.ts";
@@ -14,11 +15,10 @@ import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operat
 import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accounts.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts";
-import { projectGateway, projectGatewayEvents } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import { ModelAccountsSection, type ModelAccountsSectionProps } from "./model-accounts-section.tsx";
+import { ModelAccountsSection } from "./model-accounts-section.tsx";
 
 registerEnglishCatalog(registerModelAccountsEnglish);
 
@@ -41,8 +41,12 @@ class ModelAccountsState {
   error: string | null = null;
   notice: "connected" | "cancelled" | "expired" | "selected" | "cleared" | null = null;
   linkDraft = "";
-  signIn: ModelAccountsSectionProps["signIn"] = null;
-  connectFlow: ModelAccountsSectionProps["connectFlow"] = null;
+  signIn: {
+    providers: UsersAuthConnectCatalogResult["providers"];
+    provider: string;
+    method: string;
+  } | null = null;
+  connectFlow: (UsersAuthConnectStartResult & { step?: WizardStep }) | null = null;
   stepValue: unknown;
   statusUnavailable = false;
 
@@ -392,85 +396,42 @@ class ModelAccountsState {
     }
   }
 
-  section() {
-    const snapshot = this.context.gateway.snapshot;
-    if (snapshot.phase !== "connected" || !snapshot.client) {
-      return null;
+  get busy() {
+    return this.inventoryLoading || this.action !== null;
+  }
+  get cancelBusy() {
+    return this.action !== null && this.action !== "answer";
+  }
+
+  setLinkDraft(value: string) {
+    this.linkDraft = value;
+    this.publish();
+  }
+
+  selectMethod(method: string) {
+    if (this.signIn && !this.action && !this.connectFlow) {
+      this.signIn = { ...this.signIn, method };
+      this.publish();
     }
-    const person = snapshot.selfUser?.id === this.props.identityId ? snapshot.selfUser : null;
-    const section: Parameters<typeof ModelAccountsSection>[0] = {
-      context: {
-        gatewayUrl: (this.target?.client ?? snapshot.client).gatewayUrl,
-        personLabel: person
-          ? this.props.personLabel ||
-            person.name ||
-            person.email ||
-            t("profilePage.modelAccounts.currentPerson")
-          : null,
-        unavailableReason: !person
-          ? "identity"
-          : hasOperatorWriteAccess(snapshot.hello?.auth ?? null)
-            ? "profile"
-            : "write",
-        onConnectionSettings: () => this.context.navigate("connection"),
-      },
-      state: this.target
-        ? {
-            links: this.links,
-            accounts: this.accounts,
-            hasMore: Boolean(this.nextCursor),
-            inventoryLoading: this.inventoryLoading,
-            inventoryError: this.inventoryError,
-            showManualLink: this.target.canAdmin,
-            busy: this.inventoryLoading || this.action !== null,
-            cancelBusy: this.action !== null && this.action !== "answer",
-            error: this.error,
-            notice: this.notice ? t(`profilePage.modelAccounts.notices.${this.notice}`) : null,
-            statusUnavailable: this.statusUnavailable,
-            linkDraft: this.linkDraft,
-            signIn: this.signIn,
-            connectFlow: this.connectFlow,
-            stepValue: this.stepValue,
-            onLinkDraftInput: (value) => {
-              this.linkDraft = value;
-              this.publish();
-            },
-            onLink: () => this.updateAccount("link", this.linkDraft.trim()),
-            onUnlink: (provider) => this.updateAccount("unlink", provider),
-            onSelectAccount: (authProfileId) => this.updateAccount("select", authProfileId),
-            onLoadMore: () => void this.loadAccounts(this.nextCursor),
-            onRefresh: () => void this.loadAccounts(),
-            onAddAccount: () => this.openSignIn(),
-            onProviderChange: (provider) => this.selectProvider(provider),
-            onMethodChange: (method) => {
-              if (this.signIn && !this.action && !this.connectFlow) {
-                this.signIn = { ...this.signIn, method };
-                this.publish();
-              }
-            },
-            onCloseSignIn: () => {
-              if (!this.action && !this.connectFlow) {
-                this.signIn = null;
-                this.error = null;
-                this.publish();
-              }
-            },
-            onConnectStart: () => this.startConnect(),
-            onStepValueChange: (stepId, value) => {
-              if (this.connectFlow?.step?.id === stepId) {
-                this.stepValue = value;
-                this.publish();
-              }
-            },
-            onStepAnswer: (stepId, value) => this.answerStep(stepId, value),
-            onConnectCancel: () => this.connectStatus("cancel"),
-            onConnectCheck: () => this.connectStatus("status"),
-          }
-        : null,
-    };
-    return section;
+  }
+
+  closeSignIn() {
+    if (!this.action && !this.connectFlow) {
+      this.signIn = null;
+      this.error = null;
+      this.publish();
+    }
+  }
+
+  setStepValue(stepId: string, value: unknown) {
+    if (this.connectFlow?.step?.id === stepId) {
+      this.stepValue = value;
+      this.publish();
+    }
   }
 }
+
+export type { ModelAccountsState };
 
 export type ModelAccountsProps = {
   identityId?: string | null;
@@ -482,23 +443,21 @@ function ModelAccountsContent(props: ModelAccountsProps) {
   const context = useApplication();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const state = new ModelAccountsState(context, props, () => setRevision((value) => value + 1));
-  const gateway = projectGateway(context.gateway);
-  const events = projectGatewayEvents(context.gateway);
   const sync = () => {
-    state.applySnapshot(gateway.read().snapshot);
+    untrack(() => state.applySnapshot(context.gateway.snapshot));
     state.publish();
   };
-  const stopGateway = gateway.subscribe(sync);
-  const stopEvents = events.subscribe((event) => {
+  const stopGateway = context.gateway.subscribe(sync);
+  const stopEvents = context.gateway.subscribeEvents((event) => {
     if (modelAuthEventInvalidates(event)) {
       void state.loadAccounts();
     }
   });
   createEffect(() => [props.identityId, props.profileId], sync);
   sync();
-  const section = () => {
+  const readState = () => {
     revision();
-    return state.section();
+    return state;
   };
   onCleanup(() => {
     stopEvents();
@@ -506,8 +465,13 @@ function ModelAccountsContent(props: ModelAccountsProps) {
     state.dispose();
   });
   return (
-    <Show when={section()}>
-      {(data) => <ModelAccountsSection context={data().context} state={data().state} />}
+    <Show
+      when={
+        readState().context.gateway.snapshot.phase === "connected" &&
+        readState().context.gateway.snapshot.client
+      }
+    >
+      <ModelAccountsSection readState={readState} />
     </Show>
   );
 }

@@ -467,7 +467,8 @@ describe("DebugPage", () => {
       expect(page.querySelector<HTMLButtonElement>("button")?.disabled).toBe(true);
       const text = normalizedText(page.querySelector(".settings-section"));
       if (phase === "offline") {
-        expect(text).toContain("Offline Connect to the Gateway to refresh diagnostics.");
+        expect(text).toContain("Offline");
+        expect(text).toContain("Connect to the Gateway to refresh diagnostics.");
       } else {
         expect(text).not.toContain("Offline");
       }

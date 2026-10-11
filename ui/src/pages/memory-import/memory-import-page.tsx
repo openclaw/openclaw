@@ -84,8 +84,6 @@ export const MemoryImportPage = defineSolidBridge(
     const planArgs = createMemo(
       () => {
         gateway.read();
-        agents.read();
-        selection.read();
         return [
           context.gateway.snapshot.phase === "connected" ? context.gateway.snapshot.client : null,
           canAdmin(),
@@ -121,15 +119,6 @@ export const MemoryImportPage = defineSolidBridge(
         if (epoch !== planEpoch) {
           return;
         }
-        const previous = lastPlanValue;
-        if (
-          previous &&
-          (previous.client !== client ||
-            previous.agentId !== agentId ||
-            previous.overwrite !== overwrite)
-        ) {
-          resetMutationState({ preserveAttemptedImport: previous.client !== client });
-        }
         lastPlanValue = { client, agentId, overwrite, plan: nextPlan };
         state.selectedByProvider = Object.fromEntries(
           nextPlan.providers.map((provider) => [
@@ -149,33 +138,18 @@ export const MemoryImportPage = defineSolidBridge(
       }
     }
 
-    createEffect(planArgs, () => {
+    createEffect(planArgs, ([client, , agentId, overwrite], previous) => {
+      if (previous) {
+        const connectionChanged = previous[0] !== client;
+        const targetChanged = connectionChanged || previous[2] !== agentId;
+        if (targetChanged || previous[3] !== overwrite) {
+          resetMutationState({ preserveAttemptedImport: connectionChanged });
+        }
+        if (targetChanged) {
+          resetBackfillState();
+        }
+      }
       void loadPlan();
-    });
-    const mutationScope = createMemo(
-      () => {
-        const snapshot = gateway.read().snapshot;
-        selection.read();
-        agents.read();
-        return [snapshot.phase, snapshot.client, currentAgentId()] as const;
-      },
-      { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
-    );
-    createEffect(mutationScope, ([phase, client, agentId], previous) => {
-      if (
-        state.pendingImport &&
-        (phase !== "connected" ||
-          client !== lastPlanValue?.client ||
-          agentId !== state.pendingImport.agentId)
-      ) {
-        resetMutationState({ preserveAttemptedImport: true });
-      }
-      if (
-        phase !== "connected" ||
-        (previous && (previous[1] !== client || previous[2] !== agentId))
-      ) {
-        resetBackfillState();
-      }
     });
     onCleanup(() => {
       planEpoch += 1;

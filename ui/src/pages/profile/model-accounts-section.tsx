@@ -3,10 +3,8 @@ import { For, Show } from "solid-js";
 import type {
   UserModelAccount,
   UserProfileAuthLink,
-  UsersAuthConnectCatalogResult,
-  UsersAuthConnectStartResult,
-  WizardStep,
 } from "../../../../packages/gateway-protocol/src/index.ts";
+import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { providerDisplayLabel, renderProviderBrandIcon } from "../../components/provider-icon.ts";
 import { renderPicker } from "../../components/select-picker.ts";
 import {
@@ -21,53 +19,11 @@ import { renderWizardStepControls } from "../../components/wizard-step-controls.
 import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accounts.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { LitContent } from "../../lit/solid-content.tsx";
+import type { ModelAccountsState } from "./model-accounts.tsx";
 
 registerEnglishCatalog(registerModelAccountsEnglish);
 
-type ModelAccountsContext = {
-  gatewayUrl: string;
-  personLabel: string | null;
-  unavailableReason: "identity" | "write" | "profile";
-  onConnectionSettings: () => void;
-};
-
-export type ModelAccountsSectionProps = {
-  links: UserProfileAuthLink[];
-  accounts: UserModelAccount[];
-  hasMore: boolean;
-  inventoryLoading: boolean;
-  inventoryError: string | null;
-  /** Linking an arbitrary stored credential is operator.admin-only server-side. */
-  showManualLink: boolean;
-  busy: boolean;
-  cancelBusy: boolean;
-  error: string | null;
-  notice: string | null;
-  statusUnavailable: boolean;
-  linkDraft: string;
-  signIn: {
-    providers: UsersAuthConnectCatalogResult["providers"];
-    provider: string;
-    method: string;
-  } | null;
-  connectFlow: (UsersAuthConnectStartResult & { step?: WizardStep }) | null;
-  stepValue: unknown;
-  onLinkDraftInput: (value: string) => void;
-  onLink: () => void;
-  onUnlink: (provider: string) => void;
-  onSelectAccount: (authProfileId: string) => void;
-  onLoadMore: () => void;
-  onRefresh: () => void;
-  onAddAccount: () => void;
-  onProviderChange: (provider: string) => void;
-  onMethodChange: (method: string) => void;
-  onCloseSignIn: () => void;
-  onConnectStart: () => void;
-  onStepValueChange: (stepId: string, value: unknown) => void;
-  onStepAnswer: (stepId: string, value: unknown) => void;
-  onConnectCancel: () => void;
-  onConnectCheck: () => void;
-};
+type StateProps = { readState: () => ModelAccountsState };
 
 function gatewayEndpoint(gatewayUrl: string): string {
   const url = URL.parse(gatewayUrl);
@@ -75,16 +31,15 @@ function gatewayEndpoint(gatewayUrl: string): string {
 }
 
 function AccountRow(props: {
-  state: ModelAccountsSectionProps;
+  readState: () => ModelAccountsState;
   row: { kind: "linked"; link: UserProfileAuthLink } | { kind: "saved"; account: UserModelAccount };
 }) {
+  const state = () => props.readState();
   const linked = () => props.row.kind === "linked";
   const reference = () => (props.row.kind === "linked" ? props.row.link : props.row.account);
   const account = () =>
     props.row.kind === "linked"
-      ? props.state.accounts.find(
-          (candidate) => candidate.authProfileId === reference().authProfileId,
-        )
+      ? state().accounts.find((candidate) => candidate.authProfileId === reference().authProfileId)
       : props.row.account;
   const label = () => account()?.label ?? t("profilePage.modelAccounts.gatewayAccount");
   const provider = () => providerDisplayLabel(reference().provider);
@@ -110,7 +65,7 @@ function AccountRow(props: {
           <Show
             when={
               account() &&
-              props.state.accounts.some(
+              state().accounts.some(
                 (candidate) =>
                   candidate.authProfileId !== reference().authProfileId &&
                   candidate.provider === reference().provider &&
@@ -140,11 +95,11 @@ function AccountRow(props: {
                 ? `${action()}: ${provider()} · ${account()?.label ?? reference().authProfileId}`
                 : `${action()}: ${provider()} · ${label()} (${reference().authProfileId})`
             }
-            disabled={props.state.busy}
+            disabled={state().busy}
             onClick={() =>
               linked()
-                ? props.state.onUnlink(reference().provider)
-                : props.state.onSelectAccount(reference().authProfileId)
+                ? state().updateAccount("unlink", reference().provider)
+                : state().updateAccount("select", reference().authProfileId)
             }
           >
             {action()}
@@ -155,16 +110,17 @@ function AccountRow(props: {
   );
 }
 
-function SignIn(props: { state: ModelAccountsSectionProps }) {
-  const choice = () => props.state.signIn;
+function SignIn(props: StateProps) {
+  const state = () => props.readState();
+  const choice = () => state().signIn;
   const provider = () => choice()?.providers.find((entry) => entry.id === choice()?.provider);
-  const flow = () => props.state.connectFlow;
+  const flow = () => state().connectFlow;
   const cancel = () => (
     <button
       type="button"
       class="btn btn--sm profile-auth-connect-cancel"
-      disabled={props.state.cancelBusy}
-      onClick={() => (flow() ? props.state.onConnectCancel() : props.state.onCloseSignIn())}
+      disabled={state().cancelBusy}
+      onClick={() => (flow() ? state().connectStatus("cancel") : state().closeSignIn())}
     >
       {t("profilePage.modelAccounts.cancelAction")}
     </button>
@@ -195,9 +151,9 @@ function SignIn(props: { state: ModelAccountsSectionProps }) {
                         value: entry.id,
                         label: entry.label,
                       })) ?? [],
-                    disabled: props.state.busy,
+                    disabled: state().busy,
                     renderLeading: (entry) => renderProviderBrandIcon(entry.value),
-                    onChange: props.state.onProviderChange,
+                    onChange: (value) => state().selectProvider(value),
                   })}
                 />
                 <Show when={provider()}>
@@ -212,14 +168,12 @@ function SignIn(props: { state: ModelAccountsSectionProps }) {
                           label: method.label,
                           description: method.hint,
                         })) ?? [],
-                      disabled: props.state.busy,
-                      onChange: props.state.onMethodChange,
+                      disabled: state().busy,
+                      onChange: (value) => state().selectMethod(value),
                     })}
                   />
                 </Show>
-                <Show
-                  when={!props.state.busy && !props.state.error && choice()?.providers.length === 0}
-                >
+                <Show when={!state().busy && !state().error && choice()?.providers.length === 0}>
                   <span>{t("profilePage.modelAccounts.noMethods")}</span>
                 </Show>
                 <div class="wizard-step__actions">
@@ -227,8 +181,8 @@ function SignIn(props: { state: ModelAccountsSectionProps }) {
                   <button
                     type="button"
                     class="btn btn--sm primary profile-auth-connect-start"
-                    disabled={props.state.busy || !choice()?.method}
-                    onClick={() => props.state.onConnectStart()}
+                    disabled={state().busy || !choice()?.method}
+                    onClick={() => state().startConnect()}
                   >
                     {t("profilePage.modelAccounts.connectAction")}
                   </button>
@@ -248,31 +202,34 @@ function SignIn(props: { state: ModelAccountsSectionProps }) {
               >
                 {(step) => (
                   <LitContent
-                    value={renderWizardStepControls({
-                      step: step(),
-                      value: props.state.stepValue,
-                      busy: props.state.busy,
-                      inputId: "profile-account-auth-answer",
-                      leadingAction: html`<button
-                        type="button"
-                        class="btn btn--sm profile-auth-connect-cancel"
-                        ?disabled=${props.state.cancelBusy}
-                        @click=${props.state.onConnectCancel}
-                      >
-                        ${t("profilePage.modelAccounts.cancelAction")}
-                      </button>`,
-                      onValueChange: (value) => props.state.onStepValueChange(step().id, value),
-                      onAnswer: (value) => props.state.onStepAnswer(step().id, value),
-                    })}
+                    value={(() => {
+                      const renderedStep = step();
+                      return renderWizardStepControls({
+                        step: renderedStep,
+                        value: state().stepValue,
+                        busy: state().busy,
+                        inputId: "profile-account-auth-answer",
+                        leadingAction: html`<button
+                          type="button"
+                          class="btn btn--sm profile-auth-connect-cancel"
+                          ?disabled=${state().cancelBusy}
+                          @click=${() => state().connectStatus("cancel")}
+                        >
+                          ${t("profilePage.modelAccounts.cancelAction")}
+                        </button>`,
+                        onValueChange: (value) => state().setStepValue(renderedStep.id, value),
+                        onAnswer: (value) => state().answerStep(renderedStep.id, value),
+                      });
+                    })()}
                   />
                 )}
               </Show>
-              <Show when={props.state.statusUnavailable}>
+              <Show when={state().statusUnavailable}>
                 <button
                   type="button"
                   class="btn btn--sm profile-auth-connect-check"
-                  disabled={props.state.cancelBusy}
-                  onClick={() => props.state.onConnectCheck()}
+                  disabled={state().cancelBusy}
+                  onClick={() => state().connectStatus("status")}
                 >
                   {t("profilePage.modelAccounts.checkStatusAction")}
                 </button>
@@ -285,42 +242,45 @@ function SignIn(props: { state: ModelAccountsSectionProps }) {
   );
 }
 
-function ModelAccountRows(props: { state: ModelAccountsSectionProps }) {
+function ModelAccountRows(props: StateProps) {
+  const state = () => props.readState();
   return (
     <>
       <Show
-        when={props.state.links.length}
+        when={state().links.length}
         fallback={<SettingsEmpty message={t("profilePage.modelAccounts.empty")} />}
       >
-        <For each={props.state.links} keyed={(link) => link.authProfileId}>
-          {(link) => <AccountRow state={props.state} row={{ kind: "linked", link: link() }} />}
+        <For each={state().links} keyed={(link) => link.authProfileId}>
+          {(link) => (
+            <AccountRow readState={props.readState} row={{ kind: "linked", link: link() }} />
+          )}
         </For>
       </Show>
       <For
-        each={props.state.accounts.filter((account) => !account.selected)}
+        each={state().accounts.filter((account) => !account.selected)}
         keyed={(account) => account.authProfileId}
       >
         {(account) => (
-          <AccountRow state={props.state} row={{ kind: "saved", account: account() }} />
+          <AccountRow readState={props.readState} row={{ kind: "saved", account: account() }} />
         )}
       </For>
-      <Show when={props.state.hasMore}>
+      <Show when={Boolean(state().nextCursor)}>
         <SettingsRow
           title={t("profilePage.modelAccounts.savedAccounts")}
           control={
             <button
               type="button"
               class="btn btn--sm profile-auth-accounts-more"
-              disabled={props.state.busy}
-              onClick={() => props.state.onLoadMore()}
+              disabled={state().busy}
+              onClick={() => void state().loadAccounts(state().nextCursor)}
             >
               {t("profilePage.modelAccounts.loadMore")}
             </button>
           }
         />
       </Show>
-      <SignIn state={props.state} />
-      <Show when={props.state.showManualLink}>
+      <SignIn readState={props.readState} />
+      <Show when={state().target?.canAdmin}>
         <SettingsRow
           title={t("profilePage.modelAccounts.inputLabel")}
           description={t("profilePage.modelAccounts.inputDescription")}
@@ -330,22 +290,22 @@ function ModelAccountRows(props: { state: ModelAccountsSectionProps }) {
               class="model-accounts-form"
               onSubmit={(event) => {
                 event.preventDefault();
-                props.state.onLink();
+                state().updateAccount("link", state().linkDraft.trim());
               }}
             >
               <input
                 class="settings-input profile-auth-link-input"
                 type="text"
                 aria-label={t("profilePage.modelAccounts.inputLabel")}
-                value={props.state.linkDraft}
+                value={state().linkDraft}
                 placeholder={t("profilePage.modelAccounts.inputPlaceholder")}
-                disabled={props.state.busy}
-                onInput={(event) => props.state.onLinkDraftInput(event.currentTarget.value)}
+                disabled={state().busy}
+                onInput={(event) => state().setLinkDraft(event.currentTarget.value)}
               />
               <button
                 type="submit"
                 class="btn btn--sm profile-auth-link-submit"
-                disabled={props.state.busy || !props.state.linkDraft.trim()}
+                disabled={state().busy || !state().linkDraft.trim()}
               >
                 {t("profilePage.modelAccounts.linkAction")}
               </button>
@@ -353,81 +313,86 @@ function ModelAccountRows(props: { state: ModelAccountsSectionProps }) {
           }
         />
       </Show>
-      <For each={["notice", "error"] as const}>
-        {(kind) => (
-          <Show when={props.state[kind]}>
-            <div
-              class={[
-                "settings-row",
-                {
-                  "model-accounts-notice": kind === "notice",
-                  "model-accounts-error": kind === "error",
-                },
-              ]}
-              role={kind === "notice" ? "status" : "alert"}
-            >
-              <span class="settings-row__desc">{props.state[kind]}</span>
-            </div>
-          </Show>
-        )}
-      </For>
-      <Show when={props.state.inventoryError}>
+      <Show when={state().notice}>
+        <div class="settings-row model-accounts-notice" role="status">
+          <span class="settings-row__desc">
+            {t(`profilePage.modelAccounts.notices.${state().notice}`)}
+          </span>
+        </div>
+      </Show>
+      <Show when={state().error}>
         <div class="settings-row model-accounts-error" role="alert">
-          {t("profilePage.modelAccounts.inventoryFailed")} {props.state.inventoryError}
+          <span class="settings-row__desc">{state().error}</span>
+        </div>
+      </Show>
+      <Show when={state().inventoryError}>
+        <div class="settings-row model-accounts-error" role="alert">
+          {t("profilePage.modelAccounts.inventoryFailed")} {state().inventoryError}
         </div>
       </Show>
     </>
   );
 }
 
-export function ModelAccountsSection(props: {
-  context: ModelAccountsContext;
-  state: ModelAccountsSectionProps | null;
-}) {
+export function ModelAccountsSection(props: StateProps) {
+  const state = () => props.readState();
+  const snapshot = () => state().context.gateway.snapshot;
+  const person = () =>
+    snapshot().selfUser?.id === state().props.identityId ? snapshot().selfUser : null;
+  const personLabel = () =>
+    person()
+      ? state().props.personLabel ||
+        person()?.name ||
+        person()?.email ||
+        t("profilePage.modelAccounts.currentPerson")
+      : null;
+  const unavailableReason = () =>
+    !person()
+      ? "identity"
+      : hasOperatorWriteAccess(snapshot().hello?.auth ?? null)
+        ? "profile"
+        : "write";
   return (
     <SettingsSection
       title={t("profilePage.modelAccounts.title")}
       description={t("profilePage.modelAccounts.description")}
       actions={
-        <Show when={props.state}>
-          {(state) => (
-            <>
-              <Show when={!state().signIn}>
-                <button
-                  type="button"
-                  class="btn btn--sm primary profile-auth-add-account"
-                  disabled={state().busy}
-                  onClick={() => state().onAddAccount()}
-                >
-                  {t("profilePage.modelAccounts.addAccount")}
-                </button>
-              </Show>
-              <button
-                type="button"
-                class="btn btn--sm profile-auth-accounts-refresh"
-                disabled={state().inventoryLoading}
-                onClick={() => state().onRefresh()}
-              >
-                {t("common.refresh")}
-              </button>
-            </>
-          )}
+        <Show when={state().target}>
+          <Show when={!state().signIn}>
+            <button
+              type="button"
+              class="btn btn--sm primary profile-auth-add-account"
+              disabled={state().busy}
+              onClick={() => state().openSignIn()}
+            >
+              {t("profilePage.modelAccounts.addAccount")}
+            </button>
+          </Show>
+          <button
+            type="button"
+            class="btn btn--sm profile-auth-accounts-refresh"
+            disabled={state().inventoryLoading}
+            onClick={() => void state().loadAccounts()}
+          >
+            {t("common.refresh")}
+          </button>
         </Show>
       }
     >
       <SettingsRow
         title={t("profilePage.modelAccounts.gateway")}
         stackedOnNarrow
-        control={<SettingsValue mono value={gatewayEndpoint(props.context.gatewayUrl)} />}
+        control={
+          <SettingsValue
+            mono
+            value={gatewayEndpoint((state().target?.client ?? snapshot().client!).gatewayUrl)}
+          />
+        }
       />
       <SettingsRow
         title={t("profilePage.modelAccounts.person")}
         stackedOnNarrow
-        control={
-          <SettingsValue
-            value={props.context.personLabel ?? t("profilePage.modelAccounts.noPerson")}
-          />
-        }
+        control={<SettingsValue value={personLabel() ?? t("profilePage.modelAccounts.noPerson")} />}
       />
       <SettingsRow
         title={t("profilePage.modelAccounts.scope")}
@@ -435,20 +400,18 @@ export function ModelAccountsSection(props: {
         control={<SettingsValue value={t("profilePage.modelAccounts.personal")} />}
       />
       <Show
-        when={props.state}
+        when={state().target}
         fallback={
           <SettingsRow
             title={t("profilePage.modelAccounts.signInUnavailable")}
-            description={t(
-              `profilePage.modelAccounts.unavailable.${props.context.unavailableReason}`,
-            )}
+            description={t(`profilePage.modelAccounts.unavailable.${unavailableReason()}`)}
             stacked
             control={
               <>
                 <button
                   type="button"
                   class="btn btn--sm"
-                  onClick={() => props.context.onConnectionSettings()}
+                  onClick={() => state().context.navigate("connection")}
                 >
                   {t("profilePage.modelAccounts.connectionSettings")}
                 </button>
@@ -458,7 +421,7 @@ export function ModelAccountsSection(props: {
           />
         }
       >
-        {(state) => <ModelAccountRows state={state()} />}
+        <ModelAccountRows readState={props.readState} />
       </Show>
     </SettingsSection>
   );

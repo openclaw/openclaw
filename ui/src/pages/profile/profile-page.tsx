@@ -33,13 +33,7 @@ import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx
 import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accounts.ts";
 import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import {
-  projectApplicationConfig,
-  projectGateway,
-  projectGatewayEvents,
-} from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { projectAgents, projectAgentIdentity } from "../../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { assertUploadsEnabled } from "../../lib/uploads.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
@@ -341,17 +335,12 @@ function ProfilePageContent() {
     revision();
     return state;
   };
-  const gateway = projectGateway(context.gateway);
-  const events = projectGatewayEvents(context.gateway);
-  const agents = projectAgents(context.agents);
-  const identities = projectAgentIdentity({ identities: context.agentIdentity, agentId: null });
-  const config = projectApplicationConfig(context.config);
   const stops = [
-    gateway.subscribe(() => state.applyGatewaySnapshot(gateway.read().snapshot)),
-    agents.subscribe(state.publish),
-    identities.subscribe(state.publish),
-    config.subscribe(state.publish),
-    events.subscribe((event) => {
+    context.gateway.subscribe((snapshot) => state.applyGatewaySnapshot(snapshot)),
+    context.agents.subscribe(state.publish),
+    context.agentIdentity.subscribe(state.publish),
+    context.config.subscribe(state.publish),
+    context.gateway.subscribeEvents((event) => {
       if (
         !state.identityBusy &&
         event.event === "sessions.changed" &&
@@ -363,7 +352,7 @@ function ProfilePageContent() {
       }
     }),
   ];
-  state.applyGatewaySnapshot(gateway.read().snapshot);
+  state.applyGatewaySnapshot(context.gateway.snapshot);
   onCleanup(() => {
     stops.forEach((stop) => stop());
     state.dispose();
@@ -524,7 +513,8 @@ function ProfilePageContent() {
           <PersonalInstructions
             hidden={
               !connected() ||
-              gateway.read().snapshot.hello?.policy?.hasMultipleSessionSharingIdentities !== true
+              view().context.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities !==
+                true
             }
           />
           <Show when={connected()}>

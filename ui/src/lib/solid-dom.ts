@@ -1,4 +1,4 @@
-import { createRenderEffect } from "solid-js";
+import { createRenderEffect, untrack } from "solid-js";
 
 /** Keep a controlled value current without rewriting selection or the native undo buffer. */
 export function liveValue(value: () => string) {
@@ -10,7 +10,7 @@ export function liveValue(value: () => string) {
   });
   return (target: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement) => {
     element = target;
-    const next = value();
+    const next = untrack(value);
     if (target.value !== next) {
       target.value = next;
     }
@@ -27,6 +27,6 @@ export function sanitizedHtml(value: () => string) {
   });
   return (target: HTMLElement) => {
     element = target;
-    target.innerHTML = value();
+    target.innerHTML = untrack(value);
   };
 }

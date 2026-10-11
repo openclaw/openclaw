@@ -6,7 +6,7 @@ import { createApplicationGateway } from "../../test-helpers/application-context
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { DebugOverlayContent } from "./debug-overlay-content-view.tsx";
+import { DebugOverlayContent } from "./debug-overlay-content.tsx";
 
 afterEach(() => {
   cleanupSolid();

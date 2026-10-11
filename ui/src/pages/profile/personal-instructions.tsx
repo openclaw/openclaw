@@ -9,9 +9,7 @@ import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { SettingsEmpty, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { registerPersonalInstructionsEnglish } from "../../i18n/locales/en-personal-instructions.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { projectAgentSelection, projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
@@ -202,13 +200,11 @@ function PersonalInstructionsContent() {
     revision();
     return state;
   };
-  const gateway = projectGateway(context.gateway);
-  const agents = projectAgents(context.agents);
-  const selection = projectAgentSelection(context.settingsAgentSelection);
+  const sync = () => state.syncContext();
   const stops = [
-    gateway.subscribe(() => state.syncContext()),
-    agents.subscribe(() => state.syncContext()),
-    selection.subscribe(() => state.syncContext()),
+    context.gateway.subscribe(sync),
+    context.agents.subscribe(sync),
+    context.settingsAgentSelection.subscribe(sync),
   ];
   state.syncContext();
   void context.agents.ensureList();

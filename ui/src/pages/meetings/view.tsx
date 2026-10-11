@@ -8,7 +8,7 @@ import type {
 } from "@openclaw/gateway-protocol";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { For, createMemo } from "solid-js";
+import { For, createMemo, createEffect } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { syncTabGroupLabel } from "../../components/web-awesome-tabs.ts";
@@ -58,7 +58,6 @@ export type TranscriptReadState = {
 };
 
 export type TranscriptsViewProps = {
-  rootRef?: (element: HTMLElement) => void;
   basePath: string;
   now: number;
   search: string;
@@ -80,8 +79,6 @@ export type TranscriptsViewProps = {
   onReaderTab: (tab: "text" | "summary") => void;
   onDownload: (format: TranscriptsExportParams["format"]) => void;
 };
-
-type ViewProps = { view: TranscriptsViewProps };
 
 function transcriptTime(value: string | null | undefined) {
   return value ? new Date(value).toLocaleString() : t("transcripts.unknown");
@@ -132,7 +129,7 @@ function Loading(props: { label: string }) {
   );
 }
 
-function FilterField(props: ViewProps & { name: string; label: string; type?: string }) {
+function FilterField(props: TranscriptsViewProps & { name: string; label: string; type?: string }) {
   return (
     <label class="field">
       <span>{props.label}</span>
@@ -141,14 +138,14 @@ function FilterField(props: ViewProps & { name: string; label: string; type?: st
         type={props.type ?? "search"}
         aria-label={props.label}
         maxlength={TRANSCRIPT_QUERY_LIMIT}
-        ref={liveValue(() => props.view.drafts[props.name] ?? "")}
-        onInput={(event) => props.view.onDraft(props.name, event.currentTarget.value)}
+        ref={liveValue(() => props.drafts[props.name] ?? "")}
+        onInput={(event) => props.onDraft(props.name, event.currentTarget.value)}
       />
     </label>
   );
 }
 
-function Filters(props: ViewProps) {
+function Filters(props: TranscriptsViewProps) {
   return (
     <form
       class="transcripts-filters"
@@ -160,28 +157,28 @@ function Filters(props: ViewProps) {
         for (const key of TRANSCRIPT_FILTER_KEYS) {
           patch[key] = normalizeNullableString(data.get(key));
         }
-        props.view.onNavigate(patch);
+        props.onNavigate(patch);
       }}
     >
-      <FilterField view={props.view} name="query" label={t("transcripts.titleFilter")} />
+      <FilterField {...props} name="query" label={t("transcripts.titleFilter")} />
       <details
         open={TRANSCRIPT_ADVANCED_FILTER_KEYS.some((key) =>
-          new URLSearchParams(props.view.search).get(key),
+          new URLSearchParams(props.search).get(key),
         )}
       >
         <summary>{t("transcripts.advancedFilters")}</summary>
         <div class="transcripts-filters__advanced">
-          <FilterField view={props.view} name="providerId" label={t("transcripts.sourceFilter")} />
-          <FilterField view={props.view} name="accountId" label={t("transcripts.accountFilter")} />
-          <FilterField view={props.view} name="agentId" label={t("transcripts.agentFilter")} />
+          <FilterField {...props} name="providerId" label={t("transcripts.sourceFilter")} />
+          <FilterField {...props} name="accountId" label={t("transcripts.accountFilter")} />
+          <FilterField {...props} name="agentId" label={t("transcripts.agentFilter")} />
           <FilterField
-            view={props.view}
+            {...props}
             name="startedAfter"
             label={t("transcripts.afterFilter")}
             type="date"
           />
           <FilterField
-            view={props.view}
+            {...props}
             name="startedBefore"
             label={t("transcripts.beforeFilter")}
             type="date"
@@ -198,7 +195,7 @@ function Filters(props: ViewProps) {
           type="button"
           class="btn"
           onClick={() =>
-            props.view.onNavigate(
+            props.onNavigate(
               Object.fromEntries([...TRANSCRIPT_FILTER_KEYS, "cursor"].map((key) => [key, null])),
             )
           }
@@ -210,7 +207,7 @@ function Filters(props: ViewProps) {
   );
 }
 
-function MeetingRow(props: ViewProps & { entry: TranscriptSessionSummary }) {
+function MeetingRow(props: TranscriptsViewProps & { entry: TranscriptSessionSummary }) {
   const selection = () => ({ selector: props.entry.selector, find: null, tab: null });
   const participants = () => props.entry.participants.slice(0, 3).join(", ");
   const duration = () =>
@@ -228,20 +225,20 @@ function MeetingRow(props: ViewProps & { entry: TranscriptSessionSummary }) {
           { "meetings-row--silent": !props.entry.active && props.entry.utteranceCount === 0 },
         ]}
         aria-current={
-          props.entry.selector === new URLSearchParams(props.view.search).get("selector")
+          props.entry.selector === new URLSearchParams(props.search).get("selector")
             ? "page"
             : undefined
         }
         href={
-          pathForRoute("meetings", props.view.basePath) +
-          transcriptRouteSearch(props.view.search, selection())
+          pathForRoute("meetings", props.basePath) +
+          transcriptRouteSearch(props.search, selection())
         }
         onClick={(event) => {
           if (!shouldHandleNavigationClick(event)) {
             return;
           }
           event.preventDefault();
-          props.view.onNavigate(selection());
+          props.onNavigate(selection());
         }}
       >
         <span class="meetings-row__title">
@@ -281,10 +278,10 @@ function MeetingRow(props: ViewProps & { entry: TranscriptSessionSummary }) {
   );
 }
 
-function Library(props: ViewProps) {
+function Library(props: TranscriptsViewProps) {
   const days = createMemo(() => {
     const result = new Map<string, TranscriptSessionSummary[]>();
-    for (const entry of props.view.list?.sessions ?? []) {
+    for (const entry of props.list?.sessions ?? []) {
       const day = new Date(entry.startedAt).toLocaleDateString(undefined, {
         year: "numeric",
         month: "long",
@@ -298,9 +295,9 @@ function Library(props: ViewProps) {
   });
   return (
     <>
-      {props.view.listError ? (
-        <ReadError error={props.view.listError} retry={props.view.onRefresh} />
-      ) : !props.view.list ? (
+      {props.listError ? (
+        <ReadError error={props.listError} retry={props.onRefresh} />
+      ) : !props.list ? (
         <Loading label={t("meetings.loadingMeetings")} />
       ) : (
         <>
@@ -313,7 +310,7 @@ function Library(props: ViewProps) {
                     <h2>{day().day}</h2>
                     <ol class="transcripts-list">
                       <For each={day().entries} keyed={(entry) => entry.selector}>
-                        {(entry) => <MeetingRow view={props.view} entry={entry()} />}
+                        {(entry) => <MeetingRow {...props} entry={entry()} />}
                       </For>
                     </ol>
                   </section>
@@ -324,9 +321,7 @@ function Library(props: ViewProps) {
             <div class="transcripts-notice" role="status">
               <h2>
                 {t(
-                  TRANSCRIPT_FILTER_KEYS.some((key) =>
-                    new URLSearchParams(props.view.search).has(key),
-                  )
+                  TRANSCRIPT_FILTER_KEYS.some((key) => new URLSearchParams(props.search).has(key))
                     ? "meetings.noResults"
                     : "meetings.emptyTitle",
                 )}
@@ -342,17 +337,15 @@ function Library(props: ViewProps) {
             </div>
           )}
           <nav class="transcripts-actions" aria-label={t("transcripts.pagination")}>
-            {new URLSearchParams(props.view.search).has("cursor") ? (
-              <button class="btn" onClick={() => props.view.onNavigate({ cursor: null })}>
+            {new URLSearchParams(props.search).has("cursor") ? (
+              <button class="btn" onClick={() => props.onNavigate({ cursor: null })}>
                 {t("transcripts.firstPage")}
               </button>
             ) : null}
-            {props.view.list?.nextCursor ? (
+            {props.list?.nextCursor ? (
               <button
                 class="btn"
-                onClick={() =>
-                  props.view.onNavigate({ cursor: props.view.list?.nextCursor ?? null })
-                }
+                onClick={() => props.onNavigate({ cursor: props.list?.nextCursor ?? null })}
               >
                 {t("transcripts.nextPage")}
                 <Icon name="chevronRight" />
@@ -365,42 +358,46 @@ function Library(props: ViewProps) {
   );
 }
 
-function Reader(props: ViewProps) {
-  const params = () => new URLSearchParams(props.view.search);
-  const transcriptPage = () => props.view.reader.pages.at(-1);
-  const page = () => props.view.reader.summary ?? transcriptPage();
-  const tabPage = () =>
-    props.view.readerTab === "summary" ? props.view.reader.summary : transcriptPage();
+function Reader(props: TranscriptsViewProps) {
+  let tabGroup: WaTabGroup | undefined;
+  createEffect(
+    () => t("transcripts.reader"),
+    (label) => syncTabGroupLabel(tabGroup, label),
+  );
+  const params = () => new URLSearchParams(props.search);
+  const transcriptPage = () => props.reader.pages.at(-1);
+  const page = () => props.reader.summary ?? transcriptPage();
+  const tabPage = () => (props.readerTab === "summary" ? props.reader.summary : transcriptPage());
   return (
     <article
       class="transcripts-reader"
       aria-label={t("transcripts.reader")}
-      aria-busy={props.view.reader.loading ? "true" : "false"}
+      aria-busy={props.reader.loading ? "true" : "false"}
     >
       <a
         class="transcripts-back"
         href={
-          pathForRoute("meetings", props.view.basePath) +
-          transcriptRouteSearch(props.view.search, { selector: null, find: null, tab: null })
+          pathForRoute("meetings", props.basePath) +
+          transcriptRouteSearch(props.search, { selector: null, find: null, tab: null })
         }
         onClick={(event) => {
           if (!shouldHandleNavigationClick(event)) {
             return;
           }
           event.preventDefault();
-          props.view.onNavigate({ selector: null, find: null, tab: null });
+          props.onNavigate({ selector: null, find: null, tab: null });
         }}
       >
         <Icon name="arrowLeft" />
         {t("transcripts.back")}
       </a>
-      {props.view.reader.error ? (
-        <ReadError error={props.view.reader.error} retry={props.view.onReaderRetry} />
+      {props.reader.error ? (
+        <ReadError error={props.reader.error} retry={props.onReaderRetry} />
       ) : null}
-      {props.view.reader.loading && !tabPage() ? (
+      {props.reader.loading && !tabPage() ? (
         <Loading
           label={t(
-            props.view.readerTab === "summary"
+            props.readerTab === "summary"
               ? "meetings.loadingSummary"
               : "meetings.loadingTranscript",
           )}
@@ -424,11 +421,11 @@ function Reader(props: ViewProps) {
                   <span class="meetings-live">{t("meetings.liveCapture")}</span>
                   <span class="meetings-live-status__elapsed" role="timer" aria-live="off">
                     {formatDurationCompact(
-                      Math.max(0, props.view.now - Date.parse(page()!.session.startedAt)),
+                      Math.max(0, props.now - Date.parse(page()!.session.startedAt)),
                     )}
                   </span>
                 </div>
-                <p>{t(props.view.reader.error ? "meetings.liveRetrying" : "meetings.liveHint")}</p>
+                <p>{t(props.reader.error ? "meetings.liveRetrying" : "meetings.liveHint")}</p>
               </div>
             ) : null}
             <details class="transcripts-source-details">
@@ -455,8 +452,8 @@ function Reader(props: ViewProps) {
                 {(format) => (
                   <button
                     class="btn"
-                    disabled={props.view.exportState.kind === "loading"}
-                    onClick={() => props.view.onDownload(format())}
+                    disabled={props.exportState.kind === "loading"}
+                    onClick={() => props.onDownload(format())}
                   >
                     <Icon name="download" />
                     {t(`transcripts.download.${format()}`)}
@@ -464,15 +461,15 @@ function Reader(props: ViewProps) {
                 )}
               </For>
             </div>
-            {props.view.exportState.kind === "error" ? (
+            {props.exportState.kind === "error" ? (
               <p role="alert">
-                {t("transcripts.exportError")} {props.view.exportState.message}
+                {t("transcripts.exportError")} {props.exportState.message}
               </p>
             ) : null}
-            {props.view.exportState.kind === "loading" || props.view.exportState.kind === "done" ? (
+            {props.exportState.kind === "loading" || props.exportState.kind === "done" ? (
               <p role="status">
                 {t(
-                  props.view.exportState.kind === "loading"
+                  props.exportState.kind === "loading"
                     ? "transcripts.exporting"
                     : "transcripts.downloadStarted",
                 )}
@@ -480,10 +477,13 @@ function Reader(props: ViewProps) {
             ) : null}
           </header>
           <wa-tab-group
-            ref={(element) => syncTabGroupLabel(element, t("transcripts.reader"))}
+            ref={(element) => {
+              tabGroup = element;
+              syncTabGroupLabel(element, t("transcripts.reader"));
+            }}
             class="hub-tabs hub-tabs--sub transcript-reader-hub-tabs"
             aria-label={t("transcripts.reader")}
-            prop:active={props.view.readerTab}
+            prop:active={props.readerTab}
             activation="manual"
             without-scroll-controls
           >
@@ -494,18 +494,18 @@ function Reader(props: ViewProps) {
                   panel={tab()}
                   aria-controls="transcript-reader-panel"
                   class="hub-tab"
-                  active={props.view.readerTab === tab()}
-                  prop:tabIndex={props.view.readerTab === tab() ? 0 : -1}
-                  aria-selected={props.view.readerTab === tab() ? "true" : "false"}
+                  active={props.readerTab === tab()}
+                  prop:tabIndex={props.readerTab === tab() ? 0 : -1}
+                  aria-selected={props.readerTab === tab() ? "true" : "false"}
                   onClick={(event) => {
                     if (event.detail > 0 || event.isTrusted) {
-                      props.view.onReaderTab(tab());
+                      props.onReaderTab(tab());
                     }
                   }}
                   onKeyDown={(event) => {
                     if (!event.repeat && (event.key === "Enter" || event.key === " ")) {
                       event.preventDefault();
-                      props.view.onReaderTab(tab());
+                      props.onReaderTab(tab());
                     }
                   }}
                 >
@@ -517,14 +517,14 @@ function Reader(props: ViewProps) {
           <div
             id="transcript-reader-panel"
             role="tabpanel"
-            aria-labelledby={`transcript-reader-tab-${props.view.readerTab}`}
+            aria-labelledby={`transcript-reader-tab-${props.readerTab}`}
           >
-            {props.view.readerTab === "summary" ? (
-              props.view.reader.summary ? (
+            {props.readerTab === "summary" ? (
+              props.reader.summary ? (
                 <MeetingSummary
-                  page={props.view.reader.summary}
-                  generation={props.view.summaryGeneration}
-                  onRetry={props.view.onSummaryRetry}
+                  page={props.reader.summary}
+                  generation={props.summaryGeneration}
+                  onRetry={props.onSummaryRetry}
                 />
               ) : null
             ) : (
@@ -534,7 +534,7 @@ function Reader(props: ViewProps) {
                   role="search"
                   onSubmit={(event) => {
                     event.preventDefault();
-                    props.view.onNavigate({
+                    props.onNavigate({
                       find: normalizeNullableString(new FormData(event.currentTarget).get("find")),
                       tab: "transcript",
                     });
@@ -547,8 +547,8 @@ function Reader(props: ViewProps) {
                       aria-label={t("transcripts.searchWithin")}
                       placeholder={t("transcripts.searchWithin")}
                       maxlength={TRANSCRIPT_QUERY_LIMIT}
-                      ref={liveValue(() => props.view.drafts.find ?? "")}
-                      onInput={(event) => props.view.onDraft("find", event.currentTarget.value)}
+                      ref={liveValue(() => props.drafts.find ?? "")}
+                      onInput={(event) => props.onDraft("find", event.currentTarget.value)}
                     />
                   </label>
                   <button class="btn" type="submit">
@@ -559,7 +559,7 @@ function Reader(props: ViewProps) {
                     <button
                       class="btn"
                       type="button"
-                      onClick={() => props.view.onNavigate({ find: null })}
+                      onClick={() => props.onNavigate({ find: null })}
                     >
                       {t("transcripts.clearSearch")}
                     </button>
@@ -572,7 +572,7 @@ function Reader(props: ViewProps) {
                 ) : null}
                 <ol class="transcripts-utterances">
                   <For
-                    each={props.view.reader.pages.flatMap((result) => result.utterances ?? [])}
+                    each={props.reader.pages.flatMap((result) => result.utterances ?? [])}
                     keyed={(utterance) => utterance.sequence}
                   >
                     {(utterance) => (
@@ -591,8 +591,8 @@ function Reader(props: ViewProps) {
                   </For>
                 </ol>
                 {transcriptPage() &&
-                !props.view.reader.error &&
-                !props.view.reader.pages.some((result) => result.utterances?.length) ? (
+                !props.reader.error &&
+                !props.reader.pages.some((result) => result.utterances?.length) ? (
                   <p role="status">
                     {t(
                       params().get("find")
@@ -603,7 +603,7 @@ function Reader(props: ViewProps) {
                     )}
                   </p>
                 ) : null}
-                {props.view.reader.loading && transcriptPage()?.nextCursor ? (
+                {props.reader.loading && transcriptPage()?.nextCursor ? (
                   <Loading label={t("meetings.loadingTranscript")} />
                 ) : null}
               </>
@@ -618,7 +618,7 @@ function Reader(props: ViewProps) {
 export function TranscriptsView(props: TranscriptsViewProps) {
   const captureTarget = SETTINGS_SEARCH_TARGETS.meetingCapture;
   return (
-    <section class="transcripts-workspace" ref={props.rootRef}>
+    <section class="transcripts-workspace">
       <header class="content-header content-header--page">
         <div>
           <h1 class="page-title">{t("tabs.meetings")}</h1>
@@ -671,10 +671,10 @@ export function TranscriptsView(props: TranscriptsViewProps) {
             aria-label={t("transcripts.library")}
             aria-busy={props.listLoading ? "true" : "false"}
           >
-            <Filters view={props} />
-            <Library view={props} />
+            <Filters {...props} />
+            <Library {...props} />
           </section>
-          {new URLSearchParams(props.search).get("selector") ? <Reader view={props} /> : null}
+          {new URLSearchParams(props.search).get("selector") ? <Reader {...props} /> : null}
         </div>
       )}
     </section>

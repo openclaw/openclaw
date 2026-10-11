@@ -1,9 +1,9 @@
 import { For, Show } from "solid-js";
 import { registerDebugEnglish } from "../../i18n/locales/en-debug.ts";
 import type { CommandLaneDiagnostics } from "../../lib/gateway-diagnostics.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 
-registerDebugEnglish();
+registerEnglishCatalog(registerDebugEnglish);
 
 export function CommandLaneRows(
   props: Pick<CommandLaneDiagnostics, "lanes" | "dynamic"> & { compact?: boolean },

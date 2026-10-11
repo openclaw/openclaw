@@ -24,6 +24,10 @@ import {
 import { t } from "../../lib/reactive/i18n.ts";
 import { readSystemInfo } from "../../lib/system-info.ts";
 import { LitContent } from "../../lit/solid-content.tsx";
+import {
+  DEBUG_OVERLAY_SECTION_HEADERS,
+  type DebugOverlaySectionId,
+} from "./debug-overlay-loading.ts";
 import { CommandLaneRows } from "./lane-table.tsx";
 
 export type DebugOverlayStatusSnapshot = GatewayStatusSnapshot & {
@@ -35,7 +39,7 @@ export type DebugOverlayStatusSnapshot = GatewayStatusSnapshot & {
 export type DebugOverlayStatusSample = GatewayStatusSample<DebugOverlayStatusSnapshot>;
 type Context = { client: GatewayBrowserClient; gateway: ApplicationGateway };
 export type DebugOverlaySectionDescriptor = {
-  id: string;
+  id: DebugOverlaySectionId;
   titleKey: string;
   load: (context: Context, signal: AbortSignal) => Promise<unknown>;
   render: (props: {
@@ -44,7 +48,7 @@ export type DebugOverlaySectionDescriptor = {
   }) => SolidJSX.Element;
 };
 function section<T>(descriptor: {
-  id: string;
+  id: DebugOverlaySectionId;
   titleKey: string;
   load: (context: Context, signal: AbortSignal) => Promise<T>;
   render: (props: { value: T; history: readonly DebugOverlayStatusSample[] }) => SolidJSX.Element;
@@ -204,14 +208,12 @@ function Events(props: { gateway: ApplicationGateway }) {
 }
 export const DEBUG_OVERLAY_SECTIONS: readonly DebugOverlaySectionDescriptor[] = [
   section({
-    id: "lanes",
-    titleKey: "debug.overlay.lanes",
+    ...DEBUG_OVERLAY_SECTION_HEADERS.lanes,
     load: (context, signal) => loadCommandLaneDiagnostics(context.client, signal),
     render: (props) => <Lanes value={props.value} />,
   }),
   section({
-    id: "status",
-    titleKey: "debug.overlay.status",
+    ...DEBUG_OVERLAY_SECTION_HEADERS.status,
     load: async (context, signal): Promise<DebugOverlayStatusSnapshot> => {
       const sample = await readSystemInfo(context.gateway, signal);
       return { ...sample.value, pingMs: sample.roundTripMs, sampledAt: sample.at };
@@ -219,8 +221,7 @@ export const DEBUG_OVERLAY_SECTIONS: readonly DebugOverlaySectionDescriptor[] = 
     render: (props) => <Status status={props.value} history={props.history} />,
   }),
   section({
-    id: "active-runs",
-    titleKey: "debug.overlay.activeRuns",
+    ...DEBUG_OVERLAY_SECTION_HEADERS["active-runs"],
     load: (context, signal) =>
       context.client.request<SessionsListResult>(
         "sessions.list",
@@ -230,8 +231,7 @@ export const DEBUG_OVERLAY_SECTIONS: readonly DebugOverlaySectionDescriptor[] = 
     render: (props) => <ActiveRuns value={props.value} />,
   }),
   section({
-    id: "events",
-    titleKey: "debug.overlay.events",
+    ...DEBUG_OVERLAY_SECTION_HEADERS.events,
     load: async (context) => context.gateway,
     render: (props) => <Events gateway={props.value} />,
   }),

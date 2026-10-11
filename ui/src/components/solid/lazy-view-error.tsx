@@ -10,6 +10,7 @@ declare module "@solidjs/web" {
     interface IntrinsicElements {
       "openclaw-modal-dialog": HTMLAttributes<HTMLElement> & {
         label: string;
+        description?: string;
         "onModal-cancel"?: (event: Event) => void;
       };
     }

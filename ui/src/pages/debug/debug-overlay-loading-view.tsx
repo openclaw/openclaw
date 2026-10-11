@@ -1,8 +1,11 @@
 import { For, Show } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
-import { DEBUG_OVERLAY_SECTION_HEADERS } from "./debug-overlay-loading.ts";
+import {
+  DEBUG_OVERLAY_SECTION_HEADERS,
+  type DebugOverlaySectionId,
+} from "./debug-overlay-loading.ts";
 
-export function DebugOverlaySectionLoading(props: { id: string }) {
+export function DebugOverlaySectionLoading(props: { id: DebugOverlaySectionId }) {
   return (
     <div
       class={`debug-overlay__placeholder debug-overlay__placeholder--${props.id}`}
