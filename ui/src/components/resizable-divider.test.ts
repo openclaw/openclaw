@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import "./resizable-divider.ts";
 
 let container: HTMLDivElement;
@@ -97,17 +98,21 @@ describe("resizable-divider", () => {
     expect(divider.getAttribute("aria-valuenow")).toBe("55");
   });
 
-  it("localizes the fallback separator label", async () => {
+  it("updates the fallback separator label when the locale changes", async () => {
     i18n.registerTranslation("pt-BR", {
       common: {
         resizeSplitView: "Redimensionar visualização dividida",
       },
     });
-    await i18n.setLocale("pt-BR");
+    await i18n.setLocale("en");
     try {
       const divider = document.createElement("resizable-divider");
       mountSolid(() => divider, { container });
       await divider.updateComplete;
+      expect(divider.getAttribute("aria-label")).toBe("Resize split view");
+
+      await i18n.setLocale("pt-BR");
+      flush();
       expect(divider.getAttribute("aria-label")).toBe("Redimensionar visualização dividida");
     } finally {
       await i18n.setLocale("en");

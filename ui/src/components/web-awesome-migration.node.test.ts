@@ -71,6 +71,7 @@ describe("shared control ownership", () => {
     // across more than two panes.
     expect(matchingFiles(/<resizable-divider\b/u)).toEqual([
       "app/app-shell-view.ts",
+      "components/assistant-panel-view.ts",
       "components/dock-layout-controller.ts",
       "pages/chat/chat-page-pane-render.ts",
       "pages/chat/components/chat-resizable-divider.ts",

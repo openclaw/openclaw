@@ -1,5 +1,5 @@
 import { createRenderEffect, onCleanup } from "solid-js";
-import { t } from "../i18n/index.ts";
+import { t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import "./resizable-divider.css";
 
