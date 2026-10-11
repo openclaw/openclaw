@@ -68,3 +68,15 @@ it("commits initial opaque Lit content and updates it without replacing its node
   expect(view.getByRole("status")).toBe(status);
   expect(status.textContent).toBe("Connected");
 });
+
+it("leaves no empty host for absent composer content", () => {
+  const [content, setContent] = createSignal<unknown>(undefined);
+  const view = mountSolid(() => <LitContent value={content()} />);
+  expect(view.container.children).toHaveLength(0);
+  setContent(html`<p>Available notice</p>`);
+  flush();
+  expect(view.getByText("Available notice")).toBeTruthy();
+  setContent(nothing);
+  flush();
+  expect(view.container.children).toHaveLength(0);
+});

@@ -17,7 +17,7 @@ import {
   renderAttachmentPreview,
   renderAttachmentReadStatus,
 } from "./chat-attachments.ts";
-import { renderContextNoticeSolid } from "./chat-composer-context.tsx";
+import { ContextNotice } from "./chat-composer-context.tsx";
 import { hasComposerContent } from "./chat-composer-controls.ts";
 import type { ChatRunControlsProps } from "./chat-composer-controls.tsx";
 import {
@@ -107,12 +107,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
   const props = untrack(() => context.props);
 
   const activeSession = createMemo(() => props.selectedSession);
-  const contextNotice = createMemo(() =>
-    renderContextNoticeSolid(activeSession(), props.sessions?.defaults?.contextTokens ?? null, {
-      messages: props.messages,
-      providerUsage: props.providerUsage,
-    }),
-  );
   const composerControls = createMemo(() => props.composerControls ?? undefined);
   const composerLeadControl = (
     <Show when={props.permissionPicker}>{(picker) => <ChatPermissionPicker {...picker()} />}</Show>
@@ -526,7 +520,12 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 </div>
                 <div class="agent-chat__composer-trail">
                   <div class="agent-chat__composer-meta agent-chat__composer-context">
-                    {contextNotice()}
+                    <ContextNotice
+                      session={activeSession()}
+                      defaultContextTokens={props.sessions?.defaults?.contextTokens ?? null}
+                      messages={props.messages}
+                      providerUsage={props.providerUsage}
+                    />
                   </div>
                   {hasComposerContent(composerControls()) ? (
                     <>

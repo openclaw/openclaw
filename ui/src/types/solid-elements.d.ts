@@ -55,9 +55,17 @@ declare module "@solidjs/web" {
           manual?: boolean;
           "onModal-cancel"?: EventHandlerUnion<OpenClawModalDialog, CustomEvent>;
         };
-      "openclaw-chat-pasted-text": HTMLAttributes<ChatPastedText> & Properties<ChatPastedText>;
-      "openclaw-chat-question-card": HTMLAttributes<ChatQuestionCard> &
-        Properties<ChatQuestionCard>;
+      "openclaw-chat-pasted-text": HTMLAttributes<ChatPastedText> & {
+        "prop:src"?: ChatPastedText["src"];
+        "prop:sizeBytes"?: ChatPastedText["sizeBytes"];
+        "prop:scope"?: ChatPastedText["scope"];
+        "prop:onOpen"?: ChatPastedText["onOpen"];
+        "prop:composerAction"?: ChatPastedText["composerAction"];
+        "prop:composerRemoveAction"?: ChatPastedText["composerRemoveAction"];
+      };
+      "openclaw-chat-question-card": HTMLAttributes<ChatQuestionCard> & {
+        "prop:props"?: ChatQuestionCard["props"];
+      };
       "openclaw-mcp-app-catalog": HTMLAttributes<McpAppCatalog> &
         Properties<McpAppCatalog> & {
           surface?: McpAppCatalog["surface"];

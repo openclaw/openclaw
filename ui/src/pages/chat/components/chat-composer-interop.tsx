@@ -1,5 +1,5 @@
-import { createRenderEffect, onCleanup, untrack } from "solid-js";
-import { renderComposerContent } from "./chat-composer-controls.ts";
+import { createRenderEffect, onCleanup, Show, untrack } from "solid-js";
+import { hasComposerContent, renderComposerContent } from "./chat-composer-controls.ts";
 
 /** Opaque content keeps its Lit owner until that caller is ported. */
 export function LitContent(props: { value: unknown }) {
@@ -18,16 +18,18 @@ export function LitContent(props: { value: unknown }) {
     }
   });
   return (
-    <span
-      style={{ display: "contents" }}
-      ref={(node) => {
-        element = node;
-        // The unowned ref lets nested Solid adapters mount outside component evaluation.
-        renderComposerContent(
-          untrack(() => props.value),
-          node,
-        );
-      }}
-    />
+    <Show when={hasComposerContent(props.value)}>
+      <span
+        style={{ display: "contents" }}
+        ref={(node) => {
+          element = node;
+          // The unowned ref lets nested Solid adapters mount outside component evaluation.
+          renderComposerContent(
+            untrack(() => props.value),
+            node,
+          );
+        }}
+      />
+    </Show>
   );
 }

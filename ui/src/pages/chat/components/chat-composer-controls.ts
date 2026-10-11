@@ -121,7 +121,7 @@ export function renderComposerContent(value: unknown, container: HTMLElement): v
 }
 
 export function hasComposerContent(value: unknown): boolean {
-  return value !== undefined && value !== nothing;
+  return value != null && value !== false && value !== "" && value !== nothing;
 }
 
 export function renderComposerSendTooltip(label: string, alternate: string, modifier: string) {

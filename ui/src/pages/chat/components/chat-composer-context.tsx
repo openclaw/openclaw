@@ -1,6 +1,6 @@
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableObjectRecord as readCostRecord } from "@openclaw/normalization-core/record-coerce";
-import { For } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../../../src/shared/transcript-only-openclaw-assistant.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
@@ -150,85 +150,96 @@ function formatBudgetAmount(amount: number, unit: string): string {
   return `${amount.toFixed(2)} ${unit}`;
 }
 
-function renderQuotaRow(label: string, usedPercent: number, value: string, reset?: string | null) {
-  const severity = usedPercent >= 90 ? "danger" : usedPercent >= 75 ? "warn" : null;
+function QuotaRow(props: {
+  label: string;
+  usedPercent: number;
+  value: string;
+  reset?: string | null;
+}) {
+  const severity = () =>
+    props.usedPercent >= 90 ? "danger" : props.usedPercent >= 75 ? "warn" : null;
   return (
     <div class="context-usage__limit">
       <div class="context-usage__limit-head">
-        <span class="context-usage__limit-label">{label}</span>
+        <span class="context-usage__limit-label">{props.label}</span>
         <span class="context-usage__limit-meta">
-          {reset ? (
+          {props.reset ? (
             <span class="context-usage__limit-reset">
-              {t("chat.composer.contextUsage.resets", { time: reset })}
+              {t("chat.composer.contextUsage.resets", { time: props.reset })}
             </span>
           ) : null}
-          <strong>{value}</strong>
+          <strong>{props.value}</strong>
         </span>
       </div>
       <div
         class="context-usage__limit-bar"
         role="progressbar"
-        aria-label={label}
+        aria-label={props.label}
         aria-valuemin="0"
         aria-valuemax="100"
-        aria-valuenow={usedPercent}
+        aria-valuenow={props.usedPercent}
       >
         <span
-          class={severity ? `context-usage__limit-fill--${severity}` : ""}
-          style={{ width: `${usedPercent}%` }}
+          class={severity() ? `context-usage__limit-fill--${severity()}` : ""}
+          style={{ width: `${props.usedPercent}%` }}
         />
       </div>
     </div>
   );
 }
 
-function renderQuotaGroup(group: ProviderQuotaGroup, usageHref: string) {
+function QuotaGroup(props: { group: ProviderQuotaGroup; usageHref: string }) {
   return (
     <>
       <div class="context-usage__section-label context-usage__plan-header">
         <span>{t("chat.composer.contextUsage.planUsage")}</span>
         <a
           class="context-usage__plan-link"
-          href={usageHref}
+          href={props.usageHref}
           data-chat-provider-usage="true"
           aria-label={t("chat.composer.contextUsage.openUsage")}
         >
-          {group.plan ? <span class="context-usage__plan-badge">{group.plan}</span> : null}
+          {props.group.plan ? (
+            <span class="context-usage__plan-badge">{props.group.plan}</span>
+          ) : null}
           <Icon name="externalLink" />
         </a>
       </div>
-      {group.accountEmail ? (
+      {props.group.accountEmail ? (
         <div class="context-usage__account" data-chat-usage-account="true">
-          {group.accountEmail}
+          {props.group.accountEmail}
         </div>
       ) : null}
       <div class="context-usage__limits">
-        <For each={group.windows}>
-          {(limit) =>
-            renderQuotaRow(
-              formatUsageWindowLabel(limit.label),
-              limit.usedPercent,
-              `${limit.usedPercent}%`,
-              formatQuotaReset(limit.resetAt),
-            )
-          }
+        <For each={props.group.windows} keyed={false}>
+          {(limit) => (
+            <QuotaRow
+              label={formatUsageWindowLabel(limit().label)}
+              usedPercent={limit().usedPercent}
+              value={`${limit().usedPercent}%`}
+              reset={formatQuotaReset(limit().resetAt)}
+            />
+          )}
         </For>
-        <For each={group.budgets}>
-          {(budget) =>
-            renderQuotaRow(
-              budget.label || t("chat.composer.contextUsage.usageCredits"),
-              Math.max(0, Math.min(100, Math.round((budget.used / budget.limit) * 100))),
-              t("chat.composer.contextUsage.budgetValue", {
-                used: formatBudgetAmount(budget.used, budget.unit),
-                limit: formatBudgetAmount(budget.limit, budget.unit),
-              }),
-            )
-          }
+        <For each={props.group.budgets} keyed={false}>
+          {(budget) => (
+            <QuotaRow
+              label={budget().label || t("chat.composer.contextUsage.usageCredits")}
+              usedPercent={Math.max(
+                0,
+                Math.min(100, Math.round((budget().used / budget().limit) * 100)),
+              )}
+              value={t("chat.composer.contextUsage.budgetValue", {
+                used: formatBudgetAmount(budget().used, budget().unit),
+                limit: formatBudgetAmount(budget().limit, budget().unit),
+              })}
+            />
+          )}
         </For>
       </div>
       <div class="context-usage__provenance" data-chat-usage-provider="true">
         <span>{t("sessionsView.provider")}:</span>
-        <strong>{group.displayName}</strong>
+        <strong>{props.group.displayName}</strong>
       </div>
     </>
   );
@@ -243,152 +254,178 @@ function renderContextStat(label: string, value: string) {
   );
 }
 
-export function renderContextNoticeSolid(
-  session: GatewaySessionRow | undefined,
-  defaultContextTokens: number | null,
-  options: ContextNoticeOptions = {},
-) {
-  const model = getContextNoticeViewModel(session, defaultContextTokens);
-  const quotaGroups = options.providerUsage
-    ? collectProviderQuotaGroups(
-        options.providerUsage.modelAuthStatusResult ?? null,
-        isMonitoredAuthProvider,
-      )
-    : [];
-  const currentProvider =
-    session?.modelProvider?.trim() || latestAssistantProvider(options.messages);
-  const normalizedProvider = currentProvider?.toLowerCase();
-  const currentGroup = normalizedProvider
-    ? quotaGroups.find((group) =>
-        group.providers.some((id) => id.trim().toLowerCase() === normalizedProvider),
-      )
-    : undefined;
-  if (!model && !currentGroup) {
-    return null;
-  }
-  const summary = model
-    ? t("chat.composer.contextUsage.summary", {
-        used: `${model.approximate ? "~" : ""}${formatCompactTokenCount(model.used)}`,
-        limit: formatCompactTokenCount(model.limit),
-        pct: `${model.approximate ? "~" : ""}${model.pct}`,
-      })
-    : t("chat.usageRemaining");
-  const percentage = model ? `${model.approximate ? "~" : ""}${model.pct}%` : null;
-  const dashOffset = model ? RING_CIRCUMFERENCE * (1 - model.pct / 100) : RING_CIRCUMFERENCE;
-  const providerCosts = model ? latestProviderCostStats(options.messages) : null;
+type ContextNoticeProps = ContextNoticeOptions & {
+  session?: GatewaySessionRow;
+  defaultContextTokens: number | null;
+};
+
+export function ContextNotice(props: ContextNoticeProps) {
+  const model = createMemo(() =>
+    getContextNoticeViewModel(props.session, props.defaultContextTokens),
+  );
+  const currentGroup = createMemo(() => {
+    const provider = (
+      props.session?.modelProvider?.trim() || latestAssistantProvider(props.messages)
+    )?.toLowerCase();
+    if (!provider || !props.providerUsage) {
+      return undefined;
+    }
+    return collectProviderQuotaGroups(
+      props.providerUsage.modelAuthStatusResult ?? null,
+      isMonitoredAuthProvider,
+    ).find((group) => group.providers.some((id) => id.trim().toLowerCase() === provider));
+  });
+  const summary = createMemo(() => {
+    const context = model();
+    return context
+      ? t("chat.composer.contextUsage.summary", {
+          used: `${context.approximate ? "~" : ""}${formatCompactTokenCount(context.used)}`,
+          limit: formatCompactTokenCount(context.limit),
+          pct: `${context.approximate ? "~" : ""}${context.pct}`,
+        })
+      : t("chat.usageRemaining");
+  });
+  const colors = createMemo(() => {
+    const context = model();
+    return context ? { "--ctx-color": context.color, "--ctx-bg": context.bg } : undefined;
+  });
+  const dashOffset = () => RING_CIRCUMFERENCE * (1 - (model()?.pct ?? 0) / 100);
+  const providerCosts = createMemo(() =>
+    model() ? latestProviderCostStats(props.messages) : null,
+  );
   // Plan-billed sessions hide dollar estimates: subscription usage is bounded
   // by the plan windows below, and per-token math would misread as real spend.
   // Billing mode is provider-level: session rows do not record which auth
   // profile served the run, so a provider with both an API key and a
   // subscription resolves to subscription display (per-run credential
   // attribution is #102807).
-  const showCosts = !currentGroup;
-  const usageHref = `${normalizeBasePath(options.providerUsage?.basePath ?? "")}/usage`;
+  const showCosts = () => !currentGroup();
+  const usageHref = () => `${normalizeBasePath(props.providerUsage?.basePath ?? "")}/usage`;
   const formatStat = (value: number | null) =>
     value === null ? t("usage.common.emptyValue") : formatCompactTokenCount(value);
   const renderCostStat = (label: string, value: number | undefined) =>
     value === undefined || value <= 0 ? null : renderContextStat(label, formatCost(value));
-  const hasProviderCosts = providerCosts && Object.values(providerCosts).some((value) => value > 0);
+  const renderEstimate = (value: number | null) =>
+    value === null
+      ? null
+      : renderContextStat(t("chat.composer.contextUsage.estimatedCost"), formatCost(value));
+  const hasProviderCosts = () => {
+    const costs = providerCosts();
+    return showCosts() && costs && Object.values(costs).some((value) => value > 0);
+  };
   return (
-    <div
-      class="context-usage"
-      style={model ? { "--ctx-color": model.color, "--ctx-bg": model.bg } : undefined}
-    >
-      <details
-        onToggle={(event: Event) => {
-          handleChatComposerDetailsToggle(event);
-          const details = event.currentTarget;
-          if (details instanceof HTMLDetailsElement) {
-            syncChatPickerOverlay(details);
-          }
-        }}
-      >
-        <summary
-          class={["context-ring", { "context-ring--warning": model?.warning }]}
-          aria-label={summary}
-          title={t("chat.composer.contextUsage.open")}
+    <Show when={Boolean(model() || currentGroup())}>
+      <div class="context-usage" style={colors()}>
+        <details
+          onToggle={(event: Event) => {
+            handleChatComposerDetailsToggle(event);
+            if (event.currentTarget instanceof HTMLDetailsElement) {
+              syncChatPickerOverlay(event.currentTarget);
+            }
+          }}
         >
-          <svg
-            class="context-ring__dial"
-            viewBox="0 0 16 16"
-            width="16"
-            height="16"
-            aria-hidden="true"
+          <summary
+            class={["context-ring", { "context-ring--warning": model()?.warning }]}
+            aria-label={summary()}
+            title={t("chat.composer.contextUsage.open")}
           >
-            <circle class="context-ring__track" cx="8" cy="8" r={RING_RADIUS} />
-            <circle
-              class="context-ring__fill"
-              cx="8"
-              cy="8"
-              r={RING_RADIUS}
-              stroke-dasharray={RING_CIRCUMFERENCE.toFixed(2)}
-              stroke-dashoffset={dashOffset.toFixed(2)}
-            />
-          </svg>
-        </summary>
-        <wa-popup data-anchored-overlay>
-          <section
-            class="context-usage__popover"
-            aria-label={t("chat.composer.contextUsage.title")}
-          >
-            {model ? (
-              <>
-                <div class="context-usage__header">
-                  <span class="context-usage__title">
-                    {t(
-                      model.fromLastPrompt
-                        ? "chat.composer.contextUsage.promptBudget"
-                        : "chat.composer.contextUsage.contextWindow",
-                    )}
-                  </span>
-                  <strong class="context-usage__context-value">
-                    {model.detail} · {percentage}
-                  </strong>
-                </div>
-                <div
-                  class="context-usage__bar"
-                  role="progressbar"
-                  aria-label={summary}
-                  aria-valuemin="0"
-                  aria-valuemax="100"
-                  aria-valuenow={model.pct}
-                >
-                  <span style={{ width: `${model.pct}%` }} />
-                </div>
-              </>
-            ) : null}
-            {model ? (
-              <>
-                <div class="context-usage__section-label">
-                  {t("chat.composer.contextUsage.latestRunTokens")}
-                </div>
-                <dl class="context-usage__stats">
-                  {renderContextStat(t("usage.breakdown.input"), formatStat(model.input))}
-                  {renderContextStat(t("usage.breakdown.output"), formatStat(model.output))}
-                  {!showCosts || model.cost === null
-                    ? null
-                    : renderContextStat(
-                        t("chat.composer.contextUsage.estimatedCost"),
-                        formatCost(model.cost),
-                      )}
-                </dl>
-              </>
-            ) : null}
-            {showCosts && providerCosts && hasProviderCosts ? (
-              <>
-                <div class="context-usage__section-label">{t("usage.breakdown.costByType")}</div>
-                <dl class="context-usage__stats">
-                  {renderCostStat(t("usage.breakdown.input"), providerCosts.input)}
-                  {renderCostStat(t("usage.breakdown.output"), providerCosts.output)}
-                  {renderCostStat(t("usage.breakdown.cacheRead"), providerCosts.cacheRead)}
-                  {renderCostStat(t("usage.breakdown.cacheWrite"), providerCosts.cacheWrite)}
-                </dl>
-              </>
-            ) : null}
-            {currentGroup ? renderQuotaGroup(currentGroup, usageHref) : null}
-          </section>
-        </wa-popup>
-      </details>
-    </div>
+            <svg
+              class="context-ring__dial"
+              viewBox="0 0 16 16"
+              width="16"
+              height="16"
+              aria-hidden="true"
+            >
+              <circle class="context-ring__track" cx="8" cy="8" r={RING_RADIUS} />
+              <circle
+                class="context-ring__fill"
+                cx="8"
+                cy="8"
+                r={RING_RADIUS}
+                stroke-dasharray={RING_CIRCUMFERENCE.toFixed(2)}
+                stroke-dashoffset={dashOffset().toFixed(2)}
+              />
+            </svg>
+          </summary>
+          <wa-popup data-anchored-overlay>
+            <section
+              class="context-usage__popover"
+              aria-label={t("chat.composer.contextUsage.title")}
+            >
+              <Show when={model()}>
+                {(context) => (
+                  <>
+                    <div class="context-usage__header">
+                      <span class="context-usage__title">
+                        {t(
+                          context().fromLastPrompt
+                            ? "chat.composer.contextUsage.promptBudget"
+                            : "chat.composer.contextUsage.contextWindow",
+                        )}
+                      </span>
+                      <strong class="context-usage__context-value">
+                        {context().detail} · {context().approximate ? "~" : ""}
+                        {context().pct}%
+                      </strong>
+                    </div>
+                    <div
+                      class="context-usage__bar"
+                      role="progressbar"
+                      aria-label={summary()}
+                      aria-valuemin="0"
+                      aria-valuemax="100"
+                      aria-valuenow={context().pct}
+                    >
+                      <span style={{ width: `${context().pct}%` }} />
+                    </div>
+                    <div class="context-usage__section-label">
+                      {t("chat.composer.contextUsage.latestRunTokens")}
+                    </div>
+                    <dl class="context-usage__stats">
+                      {renderContextStat(t("usage.breakdown.input"), formatStat(context().input))}
+                      {renderContextStat(t("usage.breakdown.output"), formatStat(context().output))}
+                      {showCosts() ? renderEstimate(context().cost) : null}
+                    </dl>
+                  </>
+                )}
+              </Show>
+              <Show when={hasProviderCosts() ? providerCosts() : null}>
+                {(costs) => (
+                  <>
+                    <div class="context-usage__section-label">
+                      {t("usage.breakdown.costByType")}
+                    </div>
+                    <dl class="context-usage__stats">
+                      {renderCostStat(t("usage.breakdown.input"), costs().input)}
+                      {renderCostStat(t("usage.breakdown.output"), costs().output)}
+                      {renderCostStat(t("usage.breakdown.cacheRead"), costs().cacheRead)}
+                      {renderCostStat(t("usage.breakdown.cacheWrite"), costs().cacheWrite)}
+                    </dl>
+                  </>
+                )}
+              </Show>
+              <Show when={currentGroup()}>
+                {(group) => <QuotaGroup group={group()} usageHref={usageHref()} />}
+              </Show>
+            </section>
+          </wa-popup>
+        </details>
+      </div>
+    </Show>
+  );
+}
+
+export function renderContextNoticeSolid(
+  session: GatewaySessionRow | undefined,
+  defaultContextTokens: number | null,
+  options: ContextNoticeOptions = {},
+) {
+  return (
+    <ContextNotice
+      session={session}
+      defaultContextTokens={defaultContextTokens}
+      messages={options.messages}
+      providerUsage={options.providerUsage}
+    />
   );
 }

@@ -121,7 +121,7 @@ export function renderComposerPastedTextSolid(
   };
   return (
     <openclaw-chat-pasted-text
-      prop:src={getChatAttachmentDataUrl(att)}
+      prop:src={getChatAttachmentDataUrl(att) ?? undefined}
       prop:sizeBytes={att.sizeBytes}
       prop:scope={att.id}
       prop:onOpen={open}
