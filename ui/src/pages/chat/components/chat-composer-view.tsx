@@ -631,6 +631,7 @@ function ComposerTextarea(view: {
         context.state.composerComposing = true;
         context.state.composingDraft = {
           key: context.draftKey,
+          // SAFETY: The identity check above requires this scope's composer textarea.
           value: (event.target as HTMLTextAreaElement).value,
         };
         if (emojiWasOpen) {

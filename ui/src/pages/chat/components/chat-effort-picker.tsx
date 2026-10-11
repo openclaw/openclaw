@@ -192,6 +192,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
     syncSliderPreview(input);
   };
   const onSliderDrag = (event: Event) => {
+    // SAFETY: This handler is registered only on the native range input.
     const input = event.currentTarget as HTMLInputElement;
     const index = Number(input.value);
     if (view().sliderStops[index]) {
@@ -199,6 +200,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
     }
   };
   const onSliderCommit = (event: Event) => {
+    // SAFETY: Change, click, and keyboard commit all originate on the range input.
     const input = event.currentTarget as HTMLInputElement;
     const stop = view().sliderStops[Number(input.value)];
     resetSliderPreview(input);
@@ -223,6 +225,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
           aria-hidden={String(props.reserved === true)}
           inert={props.reserved === true}
           onToggle={(event: Event) => {
+            // SAFETY: This toggle handler belongs to the surrounding native details.
             const details = event.currentTarget as HTMLDetailsElement;
             handleChatComposerDetailsToggle(event);
             syncChatPickerOverlay(details);
@@ -367,6 +370,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
                         onClick={(event: MouseEvent) => {
                           if (
                             view().sliderUnanchored &&
+                            // SAFETY: This click handler belongs to the range input.
                             Number((event.currentTarget as HTMLInputElement).value) ===
                               view().sliderIndex
                           ) {
@@ -382,9 +386,11 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
                           }
                         }}
                         onPointerCancel={(event: PointerEvent) =>
+                          // SAFETY: This cancellation handler belongs to the range input.
                           resetSliderPreview(event.currentTarget as HTMLInputElement, true)
                         }
                         onBlur={(event: FocusEvent) =>
+                          // SAFETY: This blur handler belongs to the range input.
                           resetSliderPreview(event.currentTarget as HTMLInputElement, true)
                         }
                       />

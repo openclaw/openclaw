@@ -77,6 +77,7 @@ export type ChatModelPickerParams = {
 };
 
 function closeModelPickerAfterSelection(event: MouseEvent) {
+  // SAFETY: Model option buttons are the only callers of this click handler.
   const details = (event.currentTarget as HTMLElement).closest<HTMLDetailsElement>("details");
   if (details) {
     details.open = false;
@@ -380,6 +381,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
       prop:open={params.open === true}
       onKeyDown={handleModelPickerKeydown}
       onToggle={(event: Event) => {
+        // SAFETY: This toggle handler belongs to the surrounding native details.
         const target = event.currentTarget as HTMLDetailsElement;
         params.onOpenChange?.(target.open);
         handleChatComposerDetailsToggle(event);
@@ -422,6 +424,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
             event.preventDefault();
             return;
           }
+          // SAFETY: This click handler belongs to the surrounding native summary.
           (event.currentTarget as HTMLElement).focus({ preventScroll: true });
         }}
       >
@@ -496,6 +499,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
                     aria-label={t("chat.modelControls.searchModels")}
                     disabled={params.disabled}
                     onInput={(event: InputEvent) =>
+                      // SAFETY: This input handler belongs to the model search input.
                       updateModelSearch(event.currentTarget as HTMLInputElement)
                     }
                     onKeyDown={handleModelSearchKeydown}

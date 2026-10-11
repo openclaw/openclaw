@@ -366,6 +366,7 @@ export function createChatComposerContext(props: ChatComposerProps) {
     }
   };
   const handleInput = (event: InputEvent) => {
+    // SAFETY: This handler is bound only to the native composer textarea.
     const target = event.target as HTMLTextAreaElement;
     if (target !== state.composerTextarea) {
       return;
@@ -396,6 +397,7 @@ export function createChatComposerContext(props: ChatComposerProps) {
     syncComposerValue(target, typedAtSign);
   };
   const handleSelect = (event: Event) => {
+    // SAFETY: Selection and keyup listeners are attached only to the composer textarea.
     const target = event.target as HTMLTextAreaElement;
     if (
       target === document.activeElement &&
@@ -425,6 +427,7 @@ export function createChatComposerContext(props: ChatComposerProps) {
     if (state.composingDraft?.key === draftKey) {
       state.composingDraft = null;
     }
+    // SAFETY: The identity check above requires the current composer textarea.
     syncComposerValue(event.target as HTMLTextAreaElement);
   };
   const handleBlur = (event: FocusEvent) => {
@@ -437,6 +440,7 @@ export function createChatComposerContext(props: ChatComposerProps) {
     if (emojiWasOpen) {
       requestUpdate();
     }
+    // SAFETY: The identity check above requires the current composer textarea.
     const target = event.target as HTMLTextAreaElement;
     // A dropped compositionend (detach/blur mid-IME) must not wedge the
     // composing flag: it persists across renders and kills Enter-send,

@@ -41,6 +41,7 @@ function createProjectedProps<P extends object>(read: Accessor<P>): P {
   });
   // Each consumer tracks only its field; unrelated props must not rewrite native inputs.
   // The proxy owns no snapshot; its traps supply every field from the current source.
+  // SAFETY: All keys and property reads come from the current P through these traps.
   const current = new Proxy({} as P, {
     get: (_target, key) => value(key),
     has: (_target, key) => has(key),
@@ -76,8 +77,9 @@ class SolidTemplateDirective extends AsyncDirective {
     }
     this.latestProps = props;
     this.mount = () => {
-      // render() pairs this snapshot with the component's P before every mount.
+      // SAFETY: render() pairs this snapshot with the component's P before every mount.
       const [read, write] = createSignal(this.latestProps as P, { equals: false });
+      // SAFETY: Only render<P>() passes the matching component's props to this callback.
       this.updateProps = (next) => write(() => next as P);
       this.dispose = renderSolid(
         () => createComponent(component, createProjectedProps(read)),

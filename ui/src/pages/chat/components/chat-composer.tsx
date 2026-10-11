@@ -92,7 +92,7 @@ export function ChatComposer(props: ChatComposerInput) {
     handleBlur: input(() => context().handleBlur),
   };
   return renderChatComposerView(
-    // The property projections own values; do not retain the initial render frame.
+    // SAFETY: Every frame field is served by its projection; handlers are replaced explicitly.
     new Proxy({} as ReturnType<typeof createChatComposerContext>, {
       get: (_target, key) =>
         Object.hasOwn(handlers, key) ? Reflect.get(handlers, key) : fields.get(String(key))?.(),

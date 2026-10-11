@@ -474,6 +474,7 @@ function handleMenuSelection(
     }
     return;
   }
+  // SAFETY: This selection handler is registered on the wa-dropdown element.
   const menu = event.currentTarget as HTMLElement;
   const changeView = (view: ChatComposerPlusMenuView) => {
     props.onViewChange(view);
