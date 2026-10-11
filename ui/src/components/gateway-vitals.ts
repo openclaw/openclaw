@@ -4,8 +4,8 @@ import "./tooltip.ts";
 import { t } from "../i18n/index.ts";
 import { registerDebugEnglish } from "../i18n/locales/en-debug.ts";
 import { formatDurationCompact } from "../lib/format-duration.ts";
-import "./sparkline-tile.ts";
-import type { SparklineSample } from "./sparkline-tile.ts";
+import "./sparkline-tile.tsx";
+import type { SparklineSample } from "./sparkline-tile.tsx";
 
 registerDebugEnglish();
 

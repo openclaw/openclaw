@@ -2,7 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, For } from "solid-js";
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
 import type { CronJobsEnabledFilter, CronJob } from "../../api/types.ts";
-import { renderCronJobsPagination } from "../../components/cron-jobs-pagination.ts";
+import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
@@ -238,17 +238,13 @@ function JobsTable(
           {(job) => <JobRow job={job()} {...props} />}
         </For>
       )}
-      <LitContent
-        render={() =>
-          renderCronJobsPagination({
-            jobsShown: props.jobs.length,
-            jobsTotal: props.jobsTotal,
-            hasMore: props.jobsHasMore,
-            loading: props.loading,
-            loadingMore: props.jobsLoadingMore,
-            onLoadMore: props.onLoadMoreJobs,
-          })
-        }
+      <CronJobsPagination
+        jobsShown={props.jobs.length}
+        jobsTotal={props.jobsTotal}
+        hasMore={props.jobsHasMore}
+        loading={props.loading}
+        loadingMore={props.jobsLoadingMore}
+        onLoadMore={props.onLoadMoreJobs}
       />
     </div>
   );

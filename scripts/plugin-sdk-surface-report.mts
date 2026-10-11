@@ -230,7 +230,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved final-delivery capture ownership predicate for channel transcript mirrors.
       // +7: approved GitHub publication V2 requester/action contracts: five types and two preparers.
       // +3: approved async skill-command preparation pairs on two existing entrypoints.
-      3672,
+      // +1: preview adapters strip only normalization-owned response decoration.
+      // +1: shared stale-read cache replaces board, preview, search, and credential cache policies.
+      3674,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -251,7 +253,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the same final-delivery capture ownership predicate.
       // +2: prepareGitHubPublicationRequesterV2 and preparePersonalGitHubSessionActionV2.
       // +3: the same skill-command preparation replacements.
-      2133,
+      // +1: stripReplyPayloadResponsePrefix preserves durable text while assembling previews.
+      // +1: the same bounded stale-read cache factory on collection-runtime.
+      2135,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

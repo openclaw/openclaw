@@ -7,7 +7,7 @@ import { exportWidget } from "../pages/chat/components/widget-export.ts";
 import "../pages/chat/components/browser-tab-card.tsx";
 import { renderCopyButton } from "./copy-button.ts";
 import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
-import "./markdown-mermaid.ts";
+import "./markdown-mermaid.tsx";
 import { handleMarkdownTableInteraction, releaseMarkdownTables } from "./markdown-tables.ts";
 
 const owners: HTMLElement[] = [];
@@ -55,8 +55,8 @@ afterAll(() => {
 
 async function waitForDiagram(diagram: HTMLElement) {
   const { page } = await import("vitest/browser");
-  await expect.element(page.elementLocator(diagram).getByRole("img")).toBeVisible();
-  await diagram.shadowRoot!.querySelector("img")!.decode();
+  await expect.element(page.getByRole("img", { name: "Mermaid diagram" })).toBeVisible();
+  await diagram.querySelector("img")!.decode();
 }
 
 async function mountCopy(surface: "code" | "table" | "mermaid" | "message") {
@@ -94,7 +94,7 @@ async function mountCopy(surface: "code" | "table" | "mermaid" | "message") {
     owner.append(diagram);
     await diagram.updateComplete;
     await waitForDiagram(diagram);
-    button = diagram.shadowRoot?.querySelector(".copy-button") ?? null;
+    button = diagram.querySelector(".copy-button") ?? null;
   } else {
     render(renderCopyButton("Current message"), owner);
     button = owner.querySelector("button");

@@ -6,6 +6,7 @@ import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createChatSubmissions } from "../../../app/chat-submissions.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { releaseChatAttachmentPayloads } from "../attachment-payload-store.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { admitChatSubmission, reduceChatSessionProjection } from "../history-merge.ts";
@@ -64,7 +65,20 @@ function mountTranscriptPane(props: Parameters<typeof renderChatThread>[0]) {
       renderChatThread({ ...props, onRequestUpdate: renderPane }, transcript),
       container,
     );
+    flush();
     transcript.hostUpdated();
+    flush();
+  };
+  const setConnected = (connected: boolean) => {
+    if (connected) {
+      root.setConnected(true);
+      transcript.hostConnected();
+      transcript.hostUpdated();
+    } else {
+      transcript.hostDisconnected();
+      root.setConnected(false);
+    }
+    flush();
   };
   onTestFinished(() => {
     render(null, container);
@@ -73,7 +87,8 @@ function mountTranscriptPane(props: Parameters<typeof renderChatThread>[0]) {
   });
   renderPane();
   transcript.hostConnected();
-  return { container, renderPane, root: () => root };
+  flush();
+  return { container, renderPane, setConnected };
 }
 
 async function createCanonicalImageTranscript(
@@ -150,7 +165,7 @@ async function createCanonicalImageTranscript(
       { ...input, id: input.runId, sendRunId: input.runId, sendState: "sending", sendAttempts: 1 },
     ];
   }
-  const { container, renderPane, root } = mountTranscriptPane(props);
+  const { container, renderPane, setConnected } = mountTranscriptPane(props);
   const images = () => [...container.querySelectorAll<HTMLImageElement>(".chat-message-image")];
   const displayed = images();
   expect(displayed).toHaveLength(inlineUrls.length);
@@ -212,7 +227,7 @@ async function createCanonicalImageTranscript(
     images,
     publish,
     renderPane,
-    root,
+    setConnected,
   };
 }
 
@@ -527,8 +542,8 @@ describe("canonical image presentation handoff", () => {
           { path: `media://inbound/${crypto.randomUUID()}.png`, contentType: "image/png" },
         ]);
       } else if (change === "disconnect") {
-        fixture.root().setConnected(false);
-        fixture.root().setConnected(true);
+        fixture.setConnected(false);
+        fixture.setConnected(true);
       }
       if (change !== "denial") {
         expect(old.signal?.aborted).toBe(true);

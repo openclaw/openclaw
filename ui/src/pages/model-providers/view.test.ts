@@ -126,6 +126,9 @@ describe("renderModelProviders", () => {
     expect(
       container.querySelector('.model-providers__catalog-progress[role="status"]'),
     ).not.toBeNull();
+    expect(
+      container.querySelector('.model-providers__catalog-progress[role="alert"] span')?.textContent,
+    ).toBe("A provider failed discovery.");
     const retry = container.querySelector<HTMLButtonElement>(
       '.model-providers__catalog-progress[role="alert"] button',
     );

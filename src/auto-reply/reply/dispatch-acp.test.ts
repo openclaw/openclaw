@@ -876,10 +876,10 @@ describe("tryDispatchAcpReplyCore", () => {
       await nextEventLoopTurn();
       expect(settled).toBe(false);
       expect(transcriptMocks.persistAcpDispatchTranscript).not.toHaveBeenCalled();
-      expect(delivered).toEqual([{ text: prefix }]);
+      expect(delivered).toEqual([{ text: prefix, textMode: "delta" }]);
       deliveryGate.resolve();
       await dispatch;
-      expect(delivered).toEqual([{ text: prefix }]);
+      expect(delivered).toEqual([{ text: prefix, textMode: "delta" }]);
       expectTranscript({ finalText: prefix });
     } finally {
       finishTurn.resolve();

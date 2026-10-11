@@ -1,7 +1,7 @@
 import type { Model } from "../llm/types.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { copyPreparedModelRuntimeAuthBindings } from "./prepared-model-runtime-auth.js";
-import { mergePreparedNativeCatalog } from "./prepared-model-runtime.full-catalog.js";
+import { mergePreparedNativeCatalog } from "./prepared-model-runtime.catalog-publication.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 
 const catalogCaptures = new WeakMap<

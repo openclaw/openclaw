@@ -261,7 +261,10 @@ describe("chat composer suggestion accessibility", () => {
       expect(getComposerTextarea(container).value).toBe(`/${command} `);
       if (dismissed) {
         expect(container.querySelector(".slash-menu")).not.toBeNull();
-        keydownComposer(container, "Escape");
+        getComposerTextarea(container).focus();
+        const escape = keydownComposer(container, "Escape");
+        expect(escape.defaultPrevented).toBe(true);
+        expect(container.querySelector(".slash-menu")).toBeNull();
       }
       refresh.resolve();
       await refresh.promise;

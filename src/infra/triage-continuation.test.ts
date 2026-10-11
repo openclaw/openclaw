@@ -505,7 +505,15 @@ unix.for([
     if (nativeWon || !native) {
       expect(await loser.exit).toEqual({ code: 7, signal: null });
       expect(loser.output().stdout).toBe('{"status":"error","reason":"original"}\n');
-      expect(loser.output().stderr).toContain("already owned");
+      if (order === "foreground-simultaneous") {
+        // The lock owner may release during inspection; either denial preserves the winner.
+        expect([
+          "Automatic triage already owned for this installation; wait for its cleanup or inspect the saved diagnostics and run openclaw triage manually.",
+          "Automatic triage could not complete: sidecar changed during reclaim policy callback. Run `openclaw triage` manually.",
+        ]).toContain(loser.output().stderr.split("\n")[0]);
+      } else {
+        expect(loser.output().stderr).toContain("already owned");
+      }
       expect(loser.output().stderr).toContain("triage-completion:undefined");
     }
     expect(readClaim(root)).toEqual(held);

@@ -445,7 +445,7 @@ export function installEmbeddedAttemptStreamGuards(
     onModelRequest: (...args: Parameters<typeof cacheObserver.onModelRequest>) => {
       const previous = cacheObserver.getContextUsage();
       const request = cacheObserver.onModelRequest(...args);
-      if (request.requestIndex > 1) {
+      if (input.activeContextEngine?.info.ownsCompaction || request.requestIndex > 1) {
         contextGuards.checkMidTurnPrecheck({
           context: args[1],
           previousRequest:
