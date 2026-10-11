@@ -83,8 +83,8 @@ describe("Doctor planning reference intent", () => {
       agents: { defaults: { model: "ollama/example" } },
     };
     const resolved = structuredClone(authored);
-    resolved.models!.providers!.ollama.baseUrl = "https://ollama.com/api";
-    resolved.models!.providers!.ollama.apiKey = "synthetic-rotating-key";
+    resolved.models!.providers!.ollama!.baseUrl = "https://ollama.com/api";
+    resolved.models!.providers!.ollama!.apiKey = "synthetic-rotating-key";
     const source = prepareDoctorConfigReferenceSource(pairedSnapshot(authored, resolved));
     vi.mocked(resolvePluginDoctorProviderRenames).mockReturnValueOnce(renames);
     const preflight = restoreDoctorConfigEnvRefs(resolved, source);

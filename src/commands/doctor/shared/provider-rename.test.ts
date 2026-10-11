@@ -86,9 +86,9 @@ describe("provider rename config migration", () => {
     const config = configFor("https://ollama.com/api");
     const sourceKey = { source: "env", provider: "default", id: "OLLAMA_API_KEY" } as const;
     const targetKey = { source: "env", provider: "default", id: "CLOUD_API_KEY" } as const;
-    config.models!.providers!.ollama.apiKey = sourceKey;
-    config.models!.providers!.ollama.headers = { "X-Source": "source" };
-    config.models!.providers!.ollama.models.push(model("source-only"));
+    config.models!.providers!.ollama!.apiKey = sourceKey;
+    config.models!.providers!.ollama!.headers = { "X-Source": "source" };
+    config.models!.providers!.ollama!.models.push(model("source-only"));
     config.models!.providers!["ollama-cloud"] = {
       baseUrl: "https://ollama.com",
       apiKey: targetKey,
@@ -123,8 +123,8 @@ describe("provider rename config migration", () => {
   it("preserves the source SecretRef and all distinct models when moving", () => {
     const config = configFor("https://ollama.com");
     const key = { source: "env", provider: "default", id: "OLLAMA_API_KEY" } as const;
-    config.models!.providers!.ollama.apiKey = key;
-    config.models!.providers!.ollama.models.push(model("unique"));
+    config.models!.providers!.ollama!.apiKey = key;
+    config.models!.providers!.ollama!.models.push(model("unique"));
     const result = applyProviderRenames(config, declarations);
     expect(result.config.models?.providers?.["ollama-cloud"]?.apiKey).toEqual(key);
     expect(result.config.models?.providers?.["ollama-cloud"]?.models.map(({ id }) => id)).toEqual([

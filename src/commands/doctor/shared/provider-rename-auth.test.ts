@@ -128,7 +128,9 @@ describe("provider rename saved-auth binding", () => {
           fallbacks: [
             expectedRef(ids.includes(`ollama-cloud:${own}`) ? `ollama-cloud:${own}` : selected),
             expectedRef(selected),
-            expectedRef(shared.includes("ollama-cloud:shared") ? "ollama-cloud:shared" : selected),
+            expectedRef(
+              shared.some((id) => id === "ollama-cloud:shared") ? "ollama-cloud:shared" : selected,
+            ),
           ],
         });
         const result = applyProviderRenames(config, bound);
