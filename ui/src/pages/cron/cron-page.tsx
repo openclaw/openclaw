@@ -1,4 +1,3 @@
-import { html, nothing } from "lit";
 import { createEffect, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
@@ -108,18 +107,9 @@ export function CronPageContent(props: { controller: CronPageController; revisio
       subtitle: controller.cron.cronSessionFilter
         ? t("cron.list.sessionFilter")
         : subtitleForRoute("cron"),
+      filtered: Boolean(controller.cron.cronSessionFilter),
       actions: controller.cron.cronSessionFilter
-        ? html`<a
-            class="btn"
-            href=${pathForRoute("cron", controller.context.basePath)}
-            @click=${(event: MouseEvent) => {
-              if (shouldHandleNavigationClick(event)) {
-                event.preventDefault();
-                controller.context.navigate("cron", { search: "" });
-              }
-            }}
-            >${t("cron.list.showAll")}</a
-          >`
+        ? undefined
         : renderAgentScopeControl({
             agents: controller.agentsList?.agents ?? [],
             selection: controller.context.agentSelection,
@@ -136,7 +126,22 @@ export function CronPageContent(props: { controller: CronPageController; revisio
         title={header().title}
         subtitle={header().subtitle}
         actions={
-          header().actions === nothing ? undefined : <LitContent render={() => header().actions} />
+          header().filtered ? (
+            <a
+              class="btn"
+              href={pathForRoute("cron", props.controller.context.basePath)}
+              onClick={(event: MouseEvent) => {
+                if (shouldHandleNavigationClick(event)) {
+                  event.preventDefault();
+                  props.controller.context.navigate("cron", { search: "" });
+                }
+              }}
+            >
+              {t("cron.list.showAll")}
+            </a>
+          ) : header().actions === undefined ? undefined : (
+            <LitContent render={() => header().actions} />
+          )
         }
       />
       <CronRunTranscriptView controller={props.controller.runTranscript} revision={revision} />
@@ -163,13 +168,6 @@ export function CronPage(props: { routeSearch?: string; host: HTMLElement }) {
   onCleanup(() => controller.dispose());
   return <CronPageContent controller={controller} revision={revision} />;
 }
-
-export const cronPageComponent = {
-  header: true,
-  render: (search: unknown) => html`<openclaw-cron-page
-    .routeSearch=${typeof search === "string" ? search : ""}
-  ></openclaw-cron-page>`,
-};
 
 // Module re-evaluation can retain the shared custom-element registry.
 if (!customElements.get("openclaw-cron-page")) {

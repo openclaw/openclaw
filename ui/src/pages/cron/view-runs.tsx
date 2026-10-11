@@ -1,9 +1,8 @@
-import { html } from "lit";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { createMemo, For } from "solid-js";
 import type { CronRunLogEntry, CronDeliveryStatus, CronRunsStatusValue } from "../../api/types.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import "../../components/web-awesome.ts";
 import { i18n } from "../../i18n/index.ts";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
@@ -15,7 +14,6 @@ import {
   formatCompactTokenCount,
 } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { cronRunEntryMatchesLink } from "./route-model.ts";
 import type { CronProps } from "./view-types.ts";
 registerEnglishCatalog(registerCronEnglish);
@@ -481,10 +479,10 @@ function Run(props: {
           {props.entry.deliveryError ? <RunError error={props.entry.deliveryError} /> : undefined}
         </div>
       </div>
-      <LitContent
+      <SanitizedHtml
         tag="div"
         class="cron-run-entry__body chat-text"
-        render={() => html`${unsafeHTML(toSanitizedMarkdownHtml(bodySource()))}`}
+        html={toSanitizedMarkdownHtml(bodySource())}
       />
     </div>
   );

@@ -1,11 +1,10 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { html } from "lit";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { createMemo, For } from "solid-js";
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
 import { renderModelPicker } from "../../components/model-picker.ts";
 import { providerIdFromModelRef } from "../../components/provider-icon.ts";
+import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import type { CronFormState } from "../../lib/cron/types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -200,10 +199,10 @@ function PromptSection(
               role="region"
               aria-label={promptLabel()}
             >
-              <LitContent
+              <SanitizedHtml
                 tag="code"
                 class="hljs"
-                render={() => html`${unsafeHTML(highlightCodeHtml(payloadText(), codeLanguage()))}`}
+                html={highlightCodeHtml(payloadText(), codeLanguage())}
               />
             </pre>
           ) : (

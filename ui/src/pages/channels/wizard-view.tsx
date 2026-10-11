@@ -212,15 +212,17 @@ function WizardDialog(props: {
     >
       <div class="channels-wizard">
         <div class="channels-wizard__header">
-          {props.wizard.channel ? (
-            <LitContent
-              render={() =>
-                renderChannelIcon(props.wizard.channel, label(), "tile", {
-                  pluginIconUrl: props.controls.channelIconUrl?.(props.wizard.channel),
-                })
-              }
-            />
-          ) : undefined}
+          <Show when={props.wizard.channel}>
+            {(channel) => (
+              <LitContent
+                render={() =>
+                  renderChannelIcon(channel(), label(), "tile", {
+                    pluginIconUrl: props.controls.channelIconUrl?.(channel()),
+                  })
+                }
+              />
+            )}
+          </Show>
           <div class="channels-wizard__heading">
             <h2>{t("channels.setup.title", { channel: label() })}</h2>
             <div class="muted channels-wizard__subtitle">

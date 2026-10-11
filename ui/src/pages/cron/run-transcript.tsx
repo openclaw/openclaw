@@ -1,5 +1,4 @@
 import type { CronHistoryResult } from "@openclaw/gateway-protocol";
-import { html, nothing } from "lit";
 import { createMemo, flush } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronRunLogEntry } from "../../api/types.ts";
@@ -135,15 +134,16 @@ export function CronRunTranscriptView(props: {
   };
   const transcript = createMemo(() => {
     const current = state();
-    return html`${
+    return [
       current.nextCursor
         ? renderChatHistoryBoundary({
             hasMore: true,
             loading: current.loading,
             onShowEarlier: () => void props.controller.load(props.controller.nextCursor),
           })
-        : nothing
-    }${renderChatTranscriptFeed(current.messages)}`;
+        : undefined,
+      renderChatTranscriptFeed(current.messages),
+    ];
   });
   return (
     <>

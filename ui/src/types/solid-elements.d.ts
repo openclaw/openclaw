@@ -22,7 +22,11 @@ declare module "@solidjs/web" {
           "onModal-cancel"?: (event: Event) => void;
         };
       "openclaw-select-picker": LegacyAttributes<SelectPicker>;
-      "openclaw-agent-row-chip": LegacyAttributes<HTMLElementTagNameMap["openclaw-agent-row-chip"]>;
+      "openclaw-agent-row-chip": LegacyAttributes<
+        HTMLElementTagNameMap["openclaw-agent-row-chip"]
+      > & {
+        "prop:agentId"?: HTMLElementTagNameMap["openclaw-agent-row-chip"]["agentId"];
+      };
       "openclaw-mascot": LegacyAttributes<HTMLElement> & {
         mood?: MascotMood;
         "prop:size"?: number;
@@ -38,6 +42,7 @@ declare module "@solidjs/web" {
         Partial<Pick<WaDropdownItem, "value" | "type" | "variant" | "disabled">>;
       "wa-popover": LegacyAttributes<WaPopover> &
         Partial<Pick<WaPopover, "for" | "placement">> & {
+          "without-arrow"?: boolean;
           "onWa-show"?: (event: Event) => void;
           "onWa-hide"?: (event: Event) => void;
         };
