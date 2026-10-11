@@ -646,6 +646,8 @@ src/config/sessions/session-incognito-transcript-contract.ts
 src/state/artifact-preserving-state-reads.ts
 src/state/incognito-session-error.ts
 src/config/sessions/session-model-context-projection.ts
+src/config/sessions/session-model-context-navigation.ts
+src/config/sessions/session-model-context-read.ts
 src/config/sessions/session-model-context-window.ts
 src/config/sessions/session-mutation-conflict-error.ts
 src/config/sessions/session-pending-input-custody-error.ts
@@ -1037,6 +1039,7 @@ src/infra/sqlite-index-schema.ts
 src/infra/sqlite-integrity-worker-error.ts
 src/infra/sqlite-integrity-worker.ts
 src/infra/sqlite-integrity.ts
+src/infra/sqlite-jsonl-budget-error.ts
 src/infra/sqlite-jsonl-budget.ts
 src/infra/sqlite-live-snapshot.ts
 src/infra/sqlite-lifecycle-errors.ts
