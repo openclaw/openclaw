@@ -284,6 +284,23 @@ it.each([
     error: new FailoverError("Not logged in · Please run /login", cliFailure),
     expected: { provider: "claude-cli", reason: "sign_in_again" },
   },
+  {
+    name: "structured Claude CLI 410 login expiry",
+    error: new FailoverError(
+      "Failed to authenticate: OAuth session expired and could not be refreshed",
+      { ...cliFailure, reason: "session_expired", status: 410 },
+    ),
+    expected: { provider: "claude-cli", reason: "revoked" },
+  },
+  {
+    name: "an expired Claude CLI conversation session outside login recovery",
+    error: new FailoverError("HTTP 404: session not found", {
+      ...cliFailure,
+      reason: "session_expired",
+      status: 410,
+    }),
+    expected: null,
+  },
 ])("classifies $name", ({ error, expected }) => {
   expect(classifyOAuthRefreshFailureError(error)).toEqual(expected);
 });
