@@ -1,6 +1,5 @@
 import { statSync } from "node:fs";
 import { DatabaseSync, StatementSync } from "node:sqlite";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import {
   observeHostDataSql,
