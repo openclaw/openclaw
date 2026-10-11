@@ -2001,7 +2001,6 @@ describe("buildGatewayCronService", () => {
       await withCronService(createCronConfig("cron-cancelled-retry"), async (state) => {
         const job = await addCommandJob(state, "cancelled", "console.log('scheduled result')", {
           deleteAfterRun: false,
-          failureAlert: false,
           delivery: { mode: "announce", channel: "telegram", to: "123" },
         });
         await state.cron.run(job.id, "force");
