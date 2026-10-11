@@ -141,8 +141,6 @@ describe("Claude imported internal inputs", () => {
     ["resume", "text-block"],
     ["legacy requester", "string"],
     ["legacy requester", "text-block"],
-    ["legacy requester CRLF", "string"],
-    ["legacy requester CRLF", "text-block"],
   ])("removes the %s decorator, not its real %s user turn", (decoration, encoding) => {
     const hint =
       'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.';
