@@ -9,10 +9,8 @@ import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gat
 import { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import * as messageActionTurnCapability from "../../gateway/message-action-turn-capability.js";
 import type { MessageActionAuthorization } from "../../gateway/message-action-turn-capability.js";
-import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import {
   resolveMessageBroadcastAccountPlan,
@@ -21,7 +19,6 @@ import {
 import type { MessageActionResult } from "../../infra/outbound/message-action-contracts.js";
 import { projectGatewayQueuedDeliveryResult } from "../../infra/outbound/message-action-execution.js";
 import { hasAcceptedMessageActionResult } from "../../infra/outbound/message-action-result-acceptance.js";
-import { resolveEffectiveMessageAccountId } from "../../infra/outbound/message-action-routing.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { enforceMessageActionAllowlist } from "../../infra/outbound/outbound-policy.js";
 import { isDeliveredCurrentSourceReplyAsync } from "../../infra/outbound/source-reply-mirror.js";
@@ -53,7 +50,6 @@ import { createMessageToolExplicitTargetGuard } from "./message-tool-explicit-ta
 import { createMessageToolGateway } from "./message-tool-gateway.js";
 import { prepareMessageToolGroupThread } from "./message-tool-group-thread.js";
 import { deriveMessageToolIdempotency } from "./message-tool-idempotency.js";
-import { resolveOutboundActionRoute } from "./message-tool-outbound-route.js";
 import {
   projectScheduledMessageActionPartialResult,
   shouldRevalidateCompletedMessageAction,
@@ -69,7 +65,6 @@ import {
 } from "./message-tool-source-policy.js";
 import { createMessageToolTurnAuthority } from "./message-tool-turn-authority.js";
 import {
-  appendMessageToolNotices,
   prepareMessageToolTurnSendBudget,
   resolveTurnSendBudgetContext,
 } from "./message-tool-turn-send-budget.js";
@@ -143,18 +138,6 @@ function* createMessageToolSteps(
           config: options?.config,
         })
       : undefined);
-  // Fold main-session aliases the way the CLI loopback grant does, so native and CLI
-  // candidates of one logical turn share a ledger slot (mcp-grant-context.ts).
-  const turnSendSessionKey = buildTurnSendLedgerSessionKey(
-    resolvedAgentId,
-    resolvedAgentId && rawPollEchoSessionKey
-      ? canonicalizeMainSessionAlias({
-          cfg: options?.config,
-          agentId: resolvedAgentId,
-          sessionKey: rawPollEchoSessionKey,
-        })
-      : undefined,
-  );
   const pollEchoSessionKey =
     sourceReplySinkDeliveryMode === "message_tool_only"
       ? buildTurnSendLedgerSessionKey(resolvedAgentId, rawPollEchoSessionKey)
@@ -499,35 +482,17 @@ function* createMessageToolSteps(
         currentMessagingTarget: effectiveCurrentChannel.currentMessagingTarget,
         preparedMessageToolCatalog,
       });
-      const outboundActionRoute = resolveOutboundActionRoute({
-        action,
-        args: params,
-        channel: scope.channel ?? effectiveCurrentChannel.currentChannelProvider,
-        // Key the budget on the account delivery resolves, not the omitted input, so an
-        // omitted-account send shares one slot with explicit and conversations_send sends.
-        resolveAccountId: (route) =>
-          resolveEffectiveMessageAccountId({
-            cfg,
-            channel: route.channel,
-            channelPlugin: resolveOutboundChannelPlugin({
-              channel: route.channel,
-              cfg,
-              agentId: resolvedAgentId,
-            }),
-            accountId,
-            agentId: resolvedAgentId,
-            target: route.target,
-          }),
-        currentChannelProvider: effectiveCurrentChannel.currentChannelProvider,
-        currentChannelId: effectiveCurrentChannel.currentChannelId,
-        currentMessagingTarget: effectiveCurrentChannel.currentMessagingTarget,
-      });
       const budgetContext = resolveTurnSendBudgetContext({
         action,
-        outboundActionRoute,
-        sessionKey: turnSendSessionKey,
+        args: params,
+        cfg,
+        agentId: resolvedAgentId,
+        accountId,
+        channel: scope.channel ?? effectiveCurrentChannel.currentChannelProvider,
+        currentChannel: effectiveCurrentChannel,
+        sessionConfig: options?.config,
+        sessionKey: rawPollEchoSessionKey,
         runId: options?.runId,
-        isDryRun: Boolean(params.dryRun),
       });
       if (suppressPollVoteEcho(pollEchoSessionKey, pollVoteEchoRoute, action, params)) {
         decisions.recordPollVoteEchoSuppressed();
@@ -594,19 +559,12 @@ function* createMessageToolSteps(
         : params;
       const turnSendBudget = prepareMessageToolTurnSendBudget({
         budgetContext,
-        action,
         cfg: rawConfig,
-        agentId: resolvedAgentId,
         gatewayPresent: gateway !== undefined,
-        deliveryChannel: scope.channel ?? effectiveCurrentChannel.currentChannelProvider,
         actionIdempotencyKey,
       });
-      if (turnSendBudget.exhaustedMessage) {
-        return jsonResult({
-          status: "suppressed",
-          reason: "turn_send_budget_exhausted",
-          message: turnSendBudget.exhaustedMessage,
-        });
+      if (turnSendBudget.exhaustedResult) {
+        return turnSendBudget.exhaustedResult;
       }
       const hasExactSourceTurn =
         action === "send" &&
@@ -768,20 +726,8 @@ function* createMessageToolSteps(
             const details = toolResult?.details as { pollVotedOption?: unknown } | undefined;
             recordPollVote(pollEchoSessionKey, pollVoteEchoRoute, details?.pollVotedOption);
           }
-          const response = toolResult ?? jsonResult(result.payload);
-          const deliveryStatus =
-            result.kind === "send" ? result.sendResult?.deliveryStatus : undefined;
-          const landed =
-            result.kind !== "broadcast" &&
-            !result.dryRun &&
-            deliveryStatus !== "suppressed" &&
-            deliveryStatus !== "failed";
           return embeddedMessageDelivery.attachEmbeddedMessageDeliveryFact(
-            appendMessageToolNotices(
-              response,
-              result.kind === "send" && !result.dryRun ? result.normalization?.notice : undefined,
-              turnSendBudget.commitAndResolveNotice(landed),
-            ),
+            turnSendBudget.settleCompletedResult(toolResult ?? jsonResult(result.payload), result),
             messageDelivery,
           );
         },
