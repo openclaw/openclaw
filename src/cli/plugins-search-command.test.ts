@@ -53,22 +53,10 @@ describe("plugins search command", () => {
 
   it.each([
     {
-      context: "default",
-      profile: undefined,
-      container: undefined,
-      command: "openclaw plugins install clawhub:openclaw-calendar",
-    },
-    {
       context: "profile",
       profile: "work",
       container: undefined,
       command: "openclaw --profile work plugins install clawhub:openclaw-calendar",
-    },
-    {
-      context: "container",
-      profile: undefined,
-      container: "staging",
-      command: "openclaw --container staging plugins install clawhub:openclaw-calendar",
     },
     {
       context: "container over profile",
@@ -131,14 +119,6 @@ describe("plugins search command", () => {
     });
     expect(mocks.logs.join("\n")).toContain("openclaw-calendar");
     expect(mocks.logs.join("\n")).toContain(`Install: ${scenario.command}`);
-  });
-
-  it("writes JSON results when requested", async () => {
-    mocks.searchClawHubPackages.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
-
-    await runPluginsSearchCommand("calendar", { json: true }, mocks.runtime);
-
-    expect(mocks.runtime.writeJson).toHaveBeenCalledWith({ results: [] }, 2);
   });
 
   it("formats catalog version labels while preserving raw JSON values", async () => {

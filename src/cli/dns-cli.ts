@@ -203,7 +203,7 @@ export function registerDnsCli(program: Command) {
         throw new Error("dns setup is currently supported on macOS only");
       }
       if (!tailnetIPv4 && !tailnetIPv6) {
-        throw new Error("no tailnet IP detected; ensure Tailscale is running on this machine");
+        throw new Error("no tailnet IP detected; check that Tailscale is running on this machine");
       }
 
       const prefix = detectBrewPrefix();

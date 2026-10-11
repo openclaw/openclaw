@@ -54,7 +54,7 @@ workspace, `skills/` wins over `.agents/skills/`. Both directories participate i
 snapshot refresh and sandbox synchronization. Sandboxed runs read the
 materialized copies, not the original host paths.
 
-Managed worktree sessions keep their recorded canonical workspace as the skill
+Managed worktree sessions keep their recorded source workspace as the skill
 source. That source is read and watched on the Gateway, even when a File Transfer
 plugin serves the agent workspace from a paired node. The node reads its configured
 agent skill roots; it does not receive Gateway source paths. Selected skill files
@@ -108,7 +108,7 @@ A connected headless node can publish skills installed in its active OpenClaw
 skills directory (`~/.openclaw/skills` by default; profile environment overrides
 apply). They appear in the normal agent skill list while the node is connected
 and disappear when it disconnects. A local or Gateway skill keeps its name on
-collision; the node skill receives a deterministic node-prefixed name.
+collision; the node skill receives a stable node-prefixed name.
 Node-hosted v1 requires the directory name to match the skill's `name`
 frontmatter field. The published name, description, and instructions come from
 the same captured file content.
@@ -152,7 +152,7 @@ The ordinary single-admin setup stays unchanged: workspace authoring still
 uses `<workspace>/skills`, and existing file-backed skills are not moved into
 the library. A shared token does not identify a person. Personal library
 operations require an authenticated [Gateway profile](/concepts/user-model).
-The team-specific interface and agent guidance use distinct canonical Gateway
+The team-specific interface and agent guidance use distinct Gateway
 profiles, not channel senders, contacts, accounts, agents, devices, or browser
 connections. Linked and merged login identities count as one profile.
 
@@ -204,7 +204,7 @@ Worker resource delivery also has an 8 MiB aggregate limit; narrow the session
 selection if its complete bundles exceed that limit. Published revisions are
 retained, including revisions still selected by older sessions.
 
-ZIP imports allow up to 16 unfinished uploads per canonical profile and 32
+ZIP imports allow up to 16 unfinished uploads per Gateway profile and 32
 across the Gateway. Linked or merged identities share the profile limit.
 Completed imports do not count toward either limit, and uploads expire one
 hour after they begin. If a profile merge or upgrade leaves more uploads than
@@ -422,7 +422,7 @@ publish and sync.
     Configure `security.installPolicy` to run a trusted local policy command
     before skill installs continue. The policy receives metadata and the staged
     source path, applies to ClawHub, uploaded, Git, local, update, and
-    dependency-installer paths, and fails closed when the command cannot return
+    dependency-installer paths, and blocks the install when the command cannot return
     a valid decision.
   </Accordion>
   <Accordion title="Secret injection scope">
@@ -686,7 +686,7 @@ Toggle and configure bundled or managed skills under `skills.entries` in
 <ParamField path="enabled" type="boolean">
   `false` disables the skill even when bundled or installed. The `coding-agent`
   bundled skill is opt-in — set `skills.entries.coding-agent.enabled: true`
-  and ensure one of `claude`, `codex`, `opencode`, or another supported CLI
+  and check that one of `claude`, `codex`, `opencode`, or another supported CLI
   is installed and authenticated.
 </ParamField>
 
@@ -945,7 +945,7 @@ eligible catalog.
 ## Token impact
 
 When skills are eligible, OpenClaw injects a compact XML block into the system
-prompt. The cost is deterministic and scales linearly per skill:
+prompt. The cost follows a fixed formula and scales linearly per skill:
 
 - **Base overhead** (only when 1+ skills are eligible): a fixed block of intro
   prose plus the `<available_skills>` wrapper.

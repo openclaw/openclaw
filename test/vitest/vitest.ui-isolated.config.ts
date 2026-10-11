@@ -4,7 +4,6 @@
 // with stateful predecessor files (see uiIsolatedTestFiles).
 import type { ViteUserConfig } from "vitest/config";
 import { controlUiLocaleModulesPlugin } from "../../ui/config/control-ui-locales.ts";
-import { controlUiSolidPlugin } from "../../ui/vite.config.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 import { jsdomOptimizedDeps } from "./vitest.shared.config.ts";
 import { uiIsolatedTestFiles } from "./vitest.ui-isolated-paths.mjs";
@@ -27,7 +26,7 @@ export function createUiIsolatedVitestConfig(
   });
   return {
     ...config,
-    plugins: [...(config.plugins ?? []), controlUiLocaleModulesPlugin(), controlUiSolidPlugin()],
+    plugins: [...(config.plugins ?? []), controlUiLocaleModulesPlugin()],
   };
 }
 

@@ -20,6 +20,7 @@ import {
   type WorkerNodeCarrierRuntime,
 } from "./node-carrier-binding.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
+import { parseNodeWorkerResponse } from "./node-worker-response.js";
 import type { WorkerDesktopObserveResult } from "./service-contract.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 
@@ -76,12 +77,10 @@ function requireLaunchReady(
       result.error?.message?.trim() || "worker node desktop stream closed before attachment",
     );
   }
-  let payload: unknown;
-  try {
-    payload = result.payloadJSON ? JSON.parse(result.payloadJSON) : undefined;
-  } catch {
-    throw new Error("Worker environment node desktop launcher returned malformed JSON");
-  }
+  const payload = parseNodeWorkerResponse(
+    result.payloadJSON || "null",
+    "Worker environment node desktop launcher",
+  );
   if (!isDeepStrictEqual(payload, { status: "ready" })) {
     throw new Error("Worker environment node desktop launcher returned an invalid result");
   }

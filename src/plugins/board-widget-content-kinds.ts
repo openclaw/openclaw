@@ -72,7 +72,7 @@ export function createPluginBoardWidgetContentKindRegistrar(registry: PluginRegi
     ) {
       fail(
         record.id,
-        `public resource paths must be canonical URL pathnames and cannot use ${SANDBOX_HOST_PATH}`,
+        `public resource paths must be normalized URL paths and cannot use ${SANDBOX_HOST_PATH}`,
       );
     }
     for (const registered of registry.boardWidgetContentKinds.values()) {

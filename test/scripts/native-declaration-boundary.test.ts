@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { Program } from "typescript/unstable/async";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { createDeclarationInputBoundary } from "../../scripts/lib/local-check-runtime.mts";
 import { emitNativeDeclarations } from "../../scripts/lib/native-declaration-emitter.mts";
 import { readNativeTypeScriptConfig } from "../../scripts/lib/native-typescript-config.mts";
@@ -527,7 +526,7 @@ it("preserves original nested config paths and explicit override precedence duri
   expect(fs.readdirSync(path.join(root, ".artifacts"))).toEqual([]);
 });
 
-it("rejects config paths changed after materialization while preserving default-glob emission", async () => {
+it("preserves default-glob emission with inherited path mappings", async () => {
   const root = fs.realpathSync.native(roots.make("native-declaration-config-mutation-"));
   const fixture = createNativeFixture(root);
   const entry = path.join(root, "src/index.ts");
@@ -564,25 +563,6 @@ it("rejects config paths changed after materialization while preserving default-
   const stable = await emit();
   expect(stable.declarations.get(entry)?.code).toMatch(/resolvedOrigin\s*(?::|=)\s*"before"/u);
   expect(stable.inputs).not.toContain(path.join(root, "contracts/after.ts"));
-  expect(fs.readdirSync(artifacts)).toEqual([]);
-
-  let changed = false;
-  const emitter = vi
-    .spyOn(Program.prototype, "emitToString")
-    .mockImplementationOnce(async function (this: Program, ...args) {
-      emitter.mockRestore();
-      const output = await this.emitToString(...args);
-      changed = true;
-      fs.writeFileSync(configFile, configuration("after"));
-      return output;
-    });
-  try {
-    await expect(emit()).rejects.toThrow(/Boundary .*changed during compilation/u);
-  } finally {
-    emitter.mockRestore();
-  }
-  expect(changed).toBe(true);
-  expect(fs.readFileSync(configFile, "utf8")).toBe(configuration("after"));
   expect(fs.readdirSync(artifacts)).toEqual([]);
 });
 

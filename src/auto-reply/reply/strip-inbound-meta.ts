@@ -10,6 +10,9 @@ const CHANNEL_CONTEXT_HEADER = `Context: ${INBOUND_CONTEXT_MARKER}`;
 const ACTIVE_MEMORY_CONTEXT_HEADER = "Context:";
 const ACTIVE_MEMORY_OPEN_TAG = "<active_memory_plugin>";
 const ACTIVE_MEMORY_CLOSE_TAG = "</active_memory_plugin>";
+// Historical producer bytes: this companion preceded the marked JSON hint field.
+export const LEGACY_REQUESTER_PROFILE_HINT =
+  'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.';
 export const INBOUND_METADATA_MARKERS = [
   "[",
   INBOUND_CONTEXT_MARKER,
@@ -76,7 +79,30 @@ export function hasInboundMetadataSentinel(text: string): boolean {
 function metadataBlockEnd(text: string, header: TextLine): number {
   let line = readTextLine(text, header.next);
   if (line?.trimmed === "```json") {
-    return findTextLine(text, "```", line.next)?.next ?? text.length + 1;
+    const close = findTextLine(text, "```", line.next);
+    if (!close) {
+      return text.length + 1;
+    }
+    const hint = readTextLine(text, skipEmptyLines(text, close.next));
+    const separator = hint && readTextLine(text, hint.next);
+    if (
+      header.trimmed === `Conversation info: ${INBOUND_CONTEXT_MARKER}` &&
+      hint &&
+      hint.start > close.next &&
+      text.slice(hint.start, hint.end).replace(/\r$/u, "") === LEGACY_REQUESTER_PROFILE_HINT &&
+      (!separator || separator.trimmed === "")
+    ) {
+      const metadata = safeParseJsonRecord(text.slice(line.next, close.start));
+      if (
+        metadata &&
+        isRecord(metadata.requester_profile) &&
+        !("requester_profile_hint" in metadata)
+      ) {
+        // The old companion belongs to this block, not to later quoted user text.
+        return skipEmptyLines(text, hint.next);
+      }
+    }
+    return close.next;
   }
   // Generated prose context ends at the next blank separator, including its blanks.
   while (line && line.trimmed !== "") {
@@ -165,8 +191,8 @@ export function stripInboundMetadata(text: string): string {
     }
   }
   return removeLineSpans(source, spans)
-    .replace(/^\n+/, "")
-    .replace(/\n+$/, "")
+    .replace(/^(?:\r?\n)+/u, "")
+    .replace(/(?:\r?\n)+$/u, "")
     .replace(LEADING_TIMESTAMP_PREFIX_RE, "");
 }
 

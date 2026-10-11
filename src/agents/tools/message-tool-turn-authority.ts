@@ -1,6 +1,7 @@
 import { isFencedProviderReadAction } from "../../channels/plugins/message-action-dispatch.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  resolveCurrentPromptReaction,
   resolveMessageActionTurnAuthorization,
   resolveMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
@@ -51,24 +52,28 @@ export function createMessageToolTurnAuthority(params: {
       const authorization = resolve();
       const isRead = isFencedProviderReadAction(action);
       const dashboardRead = authorization?.assertDashboardReadCurrent;
+      const currentPromptReaction = lookup && resolveCurrentPromptReaction(lookup);
       const admitScheduled = authorization?.scheduled && params.admitScheduledInvocation;
       if (authorization?.scheduled && !admitScheduled) {
         throw new Error("Scheduled message invocation requires current tool policy admission.");
       }
       return {
         authorization,
+        currentPromptReaction,
         config: admitScheduled ? admitScheduled() : params.getConfig(),
         hasChannelTurnContext: Boolean(
           authorization &&
           !authorization.scheduled &&
           !authorization.deliveryAttempt &&
-          !dashboardRead,
+          !dashboardRead &&
+          !currentPromptReaction,
         ),
         gatewayTurnCapability: dashboardRead && !isRead ? undefined : token,
         scheduledRead: isRead ? authorization?.scheduled : undefined,
         assertDashboardReadCurrent: isRead ? dashboardRead : undefined,
       };
     },
+    hasCurrentPromptReaction: Boolean(lookup && resolveCurrentPromptReaction(lookup)),
     scheduledAccountScope:
       policy?.mode === "account" && (origin?.kind === "local" || channels.length > 0)
         ? {

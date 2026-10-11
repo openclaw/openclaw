@@ -4,10 +4,6 @@ import { LobsterSvg, type LobsterSvgProps } from "./lobster-pet-artwork.tsx";
 import type { LobsterPetLook } from "./lobster-pet-contract.ts";
 export {
   canonicalLobsterLook,
-  lobsterPetName,
-  mulberry32,
-  pickWeighted,
-  randomBetween,
   createLobsterPetLook,
   lobsterLookStyle,
 } from "./lobster-pet-identity.ts";

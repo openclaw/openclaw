@@ -97,7 +97,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   }
 
   protected abstract readonly createProvider: MemoryManagerProviderFactory;
-  protected abstract releaseProvider(provider: EmbeddingProvider): void;
   protected fallbackProviderInitPromise: Promise<boolean> | null = null;
   protected syncProviderGeneration: MemorySyncProviderGeneration | null = null;
 

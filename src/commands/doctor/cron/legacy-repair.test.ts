@@ -151,6 +151,31 @@ const updateDoctorEnv = {
   OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
 };
 
+it("leaves canonical one-shot jobs untouched without a SQLite repair backup", async () => {
+  await withOpenClawTestState({ label: "cron-canonical-at-repair" }, async (fixture) => {
+    const storePath = fixture.statePath("cron", "jobs.json");
+    const canonical: CronJob = {
+      ...job("canonical-at"),
+      schedule: { kind: "at", at: "2026-04-01T10:00:00.000Z" },
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "tick" },
+    };
+    await saveCronStore(storePath, { version: 1, jobs: [canonical] });
+    const { cfg, state } = await loadRepairStateForStore(storePath);
+
+    expect(await applyLegacyCronStoreRepair({ cfg, state })).toEqual({
+      changes: [],
+      warnings: [],
+    });
+    expect((await loadCronStore(storePath)).jobs).toEqual([canonical]);
+    expect(
+      (await fs.readdir(fixture.statePath("state"))).filter((name) =>
+        name.includes(".doctor-cron-"),
+      ),
+    ).toEqual([]);
+  });
+});
+
 it("rehearses quarantine import without consuming the live source before activation", async () => {
   await withOpenClawTestState({ label: "cron-rehearsal-quarantine" }, async (state) => {
     const storePath = state.statePath("custom-cron", "jobs.json");
