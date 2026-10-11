@@ -72,7 +72,6 @@ export async function readEmbeddingBatchJsonl<T>(
       }
       parsed = JSON.parse(text);
     } catch {
-      recordBytes = 0;
       throw new Error(`${options.label}: malformed JSONL record`);
     }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
