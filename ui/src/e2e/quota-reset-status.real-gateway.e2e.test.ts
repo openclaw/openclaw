@@ -12,6 +12,7 @@ import { waitForControlUiDocument } from "../../../src/commands/control-ui-hando
 import type { ModelAuthStatusResult } from "../../../src/gateway/server-methods/models-auth-status.types.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../../src/state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../../src/state/openclaw-state-db.paths.js";
+import { quotaRequestMode } from "../../../test/e2e/qa-lab/runtime/quota-reset-diagnostics.mjs";
 import {
   ACCOUNT_ID,
   MARKER,
@@ -359,7 +360,11 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
             .filter((request) => request.path.endsWith("/responses"));
           const primaryInference = inference.filter(({ body }) => {
             const request: unknown = JSON.parse(body ?? "{}");
-            return isRecord(request) && request.model === "gpt-5.5";
+            return (
+              isRecord(request) &&
+              request.model === "gpt-5.5" &&
+              quotaRequestMode(body) === "inference"
+            );
           });
           observations.push({ action: "next-ordinary-turn", result: nextTurn, state: stats() });
           expect.soft(nextTurn, evidence()).toEqual({ status: "ok", output: [MARKER] });

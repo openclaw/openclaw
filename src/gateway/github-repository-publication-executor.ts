@@ -17,6 +17,7 @@ import {
   GitHubPublicationWorkspaceChangedError,
   resolveGitHubPublicationFailure,
 } from "./github-publication-failure.js";
+import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import {
   githubPublicationApiArgs,
   hasGitHubPublicationMessageFooter,
@@ -25,6 +26,7 @@ import {
 } from "./github-publication-git-transport.js";
 import { findGitHubPublicationPullRequest } from "./github-publication-pull-requests.js";
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
+import type { RepositoryGitHubPublicationExecutionAsync } from "./github-publication-store-async.js";
 import {
   hasRepositoryGitHubPublicationWorkflowChanges,
   prepareGitHubPublicationWorkflowGuard,
@@ -123,7 +125,7 @@ export async function prepareRepositoryGitHubPublicationTarget(
 
 /** GitHub receives only accepted normalized objects; the Gateway never fetches source history. */
 export async function executeRepositoryGitHubPublication(params: {
-  execution: RepositoryGitHubPublicationExecution;
+  execution: RepositoryGitHubPublicationExecution | RepositoryGitHubPublicationExecutionAsync;
   snapshot: GitHubRepositoryPublicationSnapshot;
   snapshotRoot: string;
   storePath: string;
@@ -248,7 +250,7 @@ export async function executeRepositoryGitHubPublication(params: {
       // Preserve an authenticated response to a lost push before checking whether
       // its admission closed during the read. This records no permission to act.
       if (headCommit && observed === headCommit) {
-        execution.recordEffect("push", { headCommit });
+        await execution.recordEffect("push", { headCommit });
       }
       assertCurrent();
       return observed;
@@ -421,12 +423,12 @@ export async function executeRepositoryGitHubPublication(params: {
         message: content.commitMessage,
       });
       headCommit = verifyCommit(commit);
-      execution.updateHead(headCommit);
+      await execution.updateHead(headCommit);
     }
     if (remoteHead !== headCommit) {
       identity = await refreshIdentity();
       assertAction();
-      execution.recordEffect("push");
+      await execution.recordEffect("push");
       dispatched = true;
       // GraphQL's beforeOid is an exact lease; REST's non-force update only checks ancestry.
       const result = await runPublicationCommand(
@@ -464,7 +466,7 @@ export async function executeRepositoryGitHubPublication(params: {
           isRecord(reply.data.updateRefs) &&
           reply.data.updateRefs.clientMutationId === row.request_id;
       }
-      execution.recordEffect("push", succeeded ? { headCommit } : {});
+      await execution.recordEffect("push", succeeded ? { headCommit } : {});
       assertCurrent();
       remoteHead = await observeHead();
       if (remoteHead !== headCommit) {
@@ -476,7 +478,7 @@ export async function executeRepositoryGitHubPublication(params: {
       const body = content.pullRequestBody();
       identity = await refreshIdentity();
       assertAction();
-      execution.recordEffect("pull_request");
+      await execution.recordEffect("pull_request");
       dispatched = true;
       const created = await runPublicationCommand(
         githubPublicationApiArgs(
@@ -502,7 +504,7 @@ export async function executeRepositoryGitHubPublication(params: {
           url = value.html_url;
         }
       }
-      execution.recordEffect("pull_request", url ? { url } : {});
+      await execution.recordEffect("pull_request", url ? { url } : {});
       if (!url) {
         assertCurrent();
         url = await findPullRequest();
@@ -512,7 +514,7 @@ export async function executeRepositoryGitHubPublication(params: {
       throw new Error("GitHub pull request creation was rejected.");
     }
     return projectGitHubPublicationResult(
-      execution.complete({
+      await execution.complete({
         requestId: row.request_id,
         status: "published",
         url,
@@ -524,12 +526,13 @@ export async function executeRepositoryGitHubPublication(params: {
   } catch (error) {
     if (
       error instanceof GitHubPublicationRequesterUnavailableError ||
-      error instanceof GatewayOperatorAccessUnavailableError
+      error instanceof GatewayOperatorAccessUnavailableError ||
+      error instanceof GitHubPublicationRecoveryPendingError
     ) {
       throw error;
     }
     if (dispatched && !(error instanceof GitHubPublicationKnownFailure)) {
-      const interrupted = execution.interrupt();
+      const interrupted = await execution.interrupt();
       if (error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
       }
@@ -537,7 +540,7 @@ export async function executeRepositoryGitHubPublication(params: {
     }
     const failure = resolveGitHubPublicationFailure(error);
     return projectGitHubPublicationResult(
-      execution.complete({
+      await execution.complete({
         requestId: row.request_id,
         status: "failed",
         ...failure,
