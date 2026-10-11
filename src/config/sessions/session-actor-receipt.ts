@@ -8,7 +8,7 @@ import type {
 } from "./session-actor-contract.js";
 import type { PendingInputMutationReceipt } from "./session-pending-input-operations.types.js";
 
-/** Project the exact phase result and complete postimage into one backend-independent receipt. */
+/** Project the exact phase result and complete postimage into its committed receipt. */
 export function createSessionActorCommittedOutcome<
   Value extends SessionActorPhaseResults[SessionActorPhase],
 >(params: {

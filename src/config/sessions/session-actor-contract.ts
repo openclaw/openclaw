@@ -7,7 +7,6 @@ import type {
   SessionActorLifetime,
   SessionActorHotState,
 } from "./session-actor-state.types.js";
-import type { SessionActorStorage } from "./session-actor-storage-contract.js";
 import type { SessionEntryBookkeepingReducer } from "./session-entry-patch-operation.js";
 import type {
   InitialSessionEntryCommit,
@@ -320,8 +319,6 @@ type SessionActorCommands = {
 export type SessionActor = SessionActorLifetime &
   SessionActorCommands & {
     readonly target: SessionActorTarget;
-    /** Present only when the selected backend owns the storage domain. */
-    readonly storage?: SessionActorStorage;
     /** Detached installed MAIN state; undefined means fenced/missing. Never opens SQLite or dispatches a worker request. */
     snapshot(authority: SessionActorAuthority): SessionActorHotState | undefined;
     read(authority: SessionActorAuthority): Promise<SessionActorHotState>;

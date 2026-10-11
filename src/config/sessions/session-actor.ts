@@ -12,7 +12,7 @@ import {
 
 export type { SessionActorTransport } from "./session-actor-sqlite.js";
 
-/** The durable transport uses the same lifetime and phase owner as the memory backend. */
+/** The actor batches phases over the selected execution owner's durable transport. */
 export function createSessionActor(params: {
   target: SessionActorTarget;
   lifetime: SessionActorLifetime;

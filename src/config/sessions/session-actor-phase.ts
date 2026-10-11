@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
+import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import {
   hasActiveRestartRecoveryDeliveryClaim,
   hasExactRestartRecoveryDeliveryClaim,
@@ -7,65 +8,50 @@ import {
   resolveRestartRecoveryTerminalDeliveryDisposition,
 } from "./restart-recovery-receipt-state.js";
 import { mergeRestartRecoveryTerminalRunIds } from "./restart-recovery-state.js";
-import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import { applySessionActorAppend } from "./session-actor-append.worker.js";
 import type {
-  SessionActorAppend,
-  SessionActorAppendCommitted,
-  SessionActorHotState,
   SessionActorOperations,
-  SessionActorPhaseInputs,
   SessionActorPhase,
   SessionActorPhaseResults,
   SessionActorReducerOutcome,
 } from "./session-actor-contract.js";
+import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
 import { reduceSessionActorEntry } from "./session-actor-reducers.js";
 import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
+import { readHarnessCompletionSourceInDatabase } from "./session-harness-completion-source.kernel.js";
+import { applySessionTranscriptEvent } from "./session-message-rewrite.worker.js";
 import { projectPendingFinalDeliverySettlement } from "./session-pending-final-settlement.js";
-import type {
-  PendingInputMutation,
-  PendingInputMutationReceipt,
-} from "./session-pending-input-operations.types.js";
-import type {
-  SessionSourcePredicate,
-  SessionSourceValidation,
-} from "./session-source-authority.js";
+import { mutatePendingInput } from "./session-pending-input-operations.kernel.js";
+import type { PendingInputMutationReceipt } from "./session-pending-input-operations.types.js";
+import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
 import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
 import { sessionMatchesExpectedTranscriptTurn } from "./session-transcript-turn-state.js";
-import type { SessionTurnCommitted, SessionTurnPlan } from "./session-turn.types.js";
+import type { SessionTurnPlan } from "./session-turn.types.js";
+import { applySessionTurn } from "./session-turn.worker.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
-export type SessionActorMutation = Exclude<
+type SessionActorMutation = Exclude<
   SqliteWorkerCommand<SessionActorOperations>,
   { type: "session.actor.read" }
 >;
 
-/** Mutations synchronously update the supplied hot state before returning. */
-export type SessionActorPhaseBackend = {
-  agentId: string;
-  writeEntry(next: SessionEntry): void;
-  turn(input: SessionTurnPlan): SessionTurnCommitted;
-  append(input: SessionActorAppend): SessionActorAppendCommitted;
-  appendEvent(
-    input: Extract<SessionActorPhaseInputs["appendTranscriptEvent"], { eventJson: string }>,
-  ): { projectionNeedsReconcile?: boolean };
-  validateSources(sources: SessionSourcePredicate[] | undefined): SessionSourceValidation;
-  validateRecoveryInput(claim: HarnessCompletionRecovery): boolean;
-  mutatePendingInput(input: PendingInputMutation): PendingInputMutationReceipt;
-  admit(stage: "transaction" | "commit", publication?: unknown): void;
-};
-
 export class SessionActorStaleStateError extends Error {}
 
-/** Shared phase semantics run against the backend selected when the actor is acquired. */
-export function applySessionActorPhaseWithBackend(
+/** Phase mutations share the actor's existing worker transaction. */
+export function applySessionActorPhase(
   command: SessionActorMutation,
-  hot: SessionActorHotState,
-  backend: SessionActorPhaseBackend,
+  state: SessionActorStoredState,
+  context: AgentWorkerOperationContext,
 ) {
+  const database = context.open();
+  const hot = state.hot;
   const sessionKey = hot.target.sessionKey;
+  const incarnation =
+    hot.target.database.kind !== "file" ? hot.target.database.incarnation : undefined;
   let entryUpdate: SessionEntry | undefined;
   const requireEntry = () => {
     const entry = hot.entry;
@@ -73,6 +59,22 @@ export function applySessionActorPhaseWithBackend(
       throw new Error("Session actor requires an existing session");
     }
     return entry;
+  };
+  const writeEntry = (next: SessionEntry) => {
+    const previous = requireEntry();
+    writeSessionEntry(database, sessionKey, next, {
+      canonicalPreviousEntry: previous,
+      previousEntry: previous,
+    });
+  };
+  const append = (input: Parameters<typeof applySessionActorAppend>[0]) => {
+    const result = applySessionActorAppend(input, state, context);
+    // Initialization may rehydrate storage; keep the phase's hot object current.
+    if (state.hot !== hot) {
+      Object.assign(hot, state.hot);
+      state.hot = hot;
+    }
+    return result;
   };
   const lifecycle = (
     sessionId: string,
@@ -113,7 +115,7 @@ export function applySessionActorPhaseWithBackend(
       if (defer) {
         entryUpdate = next;
       } else {
-        backend.writeEntry(next);
+        writeEntry(next);
       }
     }
   };
@@ -126,7 +128,12 @@ export function applySessionActorPhaseWithBackend(
       throw new Error("Session actor turn changed its captured target");
     }
     assertCanonicalSessionKeyWrite(sessionKey, input.agentId);
-    const committed = backend.turn(input);
+    const committed = applySessionTurn(
+      input,
+      context,
+      (_database, candidate) => candidate,
+      incarnation,
+    );
     if (committed.result.rejectedReason || committed.result.predicateSkipped) {
       throw new SessionActorStaleStateError("Session actor turn was refused by its current owner");
     }
@@ -152,7 +159,7 @@ export function applySessionActorPhaseWithBackend(
         if (
           (entry.restartRecoveryDeliveryRunId ?? entry.activeWriterRunId) !==
             recovery.expectedRunId ||
-          backend.validateSources(recovery.sources).refusedSource
+          readSessionSourceValidation(database, recovery.sources, incarnation).refusedSource
         ) {
           throw new Error("Session actor recovery lost its source or run");
         }
@@ -160,17 +167,17 @@ export function applySessionActorPhaseWithBackend(
         if (
           claim &&
           (claim.requesterSessionKey !== sessionKey ||
-            claim.requesterAgentId !== backend.agentId ||
+            claim.requesterAgentId !== database.agentId ||
             claim.sessionId !== entry.sessionId ||
             claim.lifecycleRevision !== entry.lifecycleRevision ||
-            !backend.validateRecoveryInput(claim))
+            !readHarnessCompletionSourceInDatabase(database, claim).validInput)
         ) {
           throw new Error("Session actor recovery input no longer matches its source");
         }
-        backend.admit("transaction", { kind: "session-actor-recovery", recovery });
+        context.admit("transaction", { kind: "session-actor-recovery", recovery });
       }
       if (pending) {
-        pendingInputMutationReceipt = backend.mutatePendingInput(pending);
+        pendingInputMutationReceipt = mutatePendingInput(pending, context, () => {});
       }
       const input = command.input.turn;
       if (
@@ -198,7 +205,7 @@ export function applySessionActorPhaseWithBackend(
               }),
             }
           : {}),
-        ...(command.input.append ? { append: backend.append(command.input.append) } : {}),
+        ...(command.input.append ? { append: append(command.input.append) } : {}),
         adoption: pending && {
           existing: pending.expected.existing,
           previous: pending.expected.previous,
@@ -257,24 +264,40 @@ export function applySessionActorPhaseWithBackend(
       break;
     }
     case "session.actor.appendToolResult":
-      result = command.input.append
-        ? backend.append(command.input.append)
-        : turn(command.input.turn);
+      result = command.input.append ? append(command.input.append) : turn(command.input.turn);
       break;
     case "session.actor.appendTranscriptEvent": {
       const input = command.input;
       if (input.append) {
-        result = backend.append(input.append);
+        result = append(input.append);
         break;
       }
       if ((requireEntry().lifecycleRevision ?? null) !== input.lifecycleRevision) {
         throw new Error("Session actor transcript lifecycle changed before append");
       }
-      const validation = backend.validateSources(input.ownerSources);
+      const validation = readSessionSourceValidation(database, input.ownerSources, incarnation);
       if (validation.refusedSource) {
         throw new Error("Session actor transcript source changed before append");
       }
-      const committed = backend.appendEvent(input);
+      const scope = {
+        agentId: database.agentId,
+        path: database.path,
+        sessionKey,
+        sessionId: input.sessionId,
+      };
+      const committed = applySessionTranscriptEvent(
+        {
+          scope,
+          eventJson: input.eventJson,
+          fence: {
+            ...scope,
+            expectedLifecycleRevision: input.lifecycleRevision ?? undefined,
+            expectedWriterRunId: input.writerRunId,
+          },
+        },
+        context,
+        (_database, candidate) => candidate,
+      );
       result = { projectionNeedsReconcile: committed.projectionNeedsReconcile };
       break;
     }
@@ -340,7 +363,7 @@ export function applySessionActorPhaseWithBackend(
         ) {
           throw new Error("Session actor completion changed its captured target");
         }
-        pendingInputMutationReceipt = backend.mutatePendingInput(completion);
+        pendingInputMutationReceipt = mutatePendingInput(completion, context, () => {});
       }
       break;
     }
@@ -423,7 +446,7 @@ export function applySessionActorPhaseWithBackend(
     }
   }
   if (entryUpdate) {
-    backend.writeEntry(entryUpdate);
+    writeEntry(entryUpdate);
   }
   const committedTurn =
     result && "kind" in result && result.kind === "session-turn"
