@@ -30,7 +30,7 @@ import { log } from "../logger.js";
 import {
   clearEmbeddedSessionPromptStates,
   createToolResultPromptProjectionState,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
   persistToolResultProjections,
 } from "../session-prompt-state.js";
 import { restoreCacheTtlToolResultProjections } from "../tool-result-truncation.js";
@@ -331,10 +331,10 @@ describe("settleEmbeddedAttemptStream liveness", () => {
     },
   );
 
-  it("persists the active projection after session-state eviction", async () => {
+  it("persists the active projection after session-state invalidation", async () => {
     const sessionId = "cache-ttl-settle-evicted";
-    const otherSessionIds = Array.from({ length: 65 }, (_, index) => `cache-ttl-other-${index}`);
-    const state = getEmbeddedSessionPromptState(sessionId).toolResults;
+    using initialLease = retainEmbeddedSessionPromptState(sessionId);
+    const state = initialLease.state.toolResults;
     const key = "tool:old-read:42";
     state.replacements.set(key, {
       content: [{ type: "text", text: "kept prefix\n...\nkept suffix" }],
@@ -355,10 +355,9 @@ describe("settleEmbeddedAttemptStream liveness", () => {
       config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } },
     };
     try {
-      for (const otherSessionId of otherSessionIds) {
-        getEmbeddedSessionPromptState(otherSessionId);
-      }
-      expect(getEmbeddedSessionPromptState(sessionId).toolResults).not.toBe(state);
+      clearEmbeddedSessionPromptStates([sessionId]);
+      using replacement = retainEmbeddedSessionPromptState(sessionId);
+      expect(replacement.state.toolResults).not.toBe(state);
 
       // Production supplies this generation before entering the attempt runner.
       const metadataSnapshot = createPluginMetadataSnapshot({
@@ -379,7 +378,7 @@ describe("settleEmbeddedAttemptStream liveness", () => {
         }),
       );
     } finally {
-      clearEmbeddedSessionPromptStates([sessionId, ...otherSessionIds]);
+      clearEmbeddedSessionPromptStates([sessionId]);
     }
   });
 });
@@ -419,7 +418,8 @@ describe("attempt projection persistence through settlement", () => {
       manager.appendMessage(createAssistant(model, [{ type: "text", text: "read complete" }]));
       let previousSnapshot: ReturnType<typeof serializeCacheTtlToolResultProjections> | undefined;
       for (let turn = 0; turn < 3; turn++) {
-        const sessionPromptState = getEmbeddedSessionPromptState(scope.sessionId);
+        using turnLease = retainEmbeddedSessionPromptState(scope.sessionId);
+        const sessionPromptState = turnLease.state;
         const projectionState = sessionPromptState.toolResults;
         restoreCacheTtlToolResultProjections(projectionState, manager.getBranch());
         if (previousSnapshot) {

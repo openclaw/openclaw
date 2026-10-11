@@ -3,7 +3,6 @@ import {
   buildSessionObserverPrompt,
   normalizeSessionObserverModelOutput,
   sanitizeSessionObserverModelText,
-  SESSION_OBSERVER_MODEL_MAX_TOKENS,
   SESSION_OBSERVER_SYSTEM_PROMPT,
 } from "./session-observer-model.js";
 import type { SessionObserverDeps, SessionObserverState } from "./session-observer-model.js";
@@ -71,10 +70,8 @@ export function createSessionObserverCompletion(params: {
             prompt: buildSessionObserverPrompt(state, notes),
             timeoutMs: SESSION_OBSERVER_MODEL_TIMEOUT_MS,
             abortSignal: controller.signal,
-            streamParams: {
-              maxTokens: SESSION_OBSERVER_MODEL_MAX_TOKENS,
-              temperature: 0.2,
-            },
+            answerTokenBudget: 300,
+            streamParams: { temperature: 0.2 },
           });
           const parsed = normalizeSessionObserverModelOutput(result.text);
           if (parsed) {

@@ -90,11 +90,6 @@ function resolveOpenAICompletionsMaxTokens(
   return { maxTokens: model.maxTokens, clampToModelMaxTokens: false };
 }
 
-function resolveOpenAICompletionsModelMaxTokens(model: OpenAIModeModel): number | undefined {
-  const maxTokens = asPositiveFiniteNumber(model.maxTokens);
-  return maxTokens === undefined ? undefined : Math.floor(maxTokens);
-}
-
 const OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN = 1.25;
 const OPENAI_COMPLETIONS_IMAGE_CHAR_ESTIMATE = 8_000;
 const MIN_USEFUL_OUTPUT_TOKENS = 16;
@@ -118,8 +113,7 @@ function estimateOpenAICompletionsInputTokens(payload: {
   tools?: CompletionsRequest["tools"];
   response_format?: unknown;
 }): number {
-  let adjustedChars = 0;
-  adjustedChars += estimateOpenAICompletionsMessagesChars(payload.messages);
+  let adjustedChars = estimateOpenAICompletionsMessagesChars(payload.messages);
   if (payload.tools?.length) {
     adjustedChars += estimateJsonChars(payload.tools, 1024);
   }
@@ -481,7 +475,9 @@ export function buildOpenAICompletionsRequest(
       asPositiveFiniteNumber((model as { contextTokens?: number }).contextTokens) ??
       asPositiveFiniteNumber(model.contextWindow);
     let clampedMaxTokens = effectiveMaxTokens;
-    const modelMaxTokens = resolveOpenAICompletionsModelMaxTokens(model);
+    const modelOutputLimit = asPositiveFiniteNumber(model.maxTokens);
+    const modelMaxTokens =
+      modelOutputLimit === undefined ? undefined : Math.floor(modelOutputLimit);
     if (
       maxTokenBudget.clampToModelMaxTokens &&
       clampedMaxTokens !== undefined &&
@@ -506,7 +502,15 @@ export function buildOpenAICompletionsRequest(
       const estimatedInputTokens = estimateOpenAICompletionsInputTokens(params);
       const remainingBudget = Math.max(0, effectiveContextTokens - estimatedInputTokens - 1);
       if (clampedMaxTokens > remainingBudget) {
-        if (remainingBudget < MIN_USEFUL_OUTPUT_TOKENS) {
+        // Tool arguments need useful headroom even when the provider accepts a smaller cap.
+        const minimumOutputTokens =
+          params.tools?.length && params.tool_choice !== "none"
+            ? Math.max(
+                MIN_USEFUL_OUTPUT_TOKENS,
+                Math.min(2_048, Math.ceil((modelMaxTokens ?? 0) / 8)),
+              )
+            : MIN_USEFUL_OUTPUT_TOKENS;
+        if (remainingBudget < minimumOutputTokens) {
           throw Object.assign(
             new Error(
               `Context window exceeded: estimated input ${estimatedInputTokens} leaves only ` +

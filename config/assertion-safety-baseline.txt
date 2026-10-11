@@ -1284,7 +1284,6 @@ src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.ts	4
 src/agents/embedded-agent-runner/run/attempt.model-diagnostic-observation.ts	1
 src/agents/embedded-agent-runner/run/context-recovery-state.ts	2
 src/agents/embedded-agent-runner/run/helpers.ts	2
-src/agents/embedded-agent-runner/run/history-image-prune.ts	2
 src/agents/embedded-agent-runner/run/images.ts	6
 src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts	2
 src/agents/embedded-agent-runner/run/incomplete-turn-resolution.ts	3
@@ -2664,9 +2663,6 @@ ui/src/components/app-sidebar-session-row-render.ts	2
 ui/src/components/app-sidebar-session-section-header.ts	6
 ui/src/components/app-sidebar.ts	1
 ui/src/components/app-topbar.ts	1
-ui/src/components/board/board-view.ts	1
-ui/src/components/board/board-widget-cell.ts	1
-ui/src/components/board/board-widget-frame.ts	1
 ui/src/components/browser/browser-annotation.ts	1
 ui/src/components/browser/browser-client.ts	1
 ui/src/components/config-form-collection-draft.ts	4
@@ -2788,7 +2784,6 @@ ui/src/pages/memory-import/view.ts	2
 ui/src/pages/new-session/draft-place-browser.ts	2
 ui/src/pages/new-session/place-browser.ts	1
 ui/src/pages/new-session/preferences.ts	1
-ui/src/pages/plugin/logbook-view.ts	1
 ui/src/pages/plugin/route.ts	1
 ui/src/pages/portals/portal-reachability.ts	1
 ui/src/pages/profile/identity-section.ts	2
