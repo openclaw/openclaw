@@ -180,17 +180,7 @@ export const progressCardStore = {
       steps: input.steps,
       expectedRevision: input.expectedRevision,
     });
-    const assertCurrent = () => {
-      input.assertCurrent?.();
-      const current = captureGatewaySessionStoreScope(sessionKey, agentId);
-      if (
-        current.agentId !== resolved.agentId ||
-        current.storePath !== resolved.storePath ||
-        current.sessionKey !== resolved.sessionKey
-      ) {
-        throw new Error("progress-card session changed; retry");
-      }
-    };
+    const assertCurrent = () => input.assertCurrent?.();
     assertCurrent();
     const unsuffixed = resolveUnsuffixedSqliteTargetFromSessionStorePath(resolved.storePath);
     if (isIncognitoOpenClawAgentSqlitePath(unsuffixed.path, { agentId: resolved.agentId, env })) {

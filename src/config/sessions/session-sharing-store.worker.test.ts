@@ -394,68 +394,58 @@ it("commits aliased worker membership and participant facts before publishing, a
   });
 });
 
-it("rejects the complete aliased category update when a later member changes after preparation", async () => {
+it("preserves entry changes and skips reassigned categories after preparation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     const alias = state.path("category-alias");
     fs.symlinkSync(path.dirname(database.path), alias, "junction");
-    const scopeAt = (index: number) => ({
+    const scope = {
       agentId: "main",
       storePath: path.join(alias, path.basename(database.path)),
-      sessionKey: `agent:main:category-revalidation:${String(index).padStart(2, "0")}`,
-    });
-    const firstScope = scopeAt(0);
-    const replacedScope = scopeAt(11);
-    const scopes = [
-      firstScope,
-      ...Array.from({ length: 10 }, (_, index) => scopeAt(index + 1)),
-      replacedScope,
-    ];
-    for (const [index, scope] of scopes.entries()) {
-      replaceSessionEntrySync(scope, {
-        sessionId: `original-${index}`,
+      sessionKey: "agent:main:category-current",
+    };
+    const reassigned = { ...scope, sessionKey: "agent:main:category-reassigned" };
+    for (const target of [scope, reassigned]) {
+      replaceSessionEntrySync(target, {
+        sessionId: target.sessionKey,
         updatedAt: 1,
         category: "Work",
+        label: "Before",
       });
     }
     let changed = false;
     await expect(
       updateSessionGroupCategoriesInWorker({
-        scope: firstScope,
+        scope,
         from: "Work",
         assertTargetCurrent() {
           if (!changed) {
             changed = true;
-            replaceSessionEntrySync(replacedScope, {
-              sessionId: "replacement",
+            replaceSessionEntrySync(scope, {
+              sessionId: scope.sessionKey,
               updatedAt: 2,
+              category: "Work",
+              label: "After",
+            });
+            replaceSessionEntrySync(reassigned, {
+              sessionId: reassigned.sessionKey,
+              updatedAt: 3,
               category: "Replacement",
+              label: "Reassigned",
             });
           }
         },
       }),
-    ).rejects.toThrow(
-      `SQLite session entry changed before replacement for ${replacedScope.sessionKey}`,
-    );
-    expect(loadSessionEntry(firstScope)).toMatchObject({
-      sessionId: "original-0",
-      updatedAt: 1,
-      category: "Work",
-    });
-    expect(loadSessionEntry(replacedScope)).toMatchObject({
-      sessionId: "replacement",
-      updatedAt: 2,
+    ).resolves.toBe(1);
+    const entry = loadSessionEntry(scope);
+    expect(entry).toMatchObject({ sessionId: scope.sessionKey, updatedAt: 2, label: "After" });
+    expect(entry?.category).toBeUndefined();
+    expect(loadSessionEntry(reassigned)).toMatchObject({
+      sessionId: reassigned.sessionKey,
+      updatedAt: 3,
       category: "Replacement",
+      label: "Reassigned",
     });
-    await expect(
-      updateSessionGroupCategoriesInWorker({ scope: firstScope, from: "Work" }),
-    ).resolves.toBe(11);
-    for (const [index, scope] of scopes.slice(0, -1).entries()) {
-      const entry = loadSessionEntry(scope);
-      expect(entry).toMatchObject({ sessionId: `original-${index}`, updatedAt: 1 });
-      expect(entry?.category).toBeUndefined();
-    }
-    expect(loadSessionEntry(replacedScope)?.category).toBe("Replacement");
   });
 });
 

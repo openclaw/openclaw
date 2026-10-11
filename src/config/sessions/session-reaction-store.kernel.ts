@@ -107,14 +107,16 @@ export function setSessionReactionInDatabase(
       }),
     );
   }
-  const remainingRows = executeSqliteQuerySync(
-    database.db,
-    reactionRows(database, sessionKey, params.expectedSessionId).where(
-      "message_id",
-      "=",
-      params.messageId,
-    ),
-  ).rows;
+  const remainingRows = params.remove
+    ? rows.filter((row) => row.emoji !== params.emoji || row.identity_id !== params.identityId)
+    : executeSqliteQuerySync(
+        database.db,
+        reactionRows(database, sessionKey, params.expectedSessionId).where(
+          "message_id",
+          "=",
+          params.messageId,
+        ),
+      ).rows;
   return {
     reactions: summarizeReactions(remainingRows),
     newestRemainingEmoji: remainingRows.at(-1)?.emoji,
