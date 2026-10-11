@@ -1,10 +1,9 @@
-/* @vitest-environment jsdom */
-
-import { createSignal, flush } from "solid-js";
+import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { mountUsageView } from "./view-mount.test-support.ts";
-import { renderSessionBarRow } from "./view-session-row.tsx";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import { SessionBarRow } from "./view-session-row.tsx";
 
 const execCommandDescriptor = Object.getOwnPropertyDescriptor(document, "execCommand");
 
@@ -32,9 +31,9 @@ it("retires pending usage session label copying when its payload changes", async
   Object.defineProperty(document, "execCommand", { configurable: true, value: fallback });
   const owner = document.body.appendChild(document.createElement("section"));
   const [label, setLabel] = createSignal("first");
-  mountUsageView(
+  mountSolid(
     () =>
-      renderSessionBarRow({
+      SessionBarRow({
         sessionKey: "session",
         get displayLabel() {
           return label();
@@ -45,8 +44,9 @@ it("retires pending usage session label copying when its payload changes", async
         isSelected: false,
         onSelect: vi.fn(),
       }),
-    owner,
+    { container: owner },
   );
+  flush();
   const button = owner.querySelector<HTMLButtonElement>(".session-bar-actions button")!;
   button.click();
   expect(writeText).toHaveBeenCalledOnce();

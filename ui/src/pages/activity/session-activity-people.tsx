@@ -10,7 +10,9 @@ import {
 import { locale, t } from "../../lib/reactive/i18n.ts";
 import type { SessionActivityViewProps } from "./session-activity-view.tsx";
 
-type ActivityPerson = PresenceViewer & { count: number };
+type ActivityPerson = PresenceViewer & {
+  count: number;
+};
 
 function isUnresolvedPerson(person: PresenceViewer): boolean {
   return !person.name && !person.email && presenceViewerLabel(person) === person.id;

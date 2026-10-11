@@ -32,7 +32,7 @@ function creatorLabel({ actor }: SessionUsageCreator): string {
     : name;
 }
 
-export function renderUsageCreatorFilter(props: {
+export function UsageCreatorFilter(props: {
   options: readonly SessionUsageCreator[];
   selectedKey: string | null;
   onSelect: (key: string | null) => void;
@@ -72,7 +72,7 @@ export function renderUsageCreatorFilter(props: {
   );
 }
 
-export function renderUsageCreators(props: UsageCreatorsProps) {
+export function UsageCreators(props: UsageCreatorsProps) {
   const value = (group: UsageCreatorGroup, mode: UsageCreatorsProps["mode"]) =>
     mode === "tokens" ? group.totals.totalTokens : group.totals.totalCost;
   const groups = createMemo(() => {
@@ -139,21 +139,16 @@ export function renderUsageCreators(props: UsageCreatorsProps) {
 
   return (
     <SettingsSection
-      {...{
-        title: t("usage.creators.title"),
-        description: t("usage.creators.description"),
-      }}
+      title={t("usage.creators.title")}
+      description={t("usage.creators.description")}
     >
       <div class="usage-panel usage-creators">
         {groups().length > 0 ? (
           renderRows(groups().slice(0, 8))
         ) : (
-          <>
-            {" "}
-            <div class="usage-empty-block usage-empty-block--compact">
-              {t("usage.creators.empty")}
-            </div>{" "}
-          </>
+          <div class="usage-empty-block usage-empty-block--compact">
+            {t("usage.creators.empty")}
+          </div>
         )}
         {groups().length > 8 ? (
           <details class="usage-creators-more">
@@ -165,6 +160,3 @@ export function renderUsageCreators(props: UsageCreatorsProps) {
     </SettingsSection>
   );
 }
-
-export const UsageCreatorFilter = renderUsageCreatorFilter;
-export const UsageCreators = renderUsageCreators;

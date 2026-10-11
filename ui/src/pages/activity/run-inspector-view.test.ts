@@ -1,19 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { createSignal, flush } from "@solidjs/signals";
-import { render } from "@solidjs/web";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createSignal } from "solid-js";
+import { describe, expect, it, vi } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import type { RunInspectorResult, RunInspectorState } from "./run-inspector-model.ts";
 import { renderRunInspector } from "./run-inspector-view.tsx";
-
-const disposals: Array<() => void> = [];
-
-afterEach(() => {
-  for (const dispose of disposals.splice(0)) {
-    dispose();
-  }
-  document.body.replaceChildren();
-});
 
 const hmacRef = `hmac-sha256:v1:${"a".repeat(32)}:${"b".repeat(64)}`;
 
@@ -117,8 +109,6 @@ type ViewTestState =
     });
 
 function renderState(state: ViewTestState, onLoadMoreExecutions = vi.fn()) {
-  const container = document.createElement("div");
-  document.body.append(container);
   const normalizedState: RunInspectorState =
     state.status === "ready"
       ? {
@@ -130,21 +120,17 @@ function renderState(state: ViewTestState, onLoadMoreExecutions = vi.fn()) {
             ),
         }
       : state;
-  disposals.push(
-    render(
-      () =>
-        renderRunInspector({
-          basePath: "/operator",
-          state: normalizedState,
-          selector: { kind: "run", id: "run-1" },
-          selectorId: null,
-          onLoadMoreDecisions: vi.fn(),
-          onLoadMoreExecutions,
-          onRestart: vi.fn(),
-          onRetry: vi.fn(),
-        }),
-      container,
-    ),
+  const { container } = mountSolid(() =>
+    renderRunInspector({
+      basePath: "/operator",
+      state: normalizedState,
+      selector: { kind: "run", id: "run-1" },
+      selectorId: null,
+      onLoadMoreDecisions: vi.fn(),
+      onLoadMoreExecutions,
+      onRestart: vi.fn(),
+      onRetry: vi.fn(),
+    }),
   );
   flush();
   return container;
@@ -156,24 +142,20 @@ describe("renderRunInspector", () => {
       status: "loading",
       waitingForGateway: false,
     });
-    const container = document.createElement("div");
-    disposals.push(
-      render(
-        () =>
-          renderRunInspector({
-            basePath: "/operator",
-            get state() {
-              return state();
-            },
-            selector: { kind: "run", id: "run-1" },
-            selectorId: null,
-            onLoadMoreDecisions: vi.fn(),
-            onLoadMoreExecutions: vi.fn(),
-            onRestart: vi.fn(),
-            onRetry: vi.fn(),
-          }),
-        container,
-      ),
+
+    const { container } = mountSolid(() =>
+      renderRunInspector({
+        basePath: "/operator",
+        get state() {
+          return state();
+        },
+        selector: { kind: "run", id: "run-1" },
+        selectorId: null,
+        onLoadMoreDecisions: vi.fn(),
+        onLoadMoreExecutions: vi.fn(),
+        onRestart: vi.fn(),
+        onRetry: vi.fn(),
+      }),
     );
     flush();
     expect(container.textContent).toContain("Loading run inspection");

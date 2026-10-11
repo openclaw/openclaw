@@ -1,8 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
-import { render } from "@solidjs/web";
-import { createComponent, createSignal, flush } from "solid-js";
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/schema/audit-run.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -21,6 +20,8 @@ import { loadSettings } from "../../app/settings.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { ActivityPageController } from "./activity-page-controller.ts";
 import { ActivityPageView } from "./activity-page-view.tsx";
 import type { ActivityEntry } from "./tool-activity.ts";
@@ -45,7 +46,6 @@ function inspectRun(
 }
 
 const pageRevisions = new WeakMap<TestActivityPage, () => number>();
-const renderDisposals: Array<() => void> = [];
 
 function createActivityPage(): TestActivityPage {
   const [revision, setRevision] = createSignal(0);
@@ -56,23 +56,14 @@ function createActivityPage(): TestActivityPage {
 }
 
 function mountActivityPage(page: TestActivityPage): HTMLDivElement {
-  const container = document.createElement("div");
-  document.body.append(container);
-  const dispose = render(
-    () =>
-      createComponent(ActivityPageView, {
-        controller: page,
-        revision: pageRevisions.get(page)!,
-        host: container,
-      }),
-    container,
+  const mounted = mountSolid(() =>
+    createComponent(ActivityPageView, {
+      controller: page,
+      revision: pageRevisions.get(page)!,
+    }),
   );
-  renderDisposals.push(() => {
-    dispose();
-    container.remove();
-  });
   flush();
-  return container;
+  return mounted.container;
 }
 
 function gateway(): ApplicationContext["gateway"] {
@@ -219,9 +210,7 @@ function toolEvent(id: string, sessionKey = "main") {
 }
 
 afterEach(async () => {
-  for (const dispose of renderDisposals.splice(0)) {
-    dispose();
-  }
+  cleanupSolid();
   for (const page of activePages) {
     page.dispose();
   }
@@ -440,7 +429,15 @@ describe("ActivityPage gateway lifecycle", () => {
     "collects delivered %s activity only from the mounted roster",
     async (kind) => {
       const { gateway: source, current } = activityGateway();
-      const page = bindActivity(source);
+      const roster = activityRoster([
+        { key: "main", kind: "direct", hasActiveRun: true },
+        { key: "agent:research:work", agentId: "research", kind: "direct", hasActiveRun: true },
+        { key: "global", agentId: "research", kind: "global", hasActiveRun: true },
+        { key: "unknown", agentId: "research", kind: "unknown", hasActiveRun: true },
+      ]);
+      current().request.mockImplementation(async (method, params) =>
+        method === "sessions.list" ? roster : activityResponse(method, params),
+      );
       const origins = [
         { runId: "selected", sessionKey: "main" },
         { runId: "other", sessionKey: "agent:research:work", agentId: "research" },
@@ -450,13 +447,11 @@ describe("ActivityPage gateway lifecycle", () => {
         { runId: "unscoped" },
       ];
       const acquisitions = vi.spyOn(activityContext(source).sessions, "subscribeMessages");
-      syncActivityRoster(page, [
-        { key: "main", kind: "direct", hasActiveRun: true },
-        { key: "agent:research:work", agentId: "research", kind: "direct" },
-        { key: "global", agentId: "research", kind: "global" },
-        { key: "unknown", agentId: "research", kind: "unknown" },
-      ]);
+      const page = createActivityPage();
+      page.connect(activityContext(source) as ApplicationContext);
+      page.setRouteLocation({ pathname: "/activity", search: "?view=live", hash: "" });
       try {
+        await page.sessionActivity.load(source.snapshot.client, "current");
         await Promise.all(acquisitions.mock.results.map((result) => result.value));
       } finally {
         acquisitions.mockRestore();

@@ -1,10 +1,11 @@
 import type { RouteLoaderOptions } from "@openclaw/uirouter";
-import { render } from "@solidjs/web";
-import { createMemo, createSignal, flush } from "solid-js";
+import { createMemo, createSignal } from "solid-js";
 import { expect, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CostUsageSummary, SessionsUsageResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import type { UsageDetailsController } from "./detail-controller.ts";
 import type { UsageRefreshPolicy } from "./refresh-policy.ts";
 import { page as usageRoute } from "./route.ts";
@@ -152,22 +153,25 @@ export async function createPage(
   const mount = () => {
     model.connect();
     if (content) {
-      disposeView = render(() => {
-        const state = createMemo(() => {
-          revision();
-          return model.read();
-        });
-        return content({
-          get state() {
-            return state();
-          },
-          context: model.context,
-          get result() {
+      disposeView = mountSolid(
+        () => {
+          const state = createMemo(() => {
             revision();
-            return model.usageResult;
-          },
-        });
-      }, page);
+            return model.read();
+          });
+          return content({
+            get state() {
+              return state();
+            },
+            context: model.context,
+            get result() {
+              revision();
+              return model.usageResult;
+            },
+          });
+        },
+        { container: page },
+      ).unmount;
     }
   };
   const cleanup = () => {

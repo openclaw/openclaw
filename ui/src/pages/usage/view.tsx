@@ -75,50 +75,43 @@ function renderProviderUsage(
 ) {
   const notice =
     stalled || unavailable ? (
-      <>
-        {" "}
-        <div class="callout warning usage-callout">
-          {t(stalled ? "usage.providerUsage.stalled" : "usage.providerUsage.unavailable")}
-        </div>{" "}
-      </>
+      <div class="callout warning usage-callout">
+        {t(stalled ? "usage.providerUsage.stalled" : "usage.providerUsage.unavailable")}
+      </div>
     ) : undefined;
   if (providers.length === 0) {
     return notice;
   }
   return (
     <SettingsSection
-      {...{
-        title: t("usage.providerUsage.title"),
-        count: providers.length,
-        description: t("usage.providerUsage.subtitle"),
-      }}
+      title={t("usage.providerUsage.title")}
+      count={providers.length}
+      description={t("usage.providerUsage.subtitle")}
     >
-      <>
-        {notice}
-        <div class="usage-panel provider-usage-section">
-          <div class="provider-usage-grid">
-            <For each={providers}>
-              {(provider) => (
-                <article class="provider-usage-card">
-                  <div class="provider-usage-card__header">
-                    <div>
-                      <div class="provider-usage-card__name">{provider.displayName}</div>
-                      <div class="provider-usage-card__id">{provider.provider}</div>
-                    </div>
-                    {provider.plan ? (
-                      <>
-                        {" "}
-                        <span class="provider-usage-plan">{provider.plan}</span>{" "}
-                      </>
-                    ) : undefined}
+      {notice}
+      <div class="usage-panel provider-usage-section">
+        <div class="provider-usage-grid">
+          <For each={providers}>
+            {(provider) => (
+              <article class="provider-usage-card">
+                <div class="provider-usage-card__header">
+                  <div>
+                    <div class="provider-usage-card__name">{provider.displayName}</div>
+                    <div class="provider-usage-card__id">{provider.provider}</div>
                   </div>
-                  <LitContent content={renderProviderUsageDetails(provider)} />
-                </article>
-              )}
-            </For>
-          </div>
+                  {provider.plan ? (
+                    <>
+                      {" "}
+                      <span class="provider-usage-plan">{provider.plan}</span>{" "}
+                    </>
+                  ) : undefined}
+                </div>
+                <LitContent content={renderProviderUsageDetails(provider)} />
+              </article>
+            )}
+          </For>
         </div>
-      </>
+      </div>
     </SettingsSection>
   );
 }
@@ -355,7 +348,7 @@ export function renderUsage(props: UsageProps) {
     };
   });
   return (
-    <SettingsPage {...{ wide: true }}>
+    <SettingsPage wide>
       <div class="usage-page">
         <section class="settings-section">
           <div class="settings-section__header">
@@ -382,14 +375,14 @@ export function renderUsage(props: UsageProps) {
               <div class="usage-controls">
                 {renderFilterChips(state().data.sessions, props)}
                 <div class="usage-presets">
-                  <For each={state().datePresets}>
+                  <For each={state().datePresets} keyed={(preset) => preset.days}>
                     {(preset) => (
                       <button
-                        class={["btn btn--sm", { active: state().isPresetSelected(preset.days) }]}
-                        aria-pressed={state().isPresetSelected(preset.days) ? "true" : "false"}
-                        onClick={() => state().applyPreset(preset.days)}
+                        class={["btn btn--sm", { active: state().isPresetSelected(preset().days) }]}
+                        aria-pressed={state().isPresetSelected(preset().days) ? "true" : "false"}
+                        onClick={() => state().applyPreset(preset().days)}
                       >
-                        {preset.label}
+                        {preset().label}
                       </button>
                     )}
                   </For>
@@ -439,45 +432,39 @@ export function renderUsage(props: UsageProps) {
               </div>
               <div class="usage-view-options">
                 <UsageCreatorFilter
-                  {...{
-                    options: state().data.creatorOptions,
-                    selectedKey: state().filters.creatorKey,
-                    onSelect: (creatorKey) => state().filterActions.onScopeChange({ creatorKey }),
-                  }}
+                  options={state().data.creatorOptions}
+                  selectedKey={state().filters.creatorKey}
+                  onSelect={(creatorKey) => state().filterActions.onScopeChange({ creatorKey })}
                 />
                 <SettingsSegmented
-                  {...{
-                    mode: "buttons",
-                    variant: "accent",
-                    value: state().filters.scope,
-                    onChange: (scope) => state().filterActions.onScopeChange({ scope }),
-                    onReselect: (scope) => state().filterActions.onScopeChange({ scope }),
-                    options: [
-                      {
-                        value: "instance",
-                        label: t("usage.scope.instance"),
-                        title: t("usage.scope.instanceHint"),
-                      },
-                      {
-                        value: "family",
-                        label: t("usage.scope.family"),
-                        title: t("usage.scope.familyHint"),
-                      },
-                    ],
-                  }}
+                  mode="buttons"
+                  variant="accent"
+                  value={state().filters.scope}
+                  onChange={(scope) => state().filterActions.onScopeChange({ scope })}
+                  onReselect={(scope) => state().filterActions.onScopeChange({ scope })}
+                  options={[
+                    {
+                      value: "instance",
+                      label: t("usage.scope.instance"),
+                      title: t("usage.scope.instanceHint"),
+                    },
+                    {
+                      value: "family",
+                      label: t("usage.scope.family"),
+                      title: t("usage.scope.familyHint"),
+                    },
+                  ]}
                 />
                 <SettingsSegmented
-                  {...{
-                    mode: "buttons",
-                    variant: "accent",
-                    value: state().isTokenMode ? "tokens" : "cost",
-                    onChange: (chartMode) => state().displayActions.onChange({ chartMode }),
-                    onReselect: (chartMode) => state().displayActions.onChange({ chartMode }),
-                    options: [
-                      { value: "tokens", label: t("usage.metrics.tokens") },
-                      { value: "cost", label: t("usage.metrics.cost") },
-                    ],
-                  }}
+                  mode="buttons"
+                  variant="accent"
+                  value={state().isTokenMode ? "tokens" : "cost"}
+                  onChange={(chartMode) => state().displayActions.onChange({ chartMode })}
+                  onReselect={(chartMode) => state().displayActions.onChange({ chartMode })}
+                  options={[
+                    { value: "tokens", label: t("usage.metrics.tokens") },
+                    { value: "cost", label: t("usage.metrics.cost") },
+                  ]}
                 />
                 <button
                   class="btn btn--sm primary"
@@ -632,7 +619,7 @@ export function renderUsage(props: UsageProps) {
               <div class="usage-filter-row">
                 {
                   <UsageQueryFilter
-                    filterKey={"channel"}
+                    filterKey="channel"
                     label={t("usage.filters.channel")}
                     options={state().filterOptions.channel}
                     queryDraft={state().filters.queryDraft}
@@ -641,7 +628,7 @@ export function renderUsage(props: UsageProps) {
                 }
                 {
                   <UsageQueryFilter
-                    filterKey={"provider"}
+                    filterKey="provider"
                     label={t("usage.filters.provider")}
                     options={state().filterOptions.provider}
                     queryDraft={state().filters.queryDraft}
@@ -650,7 +637,7 @@ export function renderUsage(props: UsageProps) {
                 }
                 {
                   <UsageQueryFilter
-                    filterKey={"model"}
+                    filterKey="model"
                     label={t("usage.filters.model")}
                     options={state().filterOptions.model}
                     queryDraft={state().filters.queryDraft}
@@ -659,7 +646,7 @@ export function renderUsage(props: UsageProps) {
                 }
                 {
                   <UsageQueryFilter
-                    filterKey={"tool"}
+                    filterKey="tool"
                     label={t("usage.filters.tool")}
                     options={state().filterOptions.tool}
                     queryDraft={state().filters.queryDraft}
@@ -720,10 +707,7 @@ export function renderUsage(props: UsageProps) {
             </div>
 
             {state().data.error ? (
-              <>
-                {" "}
-                <div class="callout danger usage-callout">{state().data.error}</div>{" "}
-              </>
+              <div class="callout danger usage-callout">{state().data.error}</div>
             ) : undefined}
             {state().data.cacheRefresh !== "complete" ? (
               <div
@@ -749,16 +733,13 @@ export function renderUsage(props: UsageProps) {
 
         {!state().hasOverviewData ? (
           state().loadingOverview ? (
-            <>
-              {" "}
-              <div class="usage-panel usage-loading-card">
-                <div class="usage-loading-grid">
-                  <div class="skeleton usage-skeleton-block usage-skeleton-block--tall" />
-                  <div class="skeleton usage-skeleton-block" />
-                  <div class="skeleton usage-skeleton-block" />
-                </div>
-              </div>{" "}
-            </>
+            <div class="usage-panel usage-loading-card">
+              <div class="usage-loading-grid">
+                <div class="skeleton usage-skeleton-block usage-skeleton-block--tall" />
+                <div class="skeleton usage-skeleton-block" />
+                <div class="skeleton usage-skeleton-block" />
+              </div>
+            </div>
           ) : undefined
         ) : state().isEmpty ? (
           renderUsageEmptyState(state().filterActions.onRefresh)
@@ -789,12 +770,10 @@ export function renderUsage(props: UsageProps) {
               </Show>
             </div>
             <UsageCreators
-              {...{
-                groups: state().activeAggregates.byCreator ?? [],
-                selectedKey: state().filters.creatorKey,
-                mode: state().display.chartMode,
-                onSelect: (creatorKey) => state().filterActions.onScopeChange({ creatorKey }),
-              }}
+              groups={state().activeAggregates.byCreator ?? []}
+              selectedKey={state().filters.creatorKey}
+              mode={state().display.chartMode}
+              onSelect={(creatorKey) => state().filterActions.onScopeChange({ creatorKey })}
             />
             {renderUsageInsights(
               state().insightTotals,
@@ -833,19 +812,16 @@ export function renderUsage(props: UsageProps) {
               </div>
               <Show when={state().primarySelectedEntry}>
                 {(selectedSession) => (
-                  <>
-                    {" "}
-                    <div class="usage-grid-column">
-                      <SessionDetailPanel
-                        session={selectedSession()}
-                        detail={state().detail}
-                        callbacks={state().detailActions}
-                        range={state().filters}
-                        contextExpanded={state().display.contextExpanded}
-                        onClose={() => state().filterActions.onClearSessions()}
-                      />
-                    </div>{" "}
-                  </>
+                  <div class="usage-grid-column">
+                    <SessionDetailPanel
+                      session={selectedSession()}
+                      detail={state().detail}
+                      callbacks={state().detailActions}
+                      range={state().filters}
+                      contextExpanded={state().display.contextExpanded}
+                      onClose={() => state().filterActions.onClearSessions()}
+                    />
+                  </div>
                 )}
               </Show>
             </div>

@@ -1,11 +1,10 @@
-/* @vitest-environment jsdom */
-
-import { createSignal, flush } from "solid-js";
+import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import type { SessionUsageCreator } from "../../../../src/shared/usage-types.js";
-import { renderUsageCreatorFilter, renderUsageCreators } from "./view-creators.tsx";
-import { mountUsageView } from "./view-mount.test-support.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import { UsageCreatorFilter, UsageCreators } from "./view-creators.tsx";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -29,16 +28,16 @@ it("keeps all creator choices after filtering and passes opaque identities throu
   const container = document.createElement("div");
   document.body.append(container);
   const [options, setOptions] = createSignal<SessionUsageCreator[]>([alex, jordan]);
-  mountUsageView(
+  mountSolid(
     () => [
-      renderUsageCreatorFilter({
+      UsageCreatorFilter({
         get options() {
           return options();
         },
         selectedKey: alex.key,
         onSelect,
       }),
-      renderUsageCreators({
+      UsageCreators({
         groups: [
           {
             ...alex,
@@ -53,8 +52,9 @@ it("keeps all creator choices after filtering and passes opaque identities throu
         onSelect,
       }),
     ],
-    container,
+    { container },
   );
+  flush();
 
   const select = container.querySelector("select")!;
   expect(select.getAttribute("aria-label")).toBe("Filter by session creator");
@@ -102,9 +102,9 @@ it.each([
   const onSelect = vi.fn<(key: string | null) => void>();
   const container = document.createElement("div");
   document.body.append(container);
-  mountUsageView(
+  mountSolid(
     () =>
-      renderUsageCreators({
+      UsageCreators({
         groups: [
           {
             key: "unattributed:opaque-key",
@@ -119,8 +119,9 @@ it.each([
         mode: "cost",
         onSelect,
       }),
-    container,
+    { container },
   );
+  flush();
 
   const button = container.querySelector<HTMLButtonElement>("tbody button")!;
   expect(button.textContent).toContain(label);

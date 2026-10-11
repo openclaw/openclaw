@@ -1,12 +1,12 @@
 import { html } from "lit";
-import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { createEffect, createMemo, createSignal } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { UsagePageShell } from "./page-shell.tsx";
 import type { UsageProps, UsageRouteData } from "./types.ts";
 import { UsagePageModel } from "./usage-page-model.ts";
-import { renderUsage } from "./view.tsx";
+import { renderUsage as UsageView } from "./view.tsx";
 
 export type { UsageRouteData } from "./types.ts";
 
@@ -15,26 +15,9 @@ export function UsagePageContent(props: {
   context: ApplicationContext;
   result: UsagePageModel["usageResult"];
 }) {
-  const state: UsageProps = {
-    get data() {
-      return props.state.data;
-    },
-    get filters() {
-      return props.state.filters;
-    },
-    get display() {
-      return props.state.display;
-    },
-    get detail() {
-      return props.state.detail;
-    },
-    get callbacks() {
-      return props.state.callbacks;
-    },
-  };
   return (
     <UsagePageShell context={props.context} result={props.result}>
-      {renderUsage(state)}
+      <UsageView {...props.state} />
     </UsagePageShell>
   );
 }
@@ -47,12 +30,17 @@ function UsagePageBody(props: { routeData?: UsageRouteData }) {
     revision();
     return model.read();
   });
-  model.connect();
+  createEffect(
+    () => context,
+    () => {
+      model.connect();
+      return () => model.dispose();
+    },
+  );
   createEffect(
     () => props.routeData,
     (data) => model.setRouteData(data),
   );
-  onCleanup(() => model.dispose());
   return (
     <UsagePageContent state={state()} context={context} result={(revision(), model.usageResult)} />
   );

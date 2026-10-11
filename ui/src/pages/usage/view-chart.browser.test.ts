@@ -1,10 +1,11 @@
 import { afterEach, expect, it } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
-import { renderCostBreakdownCompact, renderDailyChartCompact } from "./view-chart.tsx";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import "../../styles.css";
 import "../../styles/usage.css";
-import { mountUsageView } from "./view-mount.test-support.ts";
+import { CostBreakdownCompact, DailyChartCompact } from "./view-chart.tsx";
 
 registerUsageEnglish();
 afterEach(() => document.body.replaceChildren());
@@ -21,21 +22,22 @@ it("keeps token segments proportional and legend markers round beside form style
   };
   const container = document.createElement("div");
   document.body.append(container);
-  mountUsageView(
+  mountSolid(
     () => [
-      renderDailyChartCompact(
-        [{ ...totals, date: "2026-09-18" }],
-        [],
-        "tokens",
-        "by-type",
-        () => {},
-        () => {},
-        { startDate: "2026-09-18", endDate: "2026-09-18", complete: true },
-      ),
-      renderCostBreakdownCompact(totals, "tokens"),
+      DailyChartCompact({
+        dailyEntries: [{ ...totals, date: "2026-09-18" }],
+        selectedDays: [],
+        chartMode: "tokens",
+        dailyChartMode: "by-type",
+        onDailyChartModeChange: () => {},
+        onSelectDay: () => {},
+        range: { startDate: "2026-09-18", endDate: "2026-09-18", complete: true },
+      }),
+      CostBreakdownCompact({ totals, mode: "tokens" }),
     ],
-    container,
+    { container },
   );
+  flush();
   await Promise.all(
     [...container.querySelectorAll("openclaw-tooltip")].map((tooltip) => tooltip.updateComplete),
   );

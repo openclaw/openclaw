@@ -230,13 +230,6 @@ function deriveTimeSeries(detail: TimeSeriesProps["detail"], range: TimeSeriesPr
     showStatus: true,
   };
 }
-export function renderTimeSeriesCompact(
-  detail: TimeSeriesProps["detail"],
-  callbacks: TimeSeriesProps["callbacks"],
-  range: TimeSeriesProps["range"],
-) {
-  return <TimeSeriesCompact detail={detail} callbacks={callbacks} range={range} />;
-}
 
 export function TimeSeriesCompact(props: TimeSeriesProps) {
   const view = createMemo(() => deriveTimeSeries(props.detail, props.range));
@@ -395,33 +388,29 @@ function TimeSeriesChart(props: {
             </div>
           ) : undefined}
           <SettingsSegmented
-            {...{
-              mode: "buttons",
-              variant: "accent",
-              className: "small",
-              value: model().mode,
-              onChange: props.callbacks.onTimeSeriesModeChange,
-              onReselect: props.callbacks.onTimeSeriesModeChange,
-              options: [
-                { value: "per-turn", label: t("usage.details.perTurn") },
-                { value: "cumulative", label: t("usage.details.cumulative") },
-              ],
-            }}
+            mode="buttons"
+            variant="accent"
+            {...{ className: "small" }}
+            value={model().mode}
+            onChange={props.callbacks.onTimeSeriesModeChange}
+            onReselect={props.callbacks.onTimeSeriesModeChange}
+            options={[
+              { value: "per-turn", label: t("usage.details.perTurn") },
+              { value: "cumulative", label: t("usage.details.cumulative") },
+            ]}
           />
           {!model().isCumulative ? (
             <SettingsSegmented
-              {...{
-                mode: "buttons",
-                variant: "accent",
-                className: "small",
-                value: model().breakdownMode,
-                onChange: props.callbacks.onTimeSeriesBreakdownChange,
-                onReselect: props.callbacks.onTimeSeriesBreakdownChange,
-                options: [
-                  { value: "total", label: t("usage.daily.total") },
-                  { value: "by-type", label: t("usage.daily.byType") },
-                ],
-              }}
+              mode="buttons"
+              variant="accent"
+              {...{ className: "small" }}
+              value={model().breakdownMode}
+              onChange={props.callbacks.onTimeSeriesBreakdownChange}
+              onReselect={props.callbacks.onTimeSeriesBreakdownChange}
+              options={[
+                { value: "total", label: t("usage.daily.total") },
+                { value: "by-type", label: t("usage.daily.byType") },
+              ]}
             />
           ) : undefined}
         </div>
@@ -467,24 +456,22 @@ function TimeSeriesChart(props: {
               </>
             )}
           </For>
-          <>
-            <text
-              x={model().padding.left}
-              y={model().padding.top + model().chartHeight + 10}
-              text-anchor="start"
-              class="ts-axis-label"
-            >
-              {model().formatAxisTimestamp(model().firstTimestamp)}
-            </text>
-            <text
-              x={model().width - model().padding.right}
-              y={model().padding.top + model().chartHeight + 10}
-              text-anchor="end"
-              class="ts-axis-label"
-            >
-              {model().formatAxisTimestamp(model().lastTimestamp)}
-            </text>
-          </>
+          <text
+            x={model().padding.left}
+            y={model().padding.top + model().chartHeight + 10}
+            text-anchor="start"
+            class="ts-axis-label"
+          >
+            {model().formatAxisTimestamp(model().firstTimestamp)}
+          </text>
+          <text
+            x={model().width - model().padding.right}
+            y={model().padding.top + model().chartHeight + 10}
+            text-anchor="end"
+            class="ts-axis-label"
+          >
+            {model().formatAxisTimestamp(model().lastTimestamp)}
+          </text>
           <For each={model().bars}>
             {(bar) =>
               bar.stacked ? (
@@ -574,26 +561,23 @@ function TimeSeriesChart(props: {
           {(side) => {
             const x = () => (side === "left" ? model().leftHandleX : model().rightHandleX);
             return (
-              <>
-                {" "}
-                <div
-                  class={`chart-handle-zone chart-handle-${side}`}
-                  role="slider"
-                  tabindex="0"
-                  aria-label={t(
-                    side === "left" ? "usage.details.rangeStart" : "usage.details.rangeEnd",
-                  )}
-                  aria-valuemin={side === "left" ? model().firstTimestamp : model().cursorLeft}
-                  aria-valuemax={side === "left" ? model().cursorRight : model().lastTimestamp}
-                  aria-valuenow={side === "left" ? model().cursorLeft : model().cursorRight}
-                  aria-valuetext={model().formatTooltipTimestamp(
-                    side === "left" ? model().cursorLeft : model().cursorRight,
-                  )}
-                  style={{ left: `${((x() / model().width) * 100).toFixed(1)}%` }}
-                  onMouseDown={makeDragHandler(side)}
-                  onKeyDown={(event: KeyboardEvent) => handleCursorKeydown(event, side)}
-                />{" "}
-              </>
+              <div
+                class={`chart-handle-zone chart-handle-${side}`}
+                role="slider"
+                tabindex="0"
+                aria-label={t(
+                  side === "left" ? "usage.details.rangeStart" : "usage.details.rangeEnd",
+                )}
+                aria-valuemin={side === "left" ? model().firstTimestamp : model().cursorLeft}
+                aria-valuemax={side === "left" ? model().cursorRight : model().lastTimestamp}
+                aria-valuenow={side === "left" ? model().cursorLeft : model().cursorRight}
+                aria-valuetext={model().formatTooltipTimestamp(
+                  side === "left" ? model().cursorLeft : model().cursorRight,
+                )}
+                style={{ left: `${((x() / model().width) * 100).toFixed(1)}%` }}
+                onMouseDown={makeDragHandler(side)}
+                onKeyDown={(event: KeyboardEvent) => handleCursorKeydown(event, side)}
+              />
             );
           }}
         </For>

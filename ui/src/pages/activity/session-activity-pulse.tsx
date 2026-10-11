@@ -1,5 +1,5 @@
 import { createMemo } from "@solidjs/signals";
-import { For } from "solid-js";
+import { For, Show } from "solid-js";
 import type { SessionActivityPulse } from "../../../../src/shared/session-types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
@@ -39,16 +39,6 @@ export function renderSessionActivityPulse(props: SessionActivityPulseProps) {
       ),
     };
   });
-  const stats = createMemo(() =>
-    (
-      [
-        ["sessions", props.pulse.sessions],
-        ["started", props.pulse.started],
-        ["people", props.pulse.people],
-        ["running", props.pulse.running],
-      ] as const
-    ).filter(([, value]) => value !== undefined),
-  );
   return (
     <section class="activity-pulse">
       <div class="activity-pulse__header">
@@ -57,28 +47,28 @@ export function renderSessionActivityPulse(props: SessionActivityPulseProps) {
           <strong>{chart().windowLabel}</strong>
         </div>
         <div class="activity-pulse__stats">
-          <For each={stats()} keyed={(stat) => stat[0]}>
-            {(stat, index) => (
-              <>
+          <For each={["sessions", "started", "people", "running"] as const}>
+            {(key, index) => (
+              <Show when={props.pulse[key] !== undefined}>
                 {index() ? " · " : undefined}
                 <span
                   title={
-                    stat()[0] === "people" && props.options.peopleIncomplete
+                    key === "people" && props.options.peopleIncomplete
                       ? t("activityFeed.partialHistory")
                       : undefined
                   }
                 >
-                  {stat()[0] === "running" && props.pulse.running > 0 ? (
+                  {key === "running" && props.pulse.running > 0 ? (
                     <i class="activity-pulse__running" aria-hidden="true" />
                   ) : undefined}
                   <b>
-                    {stat()[0] === "people" && props.options.peopleIncomplete
-                      ? `${stat()[1]}+`
-                      : stat()[1]}
+                    {key === "people" && props.options.peopleIncomplete
+                      ? `${props.pulse[key]}+`
+                      : props.pulse[key]}
                   </b>{" "}
-                  {t(`activity.pulse.${stat()[0]}`)}
+                  {t(`activity.pulse.${key}`)}
                 </span>
-              </>
+              </Show>
             )}
           </For>
         </div>

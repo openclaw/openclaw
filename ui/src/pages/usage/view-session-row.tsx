@@ -3,7 +3,7 @@ import "../../components/agent-row-chip.ts";
 import { handleCopyButton } from "../../components/copy-button.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
-export function renderSessionBarRow(props: {
+export function SessionBarRow(props: {
   sessionKey: string;
   displayLabel: string;
   meta: string[];

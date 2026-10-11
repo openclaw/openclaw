@@ -1,11 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /* @vitest-environment jsdom */
-import { createSignal, flush } from "solid-js";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CostDailyEntry } from "./types.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import type { CostDailyEntry, UsageProps } from "./types.ts";
 import { dailyEntry } from "./usage-chart.test-support.ts";
-import { renderDailyChartCompact } from "./view-chart.tsx";
-import { mountUsageView } from "./view-mount.test-support.ts";
+import { DailyChartCompact } from "./view-chart.tsx";
 import { createUsageProps } from "./view.test-support.ts";
 import { renderUsage } from "./view.tsx";
 
@@ -19,15 +20,24 @@ function renderDailyChart(
   const container = document.createElement("div");
   document.body.append(container);
   const onSelectDay = vi.fn<(day: string, shiftKey: boolean, orderedDays: string[]) => void>();
-  mountUsageView(
+  mountSolid(
     () =>
-      renderDailyChartCompact(daily, [], chartMode, dailyChartMode, () => {}, onSelectDay, {
-        startDate: daily[0]?.date ?? "2026-05-01",
-        endDate: daily.at(-1)?.date ?? "2026-05-01",
-        complete: true,
+      DailyChartCompact({
+        dailyEntries: daily,
+        selectedDays: [],
+        chartMode,
+        dailyChartMode,
+        onDailyChartModeChange: () => {},
+        onSelectDay,
+        range: {
+          startDate: daily[0]?.date ?? "2026-05-01",
+          endDate: daily.at(-1)?.date ?? "2026-05-01",
+          complete: true,
+        },
       }),
-    container,
+    { container },
   );
+  flush();
   return {
     container,
     onSelectDay,
@@ -35,7 +45,7 @@ function renderDailyChart(
   };
 }
 
-describe("renderDailyChartCompact", () => {
+describe("DailyChartCompact", () => {
   it("keeps day selection operable with mouse and keyboard", () => {
     const entry = dailyEntry("2026-05-04", 500, 0.2);
     const base = createUsageProps();
@@ -51,7 +61,7 @@ describe("renderDailyChartCompact", () => {
       })),
     );
     const container = document.body.appendChild(document.createElement("div"));
-    mountUsageView(
+    mountSolid(
       () =>
         renderUsage({
           ...base,
@@ -61,8 +71,9 @@ describe("renderDailyChartCompact", () => {
           data: { ...base.data, totals: entry, costDaily: [entry] },
           callbacks: { ...base.callbacks, filters: { ...base.callbacks.filters, onSelectDay } },
         }),
-      container,
+      { container },
     );
+    flush();
     const bar = expectDefined(
       container.querySelector<HTMLElement>(".daily-bar-wrapper"),
       "daily usage bar",
@@ -134,5 +145,45 @@ describe("renderDailyChartCompact", () => {
     expect(container.querySelectorAll(".daily-bar-total--placeholder")).toHaveLength(
       costs.length === 15 ? 15 : 0,
     );
+  });
+  it("keeps a range preset focused while applying its dates", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-05-14T12:00:00.000Z"));
+    const base = createUsageProps();
+    const [filters, setFilters] = createSignal({ ...base.filters, timeZone: "utc" as const });
+    const onDatesChange = vi.fn((patch: Partial<UsageProps["filters"]>) =>
+      setFilters((current) => ({ ...current, ...patch })),
+    );
+    const container = document.body.appendChild(document.createElement("div"));
+    try {
+      mountSolid(
+        () =>
+          renderUsage({
+            ...base,
+            get filters() {
+              return filters();
+            },
+            callbacks: { ...base.callbacks, filters: { ...base.callbacks.filters, onDatesChange } },
+          }),
+        { container },
+      );
+      flush();
+      const preset = [
+        ...container.querySelectorAll<HTMLButtonElement>(".usage-presets button"),
+      ].find((button) => button.textContent?.trim() === "7d")!;
+      preset.focus();
+      preset.click();
+      flush();
+      expect(onDatesChange.mock.calls.map(([patch]) => patch)).toEqual([
+        { startDate: "2026-05-08" },
+        { endDate: "2026-05-14" },
+      ]);
+      expect([...container.querySelectorAll(".usage-presets button")]).toContain(preset);
+      expect(document.activeElement).toBe(preset);
+      expect(preset.getAttribute("aria-pressed")).toBe("true");
+    } finally {
+      container.remove();
+      vi.useRealTimers();
+    }
   });
 });

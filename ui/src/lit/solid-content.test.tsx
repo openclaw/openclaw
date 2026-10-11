@@ -1,9 +1,9 @@
-import { render } from "@solidjs/web";
 import { html } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive } from "lit/directive.js";
 import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { LitContent } from "./solid-content.tsx";
 
 afterEach(() => document.body.replaceChildren());
@@ -24,14 +24,14 @@ it("updates an isolated Lit outlet and retires its directives without replacing 
   const onClick = vi.fn(() => setLabel("Second"));
   const container = document.createElement("div");
   document.body.append(container);
-  const dispose = render(
+  const { unmount } = mountSolid(
     () => (
       <section>
         <input aria-label="Solid sibling" />
         <LitContent content={html`<button @click=${onClick}>${observeRemoval(label())}</button>`} />
       </section>
     ),
-    container,
+    { container },
   );
   flush();
   const sibling = container.querySelector("input")!;
@@ -49,7 +49,7 @@ it("updates an isolated Lit outlet and retires its directives without replacing 
     expect(sibling.value).toBe("Typed value");
     expect(disconnected).not.toHaveBeenCalled();
   } finally {
-    dispose();
+    unmount();
   }
   expect(disconnected).toHaveBeenCalledOnce();
   expect(outlet.querySelector("button")).toBeNull();

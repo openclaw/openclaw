@@ -123,12 +123,11 @@ function SessionLinkView(props: {
   );
   // eslint-disable-next-line solid/reactivity -- Solid 2 dynamic() tracks its source in an owned memo.
   const SessionLink = dynamic(() => (target() ? "a" : "div"));
-  const owner = createMemo(() => sessionActivityOwner(props.row));
   const ownerName = createMemo(() => {
     locale();
-    return presenceViewerLabel(owner());
+    return presenceViewerLabel(sessionActivityOwner(props.row));
   });
-  const activityAt = createMemo(() => sessionActivityTimestamp(props.row));
+  const activityAt = () => sessionActivityTimestamp(props.row);
   const relativeTime = createMemo(() => {
     void props.presentationRevision;
     locale();
@@ -146,10 +145,8 @@ function SessionLinkView(props: {
   const scope = createMemo(() =>
     props.row.channel ? t("activityFeed.channelLabel", { value: props.row.channel }) : null,
   );
-  const showAgent = createMemo(() => props.row.kind !== "global" || Boolean(props.row.agentId));
-  const source = createMemo(() =>
-    props.row.createdVia === "cron" ? t("activityFeed.automation") : null,
-  );
+  const showAgent = () => props.row.kind !== "global" || Boolean(props.row.agentId);
+  const source = () => (props.row.createdVia === "cron" ? t("activityFeed.automation") : null);
   return (
     <div
       class={[
@@ -175,7 +172,7 @@ function SessionLinkView(props: {
           ) : undefined}
           <openclaw-viewer-avatar
             prop:identity={props.row.owner?.actor.identity ?? props.row.createdActor?.identity}
-            prop:user={owner()}
+            prop:user={sessionActivityOwner(props.row)}
             prop:markAsViewer={false}
             variant="footer"
           />
@@ -203,7 +200,7 @@ function SessionLinkView(props: {
             ) : undefined}
             {showAgent() ? (
               <span class="activity-feed__session-scope">
-                {<LitContent content={renderAgentRowChip(agentId())} />}
+                <LitContent content={renderAgentRowChip(agentId())} />
               </span>
             ) : undefined}
             {scope() ? <span class="activity-feed__session-scope">{scope()}</span> : undefined}
@@ -214,7 +211,7 @@ function SessionLinkView(props: {
           {activityAt() > 0 ? <span>{relativeTime()}</span> : undefined}
         </span>
       </SessionLink>
-      {<SessionActivitySummary row={props.row} onRetry={props.onSummaryRetry} />}
+      <SessionActivitySummary row={props.row} onRetry={props.onSummaryRetry} />
       <ActivitySessionGit
         context={props.context}
         sessionKey={scopedSessionArtifactKey(props.row.key, agentId())}
@@ -341,15 +338,10 @@ function IdentityHeader(props: {
           {props.identity.email ? <p>{props.identity.email}</p> : undefined}
         </div>
         <SettingsStatus
-          {...{
-            kind:
-              online() && activity() !== "unknown"
-                ? activity() === "idle"
-                  ? "warn"
-                  : "ok"
-                : "muted",
-            label: status(),
-          }}
+          kind={
+            online() && activity() !== "unknown" ? (activity() === "idle" ? "warn" : "ok") : "muted"
+          }
+          label={status()}
         />
       </div>
       {descriptions().length ? (
@@ -489,7 +481,7 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
     <div class="activity-feed">
       <div class="activity-feed__toolbar">
         <label class="data-table-search activity-feed__search">
-          {<Icon name="search" />}
+          <Icon name="search" />
           <input
             type="search"
             aria-label={t("activityFeed.searchPlaceholder")}
@@ -502,24 +494,22 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
             }}
           />
         </label>
-        {
-          <SettingsSegmented
-            {...{
-              mode: "buttons",
-              className: "activity-feed__time-filter",
-              value: props.filters.time,
-              ariaLabel: t("activityFeed.time"),
-              options: ACTIVITY_TIME_FILTERS.map((time) => ({
-                value: time,
-                label: t(TIME_LABELS[time]),
-                ariaLabel: t(TIME_LABELS[time]),
-                compactLabel: time === "all" ? t(TIME_LABELS[time]) : time,
-              })),
-              onChange: (time) => props.onFiltersChange({ ...props.filters, time }),
-              onReselect: (time) => props.onFiltersChange({ ...props.filters, time }),
-            }}
-          />
-        }
+        {/* oxlint-disable solid/no-react-specific-props -- SettingsSegmented retains the shared settings-controls className contract. */}
+        <SettingsSegmented
+          mode="buttons"
+          className="activity-feed__time-filter"
+          value={props.filters.time}
+          ariaLabel={t("activityFeed.time")}
+          options={ACTIVITY_TIME_FILTERS.map((time) => ({
+            value: time,
+            label: t(TIME_LABELS[time]),
+            ariaLabel: t(TIME_LABELS[time]),
+            compactLabel: time === "all" ? t(TIME_LABELS[time]) : time,
+          }))}
+          onChange={(time) => props.onFiltersChange({ ...props.filters, time })}
+          onReselect={(time) => props.onFiltersChange({ ...props.filters, time })}
+        />
+        {/* oxlint-enable solid/no-react-specific-props */}
         <PeopleControl
           view={props}
           people={people()}

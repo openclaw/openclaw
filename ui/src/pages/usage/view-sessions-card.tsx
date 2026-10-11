@@ -6,7 +6,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import "../../components/tooltip.ts";
 import { formatAnalysisCost, formatUsageTokens } from "./metrics.ts";
 import type { UsageProps, UsageSessionEntry } from "./types.ts";
-import { renderSessionBarRow as SessionBarRow } from "./view-session-row.tsx";
+import { SessionBarRow } from "./view-session-row.tsx";
 
 const buildSessionMeta = (session: UsageSessionEntry): string[] =>
   [
@@ -127,7 +127,7 @@ export function SessionsCard(props: {
     };
   });
   return (
-    <SettingsSection {...{ title: t("usage.sessions.title") }}>
+    <SettingsSection title={t("usage.sessions.title")}>
       <div class="usage-panel sessions-card">
         <div class="sessions-card-header">
           <div class="sessions-card-count">
@@ -150,19 +150,17 @@ export function SessionsCard(props: {
             </span>
           </div>
           <SettingsSegmented
-            {...{
-              mode: "buttons",
-              variant: "accent",
-              ariaPressed: false,
-              className: "small",
-              value: state().sessionsTab,
-              onChange: (tab) => state().onDisplayChange({ sessionsTab: tab }),
-              onReselect: (tab) => state().onDisplayChange({ sessionsTab: tab }),
-              options: [
-                { value: "all", label: t("usage.sessions.all") },
-                { value: "recent", label: t("usage.sessions.recent") },
-              ],
-            }}
+            mode="buttons"
+            variant="accent"
+            ariaPressed={false}
+            {...{ className: "small" }}
+            value={state().sessionsTab}
+            onChange={(tab) => state().onDisplayChange({ sessionsTab: tab })}
+            onReselect={(tab) => state().onDisplayChange({ sessionsTab: tab })}
+            options={[
+              { value: "all", label: t("usage.sessions.all") },
+              { value: "recent", label: t("usage.sessions.recent") },
+            ]}
           />
           <label class="sessions-sort">
             <span>{t("usage.sessions.sort")}</span>
@@ -215,16 +213,13 @@ export function SessionsCard(props: {
           ) : undefined}
         </div>
         {state().displayedEntries.length === 0 ? (
-          <>
-            {" "}
-            <div class="usage-empty-block">
-              {t(
-                state().sessionsTab === "recent"
-                  ? "usage.sessions.noRecent"
-                  : "usage.sessions.noneInRange",
-              )}
-            </div>{" "}
-          </>
+          <div class="usage-empty-block">
+            {t(
+              state().sessionsTab === "recent"
+                ? "usage.sessions.noRecent"
+                : "usage.sessions.noneInRange",
+            )}
+          </div>
         ) : (
           <div
             class={
@@ -295,12 +290,4 @@ function SessionRows(props: {
       )}
     </For>
   );
-}
-
-export function renderSessionsCard(
-  sessions: UsageSessionEntry[],
-  usage: Pick<UsageProps, "filters" | "display" | "callbacks">,
-  totalSessions: number,
-) {
-  return <SessionsCard sessions={sessions} usage={usage} totalSessions={totalSessions} />;
 }

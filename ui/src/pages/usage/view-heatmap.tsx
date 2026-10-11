@@ -67,9 +67,10 @@ function renderHeatmapSvg(heatmap: UsageHeatmap) {
               if (!day) {
                 return undefined;
               }
-              const tooltip = `${formatFullDate(day.date)} · ${t("usage.heatmap.cellTokens", {
-                tokens: numberFormat.format(day.tokens),
-              })}`;
+              const tooltip = () =>
+                `${formatFullDate(day.date)} · ${t("usage.heatmap.cellTokens", {
+                  tokens: numberFormat.format(day.tokens),
+                })}`;
               return (
                 <rect
                   class={`usage-heatmap__cell usage-heatmap__cell--l${day.level}`}
@@ -79,8 +80,8 @@ function renderHeatmapSvg(heatmap: UsageHeatmap) {
                   height={HEATMAP_CELL}
                   rx="2.5"
                   role="img"
-                  data-tooltip={tooltip}
-                  aria-label={tooltip}
+                  data-tooltip={tooltip()}
+                  aria-label={tooltip()}
                 />
               );
             }}
@@ -116,16 +117,12 @@ export function renderUsageHeatmap(
   );
   return (
     <SettingsSection
-      {...{
-        title: t("usage.heatmap.title"),
-        description: t("usage.heatmap.subtitle"),
-        actions: legend,
-      }}
+      title={t("usage.heatmap.title")}
+      description={t("usage.heatmap.subtitle")}
+      actions={legend}
     >
-      <>
-        {" "}
-        <div class="usage-panel usage-heatmap">{renderHeatmapSvg(heatmap)}</div>{" "}
-      </>
+      {" "}
+      <div class="usage-panel usage-heatmap">{renderHeatmapSvg(heatmap)}</div>{" "}
     </SettingsSection>
   );
 }

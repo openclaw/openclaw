@@ -31,31 +31,6 @@ type CurrentWorkProps = {
 };
 
 function CurrentSession(props: { owner: CurrentWorkProps; row: GatewaySessionRow }) {
-  const content = (
-    <>
-      <span class={`activity-current-work__copy`}>
-        <span class={`activity-current-work__title`}>
-          {resolveSessionDisplayName(props.row.key, props.row)}
-        </span>
-        <span class={`activity-current-work__agent`}>
-          {props.row.agentId
-            ? t("activityFeed.agentLabel", { value: props.row.agentId })
-            : props.row.key}
-        </span>
-      </span>
-      {
-        <SettingsStatus
-          {...{
-            kind: "warn",
-            label:
-              props.row.status === "queued"
-                ? t("activity.currentWork.queued")
-                : t("activity.status.running"),
-          }}
-        />
-      }
-    </>
-  );
   const face = createMemo(() => resolveSessionPreferredFace(props.row));
   const target = createMemo(() =>
     isSessionKeyAddressable(props.row.key, props.owner.globalScope)
@@ -72,26 +47,41 @@ function CurrentSession(props: { owner: CurrentWorkProps; row: GatewaySessionRow
   // oxlint-disable-next-line solid/reactivity -- Solid 2 dynamic() tracks its source callback.
   const CurrentRow = dynamic(() => (target() ? "a" : "div"));
   return (
-    <>
-      <CurrentRow
-        class={`activity-current-work__row`}
-        data-session-key={props.row.key}
-        data-agent-id={props.row.agentId ?? undefined}
-        href={target()?.href ?? undefined}
-        onClick={
-          target()
-            ? (event: MouseEvent) => {
-                if (shouldHandleNavigationClick(event)) {
-                  event.preventDefault();
-                  props.owner.navigate(face(), target()!.options);
-                }
+    <CurrentRow
+      class="activity-current-work__row"
+      data-session-key={props.row.key}
+      data-agent-id={props.row.agentId ?? undefined}
+      href={target()?.href ?? undefined}
+      onClick={
+        target()
+          ? (event: MouseEvent) => {
+              if (shouldHandleNavigationClick(event)) {
+                event.preventDefault();
+                props.owner.navigate(face(), target()!.options);
               }
-            : undefined
+            }
+          : undefined
+      }
+    >
+      <span class="activity-current-work__copy">
+        <span class="activity-current-work__title">
+          {resolveSessionDisplayName(props.row.key, props.row)}
+        </span>
+        <span class="activity-current-work__agent">
+          {props.row.agentId
+            ? t("activityFeed.agentLabel", { value: props.row.agentId })
+            : props.row.key}
+        </span>
+      </span>
+      <SettingsStatus
+        kind="warn"
+        label={
+          props.row.status === "queued"
+            ? t("activity.currentWork.queued")
+            : t("activity.status.running")
         }
-      >
-        {content}
-      </CurrentRow>
-    </>
+      />
+    </CurrentRow>
   );
 }
 
@@ -111,51 +101,43 @@ export function renderCurrentWork(props: CurrentWorkProps) {
             : null,
   );
   return (
-    <>
-      <section
-        class={`activity-current-work`}
-        aria-label={t("activity.currentWork.title")}
-        aria-busy={props.loading ? "true" : "false"}
-      >
-        <div class={`settings-section__header`}>
-          <h2 class={`settings-section__heading`}>{t("activity.currentWork.title")}</h2>
-        </div>
-        <div class={`settings-group activity-current-work__rows`}>
-          {message() ? (
-            <>
-              <div class={`activity-current-work__feedback`} role={`status`}>
-                <span>{message()}</span>
-                {props.error ? (
-                  <>
-                    <button
-                      type={`button`}
-                      class={`btn btn--sm`}
-                      disabled={props.loading}
-                      onClick={props.onRetry}
-                    >
-                      {t("common.retry")}
-                    </button>
-                  </>
-                ) : undefined}
-              </div>
-            </>
-          ) : (
-            <For each={rows()} keyed={currentWorkIdentity}>
-              {(row) => <CurrentSession owner={props} row={row()} />}
-            </For>
-          )}
-          {props.result?.hasMore && !message() ? (
-            <>
-              <div class={`activity-current-work__feedback`}>
-                {t("activity.currentWork.limit", {
-                  count: String(rows().length),
-                  total: String(props.result.totalCount ?? rows().length),
-                })}
-              </div>
-            </>
-          ) : undefined}
-        </div>
-      </section>
-    </>
+    <section
+      class="activity-current-work"
+      aria-label={t("activity.currentWork.title")}
+      aria-busy={props.loading ? "true" : "false"}
+    >
+      <div class="settings-section__header">
+        <h2 class="settings-section__heading">{t("activity.currentWork.title")}</h2>
+      </div>
+      <div class="settings-group activity-current-work__rows">
+        {message() ? (
+          <div class="activity-current-work__feedback" role="status">
+            <span>{message()}</span>
+            {props.error ? (
+              <button
+                type="button"
+                class="btn btn--sm"
+                disabled={props.loading}
+                onClick={props.onRetry}
+              >
+                {t("common.retry")}
+              </button>
+            ) : undefined}
+          </div>
+        ) : (
+          <For each={rows()} keyed={currentWorkIdentity}>
+            {(row) => <CurrentSession owner={props} row={row()} />}
+          </For>
+        )}
+        {props.result?.hasMore && !message() ? (
+          <div class="activity-current-work__feedback">
+            {t("activity.currentWork.limit", {
+              count: String(rows().length),
+              total: String(props.result.totalCount ?? rows().length),
+            })}
+          </div>
+        ) : undefined}
+      </div>
+    </section>
   );
 }

@@ -1,12 +1,11 @@
-/* @vitest-environment jsdom */
-
-import { createSignal, flush } from "solid-js";
+import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { buildAggregatesFromSessions } from "./metrics.ts";
 import { buildUsageFilterOptions } from "./query.ts";
 import { createRecordedCostUsage } from "./test-helpers/recorded-cost.test-support.ts";
 import type { UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
-import { mountUsageView } from "./view-mount.test-support.ts";
 import { createUsageProps, usageSession } from "./view.test-support.ts";
 import { renderUsage } from "./view.tsx";
 
@@ -86,7 +85,7 @@ it.each([
   ];
   const onExportJson = vi.fn();
   const container = document.createElement("div");
-  mountUsageView(
+  mountSolid(
     () =>
       renderUsage(
         createUsageProps({
@@ -103,8 +102,9 @@ it.each([
           },
         }),
       ),
-    container,
+    { container },
   );
+  flush();
   expect(
     [...container.querySelectorAll(".usage-metric-badge strong")].map((el) => el.textContent),
   ).toEqual(["99", "$10.00", "1"]);
@@ -129,10 +129,10 @@ it.each([
 it("renders shared skeletons while initial usage is loading", () => {
   const container = document.createElement("div");
   const props = createUsageProps();
-  mountUsageView(
-    () => renderUsage(createUsageProps({ data: { ...props.data, loading: true } })),
+  mountSolid(() => renderUsage(createUsageProps({ data: { ...props.data, loading: true } })), {
     container,
-  );
+  });
+  flush();
 
   const blocks = container.querySelectorAll(".usage-skeleton-block");
   expect(blocks).toHaveLength(3);
@@ -150,7 +150,7 @@ describe("renderUsage", () => {
     const fixture = createRecordedCostUsage();
     const sessions = sessionIndex === null ? fixture.sessions : [fixture.sessions[sessionIndex]!];
     const container = document.createElement("div");
-    mountUsageView(
+    mountSolid(
       () =>
         renderUsage(
           createUsageProps({
@@ -162,8 +162,9 @@ describe("renderUsage", () => {
             },
           }),
         ),
-      container,
+      { container },
     );
+    flush();
 
     expect(averageCostSummary(container)).toEqual({
       hint: missing
@@ -196,7 +197,7 @@ describe("renderUsage", () => {
       const clearedFilters = { ...props.filters };
       const container = document.createElement("div");
       const [currentFilters, setFilters] = createSignal(props.filters);
-      mountUsageView(
+      mountSolid(
         () =>
           renderUsage({
             ...props,
@@ -204,8 +205,9 @@ describe("renderUsage", () => {
               return currentFilters();
             },
           }),
-        container,
+        { container },
       );
+      flush();
       for (const { filters, missing, value } of [
         { filters: clearedFilters, missing: true, value: "$0.03" },
         { filters: { ...clearedFilters, ...selected }, missing: false, value: "$0.00" },
@@ -226,11 +228,12 @@ describe("renderUsage", () => {
   it("surfaces a provider-usage failure instead of hiding the panel", () => {
     const container = document.createElement("div");
     const base = createUsageProps();
-    mountUsageView(
+    mountSolid(
       () =>
         renderUsage(createUsageProps({ data: { ...base.data, providerUsageUnavailable: true } })),
-      container,
+      { container },
     );
+    flush();
 
     expect(container.textContent).toContain(
       "Provider usage is unavailable; the last request failed. Refresh to retry.",
@@ -239,7 +242,8 @@ describe("renderUsage", () => {
 
   it("keeps the provider panel hidden when usage is empty without a failure", () => {
     const container = document.createElement("div");
-    mountUsageView(() => renderUsage(createUsageProps()), container);
+    mountSolid(() => renderUsage(createUsageProps()), { container });
+    flush();
 
     expect(container.textContent).not.toContain("Provider usage is unavailable");
   });
@@ -275,7 +279,7 @@ describe("renderUsage", () => {
         { timeZone: "local", selectedDay: "2026-05-14", visible: false },
       ] as const) {
         const container = document.createElement("div");
-        mountUsageView(
+        mountSolid(
           () =>
             renderUsage(
               createUsageProps({
@@ -287,8 +291,9 @@ describe("renderUsage", () => {
                 },
               }),
             ),
-          container,
+          { container },
         );
+        flush();
 
         expect(container.querySelector(".session-bar-row") !== null).toBe(visible);
       }
@@ -306,7 +311,7 @@ describe("renderUsage", () => {
       usageSession("agent:research:main", "research", "anthropic"),
     ];
 
-    mountUsageView(
+    mountSolid(
       () =>
         renderUsage(
           createUsageProps({
@@ -323,8 +328,9 @@ describe("renderUsage", () => {
             },
           }),
         ),
-      container,
+      { container },
     );
+    flush();
 
     const providers = insightCard(container, "Top Providers");
     expect(providers?.textContent).toContain("anthropic");
@@ -338,7 +344,7 @@ describe("renderUsage", () => {
     const container = document.createElement("div");
     const sessions = [usageSession("agent:main:main", "main", "openai")];
 
-    mountUsageView(
+    mountSolid(
       () =>
         renderUsage(
           createUsageProps({
@@ -355,8 +361,9 @@ describe("renderUsage", () => {
             },
           }),
         ),
-      container,
+      { container },
     );
+    flush();
 
     const providers = insightCard(container, "Top Providers");
     expect(providers?.textContent).toContain("No provider data");
@@ -375,7 +382,7 @@ describe("renderUsage", () => {
       }
       const onExportJson = vi.fn();
       const container = document.createElement("div");
-      mountUsageView(
+      mountSolid(
         () =>
           renderUsage(
             createUsageProps({
@@ -395,8 +402,9 @@ describe("renderUsage", () => {
               },
             }),
           ),
-        container,
+        { container },
       );
+      flush();
       container
         .querySelector(".usage-export-menu")
         ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "json" } } }));
@@ -428,7 +436,7 @@ describe("renderUsage", () => {
       },
     } satisfies UsageProps["data"]["sessions"][number];
 
-    mountUsageView(
+    mountSolid(
       () =>
         renderUsage(
           createUsageProps({
@@ -439,8 +447,9 @@ describe("renderUsage", () => {
             },
           }),
         ),
-      container,
+      { container },
     );
+    flush();
 
     expect(container.querySelector(".filter-chip-label")?.textContent).toContain(
       `${"a".repeat(19)}…`,
@@ -453,7 +462,8 @@ describe("renderUsage", () => {
   it("omits the duplicate inner page heading because the shell owns tab headings", () => {
     const container = document.createElement("div");
 
-    mountUsageView(() => renderUsage(createUsageProps()), container);
+    mountSolid(() => renderUsage(createUsageProps()), { container });
+    flush();
 
     expect(container.querySelector(".usage-page-header")).toBeNull();
     expect(container.querySelector(".usage-page-title")).toBeNull();
@@ -463,7 +473,7 @@ describe("renderUsage", () => {
   it("leaves agent scoping to the shared page header control", () => {
     const container = document.createElement("div");
 
-    mountUsageView(
+    mountSolid(
       () =>
         renderUsage(
           createUsageProps({
@@ -480,8 +490,9 @@ describe("renderUsage", () => {
             },
           }),
         ),
-      container,
+      { container },
     );
+    flush();
 
     expect(container.querySelector('input[name="usage-agent-scope"]')).toBeNull();
   });
@@ -497,7 +508,7 @@ describe("renderUsage", () => {
     );
     const container = document.body.appendChild(document.createElement("div"));
     try {
-      mountUsageView(
+      mountSolid(
         () =>
           renderUsage({
             ...base,
@@ -510,8 +521,9 @@ describe("renderUsage", () => {
               filters: { ...base.callbacks.filters, onQueryDraftChange },
             },
           }),
-        container,
+        { container },
       );
+      flush();
       const first = [...container.querySelectorAll(".usage-filter-option")].find(
         (item) => item.textContent?.trim() === "clear",
       )!;
@@ -559,7 +571,7 @@ describe("renderUsage", () => {
     const [data, setData] = createSignal({ ...base.data, totals: initial });
     const [display, setDisplay] = createSignal(base.display);
     const container = document.createElement("div");
-    mountUsageView(
+    mountSolid(
       () =>
         renderUsage({
           ...base,
@@ -570,8 +582,9 @@ describe("renderUsage", () => {
             return display();
           },
         }),
-      container,
+      { container },
     );
+    flush();
     const breakdown = container.querySelector(".cost-breakdown")!;
     expect(breakdown.querySelector(".cost-breakdown-total")?.textContent).toContain("120");
     setDisplay((current) => ({ ...current, chartMode: "cost" }));
@@ -597,7 +610,8 @@ describe("renderUsage", () => {
     });
     props.callbacks.filters.onQueryDraftChange = onQueryDraftChange;
 
-    mountUsageView(() => renderUsage(props), container);
+    mountSolid(() => renderUsage(props), { container });
+    flush();
     const option = [...container.querySelectorAll("wa-dropdown-item")].find(
       (item) => item.textContent?.trim() === "clear",
     )!;
@@ -668,7 +682,7 @@ describe("renderUsage", () => {
 
     const [data, setData] = createSignal(props.data);
     const [display, setDisplay] = createSignal(props.display);
-    mountUsageView(
+    mountSolid(
       () =>
         renderUsage({
           ...props,
@@ -679,8 +693,9 @@ describe("renderUsage", () => {
             return display();
           },
         }),
-      container,
+      { container },
     );
+    flush();
     expect(chartModeButton("Tokens")?.getAttribute("aria-pressed")).toBe("true");
     expect(chartModeButton("Cost")?.getAttribute("aria-pressed")).toBe("false");
     expect(values()).toEqual(["first", "second"]);
@@ -717,7 +732,7 @@ describe("renderUsage", () => {
   it("reports a stalled provider refresh instead of hiding the section", () => {
     const container = document.createElement("div");
 
-    mountUsageView(
+    mountSolid(
       () =>
         renderUsage(
           createUsageProps({
@@ -728,8 +743,9 @@ describe("renderUsage", () => {
             },
           }),
         ),
-      container,
+      { container },
     );
+    flush();
 
     const callout = container.querySelector(".usage-callout");
     expect(callout?.textContent?.trim()).toBe(
@@ -740,7 +756,7 @@ describe("renderUsage", () => {
   it("keeps available provider usage visible when refresh stalls", () => {
     const container = document.createElement("div");
 
-    mountUsageView(
+    mountSolid(
       () =>
         renderUsage(
           createUsageProps({
@@ -757,8 +773,9 @@ describe("renderUsage", () => {
             },
           }),
         ),
-      container,
+      { container },
     );
+    flush();
 
     expect(container.querySelector(".usage-callout")?.textContent).toContain(
       "Provider usage did not finish loading",
@@ -771,7 +788,7 @@ describe("renderUsage", () => {
   it("renders provider plans, quotas, and billing independently of session usage", () => {
     const container = document.createElement("div");
 
-    mountUsageView(
+    mountSolid(
       () =>
         renderUsage(
           createUsageProps({
@@ -805,8 +822,9 @@ describe("renderUsage", () => {
             },
           }),
         ),
-      container,
+      { container },
     );
+    flush();
 
     const card = container.querySelector(".provider-usage-card");
     expect(card?.textContent).toContain("OpenRouter");
@@ -848,7 +866,7 @@ describe("renderUsage", () => {
       inputCost: 0.1,
     };
 
-    mountUsageView(
+    mountSolid(
       () =>
         renderUsage(
           createUsageProps({
@@ -920,8 +938,9 @@ describe("renderUsage", () => {
             },
           }),
         ),
-      container,
+      { container },
     );
+    flush();
 
     const messagesValue = container.querySelector(
       ".usage-overview-card .usage-summary-card--hero .usage-summary-value",
@@ -972,12 +991,13 @@ describe("renderUsage", () => {
     ];
 
     const unfiltered = document.createElement("div");
-    mountUsageView(() => renderUsage(createUsageProps({ data })), unfiltered);
+    mountSolid(() => renderUsage(createUsageProps({ data })), { container: unfiltered });
+    flush();
     expect(unfiltered.querySelector(".cost-window-analysis")).not.toBeNull();
 
     for (const filterCase of filterCases) {
       const container = document.createElement("div");
-      mountUsageView(
+      mountSolid(
         () =>
           renderUsage(
             createUsageProps({
@@ -985,8 +1005,9 @@ describe("renderUsage", () => {
               filters: { ...base.filters, ...filterCase },
             }),
           ),
-        container,
+        { container },
       );
+      flush();
       expect(container.querySelector(".cost-window-analysis")).toBeNull();
     }
   });
@@ -1002,7 +1023,7 @@ describe("renderUsage", () => {
       missingCostEntries: 0,
     };
     const container = document.createElement("div");
-    mountUsageView(
+    mountSolid(
       () =>
         renderUsage(
           createUsageProps({
@@ -1013,14 +1034,15 @@ describe("renderUsage", () => {
             },
           }),
         ),
-      container,
+      { container },
     );
+    flush();
     expect(container.querySelector(".usage-empty-state")).not.toBeNull();
   });
 
   it("does not render the empty state under an error callout", () => {
     const container = document.createElement("div");
-    mountUsageView(
+    mountSolid(
       () =>
         renderUsage(
           createUsageProps({
@@ -1030,8 +1052,9 @@ describe("renderUsage", () => {
             },
           }),
         ),
-      container,
+      { container },
     );
+    flush();
     expect(container.querySelector(".usage-callout")).not.toBeNull();
     expect(container.querySelector(".usage-empty-state")).toBeNull();
   });

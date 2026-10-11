@@ -15,12 +15,7 @@ export function renderSessionSummary(
 ) {
   const usage = filteredUsage || session.usage;
   if (!usage) {
-    return (
-      <>
-        {" "}
-        <div class="usage-empty-block">{t("usage.details.noUsageData")}</div>{" "}
-      </>
-    );
+    return <div class="usage-empty-block">{t("usage.details.noUsageData")}</div>;
   }
 
   const formatTs = (ts?: number): string => (ts ? formatMs(ts) : t("usage.common.emptyValue"));
@@ -148,19 +143,16 @@ export function renderSessionSummary(
   return (
     <>
       {badges.length > 0 ? (
-        <>
-          {" "}
-          <div class="usage-badges">
-            <For each={badges}>
-              {(b) => (
-                <>
-                  {" "}
-                  <span class="settings-row__value">{b}</span>{" "}
-                </>
-              )}
-            </For>
-          </div>{" "}
-        </>
+        <div class="usage-badges">
+          <For each={badges}>
+            {(b) => (
+              <>
+                {" "}
+                <span class="settings-row__value">{b}</span>{" "}
+              </>
+            )}
+          </For>
+        </div>
       ) : undefined}
       <div class="session-summary-grid">
         <For each={cards}>

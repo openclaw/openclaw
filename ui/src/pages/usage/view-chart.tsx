@@ -52,28 +52,6 @@ function calendarDaily(daily: CostDailyEntry[], range: UsageChartRange): CostDai
   });
 }
 
-export function renderDailyChartCompact(
-  dailyEntries: CostDailyEntry[],
-  selectedDays: string[],
-  chartMode: "tokens" | "cost",
-  dailyChartMode: "total" | "by-type",
-  onDailyChartModeChange: (mode: "total" | "by-type") => void,
-  onSelectDay: UsageProps["callbacks"]["filters"]["onSelectDay"],
-  range: UsageChartRange,
-) {
-  return (
-    <DailyChartCompact
-      dailyEntries={dailyEntries}
-      selectedDays={selectedDays}
-      chartMode={chartMode}
-      dailyChartMode={dailyChartMode}
-      onDailyChartModeChange={onDailyChartModeChange}
-      onSelectDay={onSelectDay}
-      range={range}
-    />
-  );
-}
-
 export function DailyChartCompact(props: {
   dailyEntries: CostDailyEntry[];
   selectedDays: string[];
@@ -185,18 +163,16 @@ export function DailyChartCompact(props: {
       <div class="daily-chart-compact">
         <div class="daily-chart-header">
           <SettingsSegmented
-            {...{
-              mode: "buttons",
-              variant: "accent",
-              className: "small sessions-toggle",
-              value: state().dailyChartMode,
-              onChange: state().onDailyChartModeChange,
-              onReselect: state().onDailyChartModeChange,
-              options: [
-                { value: "total", label: t("usage.daily.total") },
-                { value: "by-type", label: t("usage.daily.byType") },
-              ],
-            }}
+            mode="buttons"
+            variant="accent"
+            {...{ className: "small sessions-toggle" }}
+            value={state().dailyChartMode}
+            onChange={state().onDailyChartModeChange}
+            onReselect={state().onDailyChartModeChange}
+            options={[
+              { value: "total", label: t("usage.daily.total") },
+              { value: "by-type", label: t("usage.daily.byType") },
+            ]}
           />
           <div class="card-title">
             {state().isTokenMode ? t("usage.daily.tokensTitle") : t("usage.daily.costTitle")}
@@ -307,10 +283,6 @@ export function DailyChartCompact(props: {
       </div>
     </Show>
   );
-}
-
-export function renderCostBreakdownCompact(totals: UsageTotals, mode: "tokens" | "cost") {
-  return <CostBreakdownCompact totals={totals} mode={mode} />;
 }
 
 export function CostBreakdownCompact(props: { totals: UsageTotals; mode: "tokens" | "cost" }) {

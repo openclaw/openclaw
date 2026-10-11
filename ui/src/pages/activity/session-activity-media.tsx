@@ -1,5 +1,5 @@
 import { html } from "lit";
-import { createRenderEffect, createSignal, onCleanup, onSettled } from "solid-js";
+import { createRenderEffect, createSignal, onCleanup, onSettled, untrack } from "solid-js";
 import type { ArtifactsListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { resolveArtifactDownloadSource } from "../../api/artifact-download.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
@@ -95,115 +95,95 @@ export type ActivitySessionMediaProps = {
   session?: GatewaySessionRow;
 };
 
-// The cache and admission owner stays synchronous; Solid only observes its presentation.
-class ActivitySessionMediaState {
-  visible = false;
-  private observer?: IntersectionObserver;
-  private entry?: ImageEntry;
-  private settledEntry?: ImageEntry;
-  displayedImages: ImageBlock[] = [];
-  owner?: ConnectionImages;
-  private key = "";
-  private boundImageIdentity = "";
-  lightbox: ImageLightboxItem | null = null;
-  private imageRequest = 0;
-  private observedPending?: Promise<void>;
-  private disposed = false;
+function ActivitySessionMediaContent(
+  props: ActivitySessionMediaProps,
+  host: SolidBridgeElement<ActivitySessionMediaProps>,
+) {
+  const [revision, setRevision] = createSignal(0);
+  let visible = false;
+  let observer: IntersectionObserver | undefined;
+  let entry: ImageEntry | undefined;
+  let settledEntry: ImageEntry | undefined;
+  let displayedImages: ImageBlock[] = [];
+  let owner: ConnectionImages | undefined;
+  let key = "";
+  let boundImageIdentity = "";
+  let lightbox: ImageLightboxItem | null = null;
+  let imageRequest = 0;
+  let observedPending: Promise<void> | undefined;
+  let disposed = false;
 
-  constructor(
-    readonly props: ActivitySessionMediaProps,
-    private readonly host: HTMLElement,
-    private readonly notify: () => void,
-  ) {}
+  const isConnected = () => !disposed && host.isConnected;
 
-  private get context() {
-    return this.props.context;
-  }
-  private get sessionKey() {
-    return this.props.sessionKey;
-  }
-  private get agentId() {
-    return this.props.agentId;
-  }
-  private get revision() {
-    return this.props.revision;
-  }
-  private get session() {
-    return this.props.session;
-  }
-  private get isConnected() {
-    return !this.disposed && this.host.isConnected;
-  }
-
-  readonly refresh = () => {
-    if (!this.disposed) {
-      this.synchronize();
-      this.notify();
+  const refresh = () => {
+    if (!disposed) {
+      synchronize();
+      setRevision((value) => value + 1);
     }
   };
 
-  connect() {
+  function connect() {
     // Visibility is required before transcript discovery; never fall back to an eager scan.
     if (typeof IntersectionObserver === "undefined") {
       return;
     }
-    this.observer = new IntersectionObserver(
+    observer = new IntersectionObserver(
       (entries) => {
-        this.visible = entries.some((entry) => entry.isIntersecting);
-        this.refresh();
+        visible = entries.some((observation) => observation.isIntersecting);
+        refresh();
       },
       { rootMargin: "200px" },
     );
-    this.observer.observe(this.host);
+    observer.observe(host);
   }
 
-  dispose() {
-    this.disposed = true;
-    this.observer?.disconnect();
-    this.visible = false;
-    this.closeImage(false);
-    releaseChatMediaResourceSubscriber(this.refresh);
+  function dispose() {
+    disposed = true;
+    observer?.disconnect();
+    visible = false;
+    closeImage(false);
+    releaseChatMediaResourceSubscriber(refresh);
   }
 
-  readonly closeImage = (notify = true) => {
-    this.imageRequest++;
-    this.lightbox?.release?.();
-    this.lightbox = null;
+  const closeImage = (notify = true) => {
+    imageRequest++;
+    lightbox?.release?.();
+    lightbox = null;
     if (notify) {
-      this.refresh();
+      refresh();
     }
   };
 
-  private get imageIdentity(): string {
+  function imageIdentity(): string {
     return JSON.stringify([
-      this.agentId,
-      this.sessionKey,
-      this.session?.sessionId,
-      assistantMediaPolicyKey(this.session),
+      props.agentId,
+      props.sessionKey,
+      props.session?.sessionId,
+      assistantMediaPolicyKey(props.session),
     ]);
   }
 
-  synchronize() {
-    const { client, hello, phase } = this.context.gateway.snapshot;
-    const owner = client && phase === "connected" ? connectionImages(client, hello) : undefined;
-    const imageIdentity = this.imageIdentity;
-    const key = JSON.stringify([imageIdentity, this.revision]);
-    if (owner !== this.owner || imageIdentity !== this.boundImageIdentity) {
-      this.settledEntry = undefined;
-      this.displayedImages = [];
-      this.closeImage(false);
-      releaseChatMediaResourceSubscriber(this.refresh);
-      this.boundImageIdentity = imageIdentity;
+  function synchronize() {
+    const { client, hello, phase } = props.context.gateway.snapshot;
+    const nextOwner = client && phase === "connected" ? connectionImages(client, hello) : undefined;
+    const identity = imageIdentity();
+    const nextKey = JSON.stringify([identity, props.revision]);
+    if (nextOwner !== owner || identity !== boundImageIdentity) {
+      settledEntry = undefined;
+      displayedImages = [];
+      closeImage(false);
+      releaseChatMediaResourceSubscriber(refresh);
+      boundImageIdentity = identity;
     }
-    if (owner !== this.owner || key !== this.key) {
-      this.owner = owner;
-      this.key = key;
-      this.entry = undefined;
+    if (nextOwner !== owner || nextKey !== key) {
+      owner = nextOwner;
+      key = nextKey;
+      entry = undefined;
       if (owner) {
-        this.entry = owner.entries.get(key);
-        if (!this.entry) {
-          this.entry = { images: [], loaded: false };
-          owner.entries.set(key, this.entry);
+        entry = owner.entries.get(key);
+        if (!entry) {
+          entry = { images: [], loaded: false };
+          owner.entries.set(key, entry);
           if (owner.entries.size > 128) {
             const oldest = owner.entries.keys().next().value;
             if (oldest) {
@@ -213,65 +193,65 @@ class ActivitySessionMediaState {
         }
       }
     }
-    if (this.visible && this.entry && !this.entry.loaded && !this.entry.pending) {
-      this.load();
+    if (visible && entry && !entry.loaded && !entry.pending) {
+      load();
     }
-    if (this.entry?.pending && this.observedPending !== this.entry.pending) {
-      this.observedPending = this.entry.pending;
-      void this.observedPending.then(this.refresh);
+    if (entry?.pending && observedPending !== entry.pending) {
+      observedPending = entry.pending;
+      void observedPending.then(refresh);
     }
-    if (this.entry?.loaded && !this.entry.pending) {
-      this.settledEntry = this.entry;
+    if (entry?.loaded && !entry.pending) {
+      settledEntry = entry;
     }
-    const settled = this.settledEntry;
-    if (settled && !settled.pending && (!settled.error || this.displayedImages.length === 0)) {
-      this.displayedImages = settled.images.slice(0, 4);
+    const settled = settledEntry;
+    if (settled && !settled.pending && (!settled.error || displayedImages.length === 0)) {
+      displayedImages = settled.images.slice(0, 4);
     }
   }
 
-  readonly load = (entry = this.entry) => {
-    const gateway = this.context.gateway;
+  const load = (target = entry) => {
+    const gateway = props.context.gateway;
     const { client, hello } = gateway.snapshot;
-    const owner = this.owner;
-    const imageIdentity = this.imageIdentity;
-    const sessionKey = this.sessionKey;
-    const agentId = this.agentId;
-    if (!client || !owner || !entry || entry.pending) {
+    const requestOwner = owner;
+    const identity = imageIdentity();
+    const sessionKey = props.sessionKey;
+    const agentId = props.agentId;
+    if (!client || !requestOwner || !target || target.pending) {
       return;
     }
     const current = () =>
-      this.isConnected &&
-      this.visible &&
-      this.owner === owner &&
-      this.imageIdentity === imageIdentity &&
-      (this.entry === entry || this.settledEntry === entry) &&
+      isConnected() &&
+      visible &&
+      owner === requestOwner &&
+      imageIdentity() === identity &&
+      (entry === target || settledEntry === target) &&
       gateway.snapshot.client === client &&
       gateway.snapshot.hello === hello &&
       gateway.snapshot.phase === "connected";
-    if (entry.error) {
-      entry.cursor = undefined;
-      entry.images = [];
+    if (target.error) {
+      target.cursor = undefined;
+      target.images = [];
     }
-    entry.error = false;
+    target.error = false;
     // Explicit pagination must not supersede a queued background refresh.
-    const queueKey = JSON.stringify([agentId, sessionKey, entry === this.settledEntry]);
-    entry.pending = queued(owner, queueKey, async () => {
+    const queueKey = JSON.stringify([agentId, sessionKey, target === settledEntry]);
+    target.pending = queued(requestOwner, queueKey, async () => {
       try {
         // A viewport visit searches at most three bounded pages. Older history is explicit.
-        for (let page = 0; page < 3 && entry.images.length < 4 && current(); page++) {
+        for (let page = 0; page < 3 && target.images.length < 4 && current(); page++) {
           const result = await client.request<ArtifactsListResult>("artifacts.list", {
             sessionKey,
             agentId,
             type: "image",
-            limit: 4 - entry.images.length,
-            ...(entry.cursor ? { cursor: entry.cursor } : {}),
+            limit: 4 - target.images.length,
+            ...(target.cursor ? { cursor: target.cursor } : {}),
           });
           if (!current()) {
             return;
           }
-          entry.loaded = true;
-          entry.cursor = result.nextCursor;
-          entry.omitted ||= result.omittedOversized;
+          target.loaded = true;
+          target.cursor = result.nextCursor;
+          target.omitted ||= result.omittedOversized;
           for (const artifact of result.artifacts) {
             const image: ImageBlock | undefined = artifact.image?.url
               ? {
@@ -285,80 +265,75 @@ class ActivitySessionMediaState {
                 : undefined;
             if (
               image &&
-              !entry.images.some(
+              !target.images.some(
                 (existing) =>
                   (existing.url ?? existing.artifactId) === (image.url ?? image.artifactId),
               )
             ) {
-              entry.images.push(image);
+              target.images.push(image);
             }
           }
-          if (!entry.cursor) {
+          if (!target.cursor) {
             break;
           }
         }
       } catch {
         if (current()) {
-          entry.loaded = true;
-          entry.error = true;
+          target.loaded = true;
+          target.error = true;
         }
       }
     })
       .then((admission) => {
         if (admission !== "run" && current()) {
-          entry.loaded = true;
-          entry.error = admission === "full";
+          target.loaded = true;
+          target.error = admission === "full";
         }
       })
       .finally(() => {
-        entry.pending = undefined;
-        this.refresh();
+        target.pending = undefined;
+        refresh();
       });
-    this.refresh();
+    refresh();
   };
 
-  get displayEntry() {
-    const { client } = this.context.gateway.snapshot;
-    return this.owner && client ? (this.settledEntry ?? this.entry) : undefined;
-  }
-
-  imageOptions() {
-    const owner = this.owner!;
-    const gateway = this.context.gateway;
+  function imageOptions() {
+    const imageOwner = owner!;
+    const gateway = props.context.gateway;
     const { client, hello } = gateway.snapshot;
     const currentConnection = () =>
       gateway.snapshot.client === client &&
       gateway.snapshot.hello === hello &&
       gateway.snapshot.phase === "connected";
-    const imageIdentity = this.imageIdentity;
-    const agentId = this.agentId;
+    const identity = imageIdentity();
+    const agentId = props.agentId;
     return {
-      sessionKey: this.sessionKey,
+      sessionKey: props.sessionKey,
       agentId,
-      connectionEpoch: owner.epoch,
-      policyKey: assistantMediaPolicyKey(this.session),
-      resourceBasePath: this.context.resourceBasePath,
+      connectionEpoch: imageOwner.epoch,
+      policyKey: assistantMediaPolicyKey(props.session),
+      resourceBasePath: props.context.resourceBasePath,
       authToken: resolveControlUiAuthToken({
         hello,
         settings: { token: gateway.connection.token },
         password: gateway.connection.password,
       }),
-      onRequestUpdate: this.refresh,
-      onRequestOpenImage: () => ++this.imageRequest,
+      onRequestUpdate: refresh,
+      onRequestOpenImage: () => ++imageRequest,
       onOpenImage: (item: ImageLightboxItem, version?: number) => {
         if (
-          !this.isConnected ||
-          this.owner !== owner ||
-          this.imageIdentity !== imageIdentity ||
+          !isConnected() ||
+          owner !== imageOwner ||
+          imageIdentity() !== identity ||
           !currentConnection() ||
-          version !== this.imageRequest
+          version !== imageRequest
         ) {
           item.release?.();
           return;
         }
-        this.lightbox?.release?.();
-        this.lightbox = item;
-        this.refresh();
+        lightbox?.release?.();
+        lightbox = item;
+        refresh();
       },
       resolveArtifactDownload: (
         params: Parameters<typeof resolveArtifactDownloadSource>[1],
@@ -372,50 +347,49 @@ class ActivitySessionMediaState {
             get connected() {
               return currentConnection();
             },
-            resourceBasePath: this.context.resourceBasePath,
+            resourceBasePath: props.context.resourceBasePath,
           },
           { ...params, agentId },
           signal,
         ),
     };
   }
-}
-
-function ActivitySessionMediaContent(
-  props: ActivitySessionMediaProps,
-  host: SolidBridgeElement<ActivitySessionMediaProps>,
-) {
-  const [revision, setRevision] = createSignal(0);
-  const state = new ActivitySessionMediaState(props, host, () => setRevision((value) => value + 1));
-  const gateway = projectGateway(props.context.gateway);
+  // The projection is seeded once; its source follows the tracked effect below.
+  const gatewayProjection = projectGateway(untrack(() => props.context.gateway));
   createRenderEffect(
     () => props.context.gateway,
-    (source) => gateway.replaceSource(source),
+    (source) => gatewayProjection.replaceSource(source),
   );
   createRenderEffect(
-    () => [gateway.read(), props.sessionKey, props.agentId, props.revision, props.session],
-    () => state.refresh(),
+    () => [
+      gatewayProjection.read(),
+      props.sessionKey,
+      props.agentId,
+      props.revision,
+      props.session,
+    ],
+    () => refresh(),
   );
-  onSettled(() => state.connect());
-  onCleanup(() => state.dispose());
-  const entry = () => {
+  onSettled(connect);
+  onCleanup(dispose);
+  const displayEntry = () => {
     revision();
-    return state.displayEntry;
+    return owner && props.context.gateway.snapshot.client ? (settledEntry ?? entry) : undefined;
   };
   const hasImages = () => {
     revision();
-    return state.displayedImages.length > 0;
+    return displayedImages.length > 0;
   };
   const older = () => {
-    const value = entry();
+    const value = displayEntry();
     return Boolean(value?.cursor && value.images.length < 4 && !value.error);
   };
   const showNote = () => {
-    const value = entry();
+    const value = displayEntry();
     return Boolean(value?.error || value?.omitted || (!hasImages() && value?.cursor));
   };
-  const load = () => state.load(entry());
-  const loadLabel = () => t(entry()?.pending ? "common.loading" : "activity.images.older");
+  const loadDisplayed = () => load(displayEntry());
+  const loadLabel = () => t(displayEntry()?.pending ? "common.loading" : "activity.images.older");
   const gallery = () => {
     revision();
     // The unported chat gallery owns these children and its resource directives.
@@ -423,18 +397,18 @@ function ActivitySessionMediaContent(
       ? [
           html`<button
             class="activity-feed__note-action"
-            ?disabled=${Boolean(entry()?.pending)}
-            @click=${() => state.load(entry())}
+            ?disabled=${Boolean(displayEntry()?.pending)}
+            @click=${() => load(displayEntry())}
           >
             ${loadLabel()}
           </button>`,
         ]
       : [];
-    return renderMessageImages(state.displayedImages, state.imageOptions(), previews);
+    return renderMessageImages(displayedImages, imageOptions(), previews);
   };
-  const lightbox = () => {
+  const lightboxContent = () => {
     revision();
-    return renderChatImageLightbox(state.lightbox, () => state.closeImage());
+    return renderChatImageLightbox(lightbox, () => closeImage());
   };
   return (
     <>
@@ -443,35 +417,22 @@ function ActivitySessionMediaContent(
           {hasImages() && <LitContent content={gallery()} />}
           {showNote() && (
             <div class="activity-feed__note">
-              {entry()?.omitted && <span>{t("activity.images.incomplete")}</span>}
-              {entry()?.error ? (
-                <>
-                  <span role="status">{t("activity.images.failed")}</span>
-                  <button
-                    class="activity-feed__note-action"
-                    disabled={Boolean(entry()?.pending)}
-                    onClick={load}
-                  >
-                    {t("common.retry")}
-                  </button>
-                </>
-              ) : (
-                !hasImages() &&
-                older() && (
-                  <button
-                    class="activity-feed__note-action"
-                    disabled={Boolean(entry()?.pending)}
-                    onClick={load}
-                  >
-                    {loadLabel()}
-                  </button>
-                )
+              {displayEntry()?.omitted && <span>{t("activity.images.incomplete")}</span>}
+              {displayEntry()?.error && <span role="status">{t("activity.images.failed")}</span>}
+              {(displayEntry()?.error || (!hasImages() && older())) && (
+                <button
+                  class="activity-feed__note-action"
+                  disabled={Boolean(displayEntry()?.pending)}
+                  onClick={loadDisplayed}
+                >
+                  {displayEntry()?.error ? t("common.retry") : loadLabel()}
+                </button>
               )}
             </div>
           )}
         </div>
       )}
-      <LitContent content={lightbox()} />
+      <LitContent content={lightboxContent()} />
     </>
   );
 }

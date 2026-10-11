@@ -140,17 +140,18 @@ function renderCostWindowComparison(
         <For each={Array.from(windows.entries())}>
           {([index, summary]) => {
             const isRange = index === 0;
-            const label = isRange
-              ? t("usage.costWindows.selectedRange")
-              : summary.days === 1
-                ? summary.endDate === today
-                  ? t("usage.presets.today")
-                  : formatDayLabel(summary.endDate)
-                : t("usage.costWindows.lastDays", { count: String(summary.days) });
+            const label = () =>
+              isRange
+                ? t("usage.costWindows.selectedRange")
+                : summary.days === 1
+                  ? summary.endDate === today
+                    ? t("usage.presets.today")
+                    : formatDayLabel(summary.endDate)
+                  : t("usage.costWindows.lastDays", { count: String(summary.days) });
             const averageDailyCost = summary.totals.totalCost / summary.days;
             return (
               <div class={["cost-window-card", { "cost-window-card--range": isRange }]}>
-                <div class="cost-window-card__label">{label}</div>
+                <div class="cost-window-card__label">{label()}</div>
                 <div class="cost-window-card__value">
                   {formatAnalysisCost(summary.totals.totalCost)}
                 </div>
@@ -185,10 +186,7 @@ function renderInsightList(
     <div class={cardClass}>
       <div class="usage-insight-title">{title}</div>
       {items.length === 0 ? (
-        <>
-          {" "}
-          <div class="muted">{emptyLabel}</div>{" "}
-        </>
+        <div class="muted">{emptyLabel}</div>
       ) : (
         <div class={listClass}>
           <For each={items}>
@@ -197,12 +195,7 @@ function renderInsightList(
                 <div class="usage-error-row">
                   <div class="usage-error-date">{item.label}</div>
                   <div class="usage-error-rate">{item.value}</div>
-                  {item.sub ? (
-                    <>
-                      {" "}
-                      <div class="usage-error-sub">{item.sub}</div>{" "}
-                    </>
-                  ) : undefined}
+                  {item.sub ? <div class="usage-error-sub">{item.sub}</div> : undefined}
                 </div>
               ) : (
                 <div class="usage-list-item">
@@ -324,7 +317,7 @@ function renderUsageInsights(
   ] as const;
 
   return (
-    <SettingsSection {...{ title: t("usage.overview.title") }}>
+    <SettingsSection title={t("usage.overview.title")}>
       <section class="usage-panel usage-overview-card">
         <div class="usage-overview-layout">
           <div class="usage-summary-grid">
@@ -404,7 +397,9 @@ function renderUsageInsights(
           </div>
           <div class="usage-insights-grid">
             <For each={insightLists}>
-              {([titleKey, items, emptyKey]) => renderInsightList(t(titleKey), items, t(emptyKey))}
+              {([titleKey, items, emptyKey]) => (
+                <>{renderInsightList(t(titleKey), items, t(emptyKey))}</>
+              )}
             </For>
             {renderInsightList(
               t("usage.overview.peakErrorDays"),
@@ -430,5 +425,3 @@ function renderUsageInsights(
 }
 
 export { renderCostWindowComparison, renderFilterChips, renderInsightList, renderUsageInsights };
-
-export { renderSessionsCard } from "./view-sessions-card.tsx";

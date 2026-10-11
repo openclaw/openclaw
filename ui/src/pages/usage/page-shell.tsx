@@ -11,7 +11,7 @@ import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { projectAgentSelection } from "../../lib/reactive/application.ts";
 import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { locale, t } from "../../lib/reactive/i18n.ts";
 import { LitContent } from "../../lit/solid-content.tsx";
 
 export function UsagePageShell(props: {
@@ -23,6 +23,10 @@ export function UsagePageShell(props: {
   const context = untrack(() => props.context);
   const agents = projectAgents(context.agents);
   const selection = projectAgentSelection(context.agentSelection);
+  const header = createMemo(() => {
+    locale();
+    return { title: titleForRoute("usage"), subtitle: subtitleForRoute("usage") };
+  });
   const additionalAgentIds = createMemo(
     () =>
       props.result?.sessions
@@ -32,20 +36,18 @@ export function UsagePageShell(props: {
   return (
     <>
       <SettingsPageHeader
-        {...{
-          title: titleForRoute("usage"),
-          subtitle: subtitleForRoute("usage"),
-          actions: (
-            <LitContent
-              content={renderAgentScopeControl({
-                agents: agents.read().agentsList?.agents ?? [],
-                additionalAgentIds: additionalAgentIds(),
-                selection: props.context.agentSelection,
-                selectedId: selection.read().state.scopeId,
-              })}
-            />
-          ),
-        }}
+        title={header().title}
+        subtitle={header().subtitle}
+        actions={
+          <LitContent
+            content={renderAgentScopeControl({
+              agents: agents.read().agentsList?.agents ?? [],
+              additionalAgentIds: additionalAgentIds(),
+              selection: props.context.agentSelection,
+              selectedId: selection.read().state.scopeId,
+            })}
+          />
+        }
       />
       <SettingsWorkspace>{props.children}</SettingsWorkspace>
     </>
@@ -82,16 +84,16 @@ export function renderUsageRefreshStatus(
 ) {
   return (
     <PanelRefreshStatusView
-      {...{
-        status,
-        errorMessage: status.error
+      status={status}
+      errorMessage={
+        status.error
           ? t("usage.details.loadFailed", {
               detail: normalizeLowercaseStringOrEmpty(t(detailKey)),
               error: status.error,
             })
-          : undefined,
-        className: `usage-callout usage-detail-error--${kind}`,
-      }}
+          : undefined
+      }
+      {...{ className: `usage-callout usage-detail-error--${kind}` }}
     />
   );
 }

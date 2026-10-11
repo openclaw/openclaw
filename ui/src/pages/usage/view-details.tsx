@@ -75,26 +75,6 @@ function computeFilteredUsage(
   };
 }
 
-export function renderSessionDetailPanel(
-  session: UsageSessionEntry,
-  detail: UsageProps["detail"],
-  callbacks: UsageProps["callbacks"]["details"],
-  range: Pick<UsageProps["filters"], "startDate" | "endDate" | "selectedDays" | "timeZone">,
-  contextExpanded: boolean,
-  onClose: () => void,
-) {
-  return (
-    <SessionDetailPanel
-      session={session}
-      detail={detail}
-      callbacks={callbacks}
-      range={range}
-      contextExpanded={contextExpanded}
-      onClose={onClose}
-    />
-  );
-}
-
 export function SessionDetailPanel(props: {
   session: UsageSessionEntry;
   detail: UsageProps["detail"];
@@ -404,15 +384,17 @@ function LoadedContextPanel(props: {
       <div class="context-breakdown-grid">
         <For each={state().groups.filter(({ entries }) => entries.length > 0)}>
           {({ labelKey, entries }) => {
-            const visible = state().expanded ? entries : entries.slice(0, state().defaultLimit);
-            const more = entries.length - visible.length;
+            const visible = createMemo(() =>
+              state().expanded ? entries : entries.slice(0, state().defaultLimit),
+            );
+            const more = () => entries.length - visible().length;
             return (
               <div class="context-breakdown-card">
                 <div class="context-breakdown-title">
                   {t(labelKey)} ({entries.length})
                 </div>
                 <div class="context-breakdown-list">
-                  <For each={visible}>
+                  <For each={visible()}>
                     {({ name, chars }) => (
                       <div class="context-breakdown-item">
                         <span class="mono" title={name}>
@@ -427,9 +409,9 @@ function LoadedContextPanel(props: {
                     )}
                   </For>
                 </div>
-                {more > 0 ? (
+                {more() > 0 ? (
                   <div class="context-breakdown-more">
-                    {t("usage.sessions.more", { count: String(more) })}
+                    {t("usage.sessions.more", { count: String(more()) })}
                   </div>
                 ) : undefined}
               </div>
@@ -635,7 +617,7 @@ function SessionLogs(props: {
               {(entry) => {
                 const { log, toolInfo, cleanContent } = entry;
                 const roleClass = log.role === "user" ? "user" : "assistant";
-                const roleLabel =
+                const roleLabel = () =>
                   log.role === "user"
                     ? t("usage.details.you")
                     : log.role === "assistant"
@@ -644,7 +626,7 @@ function SessionLogs(props: {
                 return (
                   <div class={`session-log-entry ${roleClass}`}>
                     <div class="session-log-meta">
-                      <span class="session-log-role">{roleLabel}</span>
+                      <span class="session-log-role">{roleLabel()}</span>
                       <span>{state().formatLogTimestamp(log.timestamp)}</span>
                       {log.tokens ? (
                         <>
@@ -684,10 +666,7 @@ function SessionLogs(props: {
           <div class="session-logs-header">{t("usage.details.conversation")}</div>
           {state().refreshStatus}
           {state().initialLoading || !state().initialError ? (
-            <>
-              {" "}
-              <div class="usage-empty-block">{t(state().message)}</div>{" "}
-            </>
+            <div class="usage-empty-block">{t(state().message)}</div>
           ) : undefined}
         </div>
       )}

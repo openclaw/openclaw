@@ -118,7 +118,6 @@ function decisionOutcomeLabel(outcome: DecisionReceiptDisplayV1["decision"]["out
 function renderReceiptBadges(receipt: DecisionReceiptDisplayV1, accessible = false) {
   return (
     <For
-      keyed={false}
       each={[
         [receipt.decision.outcome, decisionOutcomeLabel(receipt.decision.outcome), "outcomeLabel"],
         [
@@ -128,32 +127,18 @@ function renderReceiptBadges(receipt: DecisionReceiptDisplayV1, accessible = fal
         ],
       ]}
     >
-      {(badge) => (
+      {([value, label, labelKey]) => (
         <span
-          class={`run-inspector__receipt-badge run-inspector__receipt-badge--${badge()[0]}`}
+          class={`run-inspector__receipt-badge run-inspector__receipt-badge--${value}`}
           role={accessible ? "img" : undefined}
           aria-label={
-            accessible
-              ? `${t(`activity.runInspector.decisions.${badge()[2]}`)}: ${badge()[1]}`
-              : undefined
+            accessible ? `${t(`activity.runInspector.decisions.${labelKey}`)}: ${label}` : undefined
           }
         >
-          {badge()[1]}
+          {label}
         </span>
       )}
     </For>
-  );
-}
-
-function renderReceiptCodes(values: readonly string[], emptyCopy: string) {
-  return values.length === 0 ? (
-    <p class="run-inspector__reason">{emptyCopy}</p>
-  ) : (
-    <ul class="run-inspector__code-list">
-      <For each={values} keyed={false}>
-        {(value) => <li>{renderRunInspectorSafeRef(value(), true)}</li>}
-      </For>
-    </ul>
   );
 }
 
@@ -229,9 +214,16 @@ function renderReceiptDetail(receipt: DecisionReceiptDisplayV1) {
           ["grantCountLabel", receipt.enforcement.grantCount],
         ])}
         <h6>{t("activity.runInspector.decisions.contextFieldsLabel")}</h6>
-        {renderReceiptCodes(
-          receipt.enforcement.contextFieldsUsed,
-          t("activity.runInspector.decisions.noContextFields"),
+        {receipt.enforcement.contextFieldsUsed.length ? (
+          <ul class="run-inspector__code-list">
+            <For each={receipt.enforcement.contextFieldsUsed}>
+              {(value) => <li>{renderRunInspectorSafeRef(value, true)}</li>}
+            </For>
+          </ul>
+        ) : (
+          <p class="run-inspector__reason">
+            {t("activity.runInspector.decisions.noContextFields")}
+          </p>
         )}
         {renderRunInspectorMissingEvidence(receipt.missingEvidence, {
           headingId: "run-inspector-receipt-missing-heading",
@@ -277,31 +269,28 @@ export function renderRunInspectorDecisions(
           class="run-inspector__receipt-list"
           aria-label={t("activity.runInspector.decisions.listLabel")}
         >
-          <For each={result.decisionDisplays} keyed={(receipt) => receipt.selectorId}>
+          <For each={result.decisionDisplays}>
             {(receipt) => {
-              const selected = () => selectedReceipt?.selectorId === receipt().selectorId;
-              const summary = () =>
-                receipt().action.summary ??
-                `${receipt().action.family} · ${receipt().action.operation}`;
+              const selected = selectedReceipt?.selectorId === receipt.selectorId;
+              const summary =
+                receipt.action.summary ?? `${receipt.action.family} · ${receipt.action.operation}`;
               return (
                 <li>
                   <a
                     href={activityRunInspectorSelectorHref(selector, basePath, {
-                      id: receipt().selectorId,
-                      decisionCursor: state.receiptPageCursors.get(receipt().selectorId),
+                      id: receipt.selectorId,
+                      decisionCursor: state.receiptPageCursors.get(receipt.selectorId),
                     })}
-                    aria-current={selected() ? "true" : undefined}
+                    aria-current={selected ? "true" : undefined}
                     aria-label={t("activity.runInspector.decisions.inspectLabel", {
-                      summary: summary(),
-                      outcome: decisionOutcomeLabel(receipt().decision.outcome),
-                      classification: runInspectorCoverageLabel(
-                        receipt().enforcement.coverageState,
-                      ),
+                      summary,
+                      outcome: decisionOutcomeLabel(receipt.decision.outcome),
+                      classification: runInspectorCoverageLabel(receipt.enforcement.coverageState),
                     })}
                   >
-                    <span>{summary()}</span>
+                    <span>{summary}</span>
                     <span class="run-inspector__receipt-badges" aria-hidden="true">
-                      {renderReceiptBadges(receipt())}
+                      {renderReceiptBadges(receipt)}
                     </span>
                   </a>
                 </li>

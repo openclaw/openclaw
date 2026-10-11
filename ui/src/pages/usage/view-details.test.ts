@@ -1,12 +1,13 @@
-import { createSignal, flush } from "solid-js";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
+// Control UI tests cover usage detail behavior through the rendered panel.
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import type { SessionLogEntry, TimeSeriesPoint, UsageProps, UsageSessionEntry } from "./types.ts";
 import { SessionDetailPanel } from "./view-details.tsx";
-// Control UI tests cover usage detail behavior through the rendered panel.
-import { mountUsageView } from "./view-mount.test-support.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -94,7 +95,7 @@ function mount(
   const container = document.createElement("div");
   const [cursor, setCursor] = createSignal({ start, end });
   const [contextExpanded, setContextExpanded] = createSignal(errors.contextExpanded ?? false);
-  mountUsageView(
+  mountSolid(
     () =>
       SessionDetailPanel({
         session: { ...(errors.session ?? session()), contextWeight: errors.contextWeight },
@@ -147,8 +148,9 @@ function mount(
         },
         onClose: vi.fn(),
       }),
-    container,
+    { container },
   );
+  flush();
   return container;
 }
 

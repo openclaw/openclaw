@@ -5,22 +5,6 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { buildUsageMosaicStats, formatUsageTokens } from "./metrics.ts";
 import type { UsageSessionEntry } from "./types.ts";
 
-export function renderUsageMosaic(
-  sessions: UsageSessionEntry[],
-  timeZone: "local" | "utc",
-  selectedHours: number[],
-  onSelectHour: (hour: number, shiftKey: boolean) => void,
-) {
-  return (
-    <UsageMosaic
-      sessions={sessions}
-      timeZone={timeZone}
-      selectedHours={selectedHours}
-      onSelectHour={onSelectHour}
-    />
-  );
-}
-
 export function UsageMosaic(props: {
   sessions: UsageSessionEntry[];
   timeZone: "local" | "utc";
@@ -54,23 +38,23 @@ export function UsageMosaic(props: {
   });
   return (
     <SettingsSection
-      {...{
-        title: t("usage.mosaic.title"),
-        description: state().stats.hasData
+      title={t("usage.mosaic.title")}
+      description={
+        state().stats.hasData
           ? t("usage.mosaic.subtitle", {
               zone:
                 state().timeZone === "utc"
                   ? t("usage.filters.timeZoneUtc")
                   : t("usage.filters.timeZoneLocal"),
             })
-          : t("usage.mosaic.subtitleEmpty"),
-        actions: (
-          <div class="usage-mosaic-total">
-            {formatUsageTokens(state().stats.hasData ? state().stats.totalTokens : 0)}{" "}
-            {normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
-          </div>
-        ),
-      }}
+          : t("usage.mosaic.subtitleEmpty")
+      }
+      actions={
+        <div class="usage-mosaic-total">
+          {formatUsageTokens(state().stats.hasData ? state().stats.totalTokens : 0)}{" "}
+          {normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
+        </div>
+      }
     >
       <div class="usage-panel usage-mosaic">
         {state().stats.hasData ? (
@@ -80,13 +64,12 @@ export function UsageMosaic(props: {
               <div class="usage-daypart-grid">
                 <For each={state().stats.weekdayTotals}>
                   {(part) => {
-                    const intensity = Math.min(part.tokens / state().maxWeekday, 1);
-                    const bg =
+                    const bg = () =>
                       part.tokens > 0
-                        ? `color-mix(in srgb, var(--accent) ${(12 + intensity * 60).toFixed(1)}%, transparent)`
+                        ? `color-mix(in srgb, var(--accent) ${(12 + Math.min(part.tokens / state().maxWeekday, 1) * 60).toFixed(1)}%, transparent)`
                         : "transparent";
                     return (
-                      <div class="usage-daypart-cell" style={{ background: bg }}>
+                      <div class="usage-daypart-cell" style={{ background: bg() }}>
                         <div class="usage-daypart-label">{part.label}</div>
                         <div class="usage-daypart-value">{formatUsageTokens(part.tokens)}</div>
                       </div>
@@ -132,12 +115,9 @@ export function UsageMosaic(props: {
             </div>
           </div>
         ) : (
-          <>
-            {" "}
-            <div class="usage-empty-block usage-empty-block--compact">
-              {t("usage.mosaic.noTimelineData")}
-            </div>{" "}
-          </>
+          <div class="usage-empty-block usage-empty-block--compact">
+            {t("usage.mosaic.noTimelineData")}
+          </div>
         )}
       </div>
     </SettingsSection>

@@ -1,9 +1,8 @@
-/* @vitest-environment jsdom */
-
 import { expect, it, vi } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { buildAggregatesFromSessions } from "./metrics.ts";
-import { mountUsageView } from "./view-mount.test-support.ts";
 import { createUsageProps, usageSession } from "./view.test-support.ts";
 import { renderUsage } from "./view.tsx";
 
@@ -63,7 +62,7 @@ it.each([
     }));
     const onExportJson = vi.fn();
     const container = document.createElement("div");
-    mountUsageView(
+    mountSolid(
       () =>
         renderUsage({
           ...base,
@@ -78,8 +77,9 @@ it.each([
           filters: { ...base.filters, endDate: "2026-05-15", selectedDays },
           callbacks: { ...base.callbacks, display: { ...base.callbacks.display, onExportJson } },
         }),
-      container,
+      { container },
     );
+    flush();
     expect(container.querySelector(".usage-creators-table")?.textContent).toContain("Jordan");
     expect(container.querySelectorAll(".usage-creators-table tbody tr")).toHaveLength(2);
     expect(
@@ -143,7 +143,7 @@ it("disables session-row exports without hiding complete creator totals beyond t
   }));
   const onExportJson = vi.fn();
   const container = document.createElement("div");
-  mountUsageView(
+  mountSolid(
     () =>
       renderUsage({
         ...base,
@@ -158,8 +158,9 @@ it("disables session-row exports without hiding complete creator totals beyond t
         filters: { ...base.filters, endDate: "2026-05-15", selectedDays: ["2026-05-15"] },
         callbacks: { ...base.callbacks, display: { ...base.callbacks.display, onExportJson } },
       }),
-    container,
+    { container },
   );
+  flush();
 
   expect(container.querySelectorAll(".session-bar-row")).toHaveLength(0);
   expect(container.querySelectorAll(".usage-metric-badge strong")[2]?.textContent).toBe("1");

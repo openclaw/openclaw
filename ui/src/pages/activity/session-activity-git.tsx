@@ -18,14 +18,10 @@ function renderDiff(item: { additions?: number; deletions?: number }) {
   return (
     <>
       {item.additions === undefined ? undefined : (
-        <>
-          <span class={`activity-feed__additions`}>+{item.additions.toLocaleString()}</span>
-        </>
+        <span class="activity-feed__additions">+{item.additions.toLocaleString()}</span>
       )}
       {item.deletions === undefined ? undefined : (
-        <>
-          <span class={`activity-feed__deletions`}>−{item.deletions.toLocaleString()}</span>
-        </>
+        <span class="activity-feed__deletions">−{item.deletions.toLocaleString()}</span>
       )}
     </>
   );
@@ -73,33 +69,35 @@ function PullRequest(props: { value: ControlUiSessionPullRequest }) {
       }) as const
     )[props.value.state];
   return (
-    <>
-      <a
-        class={`activity-feed__pr`}
-        data-state={props.value.state}
-        href={props.value.url}
-        target={`_blank`}
-        rel={`noopener noreferrer`}
-        aria-label={t("activity.git.pullRequest", {
-          repository: `${props.value.owner}/${props.value.repo}`,
-          number: String(props.value.number),
-          title: props.value.title,
-          state: t(`activity.git.${props.value.state}`),
-        })}
-      >
-        <span class={`activity-feed__git-icon`} aria-hidden={`true`}>
-          <Icon name={icon()} />
-        </span>
-        <span class={`activity-feed__git-label`}>
-          {props.value.repo}#{props.value.number}
-        </span>
-        {renderDiff(props.value)}
-      </a>
-    </>
+    <a
+      class="activity-feed__pr"
+      data-state={props.value.state}
+      href={props.value.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={t("activity.git.pullRequest", {
+        repository: `${props.value.owner}/${props.value.repo}`,
+        number: String(props.value.number),
+        title: props.value.title,
+        state: t(`activity.git.${props.value.state}`),
+      })}
+    >
+      <span class="activity-feed__git-icon" aria-hidden="true">
+        <Icon name={icon()} />
+      </span>
+      <span class="activity-feed__git-label">
+        {props.value.repo}#{props.value.number}
+      </span>
+      {renderDiff(props.value)}
+    </a>
   );
 }
 
-type ActivitySessionGitProps = { context: ApplicationContext; sessionKey: string; agentId: string };
+type ActivitySessionGitProps = {
+  context: ApplicationContext;
+  sessionKey: string;
+  agentId: string;
+};
 
 export const ActivitySessionGit = defineSolidBridge<ActivitySessionGitProps>(
   "openclaw-activity-session-git",
