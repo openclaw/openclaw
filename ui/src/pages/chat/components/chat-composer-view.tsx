@@ -532,7 +532,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                   <div class="agent-chat__composer-meta agent-chat__composer-context">
                     <ContextNotice
                       session={activeSession()}
-                      defaultContextTokens={props.sessions?.defaults?.contextTokens ?? null}
                       messages={props.messages}
                       providerUsage={props.providerUsage}
                     />

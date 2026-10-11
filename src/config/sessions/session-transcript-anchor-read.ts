@@ -28,7 +28,10 @@ import {
 } from "./session-transcript-read-source.js";
 import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
-import { getOwnedSessionTranscriptReader } from "./transcript-write-context.js";
+import {
+  getOwnedSessionTranscriptReader,
+  readOwnedSessionTranscriptEntry,
+} from "./transcript-write-context.js";
 
 type AnchorScope = SessionTranscriptReadScope & { sessionKey: string };
 
@@ -195,6 +198,7 @@ export async function readSessionTranscriptAnchorsFromSource(
         resolved: { ...resolved, sessionKey: resolved.sessionKey ?? source.scope.sessionKey },
         selection,
         expectedIdentity,
+        preparedEntry: onRead ? readOwnedSessionTranscriptEntry(source.scope) : undefined,
       },
       signal,
     );

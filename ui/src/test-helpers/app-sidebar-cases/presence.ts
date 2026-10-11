@@ -1,4 +1,3 @@
-import type { LitElement } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as presenceUsers from "../../lib/presence-users.ts";
@@ -10,6 +9,7 @@ import {
   createSessionsHarness,
   mountSidebar,
 } from "../app-sidebar.ts";
+import { createTestGatewayClient } from "../gateway-client.ts";
 import { settleLitElement } from "../lit-settle.ts";
 import "../../components/app-sidebar.ts";
 
@@ -407,6 +407,7 @@ describe("AppSidebar viewer presence", () => {
     await sidebar.updateComplete;
     expect(row.dataset.presenceActivity).toBe("active");
     provider.remove();
+    await Promise.resolve();
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -429,6 +430,8 @@ describe("AppSidebar viewer presence", () => {
       });
       await sidebar.updateComplete;
       vi.useFakeTimers();
+      const scheduleInterval = vi.spyOn(globalThis, "setInterval");
+      const clearInterval = vi.spyOn(globalThis, "clearInterval");
       focusSidebarPersonWithKeyboard(
         sidebar.querySelector<HTMLElement>(".sidebar-online__person")!,
       );
@@ -436,14 +439,17 @@ describe("AppSidebar viewer presence", () => {
       await vi.waitFor(() =>
         expect(document.querySelector("openclaw-elapsed-time")?.textContent).toBeTruthy(),
       );
-      const elapsed = document.querySelector<LitElement>("openclaw-elapsed-time")!;
+      const elapsed = document.querySelector("openclaw-elapsed-time")!;
       await elapsed.updateComplete;
-      const elapsedBeforeDismissal = elapsed.textContent;
+      const cardIntervals = scheduleInterval.mock.results
+        .filter((result) => result.type === "return")
+        .map((result) => result.value);
+      expect(cardIntervals.length).toBeGreaterThan(0);
       if (reason === "disconnect") {
         gateway.publish({ phase: "reconnecting" });
       }
       if (reason === "switch") {
-        gateway.publish({ client: { instanceId: "replacement" } as GatewayBrowserClient });
+        gateway.publish({ client: createTestGatewayClient(async () => ({ profiles: [] })) });
       }
       if (reason === "route") {
         sidebar.activeRouteId = "activity";
@@ -464,9 +470,14 @@ describe("AppSidebar viewer presence", () => {
       await vi.waitFor(() =>
         expect(document.querySelector(".person-activity-hovercard")).toBeNull(),
       );
+      // The bridge waits one microtask before disposing a disconnected view.
+      await Promise.resolve();
+      expect(elapsed.isConnected).toBe(false);
+      for (const interval of cardIntervals) {
+        expect(clearInterval).toHaveBeenCalledWith(interval);
+      }
       await vi.advanceTimersByTimeAsync(1_000);
-      await elapsed.updateComplete;
-      expect(elapsed.textContent).toBe(elapsedBeforeDismissal);
+      expect(document.querySelector(".person-activity-hovercard")).toBeNull();
       if (reason === "remove") {
         expect(sidebar.querySelector(".sidebar-online__person")).toBeNull();
         const returned = { ...person, ts: Date.now(), onlineSince: Date.now() };

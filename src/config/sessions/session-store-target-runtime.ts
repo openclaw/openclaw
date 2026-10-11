@@ -6,6 +6,7 @@ import {
   readOpenClawAgentDatabaseRegistryToken,
 } from "../../state/openclaw-agent-db-registry-listing.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../legacy.default-agent-owner.js";
+import type { SessionStoreRegistryRead } from "./session-sqlite-target.js";
 import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import type {
   SessionStoreTargetInventoryRequest,
@@ -81,11 +82,7 @@ function captureSelectionMemo<Value extends PreparedSelection>(
       return structuredClone(cached.value);
     },
     install(value: Value): void {
-      if (
-        !captured ||
-        registry !== readOpenClawAgentDatabaseRegistryToken({ env: request.env }) ||
-        captured !== key()
-      ) {
+      if (!captured) {
         return;
       }
       selections.delete(captured);
@@ -100,6 +97,7 @@ function captureSelectionMemo<Value extends PreparedSelection>(
 export function prepareSessionStoreTargetInventoryRead(
   request: Omit<SessionStoreTargetInventoryRequest, "registeredDatabases">,
   unchangedBy?: Parameters<typeof prepareOpenClawAgentDatabaseRegistrySnapshotRead>[1],
+  registeredDatabases?: SessionStoreRegistryRead,
 ) {
   const { candidates, ...prepared } = request;
   // Security-scoped inventories can supply a stricter witness. Ordinary discovery
@@ -147,7 +145,7 @@ export function prepareSessionStoreTargetInventoryRead(
             memo.read() ??
             (await discovery.readTargetInventory({
               ...prepared,
-              registeredDatabases: { status: "deferred" },
+              registeredDatabases: registeredDatabases ?? { status: "deferred" },
             }));
           if (inventory.kind === "session-target-registry-required") {
             const { result } = await registry.read();

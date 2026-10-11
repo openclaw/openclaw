@@ -7,10 +7,15 @@ import {
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { applyAgentConfig, pruneAgentConfig } from "../commands/agents.config.js";
 import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { diffConfigPaths } from "../gateway/config-diff.js";
+import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
+import { createGatewayModelRuntimeReload } from "../gateway/server-reload-model-runtime-scope.js";
 import { registryContainsRuntimePluginIds } from "../plugins/active-runtime-registry.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
@@ -20,11 +25,16 @@ import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generatio
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { DiscoverAuthStorageOptions } from "./agent-auth-discovery.js";
-import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
+import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
+import {
+  scopePreparedModelRuntimeLease,
+  withPreparedModelRuntimePluginGenerationScope,
+} from "./prepared-model-runtime-generation-scope.js";
 import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   beginPreparedModelRuntimePluginDrain,
+  ensureGatewayPreparedModelRuntimeReady,
   getPendingPreparedModelRuntimeReplacement,
   getPreparedModelRuntimeSnapshot,
   loadPublishedGatewayReplyDispatchRuntime,
@@ -34,6 +44,7 @@ import {
   registerPreparedModelRuntimePublicationListener,
   refreshPreparedModelRuntimeSnapshots,
   rejectPendingPreparedModelRuntimeReplacement,
+  type PreparedModelRuntimeLease,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
 import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
@@ -396,6 +407,170 @@ describe("prepared reply dispatch runtime", () => {
       }
     },
   );
+
+  it.each(["add", "delete"] as const)(
+    "keeps unchanged turns admitted across overlapping agent %s reloads",
+    async (successor) => {
+      const initialConfig: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          defaults: { model: "openai/gpt-5.5" },
+          entries: { free: {}, other: {} },
+        },
+      };
+      mocks.configuredAgentIds = ["free", "other"];
+      mocks.usePersistedAuthProfiles = true;
+      const publishAuth = (config: OpenClawConfig) =>
+        replaceRuntimeAuthProfileStoreSnapshots(
+          Object.keys(config.agents!.entries!).map((id) => ({
+            agentDir: fixture.state.agentDir(id),
+            store: { version: 1, profiles: {} },
+          })),
+        );
+      publishAuth(initialConfig);
+      const firstConfig = applyAgentConfig(initialConfig, { agentId: "first" });
+      const latestConfig =
+        successor === "add"
+          ? applyAgentConfig(firstConfig, { agentId: "second" })
+          : pruneAgentConfig(firstConfig, "other").config;
+      const reload = createGatewayModelRuntimeReload();
+      const prepare = (previous: OpenClawConfig, next: OpenClawConfig) =>
+        reload.prepare(buildGatewayReloadPlan(diffConfigPaths(previous, next)), previous, next);
+      const options = {
+        gatewayLifecycle: true,
+        catalogMode: "static" as const,
+        allowGatewaySubagentBinding: true,
+        joinSupersedingPublication: true,
+      };
+      await refreshPreparedModelRuntimeSnapshots(initialConfig, options);
+      await using resources = new AsyncDisposableStack();
+      let captured: ReturnType<typeof scopePreparedModelRuntimeLease> | undefined;
+      const dispatch = (await loadPublishedGatewayReplyDispatchRuntime({
+        agentId: "free",
+        onRuntimeLease: (lease) => {
+          captured = resources.use(scopePreparedModelRuntimeLease(lease));
+        },
+      }))!;
+      const started = createDeferred();
+      const release = createDeferred();
+      mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
+        started.resolve();
+        await release.promise;
+        return { entries: [] };
+      });
+      mocks.configuredAgentIds = ["free", "other", "first"];
+      const firstScope = prepare(initialConfig, firstConfig);
+      publishAuth(firstConfig);
+      const first = refreshPreparedModelRuntimeSnapshots(firstConfig, {
+        ...options,
+        ...firstScope.scope,
+      });
+      let second: Promise<void> | undefined;
+      try {
+        await started.promise;
+        firstScope.defer();
+        mocks.configuredAgentIds = Object.keys(latestConfig.agents!.entries!);
+        const secondScope = prepare(firstConfig, latestConfig);
+        publishAuth(latestConfig);
+        markPreparedModelRuntimeSnapshotsStale(undefined, {
+          waitForReplacement: true,
+          ...secondScope.scope,
+        });
+        second = refreshPreparedModelRuntimeSnapshots(latestConfig, {
+          ...options,
+          ...secondScope.scope,
+        });
+        release.resolve();
+        await Promise.all([first, second]);
+
+        const admissionInput = {
+          config: dispatch.config,
+          agentId: dispatch.agentId,
+          agentDir: dispatch.agentDir,
+          workspaceDir: dispatch.workspaceDir,
+          allowGatewaySubagentBinding: true,
+          runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.5" }],
+        };
+        await using pendingTurn = await acquireAgentRunPreparedModelRuntime(admissionInput, {
+          pluginGeneration: dispatch.pluginGeneration,
+        });
+        expect(pendingTurn.pluginGeneration).toBe(dispatch.pluginGeneration);
+        await captured!.run(async () => {
+          await using resumed = await acquireAgentRunPreparedModelRuntime(admissionInput, {
+            pluginGeneration: dispatch.pluginGeneration,
+          });
+          expect(resumed.pluginGeneration).toBe(dispatch.pluginGeneration);
+        });
+        const latest = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "free" }))!;
+        expect(latest.pluginGeneration).toBe(dispatch.pluginGeneration);
+        expect(latest.config).toBe(latestConfig);
+        await using admitted = await acquireAgentRunPreparedModelRuntime({
+          ...fixture.agentInput("free", latestConfig),
+          workspaceDir: latest.workspaceDir,
+          allowGatewaySubagentBinding: true,
+        });
+        expect(admitted.snapshot.config).toBe(latestConfig);
+        for (const agentId of mocks.configuredAgentIds.filter((id) => id !== "free")) {
+          expect(await loadPublishedGatewayReplyDispatchRuntime({ agentId })).toMatchObject({
+            agentId,
+            config: latestConfig,
+          });
+        }
+      } finally {
+        release.resolve();
+        await Promise.allSettled([first, second]);
+      }
+    },
+  );
+
+  it("keeps unaffected dispatch and run admission available when a scoped replacement fails", async () => {
+    mocks.configuredAgentIds = ["default", "worker"];
+    const input = fixture.agentInput("default", {});
+    await refreshPreparedModelRuntimeSnapshots(input.config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+    const original = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+    const gate = markPreparedModelRuntimeSnapshotsStale("worker agent reload", {
+      waitForReplacement: true,
+      agentIds: new Set(["worker"]),
+    });
+    const leases: PreparedModelRuntimeLease[] = [];
+    const reading = Promise.all([
+      loadPublishedGatewayReplyDispatchRuntime({
+        agentId: "default",
+        onRuntimeLease: (lease) => leases.push(lease),
+      }),
+      prepareModelRuntimeSnapshot(input),
+      acquireAgentRunPreparedModelRuntime(input, { catalogMode: "static" }).then((lease) => {
+        leases.push(lease);
+        return lease;
+      }),
+    ]);
+    const observed = reading.catch((error: unknown) => error);
+    try {
+      // Join the same healthy demand preflight while the other agent's reload remains pending.
+      await ensureGatewayPreparedModelRuntimeReady({ agentId: "default" });
+      rejectPendingPreparedModelRuntimeReplacement(gate, new Error("worker database is closing"));
+      const [dispatch, snapshot, lease] = await reading;
+      expect(dispatch).toMatchObject({
+        agentId: "default",
+        pluginGeneration: original?.pluginGeneration,
+      });
+      expect(snapshot.isCurrent()).toBe(true);
+      expect(lease.snapshot.isCurrent()).toBe(true);
+      await expect(loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" })).resolves.toBe(
+        original,
+      );
+      await expect(loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" })).rejects.toThrow(
+        "was not published for worker",
+      );
+    } finally {
+      rejectPendingPreparedModelRuntimeReplacement(gate, new Error("test cleanup"));
+      await observed;
+      await Promise.all(leases.map((lease) => lease[Symbol.asyncDispose]()));
+    }
+  });
 
   it("keeps a rejected auth refresh projection unavailable without affecting siblings", async () => {
     mocks.configuredAgentIds = ["default", "worker"];

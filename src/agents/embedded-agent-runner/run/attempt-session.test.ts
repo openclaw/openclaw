@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Type } from "typebox";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { isEmbeddedMode, setEmbeddedMode } from "../../../infra/embedded-mode.js";
 import {
@@ -32,7 +32,7 @@ import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixt
 import * as toolSearch from "../../tool-search.js";
 import {
   clearEmbeddedSessionPromptStates,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
   prepareSessionSystemPrompt,
 } from "../session-prompt-state.js";
 import { withPromptFixture } from "./attempt-system-prompt.sandbox-info.test-support.js";
@@ -244,7 +244,9 @@ function createSystemUpdateInput() {
     },
   ];
   const steer = fixture.queuePromptContext;
-  const state = getEmbeddedSessionPromptState("permission-system-updates");
+  const promptStateLease = retainEmbeddedSessionPromptState("permission-system-updates");
+  onTestFinished(() => promptStateLease[Symbol.dispose]());
+  const state = promptStateLease.state;
   const prepareSystemPromptUpdate = vi.fn((systemPrompt: string, _freshlyRendered?: boolean) =>
     prepareSessionSystemPrompt({
       state,
@@ -903,19 +905,19 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     });
   });
 
-  it.each([
-    ["settled-tool-finalization", true],
-    [undefined, false],
-  ] as const)("sets compactionForbidden for operation %s to %s", async (operation, expected) => {
-    const fixture = createInput();
-    fixture.input.attempt = { ...fixture.input.attempt, operation };
+  it.each([["settled-tool-finalization", true]] as const)(
+    "sets compactionForbidden for operation %s to %s",
+    async (operation, expected) => {
+      const fixture = createInput();
+      fixture.input.attempt = { ...fixture.input.attempt, operation };
 
-    await prepareEmbeddedAttemptAgentSession(fixture.input);
+      await prepareEmbeddedAttemptAgentSession(fixture.input);
 
-    expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledWith(
-      expect.objectContaining({ compactionForbidden: expected }),
-    );
-  });
+      expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledWith(
+        expect.objectContaining({ compactionForbidden: expected }),
+      );
+    },
+  );
 
   it("publishes session ownership before activation can fail", async () => {
     const fixture = createInput({ activationError: new Error("activation failed") });

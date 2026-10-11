@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/realtime-voice")>()),
-  resolveConfiguredRealtimeVoiceProvider: vi.fn(
+  resolveConfiguredRealtimeVoiceProviderAsync: vi.fn(
     ({ providerConfigs }: { providerConfigs?: Record<string, Record<string, unknown>> }) => {
       const selected = Object.entries(providerConfigs ?? {}).find(
         ([, config]) => typeof config.apiKey === "string" && config.apiKey.length > 0,

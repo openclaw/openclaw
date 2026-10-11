@@ -68,15 +68,9 @@ function latestAssistantProvider(messages: unknown[] | undefined): string | null
   return null;
 }
 
-function getContextNoticeViewModel(
-  session: GatewaySessionRow | undefined,
-  defaultContextTokens: number | null,
-) {
+function getContextNoticeViewModel(session: GatewaySessionRow | undefined) {
   const used = asNonNegativeFiniteNumber(session?.totalTokens);
-  const { tokens: limit, fromLastPrompt } = resolveSessionContextLimit(
-    session,
-    defaultContextTokens,
-  );
+  const { tokens: limit, fromLastPrompt } = resolveSessionContextLimit(session);
   if (used === undefined || !limit) {
     return null;
   }
@@ -257,13 +251,10 @@ function renderContextStat(label: string, value: string) {
 
 type ContextNoticeProps = ContextNoticeOptions & {
   session?: GatewaySessionRow;
-  defaultContextTokens: number | null;
 };
 
 export function ContextNotice(props: ContextNoticeProps) {
-  const model = createMemo(() =>
-    getContextNoticeViewModel(props.session, props.defaultContextTokens),
-  );
+  const model = createMemo(() => getContextNoticeViewModel(props.session));
   const currentGroup = createMemo(() => {
     const provider = (
       props.session?.modelProvider?.trim() || latestAssistantProvider(props.messages)
@@ -418,13 +409,11 @@ export function ContextNotice(props: ContextNoticeProps) {
 
 export function renderContextNoticeSolid(
   session: GatewaySessionRow | undefined,
-  defaultContextTokens: number | null,
   options: ContextNoticeOptions = {},
 ) {
   return (
     <ContextNotice
       session={session}
-      defaultContextTokens={defaultContextTokens}
       messages={options.messages}
       providerUsage={options.providerUsage}
     />

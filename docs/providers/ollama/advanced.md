@@ -183,8 +183,9 @@ on the model template, available cache slots, and unchanged instructions/tools.
 
     When replaying an assistant message, native requests retain its available
     reasoning in Ollama's separate `thinking` field alongside text and tool
-    calls. This lets tool follow-ups reuse reasoning retained by the session's
-    history policy without mixing it into visible answer text.
+    calls, including later tool steps and reopened sessions. Earlier reasoning
+    stays in place so local prompt caches can reuse the prefix. It is not mixed
+    into visible answer text; compaction can still replace older history.
 
     ```bash
     openclaw agent --model ollama/gemma4 --thinking off

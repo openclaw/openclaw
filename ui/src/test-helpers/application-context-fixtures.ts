@@ -78,7 +78,7 @@ export function createApplicationGateway(
         listener(event);
       }
     },
-    publish(next: ApplicationGatewaySnapshot) {
+    publish(this: void, next: ApplicationGatewaySnapshot) {
       snapshot = next;
       for (const listener of listeners) {
         listener(snapshot);

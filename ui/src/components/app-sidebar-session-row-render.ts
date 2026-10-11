@@ -51,7 +51,7 @@ import {
 import { sessionRunVisibility } from "./session-run-visibility.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
 import { EMPTY_VIEWER_IDENTITIES } from "./viewer-facepile.ts";
-import "./elapsed-time.ts";
+import "./elapsed-time.tsx";
 import "./tooltip.ts";
 
 const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;

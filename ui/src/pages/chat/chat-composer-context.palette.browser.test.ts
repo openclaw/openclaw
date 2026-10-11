@@ -22,16 +22,13 @@ describe("mounted context usage palette", () => {
       rootStyle.setProperty("--danger", "#dc2626");
       mountSolid(
         () =>
-          renderContextNoticeSolid(
-            {
-              key: "main",
-              kind: "direct",
-              updatedAt: null,
-              totalTokens: percent,
-              contextTokens: 100,
-            },
-            null,
-          ),
+          renderContextNoticeSolid({
+            key: "main",
+            kind: "direct",
+            updatedAt: null,
+            totalTokens: percent,
+            contextTokens: 100,
+          }),
         { container },
       );
       document.body.append(container);

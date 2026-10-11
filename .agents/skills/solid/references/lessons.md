@@ -5,6 +5,7 @@ Each entry cost at least one failed CI run, a reverted approach, or a blocked PR
 ## Solid 2 semantics
 
 - **Writes are deferred.** A setter's value is visible only after the microtask flush. That's why owners stay plain TypeScript and components derive instead of write-then-read. A signal-backed store broke callers that mutate and immediately read.
+- **Effect cleanup also runs for equal computed values.** A bridge props refresh can rerun `createEffect` even when its selected status is unchanged, canceling a timer without restarting it. Feed lifecycle effects through a `createMemo` when cleanup must follow value transitions; this kept the saved-status timer from hiding Apply indefinitely.
 - **Removed namespaces compile silently.** `on:click`, `attr:`, `bool:`, `classList`, and `use:` don't error; they become literal attributes or no-ops. Lint is the only guard.
 - **Event names are case-sensitive.** `onWaSelect` listens to `waselect`, not `wa-select`. Use `onWa-select` or `listen(...)`.
 - **Async memos aren't cancellable.** They drop superseded results but get no `AbortSignal`. Transport cancellation needs an owned async-iterable adapter.
@@ -17,6 +18,10 @@ Each entry cost at least one failed CI run, a reverted approach, or a blocked PR
 - **A tag can have only one class.** Our first plan kept Lit versions of shared primitives for unported callers while Solid rendered the same tags. The browser upgrades any element with a registered tag, so Lit rendered over Solid's children. The fix is one implementation per tag plus the bridge.
 - **Don't block the old path before the new one works.** The Lit ratchet landed before anyone could mount a Solid component, and it blocked feature PRs that legitimately added Lit UI. Migration guards start advisory. Enforce in the PR that makes the replacement usable, and only for new files.
 - **Bridges need the boring cases tested.** Properties set before upgrade, moves within one task, Lit part markers in child content, and context replacement each broke a first draft.
+- **Create content under the owner that retains it.** A Solid history header created inside a transient projection memo was disposed while a separate transcript root still displayed it. Pass the legacy template through and let the retained renderer mount it; otherwise retry, reconnect loading, and automatic history paging lose their control.
+- **Lit disconnection can mean parking.** `setConnected(false)` on a retained range must park nested Solid roots rather than recreate their controls on reveal. Preserve their presentation context and retire them with the containing range, including removal while already parked; otherwise sidebar return-focus targets and restored transcript geometry disappear.
+- **Commit timing exposes stale geometry state.** Solid's later measurement can reach the transcript end through a programmatic scroll after the pane rendered its latest button. Update the geometric affordance on that arrival while preserving reader intent; a maintenance correction must not unlock following. Hide it immediately when the end is reached: a delayed CSS visibility transition can otherwise leave the obsolete control visible after layout has settled.
+- **Refs can precede document adoption.** A Solid template element can still belong to an inert document when its ref runs, so `ownerDocument.defaultView` is null. Bind global listeners through an already mounted owner and retain that exact window for cleanup; otherwise hover-only Escape silently stops working while focused key handlers still pass.
 
 ## Testing and tooling
 

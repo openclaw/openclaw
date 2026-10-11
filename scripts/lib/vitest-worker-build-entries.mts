@@ -37,6 +37,7 @@ import {
   updateExecutorEntrypoints,
   stateDirGatewayFixtureEntrypoint,
   updateCandidateExitEntrypoints,
+  windowsProcessJobRetentionEntrypoint,
   windowsProcessOwnershipEntrypoint,
 } from "../../src/cli/cli-entrypoint.test-support.ts";
 import { updateExecutorNativeEntrypoints } from "../../src/cli/update-cli/update-command-executor-native-runtime.test-support.ts";
@@ -345,6 +346,7 @@ export const vitestWorkerBuildEntries = {
     ...Object.values(cliRecoveryEntrypoints),
     ...Object.values(cliMessageExitEntrypoints),
     windowsProcessOwnershipEntrypoint,
+    windowsProcessJobRetentionEntrypoint,
     ...Object.values(updateCandidateExitEntrypoints),
     ...Object.values(updateExecutorNativeEntrypoints),
     ...Object.values(updateExecutorEntrypoints),
