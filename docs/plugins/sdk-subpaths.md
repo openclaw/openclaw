@@ -402,7 +402,12 @@ secret that starts before it. `hasConfiguredRedactPatterns()` from the same
 subpath returns whether `logging.redactPatterns` replaces the default string rules. A
 configured rule can need any amount of text after the start of its match, so
 with configured rules no bounded lookahead is enough and the whole value has
-to be redacted.
+to be redacted. Some default rules end with a part a cut can remove, such as a
+private key's END line, a JWT's signature, the `@` after a URL password, or the
+quote that closes a quoted value. `findTruncatedSecret(text)` from the same
+subpath returns `{ start, closing }` when such a match runs to the end of
+`text`, and `undefined` otherwise: mask from `start`, then append `closing`, the
+quote that closes a quoted value (empty for other rules).
 
 For structured SecretRefs, `resolveReadOnlyEnvSecretRef` returns `blocked` when the ref cannot be used, including an allowed env ref whose value is missing or empty. Callers may apply their existing fallback only for `missing`; a blocked ref must not borrow ambient or auth-profile credentials. Its provider check follows source-specific default aliases and explicit env allowlists.
 

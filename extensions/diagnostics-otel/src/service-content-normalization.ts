@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
+  findTruncatedSecret,
   getLongestRegisteredSecretLength,
   hasConfiguredRedactPatterns,
   redactSensitiveText,
@@ -31,43 +32,10 @@ const MAX_OTEL_WHOLE_JSON_CHARS_PER_EXPORT_CHAR = 4;
 // has budget left: 8x the export's size, the cap its windows have. Past the budget the secret is
 // masked from where it starts, which drops what follows it.
 const MAX_OTEL_WHOLE_STRING_CHARS_PER_EXPORT_CHAR = 8;
-// Some secrets end with a part the window can cut off: a private key's END line, the closing
-// quote of a quoted value (JSON secret keys, quoted assignments, CLI flags), a JWT's signature,
-// or the `@` after a URL password. A secret the window leaves open is masked from where its value
+// Some secrets end with a part the window can cut off, such as a private key's END line or a JWT's
+// signature. A secret the window leaves open (`findTruncatedSecret`) is masked from where its value
 // starts.
 const OPEN_SECRET_MASK = "***";
-const PRIVATE_KEY_BEGIN_RE = /-----BEGIN [A-Z ]*PRIVATE KEY-----/i;
-const PRIVATE_KEY_END_RE = /-----END [A-Z ]*PRIVATE KEY-----/gi;
-// The redactor's JWT rule needs all three base64url segments. A run of base64url characters and
-// dots that reaches the window end can hold a JWT cut before its signature: a header of at least
-// the rule's length, starting `eyJ`, then a dot. It is masked from where that header starts. A
-// header that alone runs past the window is not recognized; it holds JOSE parameters, not claims
-// or the signature.
-const JWT_HEADER_PREFIX = "eyJ";
-const JWT_MIN_HEADER_CHARS = 13;
-// The redactor's two URL password rules end at the `@` after the userinfo. A password that runs to
-// the window end, with no character in between that ends one, is open. Each entry takes its rule's
-// schemes, userinfo and password characters: a database URL's password may hold a `/`, a web URL's
-// may not. A scheme starts at most 16 characters before the userinfo. A port followed by a run of
-// password characters that reaches the window end reads as an open password too.
-const OPEN_URL_PASSWORD_RULES = [
-  { prefix: /\b(?:https?|wss?|ftp):\/\/[^/\s:@]*:/gi, end: /[/\s@]/ },
-  {
-    prefix: /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqps?):\/\/[^:\s/@]*:/gi,
-    end: /[@\s]/,
-  },
-] as const;
-const OPEN_URL_SCHEME_MAX_CHARS = 16;
-// Whether a quote opens a secret is asked of the redactor: it gets the key before the quote, the
-// separator and quote, then a stand-in value and the closing quote. Each probe stays under
-// 512 characters: separator whitespace collapses to one space, as the rules' `\s*` allows, and
-// escapes are capped at the redactor's own limit for serialized quotes.
-const OPEN_QUOTE_PROBE_CONTEXT_CHARS = 256;
-const OPEN_QUOTE_PROBE_SEPARATOR_CHARS = 16;
-const OPEN_QUOTE_PROBE_ESCAPE_CHARS = 64;
-const OPEN_QUOTE_PROBE_VALUE = "0".repeat(24);
-const OPEN_QUOTE_SEPARATOR_CHAR_RE = /[\s:=]/;
-const NON_WORD_CHAR_RE = /\W/;
 
 // Registered secrets only match whole, so the lookahead also covers the longest registered surface
 // form (URL-encoded and JSON-escaped forms included). That length widens every clipped string's
@@ -131,7 +99,7 @@ function redactWindow(
     return { text: redactSensitiveText(value), clipped: false, settled: true };
   }
   let clippedText = truncateUtf16Safe(value, windowChars);
-  let openSecret = findOpenSecret(clippedText);
+  let openSecret = findTruncatedSecret(clippedText);
   if (openSecret && value.length <= whole.budgetChars) {
     whole.budgetChars -= value.length;
     const text = redactSensitiveText(value);
@@ -144,7 +112,7 @@ function redactWindow(
     const registeredMasked = redactSensitiveText(clippedText, { mode: "off" });
     if (registeredMasked !== clippedText) {
       clippedText = registeredMasked;
-      openSecret = findOpenSecret(clippedText);
+      openSecret = findTruncatedSecret(clippedText);
     }
   }
   if (!openSecret) {
@@ -156,120 +124,6 @@ function redactWindow(
     clipped: true,
     settled: true,
   };
-}
-
-/** A secret whose closing delimiter lies past the end of `text`, masked from `start`. */
-function findOpenSecret(text: string): { start: number; closing: string } | undefined {
-  let lastEnd = 0;
-  for (const end of text.matchAll(PRIVATE_KEY_END_RE)) {
-    lastEnd = end.index + end[0].length;
-  }
-  const begin = text.slice(lastEnd).search(PRIVATE_KEY_BEGIN_RE);
-  let open = begin < 0 ? undefined : { start: lastEnd + begin, closing: "" };
-  const jwtStart = findOpenJwt(text);
-  if (jwtStart !== undefined && jwtStart < (open?.start ?? text.length)) {
-    open = { start: jwtStart, closing: "" };
-  }
-  const passwordStart = findOpenUrlPassword(text);
-  if (passwordStart !== undefined && passwordStart < (open?.start ?? text.length)) {
-    open = { start: passwordStart, closing: "" };
-  }
-  // An open quoted value holds no closing quote, so it follows the last quote of its kind. A
-  // quote before the last line break is probed with a value that crosses a line, which only
-  // rules for values spanning lines (JSON strings) mask.
-  const lineStart = Math.max(text.lastIndexOf("\n"), text.lastIndexOf("\r")) + 1;
-  for (const quote of ['"', "'", "`"]) {
-    const quoteIndex = text.lastIndexOf(quote);
-    if (quoteIndex < 0 || quoteIndex + 1 >= (open?.start ?? text.length)) {
-      continue;
-    }
-    // An escaped quote closes with the same escape.
-    let escapeStart = quoteIndex;
-    while (escapeStart > 0 && text[escapeStart - 1] === "\\") {
-      escapeStart--;
-    }
-    let separatorStart = escapeStart;
-    while (
-      separatorStart > 0 &&
-      OPEN_QUOTE_SEPARATOR_CHAR_RE.test(text[separatorStart - 1] ?? "")
-    ) {
-      separatorStart--;
-    }
-    const escapes = Math.min(quoteIndex - escapeStart, OPEN_QUOTE_PROBE_ESCAPE_CHARS);
-    const closing = `${"\\".repeat(escapes)}${quote}`;
-    const separator = text
-      .slice(separatorStart, escapeStart)
-      .replace(/\s+/g, " ")
-      .slice(-OPEN_QUOTE_PROBE_SEPARATOR_CHARS);
-    // Start the key context on a non-word character, so the probe's start adds no word boundary
-    // the text lacks: a rule anchored there could take this quote as its closing one. A context
-    // that is one word throughout keeps its cut.
-    let keyStart = Math.max(0, separatorStart - OPEN_QUOTE_PROBE_CONTEXT_CHARS);
-    if (keyStart > 0) {
-      const wordEnd = text.slice(keyStart - 1, separatorStart).search(NON_WORD_CHAR_RE);
-      keyStart += wordEnd < 0 ? 0 : wordEnd - 1;
-    }
-    const key = text.slice(keyStart, separatorStart);
-    const value = `${quoteIndex < lineStart ? "\n" : ""}${OPEN_QUOTE_PROBE_VALUE}${closing}`;
-    // Only the stand-in's own position counts: the key context may hold the same characters.
-    if (!redactSensitiveText(`${key}${separator}${closing}${value}`).endsWith(value)) {
-      open = { start: quoteIndex + 1, closing };
-    }
-  }
-  return open;
-}
-
-/** Where a JWT starts in the base64url run that ends `text`, if the run holds one. */
-function findOpenJwt(text: string): number | undefined {
-  let from = text.length;
-  while (from > 0 && isJwtChar(text.charCodeAt(from - 1))) {
-    from--;
-  }
-  // Each candidate header ends at the next dot; a shorter one than the rule's is not a header.
-  for (;;) {
-    const start = text.indexOf(JWT_HEADER_PREFIX, from);
-    const headerEnd = start < 0 ? -1 : text.indexOf(".", start);
-    if (headerEnd < 0) {
-      return undefined;
-    }
-    if (headerEnd - start >= JWT_MIN_HEADER_CHARS) {
-      return start;
-    }
-    from = headerEnd + 1;
-  }
-}
-
-/** Where a URL password starts when the `@` that ends it lies past the end of `text`. */
-function findOpenUrlPassword(text: string): number | undefined {
-  let open: number | undefined;
-  for (const rule of OPEN_URL_PASSWORD_RULES) {
-    let runStart = text.length;
-    while (runStart > 0 && !rule.end.test(text[runStart - 1] ?? "")) {
-      runStart--;
-    }
-    // A password in the run that ends `text` has nothing before the cut that ends it.
-    rule.prefix.lastIndex = Math.max(0, runStart - OPEN_URL_SCHEME_MAX_CHARS);
-    for (let match = rule.prefix.exec(text); match; match = rule.prefix.exec(text)) {
-      const passwordStart = match.index + match[0].length;
-      if (passwordStart > runStart && passwordStart < text.length) {
-        open = Math.min(open ?? passwordStart, passwordStart);
-        break;
-      }
-    }
-  }
-  return open;
-}
-
-/** Base64url characters and the dots between JWT segments. */
-function isJwtChar(code: number): boolean {
-  return (
-    (code >= 0x30 && code <= 0x39) ||
-    (code >= 0x41 && code <= 0x5a) ||
-    (code >= 0x61 && code <= 0x7a) ||
-    code === 0x2d ||
-    code === 0x2e ||
-    code === 0x5f
-  );
 }
 
 export function normalizeOtelLogString(value: string, maxChars: number): string {

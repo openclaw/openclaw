@@ -277,7 +277,7 @@ export type RedactMatch = ReturnType<typeof readRedactMatch> & { replacement?: s
  * secret's last occurrence in match, or an empty array selects the whole match.
  * replacement carries a fixed policy mask; absent values use the caller's token hints.
  */
-type RedactMatcher = {
+export type RedactMatcher = {
   readonly source: string;
   readonly exec: (text: string) => Iterable<RedactMatch>;
   readonly createContext?: () => {

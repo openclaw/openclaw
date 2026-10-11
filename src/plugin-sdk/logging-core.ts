@@ -42,6 +42,7 @@ export {
   redactSensitiveText,
   redactToolPayloadText,
 } from "../logging/redact.js";
+export { findTruncatedSecret } from "../logging/redact-open-secret.js";
 export { getLongestRegisteredSecretLength } from "../logging/secret-redaction-registry.js";
 export { hasConfiguredRedactPatterns } from "../logging/config.js";
 export { redactIdentifier } from "@openclaw/normalization-core/node-crypto";

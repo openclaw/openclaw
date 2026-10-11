@@ -429,7 +429,8 @@ describe("OTEL content redaction at the export cut", () => {
   it.each(exportPaths)(
     "masks a JWT whose signature lies past the redaction window in $name",
     (path) => {
-      for (const jwt of [LONG_JWT, LONG_JWT_INDENTED]) {
+      // The core JWT rule finds its `eyJ` prefix in any letter case.
+      for (const jwt of [LONG_JWT, LONG_JWT_INDENTED, `EYJ${LONG_JWT.slice(3)}`]) {
         // The token starts 200 characters before the cut, so its header and part of its payload
         // would be exported.
         expect(jwt.lastIndexOf(".")).toBeGreaterThan(200 + REDACTION_LOOKAHEAD_CHARS);
@@ -438,11 +439,42 @@ describe("OTEL content redaction at the export cut", () => {
         const exported = path.exportText(text);
 
         expect(exported).toContain(TRUNCATED_SUFFIX);
-        expect(exported).not.toContain(LONG_JWT_HEADER);
+        expect(exported).not.toContain(jwt.slice(0, LONG_JWT_HEADER.length));
         expect(exported).not.toContain(
           jwt.slice(LONG_JWT_HEADER.length + 1, LONG_JWT_HEADER.length + 33),
         );
       }
+    },
+  );
+
+  it.each(exportPaths)(
+    "masks an Atlassian token whose = suffix lies past the redaction window in $name",
+    (path) => {
+      // The core rules end these tokens with `=` and eight alphanumerics, which a window that
+      // starts the token 200 characters before the cut leaves out.
+      for (const prefix of ["ATATT", "ATCTT3xFfG", "atatt"]) {
+        const token = `${prefix}${SECRET_BODY.repeat(160)}=${SECRET_BODY.slice(0, 8)}`;
+        const text = `${"x".repeat(path.keptChars - 201)} ${token} ${"y".repeat(CUT_TAIL_CHARS)}`;
+
+        const exported = path.exportText(text);
+
+        expect(exported).toContain(TRUNCATED_SUFFIX);
+        expect(exported).not.toContain(`${prefix}${SECRET_BODY.slice(0, 8)}`);
+      }
+    },
+  );
+
+  it.each(exportPaths)(
+    "masks a form value whose next pair lies past the redaction window in $name",
+    (path) => {
+      // The core form rule masks a first pair's value only when `&key=` follows it.
+      const text = `${"x".repeat(path.keptChars - 201)} code=${SECRET_BODY.repeat(160)}&state=x ${"y".repeat(CUT_TAIL_CHARS)}`;
+
+      const exported = path.exportText(text);
+
+      expect(exported).toContain(TRUNCATED_SUFFIX);
+      expect(exported).toContain("code=***");
+      expect(exported).not.toContain(SECRET_BODY);
     },
   );
 

@@ -1,4 +1,8 @@
-import type { RedactMatch, ResolvedRedactPattern } from "./redact-pattern-runtime.js";
+import type {
+  RedactMatch,
+  RedactMatcher,
+  ResolvedRedactPattern,
+} from "./redact-pattern-runtime.js";
 import {
   base64SafeToken,
   CONFIG_ASSIGNMENT_SECRET_KEYS,
@@ -574,6 +578,26 @@ const CONFIG_QUOTED_MATCHER = makeQuotedAssignmentMatcher(
   CONFIG_QUOTED_PREFIX_SOURCE,
   "g",
 );
+
+/**
+ * The matchers above whose match needs a closing part after its secret, each with text that closes
+ * any match it has open at the end of a text: an ATCTT3xFfG or ATATT token's `=` and eight
+ * alphanumerics, a JWT's payload and signature once its header has ended, the `@` after a URL
+ * password, or the `&key=` after a form value. The JWT closing leaves a header that runs to the end
+ * unclosed: a dot-free run after `eyJ` is a header or base64url JSON, and neither holds claims or a
+ * signature. None of these allows whitespace inside a match. Of the other matchers, the quoted
+ * assignments end at a closing quote, which `findTruncatedSecret` probes for with every quoted
+ * rule. The rest end where a run of their characters ends, so a cut run still matches, or within
+ * 40 characters of their start, which a caller's lookahead past its cut covers.
+ */
+export const OPEN_MATCH_CLOSINGS: readonly { pattern: RedactMatcher; closing: string }[] = [
+  { pattern: ATCTT_TOKEN_MATCHER, closing: "=AAAAAAAA" },
+  { pattern: ATATT_TOKEN_MATCHER, closing: "=AAAAAAAA" },
+  { pattern: JWT_MATCHER, closing: "AAAAAAAAAA.AAAAAAAAAA" },
+  { pattern: URL_USERINFO_MATCHER, closing: "@" },
+  { pattern: CONNECTION_STRING_MATCHER, closing: "@" },
+  { pattern: FORM_BODY_FIRST_PAIR_MATCHER, closing: "&a=" },
+];
 
 /** Default rule sources whose compilation routes to the linear matchers above. */
 export const LINEAR_MATCHER_SOURCES: ReadonlyMap<string, ResolvedRedactPattern> = new Map<

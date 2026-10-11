@@ -19,6 +19,7 @@ export type {
   OpenClawPluginServiceContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 export {
+  findTruncatedSecret,
   getLongestRegisteredSecretLength,
   hasConfiguredRedactPatterns,
   redactSensitiveText,
