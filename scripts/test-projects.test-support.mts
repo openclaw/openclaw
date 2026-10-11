@@ -3475,6 +3475,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     /^scripts\/lib\/guard-inventory-utils\.mjs$/u,
     [
       "test/plugin-extension-import-boundary.test.ts",
+      "test/architecture-smells.test.ts",
       "test/test-helper-extension-import-boundary.test.ts",
       "extension-import-boundary-checker",
       "web-fetch-provider-boundary",

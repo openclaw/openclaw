@@ -53,6 +53,7 @@ const MESSAGE_PATH = `/open-apis/im/v1/messages/${MESSAGE}`;
 const CHAT_PATH = `/open-apis/im/v1/chats/${ALLOWED}`;
 const MEMBERS_PATH = `${CHAT_PATH}/members`;
 const PINS_PATH = "/open-apis/im/v1/pins";
+const USER_PATH = `/open-apis/contact/v3/users/${MEMBER}`;
 const PEERS_PATH = "/open-apis/contact/v3/users";
 const PEERS_PAGE_TOKEN = "peers/next+%2F=";
 type ActionResult = NonNullable<Awaited<ReturnType<typeof dispatchChannelMessageAction>>>;
@@ -389,19 +390,72 @@ function createFixture(
   return { cfg, settings, record, run, dispatch };
 }
 
+const readCases: Array<{
+  action: ChannelMessageActionName;
+  params: Record<string, unknown>;
+  details: Record<string, unknown>;
+  paths: string[];
+}> = [
+  {
+    action: "read",
+    params: { chatId: ALLOWED, messageId: MESSAGE },
+    details: { message: { messageId: MESSAGE, chatId: ALLOWED, content: "allowed context" } },
+    paths: [MESSAGE_PATH, CHAT_PATH],
+  },
+  {
+    action: "reactions",
+    params: { chatId: ALLOWED, messageId: MESSAGE },
+    details: {
+      reactions: [{ reactionId: "reaction-1", emojiType: "THUMBSUP", operatorId: MEMBER }],
+    },
+    paths: [MESSAGE_PATH, CHAT_PATH, `${MESSAGE_PATH}/reactions`],
+  },
+  {
+    action: "list-pins",
+    params: { chatId: ALLOWED },
+    details: { chatId: ALLOWED, pins: [{ messageId: MESSAGE, chatId: ALLOWED }] },
+    paths: [CHAT_PATH, PINS_PATH],
+  },
+  {
+    action: "member-info",
+    params: { chatId: ALLOWED, memberId: MEMBER },
+    details: { member: { member_id: MEMBER, name: "Allowed member" } },
+    paths: [CHAT_PATH, MEMBERS_PATH, MEMBERS_PATH, USER_PATH],
+  },
+  {
+    action: "channel-info",
+    params: { chatId: ALLOWED },
+    details: { channel: { chat_id: ALLOWED, name: "Allowed" } },
+    paths: [CHAT_PATH],
+  },
+  {
+    action: "channel-list",
+    params: {},
+    details: { groups: [{ kind: "group", id: ALLOWED }], peers: [{ kind: "user", id: SELF }] },
+    paths: [],
+  },
+  {
+    action: "sticker-search",
+    params: { query: "thumbs" },
+    details: { stickers: [{ fileId: "file_allowed", keyword: "thumbs up" }], truncated: false },
+    paths: [],
+  },
+];
+
 describe.each([false, true])("Feishu provider reads (bundled: %s)", (bundled) => {
-  it("runs read through its real consumer", async () => {
-    const fixture = createFixture({ bundled });
-    expectResult(await fixture.dispatch("read", { chatId: ALLOWED, messageId: MESSAGE }), {
-      message: { messageId: MESSAGE, chatId: ALLOWED, content: "allowed context" },
-    });
-    expect(contentRequests()).toEqual([MESSAGE_PATH, CHAT_PATH]);
-    expect(
-      requests
-        .filter((request) => request.path !== AUTH_PATH)
-        .every((request) => request.method === "GET"),
-    ).toBe(true);
-  });
+  it.each(bundled ? readCases.filter(({ action }) => action === "read") : readCases)(
+    "runs $action through its real consumer",
+    async ({ action, params, details, paths }) => {
+      const fixture = createFixture({ bundled });
+      expectResult(await fixture.dispatch(action, params), details);
+      expect(contentRequests()).toEqual(paths);
+      expect(
+        requests
+          .filter((request) => request.path !== AUTH_PATH)
+          .every((request) => request.method === "GET"),
+      ).toBe(true);
+    },
+  );
 });
 
 it("filters live directory pages before applying the limit", async () => {

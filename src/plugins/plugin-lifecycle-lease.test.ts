@@ -203,12 +203,14 @@ describe("plugin lifecycle lease", () => {
     });
   });
 
-  it.for(["cleanup"] as const)(
+  it.for(["runtime", "cleanup"] as const)(
     "clears process demand after a %s waiter aborts or acquires and its holder releases",
-    async (_kind, { signal }) => {
+    async (kind, { signal }) => {
       await withOpenClawTestState({ label: "plugin-lifecycle-demand" }, async (state) => {
         vi.useFakeTimers();
         const clock = createPluginLifecycleLeaseTestClock();
+        const withWaiterLease =
+          kind === "runtime" ? withPluginLifecycleLease : withPluginArtifactCleanupLease;
         const entered = createDeferred();
         const release = createDeferred();
         const cancelled = new AbortController();
@@ -226,7 +228,7 @@ describe("plugin lifecycle lease", () => {
           await Promise.race([entered.promise, holder]);
           expect(hasPluginLifecycleLeaseDemand()).toBe(false);
 
-          const aborted = withPluginArtifactCleanupLease(
+          const aborted = withWaiterLease(
             { env: state.env, signal: cancelled.signal },
             async () => {
               throw new Error("aborted waiter acquired");
@@ -241,7 +243,7 @@ describe("plugin lifecycle lease", () => {
           const acquired = vi.fn(async () => {
             expect(hasPluginLifecycleLeaseDemand()).toBe(false);
           });
-          const waiter = withPluginArtifactCleanupLease({ env: state.env, signal }, acquired);
+          const waiter = withWaiterLease({ env: state.env, signal }, acquired);
           operations.push(waiter);
           expect(hasPluginLifecycleLeaseDemand()).toBe(true);
           release.resolve();
@@ -260,7 +262,12 @@ describe("plugin lifecycle lease", () => {
     },
   );
 
-  it.each([[true, false]])(
+  it.each([
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ])(
     "preserves operation and cleanup outcomes (run failure: %s, cleanup failure: %s)",
     async (failRun, failCleanup) => {
       await withOpenClawTestState({ label: "plugin-lifecycle-outcome" }, async (state) => {
@@ -410,43 +417,43 @@ describe("plugin lifecycle lease", () => {
     });
   });
 
-  it.each([["an explicit database path across different state directories", true]])(
-    "serializes lifecycle work sharing %s",
-    async (_label, explicitPath) => {
-      await withOpenClawTestState({ label: "plugin-lifecycle-lease" }, async (state) => {
-        const firstEntered = createDeferred();
-        const releaseFirst = createDeferred();
-        const events: string[] = [];
-        const leaseOptions = (caller: string) => ({
-          env: explicitPath ? { ...state.env, OPENCLAW_STATE_DIR: state.path(caller) } : state.env,
-          ...(explicitPath ? { path: state.path("shared-plugin-lifecycle.sqlite") } : {}),
-          leaseMs: 1_000,
-          waitMs: 3_000,
-        });
-
-        const first = withPluginLifecycleLease(leaseOptions("state-a"), async () => {
-          events.push("first-enter");
-          firstEntered.resolve();
-          await releaseFirst.promise;
-          events.push("first-exit");
-        });
-        await firstEntered.promise;
-        const second = withPluginLifecycleLease(leaseOptions("state-b"), async () => {
-          events.push("second-enter");
-        });
-        try {
-          await expect(
-            withPluginLifecycleLease({ ...leaseOptions("state-b"), waitMs: 0 }, async () => {}),
-          ).rejects.toMatchObject({ outcome: { kind: "held" } });
-          expect(events).toEqual(["first-enter"]);
-        } finally {
-          releaseFirst.resolve();
-          await Promise.all([first, second]);
-        }
-        expect(events).toEqual(["first-enter", "first-exit", "second-enter"]);
+  it.each([
+    ["one state directory", false],
+    ["an explicit database path across different state directories", true],
+  ])("serializes lifecycle work sharing %s", async (_label, explicitPath) => {
+    await withOpenClawTestState({ label: "plugin-lifecycle-lease" }, async (state) => {
+      const firstEntered = createDeferred();
+      const releaseFirst = createDeferred();
+      const events: string[] = [];
+      const leaseOptions = (caller: string) => ({
+        env: explicitPath ? { ...state.env, OPENCLAW_STATE_DIR: state.path(caller) } : state.env,
+        ...(explicitPath ? { path: state.path("shared-plugin-lifecycle.sqlite") } : {}),
+        leaseMs: 1_000,
+        waitMs: 3_000,
       });
-    },
-  );
+
+      const first = withPluginLifecycleLease(leaseOptions("state-a"), async () => {
+        events.push("first-enter");
+        firstEntered.resolve();
+        await releaseFirst.promise;
+        events.push("first-exit");
+      });
+      await firstEntered.promise;
+      const second = withPluginLifecycleLease(leaseOptions("state-b"), async () => {
+        events.push("second-enter");
+      });
+      try {
+        await expect(
+          withPluginLifecycleLease({ ...leaseOptions("state-b"), waitMs: 0 }, async () => {}),
+        ).rejects.toMatchObject({ outcome: { kind: "held" } });
+        expect(events).toEqual(["first-enter"]);
+      } finally {
+        releaseFirst.resolve();
+        await Promise.all([first, second]);
+      }
+      expect(events).toEqual(["first-enter", "first-exit", "second-enter"]);
+    });
+  });
 
   it("reclaims process-bound lifecycle work after its process is killed", async () => {
     await withOpenClawTestState({ label: "plugin-lifecycle-killed-owner" }, async (state) => {
@@ -729,8 +736,29 @@ if (process.versions.bun) {
     });
   });
 
+  it("reuses the active lease for nested lifecycle work", async () => {
+    await withOpenClawTestState({ label: "plugin-lifecycle-reentrant" }, async (state) => {
+      const events: string[] = [];
+      await withPluginLifecycleLease(
+        { env: state.env, leaseMs: 1_000, waitMs: 0 },
+        async (outerLease) => {
+          events.push("outer");
+          await withPluginLifecycleLease({}, async (innerLease) => {
+            events.push("inner");
+            expect(innerLease).toBe(outerLease);
+            expect(innerLease.databasePath).toBe(
+              path.resolve(state.stateDir, "state", "openclaw.sqlite"),
+            );
+          });
+        },
+      );
+      expect(events).toEqual(["outer", "inner"]);
+    });
+  });
+
   it.each([
     { authority: "outer", explicitNestedEnv: false },
+    { authority: "nested", explicitNestedEnv: false },
     { authority: "nested", explicitNestedEnv: true },
   ])(
     "fences a nested index commit after $authority authority is revoked (explicit env: $explicitNestedEnv)",
@@ -820,6 +848,33 @@ if (process.versions.bun) {
       expect(commitError).toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
       expect(assertCurrent).toHaveBeenCalled();
       expect(await readPersistedInstalledPluginIndex({ env: state.env })).toBeNull();
+    });
+  });
+
+  it("preserves an operation failure and releases the plugin lease after caller revocation", async () => {
+    await withOpenClawTestState({ label: "plugin-lifecycle-failed-cleanup" }, async (state) => {
+      const failure = new Error("plugin preparation failed");
+      let current = true;
+      await expect(
+        withPluginLifecycleLease(
+          {
+            env: state.env,
+            assertCurrent: () => {
+              if (!current) {
+                throw new Error("update authority revoked");
+              }
+            },
+          },
+          async () => {
+            await fs.stat(state.stateDir);
+            current = false;
+            throw failure;
+          },
+        ),
+      ).rejects.toBe(failure);
+      await expect(
+        withPluginLifecycleLease({ env: state.env, waitMs: 0 }, async () => "released"),
+      ).resolves.toBe("released");
     });
   });
 });

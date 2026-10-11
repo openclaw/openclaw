@@ -62,10 +62,39 @@ describe("custom theme import helpers", () => {
     expect(parsed?.label).toBe("a".repeat(79));
   });
 
+  it("fetches tweakcn themes with bounded no-redirect requests", async () => {
+    const response = createResponse(JSON.stringify(createTweakcnPayload()));
+    const fetchImpl = vi.fn(async () => response) as unknown as typeof fetch;
+
+    const imported = await importCustomThemeFromUrl(
+      "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",
+      fetchImpl,
+    );
+
+    expect(imported.label).toBe("Light Green");
+    expect(imported.sourceUrl).toBe("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z");
+    expect(imported.light.bg).toBe("oklch(0.98 0.01 120)");
+    expect(imported.dark.bg).toBe("oklch(0.12 0.04 265)");
+    expect(imported.light["font-body"]).toBe("Inter, system-ui, sans-serif");
+    expect(imported.dark["accent-hover"]).toBe("color-mix(in srgb, var(--accent) 82%, white 18%)");
+    const fetchMock = vi.mocked(fetchImpl);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [fetchUrl, fetchOptions] = firstFetchCall(fetchImpl);
+    expect(fetchUrl).toBe("https://tweakcn.com/r/themes/cmlhfpjhw000004l4f4ax3m7z");
+    expect(fetchOptions.signal).toBeInstanceOf(AbortSignal);
+    expect(fetchOptions).toEqual({
+      headers: { accept: "application/json" },
+      redirect: "error",
+      signal: fetchOptions.signal,
+    });
+  });
+
   it.each([
     "https://tweakcn.com/editor/theme?theme=cmlhfpjhw000004l4f4ax3m7z",
+    "https://tweakcn.com/r/themes/cmlhfpjhw000004l4f4ax3m7z",
     "/r/themes/cmlhfpjhw000004l4f4ax3m7z",
     "cmlhfpjhw000004l4f4ax3m7z",
+    "Theme link: https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z.",
   ])("imports supported tweakcn input form %s", async (input) => {
     const fetchImpl = vi.fn(async () =>
       createResponse(JSON.stringify(createTweakcnPayload())),
@@ -75,19 +104,9 @@ describe("custom theme import helpers", () => {
 
     expect(imported.themeId).toBe("cmlhfpjhw000004l4f4ax3m7z");
     expect(imported.sourceUrl).toBe("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z");
-    expect(imported.label).toBe("Light Green");
-    expect(imported.light.bg).toBe("oklch(0.98 0.01 120)");
-    expect(imported.dark.bg).toBe("oklch(0.12 0.04 265)");
-    expect(imported.light["font-body"]).toBe("Inter, system-ui, sans-serif");
-    expect(imported.dark["accent-hover"]).toBe("color-mix(in srgb, var(--accent) 82%, white 18%)");
     expect(firstFetchCall(fetchImpl)[0]).toBe(
       "https://tweakcn.com/r/themes/cmlhfpjhw000004l4f4ax3m7z",
     );
-    expect(firstFetchCall(fetchImpl)[1]).toEqual({
-      headers: { accept: "application/json" },
-      redirect: "error",
-      signal: expect.any(AbortSignal),
-    });
   });
 
   it("rejects oversized tweakcn theme responses before parsing", async () => {
@@ -143,24 +162,26 @@ describe("custom theme import helpers", () => {
     ).rejects.toThrow("Unexpected redirect");
   });
 
-  it.each([['url("https://example.com/track")', "background"]])(
-    "rejects unsafe imported CSS token %s",
-    async (token, key) => {
-      const payload = createTweakcnPayload();
-      if (key === "font-sans") {
-        payload.cssVars.theme[key] = token;
-      } else {
-        payload.cssVars.light.background = token;
-      }
-      const fetchImpl = vi.fn(async () =>
-        createResponse(JSON.stringify(payload)),
-      ) as unknown as typeof fetch;
+  it.each([
+    ['url("https://example.com/track")', "background"],
+    ["oklch(0.98 0.01 120)/*", "background"],
+    ['image-set("https://example.com/pixel.png" 1x)', "background"],
+    ["var(--attacker-font)", "font-sans"],
+  ])("rejects unsafe imported CSS token %s", async (token, key) => {
+    const payload = createTweakcnPayload();
+    if (key === "font-sans") {
+      payload.cssVars.theme[key] = token;
+    } else {
+      payload.cssVars.light.background = token;
+    }
+    const fetchImpl = vi.fn(async () =>
+      createResponse(JSON.stringify(payload)),
+    ) as unknown as typeof fetch;
 
-      await expect(
-        importCustomThemeFromUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z", fetchImpl),
-      ).rejects.toThrow("Unsupported tweakcn token");
-    },
-  );
+    await expect(
+      importCustomThemeFromUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z", fetchImpl),
+    ).rejects.toThrow("Unsupported tweakcn token");
+  });
 
   it("validates imported font families without regex backtracking", async () => {
     const payload = createTweakcnPayload();

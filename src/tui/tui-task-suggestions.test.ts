@@ -154,6 +154,39 @@ describe("TUI task suggestions", () => {
     expect(harness.addSystem).toHaveBeenCalledWith("follow-up task started in agent:main:task");
   });
 
+  it("keeps actions visible while paging through long instructions", () => {
+    const harness = createHarness();
+    const promptLines = Array.from(
+      { length: 20 },
+      (_, index) => `instruction-${String(index + 1).padStart(2, "0")}`,
+    );
+    harness.controller.handleEvent("task.suggestion", {
+      action: "created",
+      suggestion: suggestionPayload({ prompt: promptLines.join("\n") }),
+    });
+
+    const prompt = harness.openOverlay.mock.calls[0]?.[0];
+    const firstPage = stripAnsi(
+      expectDefined(prompt, "prompt test invariant").render(80).join("\n"),
+    );
+    expect(firstPage).toContain("instruction-01");
+    expect(firstPage).not.toContain("instruction-20");
+    expect(firstPage).toContain("PgUp/PgDn to inspect");
+    expect(firstPage).toContain("TASK ACTIONS");
+
+    const pages = [firstPage];
+    for (let page = 0; page < 3; page += 1) {
+      expectDefined(prompt, "prompt test invariant").handleInput?.("\u001b[6~");
+      const rendered = stripAnsi(
+        expectDefined(prompt, "prompt test invariant").render(80).join("\n"),
+      );
+      pages.push(rendered);
+      expect(rendered).toContain("TASK ACTIONS");
+    }
+    expect(pages.join("\n")).toContain("instruction-20");
+    expect(harness.requestRender).toHaveBeenCalled();
+  });
+
   it("keeps every project path segment inspectable before acceptance", () => {
     const harness = createHarness();
     const cwd = `/repo/${"nested-segment/".repeat(20)}distinguishing-project`;
@@ -196,6 +229,22 @@ describe("TUI task suggestions", () => {
     expect(rendered).toContain("why now");
     expect(rendered).toContain("run exactly");
     expect(rendered).not.toMatch(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u);
+  });
+
+  it("dismisses a suggestion without starting work", async () => {
+    const harness = createHarness();
+    harness.controller.handleEvent("task.suggestion", {
+      action: "created",
+      suggestion: suggestionPayload(),
+    });
+
+    harness.selectors[0]?.onSelect?.({ value: "dismiss", label: "Dismiss" });
+
+    await vi.waitFor(() => {
+      expect(harness.dismissTaskSuggestion).toHaveBeenCalledWith("task_1");
+    });
+    expect(harness.acceptTaskSuggestion).not.toHaveBeenCalled();
+    expect(harness.addSystem).toHaveBeenCalledWith("follow-up task dismissed");
   });
 
   it("offers only actions allowed by the connected operator scopes", () => {
@@ -387,6 +436,21 @@ describe("TUI task suggestions", () => {
     expect(harness.addSystem).not.toHaveBeenCalled();
   });
 
+  it("shows only suggestions for the active session", () => {
+    const harness = createHarness();
+    harness.controller.handleEvent("task.suggestion", {
+      action: "created",
+      suggestion: suggestionPayload({ sessionKey: "agent:other:main", agentId: "other" }),
+    });
+    expect(harness.openOverlay).not.toHaveBeenCalled();
+
+    harness.setSessionKey("agent:other:main");
+    harness.setAgentId("other");
+    harness.controller.sessionChanged();
+
+    expect(harness.openOverlay).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     {
       label: "shows a fixed-store alias owned by the active agent",
@@ -419,6 +483,22 @@ describe("TUI task suggestions", () => {
       expect(harness.openOverlay).toHaveBeenCalledTimes(visible ? 1 : 0);
     },
   );
+
+  it("closes a suggestion resolved by another client", () => {
+    const harness = createHarness();
+    harness.controller.handleEvent("task.suggestion", {
+      action: "created",
+      suggestion: suggestionPayload(),
+    });
+
+    harness.controller.handleEvent("task.suggestion", {
+      action: "resolved",
+      taskId: "task_1",
+      resolution: "accepted",
+    });
+
+    expect(harness.closeOverlay).toHaveBeenCalledWith(harness.overlayHandles[0]);
+  });
 
   it("does not resurrect a resolved suggestion from a stale refresh", async () => {
     const harness = createHarness();
