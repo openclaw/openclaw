@@ -125,7 +125,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     // Coalesce active-pane boot data only; settled and inactive panes keep immediate updates.
     if (
       this.active &&
-      !this.transcriptReady &&
+      this.transcriptLoading &&
       this.hasUpdated &&
       this.isConnected &&
       this.presented &&

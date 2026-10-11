@@ -29,6 +29,14 @@ describe("chat pane suspension", () => {
       client: { request: vi.fn() } as unknown as GatewayBrowserClient,
     });
     state.settings = { ...pane.context.theme.settings, token: "", chatShowTaskProgress: false };
+    const beginLoading = () =>
+      setChatHistoryLoad(state, {
+        phase: "pending-connection",
+        sessionKey: state.sessionKey,
+        requestAgentId: undefined,
+        startup: true,
+      });
+    beginLoading();
     const render = vi.fn(() => html`<p>${state.chatMessage}</p>`);
     const lifecycle = Object.assign(pane, { render, active: true });
     ChatPaneBase.prototype.connectedCallback.call(lifecycle);
@@ -63,6 +71,13 @@ describe("chat pane suspension", () => {
       expect(frames.size).toBe(0);
       expect(lifecycle.textContent).toBe("Ready result");
       setChatHistoryLoad(state, { phase: "idle" });
+      state.chatMessage = "Idle catalog result";
+      lifecycle.requestUpdate();
+      await Promise.resolve();
+      expect(frames.size).toBe(0);
+      await lifecycle.updateComplete;
+      expect(lifecycle.textContent).toBe("Idle catalog result");
+      beginLoading();
       lifecycle.requestUpdate();
       await Promise.resolve();
       expect(frames.size).toBe(1);
