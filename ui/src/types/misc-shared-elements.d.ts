@@ -1,7 +1,6 @@
 import "@solidjs/web";
 import "../components/assistant-panel-content.ts";
 import "../components/home-session.runtime.ts";
-import "../components/resizable-divider.ts";
 import "../components/tooltip.ts";
 import "../lib/toast.ts";
 import "../pages/custodian/custodian-surface.ts";
@@ -15,22 +14,6 @@ declare module "@solidjs/web" {
       Properties<HTMLElementTagNameMap[Tag]>;
 
     interface IntrinsicElements {
-      "resizable-divider": Omit<MiscElementAttributes<"resizable-divider">, "onResize"> & {
-        "prop:measureRatio"?: HTMLElementTagNameMap["resizable-divider"]["measureRatio"];
-        "prop:measureSize"?: HTMLElementTagNameMap["resizable-divider"]["measureSize"];
-        onResize?: EventHandlerUnion<
-          HTMLElementTagNameMap["resizable-divider"],
-          CustomEvent<{ splitRatio: number }>
-        >;
-        "onResize-end"?: EventHandlerUnion<
-          HTMLElementTagNameMap["resizable-divider"],
-          CustomEvent<{ splitRatio: number }>
-        >;
-        "onResize-start"?: EventHandlerUnion<
-          HTMLElementTagNameMap["resizable-divider"],
-          CustomEvent<null>
-        >;
-      };
       "openclaw-assistant-panel-content": MiscElementAttributes<"openclaw-assistant-panel-content"> & {
         "prop:sessionContext"?: HTMLElementTagNameMap["openclaw-assistant-panel-content"]["sessionContext"];
         "prop:context"?: HTMLElementTagNameMap["openclaw-assistant-panel-content"]["context"];
