@@ -300,6 +300,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/talk/handlers/voice.test.ts",
   "src/gateway/talk/relay-audio-base64.test.ts",
   "src/gateway/talk/relay/agent-consult.registration.test.ts",
+  "src/gateway/talk/relay/audio-completeness.test.ts",
   "src/gateway/talk/relay/barge-in.regression.test.ts",
   "src/gateway/talk/relay/index.test.ts",
   "src/gateway/talk/relay/transcript-readiness.test.ts",

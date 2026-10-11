@@ -23,6 +23,7 @@ import type { GatewayRequestContext } from "../../server-methods/shared-types.js
 import type { TalkAgentConsultAuthority } from "../client-gateway-control.js";
 import type { TalkClientRunAuthority } from "../client-run-authority.js";
 import type { PreparedTalkSessionTarget } from "../session-target.types.js";
+import type { RelayAudioCompleteness, RelayAudioOutput } from "./audio-completeness.js";
 import type { RelayToolCallLedger } from "./tool-call-ledger.js";
 
 export const RELAY_SESSION_TTL_MS = 30 * 60 * 1000;
@@ -32,7 +33,7 @@ export const RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS = 12_000;
 
 export const noFallbackRelayOutputFlush = () => {};
 
-type TalkRealtimeRelayEventData =
+export type TalkRealtimeRelayEventData =
   | { type: "ready" }
   | { type: "responseStarted"; turnId: string }
   | { type: "inputAudio"; byteLength: number }
@@ -42,7 +43,13 @@ type TalkRealtimeRelayEventData =
       itemId?: string;
       responseId?: string;
     }
-  | { type: "audioDone"; itemId?: string; responseId?: string }
+  | { type: "audioStarted"; outputId: number }
+  | {
+      type: "audioDone";
+      itemId?: string;
+      responseId?: string;
+      status?: "completed" | "cancelled" | "failed" | "incomplete";
+    }
   | { type: "clear"; reason?: RealtimeVoiceAudioClearReason }
   | { type: "mark"; markName: string }
   | {
@@ -75,7 +82,10 @@ type TalkRealtimeRelayEventData =
     }
   | { type: "close"; reason: "completed" | "error" };
 
-export type TalkRealtimeRelayEventPayload = TalkRealtimeRelayEventData & { relaySessionId: string };
+export type TalkRealtimeRelayEventPayload = TalkRealtimeRelayEventData & {
+  relaySessionId: string;
+  output?: RelayAudioOutput;
+};
 
 type TalkRealtimeRelayEvent = TalkRealtimeRelayEventData & { talkEvent?: TalkEvent };
 
@@ -271,6 +281,7 @@ export type RelaySession = {
   harness: RealtimeVoiceSessionHarness;
   capabilities?: InternalRealtimeVoiceProviderCapabilities;
   outputOwnership: TalkRealtimeRelayOutputOwnership;
+  audioCompleteness?: RelayAudioCompleteness;
   sessionTarget: PreparedTalkSessionTarget;
   expiresAtMs: number;
   cleanupTimer: ReturnType<typeof setTimeout>;
@@ -317,7 +328,7 @@ export type CreateTalkRealtimeRelaySessionParams = {
   providerConfig: RealtimeVoiceProviderConfig;
   controlSource: "delegation" | "transcript";
   capabilities?: InternalRealtimeVoiceProviderCapabilities;
-  clientCapabilities?: readonly "voice-selection"[];
+  clientCapabilities?: readonly ("voice-selection" | "audio-completeness-v1")[];
   voiceChangeId?: string;
   voiceSelectionVoices?: readonly string[];
   initialItems?: Array<{ role: "user" | "assistant"; text: string }>;
@@ -373,19 +384,40 @@ export function resolveRelayProviderToolCallId(session: RelaySession, relayCallI
 }
 
 export function broadcastToOwner(
-  session: Pick<RelaySession, "id" | "context" | "connId" | "harness">,
+  session: Pick<RelaySession, "id" | "context" | "connId" | "harness" | "audioCompleteness">,
   event: TalkRealtimeRelayEvent,
   talkEvent?: TalkEventInput,
 ): void {
+  const output = session.audioCompleteness?.observe(
+    event,
+    talkEvent?.turnId ?? event.talkEvent?.turnId,
+    (marker) => {
+      session.context.broadcastToConnIds(
+        RELAY_EVENT,
+        { relaySessionId: session.id, ...marker },
+        new Set([session.connId]),
+        { dropIfSlow: false },
+      );
+    },
+  );
+  // Cleared/settled output cannot be revived by late provider callbacks.
+  if (
+    session.audioCompleteness &&
+    (event.type === "audio" || event.type === "audioDone") &&
+    !output
+  ) {
+    return;
+  }
   const payload = {
     relaySessionId: session.id,
+    ...(output ? { output } : {}),
     ...event,
     ...(talkEvent ? { talkEvent: session.harness.talk.emit(talkEvent) } : {}),
   };
   // Classify the materialized Talk event so final results cannot be mistaken
   // for transient tool progress by individual provider callback paths.
   const dropIfSlow =
-    event.type === "audio" ||
+    (event.type === "audio" && !session.audioCompleteness) ||
     event.type === "inputAudio" ||
     (event.type === "transcript" && !event.final) ||
     ((event.type === "toolProgress" || event.type === "toolResult") &&

@@ -273,7 +273,14 @@ export const TalkAgentControlResultSchema = closedObject({
 export const TalkSessionCreateParamsSchema = closedObject({
   sessionKey: Type.Optional(Type.String()),
   voiceChangeId: Type.Optional(NonEmptyString),
-  capabilities: Type.Optional(Type.Array(Type.Literal("voice-selection"), { uniqueItems: true })),
+  capabilities: Type.Optional(
+    Type.Array(
+      Type.Union([Type.Literal("voice-selection"), Type.Literal("audio-completeness-v1")]),
+      {
+        uniqueItems: true,
+      },
+    ),
+  ),
   spawnedBy: Type.Optional(NonEmptyString),
   provider: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
@@ -397,6 +404,7 @@ export const TalkSessionCreateResultSchema = closedObject({
   transport: TalkTransportSchema,
   brain: TalkBrainSchema,
   relaySessionId: Type.Optional(NonEmptyString),
+  audioDelivery: Type.Optional(Type.Literal("audio-completeness-v1")),
   transcriptionSessionId: Type.Optional(NonEmptyString),
   handoffId: Type.Optional(NonEmptyString),
   roomId: Type.Optional(NonEmptyString),
@@ -447,6 +455,7 @@ const BrowserRealtimeGatewayRelaySessionSchema = closedObject({
   voiceSessionId: Type.Optional(NonEmptyString),
   relaySessionId: NonEmptyString,
   audio: BrowserRealtimeAudioContractSchema,
+  audioDelivery: Type.Optional(Type.Literal("audio-completeness-v1")),
   model: Type.Optional(Type.String()),
   voice: Type.Optional(Type.String()),
   expiresAt: Type.Optional(Type.Number()),
