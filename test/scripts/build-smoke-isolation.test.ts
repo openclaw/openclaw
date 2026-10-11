@@ -54,7 +54,7 @@ export function loadStatusMessageRuntimeModule() {
   }
   const home = actual.HOME;
   assert.ok(home);
-  for (const [key, value] of Object.entries(actual).filter(([key]) => key !== "HOME")) {
+  for (const [key, value] of Object.entries(actual).filter(([name]) => name !== "HOME")) {
     const relative = path.relative(home, value);
     expect(path.isAbsolute(relative), key).toBe(false);
     expect(relative.startsWith(".."), key).toBe(false);
