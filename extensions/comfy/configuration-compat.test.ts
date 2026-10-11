@@ -49,7 +49,13 @@ describe("Comfy provider discovery compatibility", () => {
       const cfg = buildComfyConfig(testCase.config);
       if (testCase.providerKey) {
         cfg.models = {
-          providers: { comfy: { apiKey: testCase.providerKey, models: [] } },
+          providers: {
+            comfy: {
+              baseUrl: "https://comfy.example.test",
+              apiKey: testCase.providerKey,
+              models: [],
+            },
+          },
         };
       }
       const provider = build();

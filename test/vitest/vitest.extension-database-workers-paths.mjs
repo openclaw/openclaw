@@ -165,6 +165,8 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/buzz/src/gateway.cold-start-recovery.test.ts",
   "extensions/clickclack/src/discussions/service-state-persistence.test.ts",
   "extensions/clickclack/src/sender-authority.test.ts",
+  // Runtime auth health reads admit the host-owned shared-state broker.
+  "extensions/codex/auth-profile-health.test.ts",
   "extensions/codex/doctor-contract-api.test.ts",
   "extensions/codex/doctor-contract-api.native-assignments.test.ts",
   "extensions/codex/index.test.ts",
