@@ -98,7 +98,8 @@ describe("update recovery reporting", () => {
         cwd: "/fixture",
         durationMs: 1,
         exitCode: 1,
-        stderrTail: "Runtime inventory refused a retained backup link",
+        stderrTail: "Cannot safely retain a host-owned plugin dependency",
+        failureFacts: [{ check: "updater-runtime-retention", code: "host-owned-plugin-link" }],
       };
       const result = failure({
         reason: "update-failed",
@@ -144,9 +145,11 @@ describe("update recovery reporting", () => {
       expect(reportPath).toBeDefined();
       const markdown = fs.readFileSync(reportPath!.slice("Report: ".length), "utf8");
       for (const output of [terminal, markdown, stored?.origin.nextAction ?? ""]) {
+        expect(output).toContain("https://docs.openclaw.ai/cli/update#runtime-retention-failures");
+        expect(output).toContain("Do not skip runtime retention");
         if (healthy) {
           expect(output).toContain("Your Gateway is still serving 2026.9.6; nothing to restore.");
-          expect(output).toContain("Fix update-failed then run `openclaw update` again.");
+          expect(output).toContain("After repairing the link, retry the update.");
           expect(output).not.toContain("did not pass verification");
         } else {
           expect(output).toContain("gateway is running 2026.9.6 but did not pass verification");

@@ -105,6 +105,12 @@ export function resolveUpdateResultNextAction(params: {
     if (result.reason === "rollback-project-changed") {
       return `Other global packages changed after staging; automatic rollback was refused to preserve them. The new installation was left unchanged. Check \`${formatCliCommand("openclaw gateway status --deep", env)}\` before restarting it. ${resolveUnsafeUpdateRecoveryGuidance(undefined, env)}`;
     }
+    const hostLinkFailure = result.steps.some((step) =>
+      step.failureFacts?.some((fact) => fact.code === "host-owned-plugin-link"),
+    );
+    const retentionGuidance = hostLinkFailure
+      ? `A dependency link reaches OpenClaw-owned files that cannot be safely retained. Keep source files and backups; inspect the link in the local error and follow https://docs.openclaw.ai/cli/update#runtime-retention-failures. Do not skip runtime retention. After repairing the link, retry the update.`
+      : undefined;
     const reason =
       result.recovery?.serviceRestartSafe === false ? result.recovery.reason : undefined;
     const failure = truncateUtf16Safe(
@@ -152,9 +158,10 @@ export function resolveUpdateResultNextAction(params: {
       deployment,
       configRefusal,
       state,
+      retentionGuidance,
       result.reason === "state-migrated-no-rollback"
         ? `Keep the new installation and recovery snapshots; do not roll back code alone. Run \`${formatCliCommand("openclaw update repair", env)}\` from the installed version to finish config and plugin maintenance.`
-        : servingVersion
+        : servingVersion && !hostLinkFailure
           ? `Fix ${truncateUtf16Safe(result.reason ?? "the update failure", 240)} then run \`${formatCliCommand("openclaw update", env)}\` again.`
           : undefined,
       reason === "state-migration-started" || (!servingVersion && (reason || !detail))

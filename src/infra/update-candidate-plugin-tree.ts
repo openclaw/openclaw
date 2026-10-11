@@ -498,8 +498,11 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
           throw new Error(`Cannot privately copy plugin dependency ${file} -> ${real}`, { cause });
         }));
       if (excludesInferredRoot(owner)) {
-        throw new Error(
-          `Cannot privately copy host-owned plugin link ${file} -> ${real}; use the openclaw package/SDK import or a separately owned plugin dependency.`,
+        throw Object.assign(
+          new Error(
+            `Cannot privately copy host-owned plugin link ${file} -> ${real}; this dependency reaches OpenClaw-owned files. Repair the link before retrying the update.`,
+          ),
+          { code: "host-owned-plugin-link" },
         );
       }
       assertUpdateCandidatePluginCopySource(owner, privateRoot);
