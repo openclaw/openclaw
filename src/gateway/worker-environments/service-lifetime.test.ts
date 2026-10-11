@@ -5,6 +5,7 @@ import {
   createTestGatewayScheduler,
 } from "../../test-utils/gateway-scheduler-clock.js";
 import * as support from "./service.test-support.js";
+import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
 
 type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
@@ -415,6 +416,19 @@ describe("worker environment service", () => {
       });
     },
   );
+
+  it("defers unreachable worker stops instead of failing Gateway shutdown", async () => {
+    const disconnected = new WorkerTunnelOwnerDisconnectedError("node is not connected");
+    const workerService = support.createService(support.createProvider(), {
+      tunnelManager: {
+        stopAll: vi.fn(async () => {
+          throw disconnected;
+        }),
+      } as unknown as WorkerTunnelManager,
+    });
+
+    await expect(workerService.stop()).resolves.toBeUndefined();
+  });
 
   it("waits for timed-out provider work during shutdown", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
