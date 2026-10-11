@@ -202,6 +202,9 @@ export class ChatTranscriptRenderer {
           return;
         }
         this.committed = current;
+        // Keep layout measurable, but do not paint the initial estimated range
+        // before the session owner has placed it at the correct reading edge.
+        this.element.style.visibility = current.initialPositionPending ? "hidden" : "";
         this.element.toggleAttribute("data-measuring-rows", current.measureRows);
         current.layout.commitRange(
           this.element,
