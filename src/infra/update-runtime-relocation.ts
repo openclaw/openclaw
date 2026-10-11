@@ -102,23 +102,27 @@ export async function relocateRuntimeLauncher(
   } else {
     // pnpm cmd-shim uses these directory-relative references on sh, cmd and PowerShell.
     // Resolve them before changing the directory; absolute store/runtime paths stay external.
+    const sourceDir = path.dirname(sourceFile);
+    const destinationDir = path.dirname(destinationFile);
+    const usesPhysicalBasedir = original.includes("$basedir_abs");
+    const physicalDestinationDir = usesPhysicalBasedir
+      ? await fs.realpath(destinationDir)
+      : destinationDir;
     content = original.replace(
-      /(\$(?:basedir|basedir_win)[/\\]|%~dp0\\)([^"\r\n]+)/gu,
+      /(\$(?:basedir|basedir_abs|basedir_win)[/\\]|%~dp0\\)([^"\r\n]+)/gu,
       (match, prefix: string, relative: string) => {
         if (/[$%]/u.test(relative)) {
           return match;
         }
-        const sourceTarget = path.resolve(
-          path.dirname(sourceFile),
-          relative.replaceAll("\\", path.sep),
-        );
-        const target = isPathInside(path.dirname(sourceFile), sourceTarget)
-          ? path.resolve(
-              path.dirname(destinationFile),
-              path.relative(path.dirname(sourceFile), sourceTarget),
-            )
+        const destinationBase =
+          usesPhysicalBasedir && prefix.startsWith("$basedir")
+            ? physicalDestinationDir
+            : destinationDir;
+        const sourceTarget = path.resolve(sourceDir, relative.replaceAll("\\", path.sep));
+        const target = isPathInside(sourceDir, sourceTarget)
+          ? path.resolve(destinationBase, path.relative(sourceDir, sourceTarget))
           : relocateRuntimePath(sourceTarget, prepared);
-        const replacement = path.relative(path.dirname(destinationFile), target);
+        const replacement = path.relative(destinationBase, target);
         return `${prefix}${prefix.startsWith("%") ? replacement.replaceAll("/", "\\") : replacement.replaceAll("\\", "/")}`;
       },
     );

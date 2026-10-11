@@ -32,7 +32,7 @@ async function writeStoredRuntime(packageRoot: string, store: string, generation
 }
 
 describe.skipIf(process.platform === "win32")("native package stage", () => {
-  it.each(["bun", "bun-launcher", "pnpm10", "pnpm11"] as const)(
+  it.each(["bun", "bun-launcher", "pnpm10", "pnpm11", "pnpm12"] as const)(
     "preserves the live %s project and executes its relocated candidate launcher",
     async (layout) => {
       await withTestDir({ prefix: "native-package-stage-" }, async (base) => {
@@ -44,17 +44,26 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
         );
         const globalRoot = path.join(
           project,
-          layout === "pnpm11" ? "v11" : layout === "pnpm10" ? "5/node_modules" : "node_modules",
+          layout === "pnpm11" || layout === "pnpm12"
+            ? "v11"
+            : layout === "pnpm10"
+              ? "5/node_modules"
+              : "node_modules",
         );
         const packageRoot = path.join(
           globalRoot,
-          ...(layout === "pnpm11" ? ["group", "node_modules"] : []),
+          ...(layout === "pnpm11" || layout === "pnpm12" ? ["group", "node_modules"] : []),
           "openclaw",
         );
         const liveBinDir = path.join(base, "bin");
+        const physicalLiveBinDir =
+          layout === "pnpm12" ? path.join(base, "physical", "bin") : liveBinDir;
         const external = path.join(base, "shared-store");
         await fs.mkdir(packageRoot, { recursive: true });
-        await fs.mkdir(liveBinDir);
+        await fs.mkdir(physicalLiveBinDir, { recursive: true });
+        if (layout === "pnpm12") {
+          await fs.symlink(path.relative(base, physicalLiveBinDir), liveBinDir);
+        }
         await fs.mkdir(external);
         await fs.writeFile(path.join(external, "dependency"), "shared dependency");
         const virtualStoreDir = path.join(project, layout === "pnpm10" ? "5/.pnpm" : "store");
@@ -70,7 +79,7 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
         await writeStoredRuntime(packageRoot, virtualStoreDir, "old");
         await fs.symlink(packageRoot, path.join(project, "owned-package"));
         await fs.symlink(path.relative(project, external), path.join(project, "shared-package"));
-        if (layout === "pnpm11") {
+        if (layout === "pnpm11" || layout === "pnpm12") {
           await fs.symlink(
             path.dirname(path.dirname(packageRoot)),
             path.join(globalRoot, "active-hash"),
@@ -156,9 +165,18 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
           }
         } else {
           const target = path.relative(stage.binDir, candidateEntry);
+          const launcherBase = layout === "pnpm12" ? "$basedir_abs" : "$basedir";
+          const absoluteBase =
+            layout === "pnpm12"
+              ? 'basedir_abs=$(CDPATH= cd -P -- "$basedir" && pwd -P) || exit $?\nbasedir="$basedir_abs"\nbasedir_win="$basedir"\n'
+              : "";
+          const convertedBaseBranch =
+            layout === "pnpm12"
+              ? `if [ "\${OPENCLAW_TEST_BASEDIR_WIN:-}" = "1" ]; then\n  exec node "$basedir_win/${target}" "$@"\nfi\n`
+              : "";
           await fs.writeFile(
             launcher,
-            `#!/bin/sh\nbasedir=$(dirname "$0")\nif [ -x "$basedir/node" ]; then\n  exec "$basedir/node" "$basedir/${target}" "$@"\nelse\n  exec node "$basedir/${target}" "$@"\nfi\n`,
+            `#!/bin/sh\nbasedir=$(dirname "$0")\n${absoluteBase}${convertedBaseBranch}if [ -x "$basedir/node" ]; then\n  exec "$basedir/node" "${launcherBase}/${target}" "$@"\nelse\n  exec node "${launcherBase}/${target}" "$@"\nfi\n`,
             { mode: 0o755 },
           );
           const node = process.execPath.replaceAll("'", "'\\''");
@@ -195,6 +213,16 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
         expect(
           (await runFile(path.join(liveBinDir, "openclaw"), [], { timeout: 5000 })).stdout.trim(),
         ).toBe(layout.startsWith("bun") ? "candidate" : "bin-runtime\ncandidate");
+        if (layout === "pnpm12") {
+          expect(
+            (
+              await runFile(path.join(liveBinDir, "openclaw"), [], {
+                timeout: 5000,
+                env: { ...process.env, OPENCLAW_TEST_BASEDIR_WIN: "1" },
+              })
+            ).stdout.trim(),
+          ).toBe("candidate");
+        }
         expect(
           (await runFile(path.join(liveBinDir, "shared"), [], { timeout: 5000 })).stdout.trim(),
         ).toBe("external");
