@@ -29,6 +29,7 @@ import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
   getFirstStreamEventTimeoutMs,
+  withFirstStreamEventTimeout,
 } from "../utils/stream-first-event-timeout.js";
 import { boundResponseBody } from "../utils/streaming-byte-guard.js";
 import { createAssistantOutput } from "./assistant-output.js";
@@ -39,10 +40,15 @@ import {
   isNativeOpenAIEndpoint,
   resolveOpenAICompletionsCompat,
 } from "./openai-completions-compat.js";
+import { bufferContextLimitedCompletions } from "./openai-completions-context-budget-buffer.js";
 import { isAzureOpenAICompatibleHost } from "./openai-completions-host.js";
-import { buildOpenAICompletionsRequest } from "./openai-completions-params.js";
+import {
+  buildOpenAICompletionsRequest,
+  resolveCompletionsContextOutputBudget,
+} from "./openai-completions-params.js";
 import {
   processCompletionsStream,
+  observeOpenAICompletionsProgress,
   shouldEmitOpenAICompletionsReasoning,
 } from "./openai-completions-stream.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
@@ -310,6 +316,7 @@ export function streamOpenAICompletionsRequest(
   void (async () => {
     const output: MutableAssistantOutput = createAssistantOutput(model);
     const provisionalCommentaryTags: PendingCommentaryTags = new Map();
+    let discardCandidate = false;
     let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
     try {
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
@@ -338,7 +345,8 @@ export function streamOpenAICompletionsRequest(
               sawStreamDONE: undefined,
             }
           : createManagedCompletionsClient(model, context, options, apiKey, cacheRetention);
-      let params = buildOpenAICompletionsRequest(model, context, options, policy);
+      const builtParams = buildOpenAICompletionsRequest(model, context, options, policy);
+      let params = builtParams;
       const encodeBody = prepareModelRequestBody(options);
       const nextParams = await options?.onPayload?.(params, model);
       if (nextParams !== undefined) {
@@ -362,6 +370,7 @@ export function streamOpenAICompletionsRequest(
           assertOpenAICompletionsPayloadHasConversationTurn(params, model);
         }
       }
+      const contextOutputBudget = resolveCompletionsContextOutputBudget(builtParams, params);
       const emitReasoning =
         mode === "direct"
           ? directEmitReasoning
@@ -410,16 +419,43 @@ export function streamOpenAICompletionsRequest(
         signal: firstEventAbort.signal,
         abort: firstEventAbort.abort,
         hook: createOpenAIProviderAcceptanceHook(options, response, model),
-        onReady: () => stream.push({ type: "start", partial: output }),
+        onReady: () => {
+          if (contextOutputBudget === undefined) {
+            stream.push({ type: "start", partial: output });
+          }
+        },
       });
+      const providerStream = observeOpenAICompletionsProgress(
+        withFirstStreamEventTimeout(hookedResponseStream, {
+          provider: model.provider,
+          api: model.api,
+          model: model.id,
+          timeoutMs: getFirstStreamEventTimeoutMs(options) ?? 0,
+          stage: "completions",
+          abort: firstEventAbort.abort,
+          onTimeout: getFirstStreamEventTimeoutHandler(options),
+          hint: "The provider may be stalled while parsing the tool payload; retry with a smaller tool surface or enable OPENCLAW_DEBUG_MODEL_PAYLOAD=tools to inspect exposed tools.",
+        }),
+        options?.signal,
+      );
+      const buffered =
+        contextOutputBudget === undefined
+          ? undefined
+          : await bufferContextLimitedCompletions(providerStream, options?.signal);
+      discardCandidate = Boolean(
+        buffered?.bounded && (buffered.failed || buffered.finishReason === "length"),
+      );
+      if (buffered && !discardCandidate) {
+        stream.push({ type: "start", partial: output });
+      }
       const directEvents =
         mode === "direct" ? createDirectCompletionsEventStream(output, stream) : undefined;
       try {
         await processCompletionsStream(
-          hookedResponseStream,
+          buffered?.stream ?? providerStream,
           output,
           model,
-          directEvents?.stream ?? stream,
+          discardCandidate ? { push() {} } : (directEvents?.stream ?? stream),
           {
             ...(directEvents
               ? {
@@ -428,15 +464,17 @@ export function streamOpenAICompletionsRequest(
                   provisionalCommentaryTags,
                 }
               : { mode: "managed" as const }),
-            signal: options?.signal,
+            signal: discardCandidate ? undefined : options?.signal,
             emitReasoning,
             strictReasoningTags: reasoningTagTextPolicy.isStrict(options),
-            firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
-            abortFirstEventStream: firstEventAbort.abort,
-            onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
             sawStreamDONE,
           },
         );
+        if (discardCandidate) {
+          throw new Error(
+            `Context length exceeded: automatic output budget of ${contextOutputBudget} tokens exhausted before completion.`,
+          );
+        }
         if (directEvents) {
           if (options?.signal?.aborted) {
             throw transportAbortError(options.signal);
@@ -457,6 +495,9 @@ export function streamOpenAICompletionsRequest(
       directEvents?.finish(output.stopReason === "toolUse");
       finalizeTransportStream({ stream, output, signal: options?.signal });
     } catch (error) {
+      if (discardCandidate) {
+        output.content = [];
+      }
       failTransportStream({
         stream,
         output,
