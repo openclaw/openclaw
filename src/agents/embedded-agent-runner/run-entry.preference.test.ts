@@ -4,6 +4,8 @@ import { buildEmbeddedRunExecutionParams } from "../../auto-reply/reply/agent-ru
 import type { FollowupRun } from "../../auto-reply/reply/queue.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { FailoverError } from "../failover-error.js";
+import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
 import { prepareAuthFixture } from "../runtime-plan/prepare-auth.test-support.js";
 import { runEmbeddedAgentEntry } from "./run-entry.js";
 import { makeResult } from "./run-entry.test-support.js";
@@ -200,4 +202,93 @@ describe("preferred model through logical-turn entry", () => {
       expect(run).toEqual(before);
     },
   );
+});
+
+describe("fallback consent changes during a running turn", () => {
+  const consentRun = (): FollowupRun["run"] => ({
+    config: {
+      agents: {
+        defaults: {
+          model: { primary: "backup/default", fallbacks: ["backup/healthy", "other/peer"] },
+        },
+      },
+    },
+    agentId: "main",
+    sessionId: "consent-entry",
+    sessionKey: "agent:main:fixture",
+    provider: "preferred",
+    model: "temporary",
+    agentDir: "/tmp/consent-entry-agent",
+    workspaceDir: "/tmp/consent-entry-workspace",
+    sessionFile: "/tmp/consent-entry.jsonl",
+    timeoutMs: 1000,
+    blockReplyBreak: "message_end",
+    hasSessionModelOverride: true,
+    modelOverrideSource: "user",
+    modelFallbackPolicy: "configured",
+  });
+  const runConsentSwitch = async (switchError: LiveSessionModelSwitchError) => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    const run = consentRun();
+    const transport: string[] = [];
+    const outcome = await runEmbeddedAgentEntry({
+      selection: { ...resolveModelFallbackOptions(run), manifestPlugins: [] },
+      identity: { agentId: run.agentId, sessionId: run.sessionId, runId: "entry-consent" },
+      harness: {
+        workspaceDir: "/tmp/workspace",
+        preparation: { kind: "direct" },
+        resolveRuntimeOverride: () => undefined,
+      },
+      behavior: {
+        kind: "channel-delivery",
+        readDeliveryEvidence: () => ({
+          hasRetryBlockedDelivery: false,
+          hasDirectlySentBlockReply: false,
+          hasBlockReplyPipelineOutput: false,
+        }),
+      },
+      sessionOverride: { kind: "preserve" },
+      runCandidate: async (provider, model) => {
+        transport.push(`${provider}/${model}`);
+        if (provider === "preferred") {
+          // The interrupted output-free attempt observed this pending session selection.
+          throw switchError;
+        }
+        if (provider === "backup") {
+          throw new FailoverError("Synthetic rate limit", {
+            reason: "rate_limit",
+            provider,
+            model,
+          });
+        }
+        return makeResult({ provider, model });
+      },
+    }).then(
+      (result) => ({ provider: result.provider, model: result.model }),
+      (error: unknown) => error,
+    );
+    return { outcome, transport };
+  };
+
+  it.each([
+    { name: "a strict selection of a configured backup", provider: "backup", model: "healthy" },
+    { name: "a policy-only withdrawal", provider: "preferred", model: "temporary" },
+  ])("returns $name to the retry owner before another provider", async (selection) => {
+    const switchError = new LiveSessionModelSwitchError(selection, {
+      modelFallbackPolicy: "configured",
+    });
+    const { outcome, transport } = await runConsentSwitch(switchError);
+    expect(outcome).toBe(switchError);
+    expect(transport).toEqual(["preferred/temporary"]);
+  });
+
+  it("control: an unchanged opt-in keeps the in-chain redirect", async () => {
+    const switchError = new LiveSessionModelSwitchError(
+      { provider: "backup", model: "healthy", modelFallbackPolicy: "configured" },
+      { modelFallbackPolicy: "configured" },
+    );
+    const { outcome, transport } = await runConsentSwitch(switchError);
+    expect(outcome).toEqual({ provider: "other", model: "peer" });
+    expect(transport).toEqual(["preferred/temporary", "backup/healthy", "other/peer"]);
+  });
 });

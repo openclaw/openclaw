@@ -171,6 +171,48 @@ describe("session preference API integration", () => {
     );
   });
 
+  it.each([
+    { name: "an opt-in", request: { modelFallbackPolicy: "configured" as const }, writes: [] },
+    {
+      name: "control: a strict",
+      request: {},
+      writes: [[expect.objectContaining({ model, target: "defaults" })]],
+    },
+  ])(
+    "$name selection of a worker's own default writes shared defaults only when strict",
+    async ({ request, writes }) => {
+      // The worker default differs from the global default, so a shared write would retarget other agents.
+      const workerKey = "agent:worker:telegram:direct:fixture";
+      const workerCfg: OpenClawConfig = {
+        ...cfg,
+        agents: { ...cfg.agents, entries: { worker: { model } } },
+      };
+      const workerPatch = { key: workerKey, model, ...request };
+      const entry = expectPatchOk(
+        await runPatch({
+          cfg: workerCfg,
+          store: { [workerKey]: { sessionId: "worker-default", updatedAt: 1 } },
+          storeKey: workerKey,
+          patch: workerPatch,
+          loadGatewayModelCatalog: catalog,
+          providerAuthMetadataSnapshot: { plugins: [] },
+        }),
+      );
+      // The worker's effective default is a Default selection, which carries no preference.
+      expect(entry.modelOverride).toBeUndefined();
+      expect(entry.modelFallbackPolicy).toBeUndefined();
+      persistSessionPatchModelSelection({
+        cfg: workerCfg,
+        entry,
+        patch: workerPatch,
+        sessionKey: workerKey,
+        targetAgentId: "worker",
+        callerScopes: ["operator.admin"],
+      });
+      expect(persistSticky.mock.calls).toEqual(writes);
+    },
+  );
+
   it("a session_status selection stays strict and drops the preference", async () => {
     const original: SessionEntry = {
       sessionId: "status-origin",

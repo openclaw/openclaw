@@ -52,8 +52,10 @@ export function persistSessionPatchModelSelection(params: {
 }): void {
   // Combined execution-policy recovery is explicitly scoped to this chat, even
   // when ordinary model selections normally update agent/global defaults.
-  // A session preference with configured fallback never writes defaults.
+  // A session preference with configured fallback never writes defaults, even
+  // when the requested model resolves to the default and drops the stored policy.
   if (
+    params.patch.modelFallbackPolicy === "configured" ||
     params.entry.modelFallbackPolicy === "configured" ||
     isSessionStatusModelPatchOrigin() ||
     typeof params.patch.model !== "string" ||

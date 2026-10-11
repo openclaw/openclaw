@@ -630,8 +630,10 @@ async function runWithModelFallbackInternal<T>(
     // Jump to later live selections; stale targets remain classified failures.
     if (err instanceof LiveSessionModelSwitchError) {
       selectionChanged = true;
-      // The outer owner must apply runtime changes before selecting another model.
+      // The outer owner must apply runtime or fallback-consent changes before
+      // selecting another model; this chain was built for the previous consent.
       if (
+        err.modelFallbackPolicyChanged ||
         hasDifferentLiveSessionRuntimeSelection({
           error: err,
           currentAgentHarnessRuntimeOverride: candidateHarnessAuth.agentHarnessRuntimeOverride,
