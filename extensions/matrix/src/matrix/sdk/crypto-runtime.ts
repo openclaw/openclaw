@@ -9,6 +9,7 @@ export { createMatrixCryptoFacade } from "./crypto-facade.js";
 export type { MatrixCryptoFacade } from "./crypto-facade.js";
 export { MatrixDecryptBridge } from "./decrypt-bridge.js";
 export {
+  persistCryptoBeforeKeyUpload,
   persistIdbToDisk,
   restoreIdbFromDisk,
   resolveDefaultIdbSnapshotPath,
