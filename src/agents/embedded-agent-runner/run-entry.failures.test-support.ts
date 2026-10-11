@@ -266,44 +266,6 @@ export function registerRunEntryFailureTests(state: {
     }
   });
 
-  it("does not persist a previous candidate error after fallback setup fails", async () => {
-    const transcript = await import("../../config/sessions/transcript.js");
-    const { makeAssistantMessageFixture } =
-      await import("../test-helpers/assistant-message-fixtures.js");
-    const append = vi
-      .spyOn(transcript, "appendExactAssistantMessageToSessionTranscript")
-      .mockRejectedValue(new Error("stale error committed"));
-    try {
-      await expect(
-        runEmbeddedAgentEntry({
-          selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
-          identity: { runId: "run-stale-error", agentId: "main", sessionId: "session-1" },
-          harness: createDirectHarness(),
-          behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
-          sessionOverride: { kind: "preserve" },
-          runCandidate: async (provider, model, options) => {
-            if (options.isFallbackRetry) {
-              throw new Error("fallback setup failed");
-            }
-            options.assistantErrorTranscript.record(
-              makeAssistantMessageFixture({ provider, model }),
-              {
-                agentId: "main",
-                sessionId: "session-1",
-                sessionKey: "agent:main:session-1",
-                storePath: "/tmp/unused-stale-error.sqlite",
-              },
-            );
-            return makeResult({ provider, model, classification: "empty" });
-          },
-        }),
-      ).rejects.toThrow("fallback setup failed");
-      expect(append).not.toHaveBeenCalled();
-    } finally {
-      append.mockRestore();
-    }
-  });
-
   it("does not finalize any candidate when fallback is exhausted", async () => {
     state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       const preferredResult = await params.run(

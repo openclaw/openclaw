@@ -468,3 +468,52 @@ it.each(["recover", "exhaust", "cancel", "cancel-retry", "terminate"])(
     }
   },
 );
+
+it.each(["", "Partial response before the disconnect"])(
+  "preserves a failed assistant through retry and transcript replay: %j",
+  async (partialText) => {
+    vi.useFakeTimers();
+    try {
+      const requests: Context["messages"][] = [];
+      streamMocks.streamSimple.mockImplementation((model, context) => {
+        requests.push(structuredClone(context.messages));
+        return createAssistantResultStream({
+          ...createAssistant(
+            model,
+            [{ type: "text", text: requests.length === 1 ? partialText : "Recovered response" }],
+            requests.length === 1 ? "error" : "stop",
+          ),
+          ...(requests.length === 1 ? { errorMessage: "HTTP 503 temporary failure" } : {}),
+        });
+      });
+      const { session, sessionManager } = await createTestSession({
+        settingsManager: SettingsManager.inMemory({
+          compaction: { enabled: false },
+          retry: { enabled: true, baseDelayMs: 1, maxRetries: 1 },
+        }),
+      });
+      const run = session.prompt("Original request");
+      await vi.runAllTimersAsync();
+      await run;
+
+      expect(requests).toHaveLength(2);
+      expect(requests[1]).toContainEqual(
+        expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: partialText }],
+          stopReason: "error",
+          errorMessage: "HTTP 503 temporary failure",
+        }),
+      );
+      expect(session.messages).toEqual(sessionManager.buildSessionContext().messages);
+
+      session.dispose();
+      const reopened = await createTestSession({ sessionManager });
+      await reopened.session.prompt("Next request");
+      expect(requests).toHaveLength(3);
+      expect(requests[2]?.slice(0, requests[1]?.length)).toEqual(requests[1]);
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);

@@ -27,7 +27,7 @@ it("releases prompt payloads while completed attempts' review callbacks remain r
   const createRetainedReview = (release: boolean) => {
     const owner = createEmbeddedAttemptSessionResources(undefined, new AbortController().signal);
     const lease = retainEmbeddedSessionPromptState(`retained-review-${sequence++}`);
-    lease.state.prunedImageMessages = new PromptPayload(["projected-image"]);
+    lease.state.removedRuntimeContextKeys = new PromptPayload(["runtime-context"]);
     owner.resources.promptStateLease = lease;
     if (release) {
       owner.releaseReview();
