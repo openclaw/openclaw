@@ -1,4 +1,4 @@
-import type { APIEmbed } from "discord-api-types/v10";
+import type { APIEmbed, APIMessageTopLevelComponent } from "discord-api-types/v10";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { renderPresentationForDelivery } from "openclaw/plugin-sdk/interactive-runtime";
@@ -32,7 +32,9 @@ import type { DiscordCommandArgContext } from "./native-command-ui.types.js";
 export const DISCORD_EMPTY_VISIBLE_REPLY_WARNING = "⚠️ Command produced no visible reply.";
 
 /** Retain visible component text, not interaction IDs or option values. */
-export function formatDiscordCommandComponents(components: readonly TopLevelComponents[]): string {
+export function formatDiscordCommandComponents(
+  components: readonly (TopLevelComponents | APIMessageTopLevelComponent)[],
+): string {
   const text: string[] = [];
   const visit = (value: unknown) => {
     if (!value || typeof value !== "object") {
@@ -50,7 +52,7 @@ export function formatDiscordCommandComponents(components: readonly TopLevelComp
     }
   };
   components.forEach((component) =>
-    visit(typeof component.serialize === "function" ? component.serialize() : component),
+    visit("serialize" in component ? component.serialize() : component),
   );
   return text.join("\n");
 }
