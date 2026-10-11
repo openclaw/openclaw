@@ -1,7 +1,7 @@
 import { Show } from "solid-js";
 import type { ControlUiLinkPreview } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { t } from "../i18n/index.ts";
+import { t } from "../lib/reactive/i18n.ts";
 import { createPreviewRenderer } from "./link-reader-preview-root.ts";
 import { Icon } from "./solid/icon.tsx";
 import "../styles/link-hovercard.css";

@@ -218,7 +218,7 @@ function PanelView(
               type="text"
               spellcheck="false"
               autocomplete="off"
-              prop:value={view().urlDraft}
+              value={view().urlDraft}
               placeholder={t("linkReader.urlPlaceholder")}
               aria-label={t("linkReader.urlPlaceholder")}
               aria-invalid={view().invalidUrl ? "true" : "false"}
@@ -288,7 +288,7 @@ function PanelView(
               {(item) => (
                 <div
                   class="lr-content"
-                  tabIndex={-1}
+                  tabindex={-1}
                   hidden={item().id !== view().activeId}
                   aria-busy={item().view.status === "loading" ? "true" : "false"}
                 >

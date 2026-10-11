@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
-import { LinkReaderContent, type LoadImage } from "./link-reader-content.tsx";
+import { LinkReaderContent } from "./link-reader-content.tsx";
+import type { LoadImage } from "./link-reader-markdown.tsx";
 import type { LinkReaderTarget } from "./link-reader-target.ts";
 
 type ReaderComment = NonNullable<ControlUiLinkReaderDocument["comments"]>[number];

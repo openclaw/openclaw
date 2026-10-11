@@ -21,7 +21,7 @@ function DateLabel(props: { value: string | undefined }) {
           return Number.isNaN(date.getTime()) ? value() : date.toLocaleString();
         };
         return (
-          <time dateTime={value()} title={value()}>
+          <time datetime={value()} title={value()}>
             {display()}
           </time>
         );
@@ -34,7 +34,7 @@ function Diff(props: { patch: string; filename: string }) {
   return (
     <pre
       class="lr-diff"
-      tabIndex={0}
+      tabindex={0}
       aria-label={t("linkReader.diffLabel", { filename: props.filename })}
     >
       <code>
@@ -107,7 +107,7 @@ function CommentContent(props: {
           href={permalink()}
           target="_blank"
           rel="noopener noreferrer"
-          referrerPolicy="no-referrer"
+          referrerpolicy="no-referrer"
           title={t("linkReader.commentPermalink")}
         >
           <Show when={props.comment.createdAt} fallback={t("linkReader.commentPermalink")}>
@@ -124,7 +124,7 @@ function CommentContent(props: {
             href={permalink()}
             target="_blank"
             rel="noopener noreferrer"
-            referrerPolicy="no-referrer"
+            referrerpolicy="no-referrer"
           >
             {location()}
           </a>{" "}
@@ -138,7 +138,7 @@ function CommentContent(props: {
             href={url()}
             target="_blank"
             rel="noopener noreferrer"
-            referrerPolicy="no-referrer"
+            referrerpolicy="no-referrer"
           >
             {props.comment.context?.replyLabel ?? t("linkReader.replyContext")}
           </a>
@@ -191,7 +191,7 @@ function ChecksContent(props: { checks: ReaderChecks; base: string }) {
     <details
       class={"lr-checks lr-checks--" + props.checks.state}
       data-reader-section="checks"
-      tabIndex={-1}
+      tabindex={-1}
       open={props.checks.state === "failure"}
     >
       <summary>
@@ -236,7 +236,7 @@ function ChecksContent(props: { checks: ReaderChecks; base: string }) {
                         href={href()}
                         target="_blank"
                         rel="noopener noreferrer"
-                        referrerPolicy="no-referrer"
+                        referrerpolicy="no-referrer"
                         data-link-reader-external=""
                       >
                         {item.name}
@@ -266,7 +266,7 @@ function ChecksContent(props: { checks: ReaderChecks; base: string }) {
               href={url()}
               target="_blank"
               rel="noopener noreferrer"
-              referrerPolicy="no-referrer"
+              referrerpolicy="no-referrer"
               data-link-reader-external=""
             >
               {t("linkReader.checksSource")}
@@ -401,7 +401,7 @@ export function LinkReaderContent(props: {
         aria-label={t("linkReader.description")}
         class="lr-description"
         data-reader-section="overview"
-        tabIndex={-1}
+        tabindex={-1}
       >
         <Show
           when={props.detail.body}
@@ -424,7 +424,7 @@ export function LinkReaderContent(props: {
             class="lr-files"
             id="files"
             data-reader-section="files"
-            tabIndex={-1}
+            tabindex={-1}
           >
             <h2>
               {t("linkReader.files")}
@@ -456,7 +456,7 @@ export function LinkReaderContent(props: {
             aria-label={t("linkReader.comments")}
             class="lr-comments"
             data-reader-section="comments"
-            tabIndex={-1}
+            tabindex={-1}
           >
             <h2>
               {t("linkReader.comments")}

@@ -19,7 +19,7 @@ export function createPreviewRenderer<T>(view: (props: { value: T }) => JSX.Elem
     }
     disposePreview(card);
     const dispose = render(() => {
-      const [current, setCurrent] = createSignal(value, { ownedWrite: true });
+      const [current, setCurrent] = createSignal<T>(() => value, { ownedWrite: true });
       updates.set(card, (next) => setCurrent(() => next));
       const content = createComponent(view, {
         get value() {

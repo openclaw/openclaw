@@ -32,15 +32,18 @@ let createObjectUrl: ReturnType<typeof vi.fn<(object: Blob | MediaSource) => str
 let revokeObjectUrl: ReturnType<typeof vi.fn<(url: string) => void>>;
 let fetchImage: ReturnType<typeof vi.fn>;
 
-async function renderLightbox({
-  src = "data:image/png;base64,cG5n",
-  imageTitle = "Generated lobster",
-  mediaKind = "image",
-  originalSrc = "",
-} = {}) {
+async function renderLightbox(
+  {
+    src = "data:image/png;base64,cG5n",
+    imageTitle = "Generated lobster",
+    mediaKind = "image",
+    originalSrc = "",
+  } = {},
+  target = container,
+) {
   const modal = document.createElement("openclaw-image-lightbox");
   Object.assign(modal, { src, mediaKind, originalSrc, imageTitle });
-  mountSolid(() => modal, { container });
+  mountSolid(() => modal, { container: target });
   await modal.updateComplete;
   const dialogAdapter = modal.querySelector("openclaw-modal-dialog");
   if (!dialogAdapter) {
@@ -370,48 +373,61 @@ describe("openclaw-image-lightbox", () => {
     expect(closes).toBe(2);
   });
 
-  it("dismisses only a pointer gesture that starts and ends on the backdrop", async () => {
-    const { modal } = await renderLightbox();
-    const stage = modal.querySelector<HTMLElement>(".stage");
-    const image = modal.querySelector<HTMLImageElement>(".image");
-    const elementFromPoint = Object.getOwnPropertyDescriptor(document, "elementFromPoint");
-    onTestFinished(() => {
-      if (elementFromPoint) {
-        Object.defineProperty(document, "elementFromPoint", elementFromPoint);
-      } else {
-        Reflect.deleteProperty(document, "elementFromPoint");
-      }
-    });
-    Object.defineProperty(document, "elementFromPoint", {
-      configurable: true,
-      value: vi.fn(() => stage ?? null),
-    });
-    let closes = 0;
-    modal.addEventListener("image-lightbox-close", () => {
-      closes += 1;
-    });
+  it.each(["document", "shadow"] as const)(
+    "dismisses only a pointer gesture that starts and ends on the backdrop in a %s root",
+    async (rootKind) => {
+      const mountTarget =
+        rootKind === "shadow"
+          ? container.attachShadow({ mode: "open" }).appendChild(document.createElement("div"))
+          : container;
+      const { modal } = await renderLightbox({}, mountTarget);
+      const hitTestRoot = modal.getRootNode();
+      const stage = modal.querySelector<HTMLElement>(".stage");
+      const image = modal.querySelector<HTMLImageElement>(".image");
+      const elementFromPoint = Object.getOwnPropertyDescriptor(hitTestRoot, "elementFromPoint");
+      onTestFinished(() => {
+        if (elementFromPoint) {
+          Object.defineProperty(hitTestRoot, "elementFromPoint", elementFromPoint);
+        } else {
+          Reflect.deleteProperty(hitTestRoot, "elementFromPoint");
+        }
+      });
+      Object.defineProperty(hitTestRoot, "elementFromPoint", {
+        configurable: true,
+        value: vi.fn(() => stage ?? null),
+      });
+      let closes = 0;
+      modal.addEventListener("image-lightbox-close", () => {
+        closes += 1;
+      });
 
-    const pointer = (target: Element | null | undefined, type: string, pointerId: number, xy = 0) =>
-      target?.dispatchEvent(
-        new PointerEvent(type, {
-          bubbles: true,
-          button: 0,
-          isPrimary: true,
-          pointerId,
-          clientX: xy,
-          clientY: xy,
-        }),
-      );
-    pointer(image, "pointerdown", 1);
-    pointer(stage, "pointerup", 1);
-    expect(closes).toBe(0);
+      const pointer = (
+        target: Element | null | undefined,
+        type: string,
+        pointerId: number,
+        xy = 0,
+      ) =>
+        target?.dispatchEvent(
+          new PointerEvent(type, {
+            bubbles: true,
+            button: 0,
+            isPrimary: true,
+            pointerId,
+            clientX: xy,
+            clientY: xy,
+          }),
+        );
+      pointer(image, "pointerdown", 1);
+      pointer(stage, "pointerup", 1);
+      expect(closes).toBe(0);
 
-    pointer(stage, "pointerdown", 2, 10);
-    pointer(stage, "pointerup", 2, 30);
-    expect(closes).toBe(0);
+      pointer(stage, "pointerdown", 2, 10);
+      pointer(stage, "pointerup", 2, 30);
+      expect(closes).toBe(0);
 
-    pointer(stage, "pointerdown", 3, 10);
-    pointer(stage, "pointerup", 3, 10);
-    expect(closes).toBe(1);
-  });
+      pointer(stage, "pointerdown", 3, 10);
+      pointer(stage, "pointerup", 3, 10);
+      expect(closes).toBe(1);
+    },
+  );
 });

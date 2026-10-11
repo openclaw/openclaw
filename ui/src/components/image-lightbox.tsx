@@ -282,7 +282,9 @@ export function ImageLightboxContent(props: ImageLightboxProps, host: ImageLight
     }
     const pointer = backdropPointer;
     backdropPointer = undefined;
-    const releaseTarget = host.ownerDocument.elementFromPoint?.(event.clientX, event.clientY);
+    const root = host.getRootNode();
+    const hitTestRoot = root instanceof ShadowRoot ? root : host.ownerDocument;
+    const releaseTarget = hitTestRoot.elementFromPoint?.(event.clientX, event.clientY);
     const shouldClose =
       event.button === 0 &&
       event.isPrimary &&
@@ -556,7 +558,7 @@ export function ImageLightboxContent(props: ImageLightboxProps, host: ImageLight
       <style>{imageLightboxStyles}</style>
       <openclaw-modal-dialog
         class="mobile-edge-to-edge viewport-edge-to-edge"
-        prop:label={
+        label={
           props.mediaKind === "video"
             ? t("chat.mediaPlayer.videoPreview", { title: title() })
             : t("chat.imageLightbox.label", { title: title() })

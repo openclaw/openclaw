@@ -1,12 +1,14 @@
 openclaw-image-lightbox {
-  --image-lightbox-control-background: rgba(12, 16, 24, 0.64);
-  --image-lightbox-control-background-hover: rgba(12, 16, 24, 0.78);
+  /* The inherited color scheme reaches viewers inside Lit shadow roots. */
+  --image-lightbox-control-background: light-dark(
+    rgba(12, 16, 24, 0.64),
+    rgba(255, 255, 255, 0.16)
+  );
+  --image-lightbox-control-background-hover: light-dark(
+    rgba(12, 16, 24, 0.78),
+    rgba(255, 255, 255, 0.22)
+  );
   display: contents;
-
-  [data-theme-mode="dark"] & {
-    --image-lightbox-control-background: rgba(255, 255, 255, 0.16);
-    --image-lightbox-control-background-hover: rgba(255, 255, 255, 0.22);
-  }
 
   openclaw-modal-dialog {
     --openclaw-modal-width: 100vw;

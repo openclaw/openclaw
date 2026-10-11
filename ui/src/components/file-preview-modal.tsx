@@ -264,7 +264,7 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
     <>
       <style>{styles}</style>
       <openclaw-modal-dialog
-        prop:label={label()}
+        label={label()}
         style={{
           "--openclaw-modal-width": "min(1100px, 92vw)",
           "--openclaw-modal-max-height": "86vh",
@@ -282,7 +282,7 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
                   <input
                     class="search"
                     placeholder={props.searchPlaceholder || t("filePreview.searchPlaceholder")}
-                    prop:value={props.query}
+                    value={props.query}
                     onInput={(event) =>
                       emit("file-preview-query-change", event.currentTarget.value)
                     }
@@ -309,7 +309,7 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
           </Show>
           <div
             class={["body", { tree: props.layout === "document" }]}
-            aria-busy={props.loading || props.fileLoading}
+            aria-busy={props.loading || props.fileLoading ? "true" : "false"}
           >
             <aside class="list">
               <Show when={props.layout === "files"}>
