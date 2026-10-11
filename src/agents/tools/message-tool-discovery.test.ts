@@ -38,6 +38,7 @@ import {
   buildMessageToolSchema,
   resolveMessageToolActionSchemaActions,
   resolveEffectiveCurrentChannelContextForRequest,
+  resolveMessageToolDiscoveryAsync,
   type MessageToolDiscoveryParams,
 } from "./message-tool-discovery.js";
 
@@ -197,6 +198,88 @@ describe("session-derived message destinations", () => {
 });
 
 describe("message tool discovery cache stability", () => {
+  it("limits actions and fields to the session's channel bindings with stable bytes", async () => {
+    const channels: PreparedMessageToolCatalog["channels"] = [
+      {
+        id: "qa-primary",
+        reconcilesUnknownSend: false,
+        actions: {
+          describeMessageTool: () => ({
+            actions: ["send", "react"],
+            schema: {
+              visibility: "all-configured",
+              properties: { primaryLabel: Type.Optional(Type.String()) },
+            },
+          }),
+        },
+      },
+      {
+        id: "qa-secondary",
+        reconcilesUnknownSend: false,
+        actions: {
+          describeMessageTool: () => ({
+            actions: ["send", "poll"],
+            capabilities: ["presentation"],
+            schema: {
+              visibility: "all-configured",
+              properties: { ballotLabel: Type.Optional(Type.String()) },
+            },
+          }),
+        },
+      },
+      {
+        id: "qa-unrelated",
+        reconcilesUnknownSend: false,
+        actions: {
+          describeMessageTool: () => ({
+            actions: ["event-create"],
+            schema: {
+              visibility: "all-configured",
+              properties: { unrelatedLabel: Type.Optional(Type.String()) },
+            },
+          }),
+        },
+      },
+    ];
+    const discover = (bindings: OpenClawConfig["bindings"], orderedChannels = channels) =>
+      resolveMessageToolDiscoveryAsync({
+        cfg: { bindings },
+        agentId: "main",
+        currentChannelProvider: "qa-primary",
+        preparedMessageToolCatalog: {
+          version: 1,
+          channels: orderedChannels,
+          getChannel: (id) => orderedChannels.find((channel) => channel.id === id),
+        },
+      });
+    const single = await discover([]);
+    expect(single.actions).toEqual(["react", "send"]);
+    expect(single.schema.properties).toHaveProperty("emoji");
+    for (const field of ["pollId", "eventName", "ballotLabel", "unrelatedLabel", "presentation"]) {
+      expect(single.schema.properties).not.toHaveProperty(field);
+    }
+    const bindings: OpenClawConfig["bindings"] = [
+      { agentId: "main", match: { channel: "qa-secondary", accountId: "*" } },
+      { agentId: "other", match: { channel: "qa-unrelated" } },
+    ];
+    const multi = await discover(bindings);
+    expect(multi.actions).toEqual(["poll", "react", "send"]);
+    expect(multi.schema.properties).toHaveProperty("ballotLabel");
+    expect(multi.schema.properties).toHaveProperty("presentation");
+    expect(multi.schema.properties).not.toHaveProperty("eventName");
+    expect(multi.schema.properties).not.toHaveProperty("unrelatedLabel");
+    expect(
+      Value.Check(multi.schema, {
+        action: "poll",
+        pollQuestion: "Ready?",
+        pollOption: ["Yes", "No"],
+      }),
+    ).toBe(true);
+    expect(JSON.stringify(await discover(bindings.toReversed(), channels.toReversed()))).toBe(
+      JSON.stringify(multi),
+    );
+  });
+
   it.each([
     { allow: undefined, expected: ["poll", "poll-vote", "react", "send"] },
     { allow: ["send", "react", "poll", "react"], expected: ["poll", "react", "send"] },
@@ -219,7 +302,14 @@ describe("message tool discovery cache stability", () => {
       currentChannelProvider: string,
     ) => {
       const params = {
-        cfg: { tools: { message: { actions: { allow } } } },
+        cfg: {
+          tools: { message: { actions: { allow } } },
+          bindings: [
+            { agentId: "main", match: { channel: "telegram" } },
+            { agentId: "main", match: { channel: "discord" } },
+          ],
+        },
+        agentId: "main",
         currentChannelProvider,
         preparedMessageToolCatalog: {
           version: 1,
@@ -289,8 +379,9 @@ describe("message tool discovery without a current channel", () => {
       expect(properties).toHaveProperty(field);
     }
     expect(properties.deliveryTag).toEqual(deliveryTag);
-    for (const field of ["messageId", "pollId", "eventName", "deleteDays", "activityState"]) {
-      expect(Object.hasOwn(properties, field)).toBe(!compact);
+    expect(Object.hasOwn(properties, "messageId")).toBe(!compact);
+    for (const field of ["pollId", "eventName", "deleteDays", "activityState"]) {
+      expect(properties).not.toHaveProperty(field);
     }
     const payload = {
       action: compact ? "broadcast" : "send",
@@ -309,6 +400,10 @@ describe("message tool discovery without a current channel", () => {
 
 describe("scheduled account discovery", () => {
   const cfg: OpenClawConfig = {
+    bindings: [
+      { agentId: "main", match: { channel: "slack" } },
+      { agentId: "main", match: { channel: "telegram" } },
+    ],
     channels: {
       slack: {
         accounts: {
@@ -391,6 +486,7 @@ describe("scheduled account discovery", () => {
         cfg,
         currentChannelProvider: origin === "external" ? "slack" : undefined,
         currentAccountId: delivery,
+        isScheduledRun: true,
         scheduledAccountScope: {
           ...(origin === "external" ? { channels: ["slack"] } : {}),
           accountId: owner,
@@ -426,6 +522,7 @@ describe("scheduled account discovery", () => {
       const catalog = registerChannels(foreignContexts);
       const params: MessageToolDiscoveryParams = {
         cfg,
+        agentId: "main",
         currentChannelProvider,
         currentAccountId: "disabled",
         currentChannelId: "delivery-room",
@@ -440,6 +537,7 @@ describe("scheduled account discovery", () => {
       const baselineContexts = foreignContexts.splice(0);
       const scoped = discover({
         ...params,
+        isScheduledRun: true,
         scheduledAccountScope: { channels: ["slack"], accountId: "ops" },
       });
 
@@ -448,7 +546,9 @@ describe("scheduled account discovery", () => {
       expect(scoped.actions).toContain("poll");
       expect(baseline.properties).toHaveProperty("foreignHint");
       expect(scoped.properties.foreignHint).toEqual(baseline.properties.foreignHint);
-      expect(foreignContexts).toEqual(baselineContexts);
+      expect(foreignContexts.filter((context) => context.sessionKey)).toEqual(
+        baselineContexts.filter((context) => context.sessionKey),
+      );
       expect(
         Value.Check(scoped.schema, {
           action: "send",
