@@ -30,6 +30,7 @@ import { clearDeviceAuthTokenFromDatabase } from "./device-auth-store.kernel.js"
 import { resolveDeviceBootstrapTokenExpiresAtMs } from "./device-bootstrap.worker-types.js";
 import { bindCloudWorkerSetupCompletion } from "./device-pairing-cloud-worker.js";
 import type { PairedDeviceMetadataPatch } from "./device-pairing-core.types.js";
+import { invalidateDevicePairingNodeSnapshot } from "./device-pairing-publication.js";
 import type { CloudWorkerSetupCompletionPublication } from "./device-pairing-read.types.js";
 import {
   invalidateDevicePairingStoreCache,
@@ -118,7 +119,10 @@ function runDevicePairingStoreMutation<T>(
         stageSqliteTransactionState(transactionDatabase.db, {
           stage: () => undefined,
           rollback: () => undefined,
-          commit: () => invalidateDevicePairingStoreCache(transactionDatabase),
+          commit: () => {
+            invalidateDevicePairingStoreCache(transactionDatabase);
+            invalidateDevicePairingNodeSnapshot(transactionDatabase.path);
+          },
         });
       }
       return result.value;

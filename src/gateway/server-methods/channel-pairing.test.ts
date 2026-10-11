@@ -178,6 +178,14 @@ describe("channel DM pairing gateway handlers", () => {
               resolveAccount: refuseSync,
               resolveAccountAsync: async (cfg: unknown, accountId: string) =>
                 pairingPlugin.config.resolveAccount(cfg, accountId),
+              describeAccount: refuseSync,
+              describeAccountAsync: async (account: { name: string }) =>
+                pairingPlugin.config.describeAccount(account),
+            },
+            security: {
+              resolveDmPolicy: refuseSync,
+              resolveDmPolicyAsync: async (context: { account: { dmPolicy: string } }) =>
+                pairingPlugin.security.resolveDmPolicy(context),
             },
           },
         ]);
