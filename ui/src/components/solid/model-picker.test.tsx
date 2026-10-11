@@ -1,14 +1,13 @@
 /* @vitest-environment jsdom */
 
-import { cleanup, render } from "@solidjs/testing-library";
-import { createSignal, flush } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createSignal } from "solid-js";
+import { describe, expect, it, vi } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import type { SelectPicker } from "../select-picker.ts";
-import { renderDecisionModelPicker } from "./decision-model-picker.tsx";
-import { ModelPicker, renderModelPicker, type ModelPickerParams } from "./model-picker.tsx";
-
-afterEach(cleanup);
+import { DecisionModelPicker } from "./decision-model-picker.tsx";
+import { ModelPicker, type ModelPickerParams } from "./model-picker.tsx";
 
 describe("Solid model picker interop", () => {
   it("renders provider nodes and selected details through the existing picker owner", async () => {
@@ -25,7 +24,7 @@ describe("Solid model picker interop", () => {
       ],
       onChange,
     });
-    const view = render(() => <ModelPicker {...params()} />);
+    const view = mountSolid(() => <ModelPicker {...params()} />);
     await updatePickers(view.container);
     const picker = view.container.querySelector<SelectPicker>("openclaw-select-picker")!;
     const trigger = picker.querySelector<HTMLButtonElement>(".picker-select__trigger")!;
@@ -58,15 +57,15 @@ describe("Solid model picker interop", () => {
 
   it("reveals a custom editor without publishing its sentinel and commits on the configured event", async () => {
     const onChange = vi.fn();
-    const view = render(() =>
-      renderModelPicker({
-        label: "Model",
-        value: "vendor/current",
-        options: [{ value: "__openclaw_custom_model__", label: "Real model" }],
-        custom: { label: "Custom model", commit: "change" },
-        onChange,
-      }),
-    );
+    const view = mountSolid(() => (
+      <ModelPicker
+        label={"Model"}
+        value={"vendor/current"}
+        options={[{ value: "__openclaw_custom_model__", label: "Real model" }]}
+        custom={{ label: "Custom model", commit: "change" }}
+        onChange={onChange}
+      />
+    ));
     await updatePickers(view.container);
     const picker = view.container.querySelector<SelectPicker>("openclaw-select-picker")!;
     const input = view.container.querySelector<HTMLInputElement>(".model-picker__custom")!;
@@ -90,16 +89,16 @@ describe("Solid model picker interop", () => {
 
   it("keeps inherited and explicitly disabled decision models distinct", async () => {
     const onChange = vi.fn();
-    const view = render(() =>
-      renderDecisionModelPicker({
-        id: "decision",
-        models: [{ id: "quick", name: "Quick", provider: "fixture", pluginId: "fixture" }],
-        value: null,
-        inherit: { model: "fixture/quick" },
-        disabled: false,
-        onChange,
-      }),
-    );
+    const view = mountSolid(() => (
+      <DecisionModelPicker
+        id={"decision"}
+        models={[{ id: "quick", name: "Quick", provider: "fixture", pluginId: "fixture" }]}
+        value={null}
+        inherit={{ model: "fixture/quick" }}
+        disabled={false}
+        onChange={onChange}
+      />
+    ));
     await updatePickers(view.container);
     const picker = view.container.querySelector<SelectPicker>("openclaw-select-picker")!;
     expect(picker.querySelector(".picker-select__trigger")?.textContent).toContain(

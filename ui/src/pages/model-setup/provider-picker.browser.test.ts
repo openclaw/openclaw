@@ -1,11 +1,12 @@
-import { render } from "@solidjs/web";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentSelect } from "../../components/agent-select.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import "../../components/web-awesome.ts";
 import "../../test-helpers/load-styles.ts";
 import "../../styles/model-setup.css";
 import { duringElementAnimation } from "../../test-helpers/web-awesome-animation.ts";
-import { renderManualProviderPicker } from "./provider-picker.tsx";
+import { ManualProviderPicker } from "./provider-picker.tsx";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 
 class SelectedAgentPicker extends AgentSelect {}
@@ -34,21 +35,19 @@ describe.runIf("__vitest_browser__" in globalThis)("selected dropdown opening", 
       if (kind === "provider") {
         const providers = options.map(({ value, label }) => ({ id: value, label }));
         disposals.push(
-          render(
+          mountSolid(
             () =>
-              renderManualProviderPicker(
-                {
-                  manualProviderId: "selected",
-                  actionsDisabled: false,
-                  iconUrls: {},
-                  onIconError: vi.fn(),
-                  onManualProviderChange: selected,
-                },
-                { manualProviders: providers },
-                providers[28],
-              ),
-            host,
-          ),
+              createComponent(ManualProviderPicker, {
+                manualProviderId: "selected",
+                actionsDisabled: false,
+                iconUrls: {},
+                onIconError: vi.fn(),
+                onManualProviderChange: selected,
+                result: { manualProviders: providers },
+                provider: providers[28],
+              }),
+            { container: host },
+          ).unmount,
         );
       } else {
         const picker = new SelectedAgentPicker();

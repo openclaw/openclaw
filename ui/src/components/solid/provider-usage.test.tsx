@@ -1,14 +1,12 @@
 /* @vitest-environment jsdom */
 
-import { cleanup, render } from "@solidjs/testing-library";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { renderProviderUsageDetails } from "./provider-usage.tsx";
-
-afterEach(cleanup);
 
 describe("Solid provider usage", () => {
   it("groups quota windows in rank order and presents remaining quota accessibly", () => {
-    const view = render(() =>
+    const view = mountSolid(() =>
       renderProviderUsageDetails(
         {
           windows: [
@@ -38,7 +36,7 @@ describe("Solid provider usage", () => {
   });
 
   it("preserves provider cost, billing and chart values in rendered DOM", () => {
-    const view = render(() =>
+    const view = mountSolid(() =>
       renderProviderUsageDetails({
         windows: [],
         billing: [{ type: "budget", used: 2.5, limit: 10, unit: "USD" }],

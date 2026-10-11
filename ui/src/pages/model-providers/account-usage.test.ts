@@ -1,4 +1,3 @@
-import { flush } from "solid-js";
 import { afterEach, expect, it } from "vitest";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
@@ -6,6 +5,8 @@ import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../test-helpers/gateway-client.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { ModelAccountUsageElement } from "./account-usage.tsx";
 import "./account-usage.tsx";
 
@@ -35,7 +36,7 @@ async function mount(request: ReturnType<typeof createGatewayRequestMock>) {
   element.client = createTestGatewayClient(request);
   element.agentId = "main";
   element.profileId = "openai:account";
-  document.body.append(element);
+  mountSolid(() => element);
   await element.updateComplete;
   return element;
 }
@@ -43,7 +44,7 @@ async function mount(request: ReturnType<typeof createGatewayRequestMock>) {
 it("loads automatically, renders remaining quota and balance, and refreshes that account", async () => {
   const request = createGatewayRequestMock(async () => snapshot);
   const view = await mount(request);
-  await expect.poll(() => view.textContent).toContain("12 credits");
+  await waitForSolid(() => expect(view.textContent).toContain("12 credits"));
   expect(view.textContent).toContain("Pro");
   expect(view.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("75");
   expect(request).toHaveBeenCalledExactlyOnceWith(
@@ -55,18 +56,18 @@ it("loads automatically, renders remaining quota and balance, and refreshes that
     expect.objectContaining({ signal: expect.any(AbortSignal) }),
   );
   // Reordering keyed account rows moves the existing custom element.
-  document.body.append(view);
+  view.parentElement!.append(view);
   await view.updateComplete;
   expect(view.textContent).toContain("12 credits");
   view.querySelector<HTMLButtonElement>("button")!.click();
-  await expect.poll(() => request.mock.calls.length).toBe(2);
+  await waitForSolid(() => expect(request.mock.calls.length).toBe(2));
   expect(request.mock.lastCall?.[1]).toEqual({
     agentId: "main",
     profileId: "openai:account",
   });
-  await expect.poll(() => view.textContent).toContain("12 credits");
+  await waitForSolid(() => expect(view.textContent).toContain("12 credits"));
   view.refreshUsage();
-  await expect.poll(() => request.mock.calls.length).toBe(3);
+  await waitForSolid(() => expect(request.mock.calls.length).toBe(3));
 });
 
 it("drops a pending response when the selected agent changes and shows the current error", async () => {
@@ -79,9 +80,9 @@ it("drops a pending response when the selected agent changes and shows the curre
     throw new Error("Account usage unavailable");
   });
   const view = await mount(request);
-  await expect.poll(() => request.mock.calls.length).toBe(1);
+  await waitForSolid(() => expect(request.mock.calls.length).toBe(1));
   view.agentId = "other";
-  await expect.poll(() => view.textContent).toContain("Account usage unavailable");
+  await waitForSolid(() => expect(view.textContent).toContain("Account usage unavailable"));
   stale.resolve();
   await stale.promise;
   flush();
@@ -100,5 +101,5 @@ it("shows the empty state when Codex returns a snapshot without quota data", asy
     providers: [{ provider: "openai", displayName: "OpenAI", windows: [] }],
   }));
   const view = await mount(request);
-  await expect.poll(() => view.textContent).toContain("No live usage data");
+  await waitForSolid(() => expect(view.textContent).toContain("No live usage data"));
 });

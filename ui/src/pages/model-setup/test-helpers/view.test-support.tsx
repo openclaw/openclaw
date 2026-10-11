@@ -1,7 +1,7 @@
-import { render } from "@solidjs/web";
 import { createSignal, flush } from "solid-js";
 import { vi } from "vitest";
 import type { SystemAgentSetupDetectResult } from "../../../api/types.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { ModelSetupView, type ModelSetupViewProps } from "../view.tsx";
 
 export type { ModelSetupViewProps } from "../view.tsx";
@@ -149,7 +149,7 @@ export function renderSetup(view: ModelSetupViewProps, container: HTMLElement): 
     root.update({ ...view });
   } else {
     const [current, setCurrent] = createSignal({ ...view });
-    const dispose = render(() => <ModelSetupView {...current()} />, container);
+    const { unmount: dispose } = mountSolid(() => <ModelSetupView {...current()} />, { container });
     roots.set(container, { update: setCurrent, dispose });
   }
   flush();

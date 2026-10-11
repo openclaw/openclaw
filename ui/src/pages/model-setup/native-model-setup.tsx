@@ -183,24 +183,16 @@ export class NativeModelSetup {
   }
 
   render(revision?: () => unknown) {
-    const current = createMemo(() => {
+    const current = () => {
       revision?.();
-      return {
-        models: this.nativeModels,
-        model: this.nativeModel,
-        selected: this.nativeModels.find(
-          (model) => `${model.provider}/${model.id}` === this.nativeModel,
-        ),
-        modelError: this.nativeModelError,
-        catalogError: this.nativeCatalogError,
-        status: this.nativeModelsStatus,
-        saving: this.saving,
-        loading: this.nativeModelsAbort !== null,
-        blocked: this.options.blocked(),
-      };
-    });
+      return this;
+    };
+    const selected = () =>
+      current().nativeModels.find(
+        (model) => `${model.provider}/${model.id}` === current().nativeModel,
+      );
     const options = createMemo(() =>
-      current().models.map((model) => ({
+      current().nativeModels.map((model) => ({
         value: `${model.provider}/${model.id}`,
         label: model.name,
         provider: model.provider,
@@ -208,7 +200,7 @@ export class NativeModelSetup {
           model.available === true
             ? providerDisplayLabel(model.provider)
             : (chatModelUnavailableMessage(model.unavailableReason) ??
-              (current().status === "loading" && model.available === undefined
+              (current().nativeModelsStatus === "loading" && model.available === undefined
                 ? t("modelSetup.nativeModels.loading")
                 : model.available === false
                   ? t("chat.modelControls.modelsUnavailable")
@@ -218,19 +210,19 @@ export class NativeModelSetup {
     );
     return renderNativeModelSetupSection(
       <>
-        {current().status === "loading" ? (
+        {current().nativeModelsStatus === "loading" ? (
           <p role="status">{t("modelSetup.nativeModels.loading")}</p>
         ) : undefined}
-        {current().status === "ready" &&
-        current().models.length === 0 &&
-        !current().catalogError ? (
+        {current().nativeModelsStatus === "ready" &&
+        current().nativeModels.length === 0 &&
+        !current().nativeCatalogError ? (
           <p role="status">{t("modelSetup.nativeModels.empty")}</p>
         ) : undefined}
         <ModelPicker
           label={t("modelSetup.nativeModels.choose")}
-          value={current().model}
+          value={current().nativeModel}
           options={options()}
-          disabled={current().blocked || current().saving}
+          disabled={current().options.blocked() || current().saving}
           onChange={(value) => {
             this.nativeModel = value;
             this.host.requestUpdate();
@@ -243,23 +235,29 @@ export class NativeModelSetup {
         />
         <button
           class="btn primary"
-          disabled={current().blocked || current().saving || current().selected?.available !== true}
+          disabled={
+            current().options.blocked() || current().saving || selected()?.available !== true
+          }
           onClick={() => void this.useNativeModel()}
         >
           {t(current().saving ? "modelSetup.nativeModels.saving" : "modelSetup.nativeModels.use")}
         </button>
-        {current().modelError ? (
+        {current().nativeModelError ? (
           <div class="callout danger" role="alert">
-            {current().modelError}
+            {current().nativeModelError}
           </div>
         ) : undefined}
-        {current().catalogError ? (
+        {current().nativeCatalogError ? (
           <div class="callout danger" role="alert">
-            {current().catalogError}
+            {current().nativeCatalogError}
             <button
               class="btn btn--sm"
               type="button"
-              disabled={current().blocked || current().saving || current().loading}
+              disabled={
+                current().options.blocked() ||
+                current().saving ||
+                current().nativeModelsAbort !== null
+              }
               onClick={() => void this.loadNativeModels(true)}
             >
               {t("common.retry")}

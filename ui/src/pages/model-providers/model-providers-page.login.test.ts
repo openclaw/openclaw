@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { render } from "@solidjs/web";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   WizardCancelParams,
@@ -10,7 +9,8 @@ import { WizardSession } from "../../../../src/wizard/session.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ModelAuthStatusResult, WizardNextResult } from "../../api/types.ts";
-import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { ModelProviderLoginController } from "./login-controller.tsx";
 import {
   appendPage,
@@ -22,12 +22,7 @@ import {
   submitCredential,
 } from "./model-providers-page.test-support.tsx";
 
-const disposals: (() => void)[] = [];
-
 afterEach(() => {
-  for (const dispose of disposals.splice(0)) {
-    dispose();
-  }
   document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -126,8 +121,8 @@ function loginHarness(
 }
 
 async function openPicker(page: ModelProvidersPageTestElement) {
-  await waitForFast(() => expect(page.data?.updatedAt).toEqual(expect.any(Number)));
-  await waitForFast(() =>
+  await waitForSolid(() => expect(page.state.data?.updatedAt).toEqual(expect.any(Number)));
+  await waitForSolid(() =>
     expect(page.querySelector<HTMLButtonElement>("[data-models-connect]")?.disabled).toBe(false),
   );
   page.querySelector<HTMLButtonElement>("[data-models-connect]")!.click();
@@ -272,7 +267,7 @@ describe("Models provider login", () => {
       const page = appendPage(context);
       try {
         await chooseLogin(page, "example-browser");
-        await waitForFast(() =>
+        await waitForSolid(() =>
           expect(page.querySelector<HTMLAnchorElement>(".wizard-step__sign-in a")?.href).toBe(
             "https://provider.example/sign-in",
           ),
@@ -294,7 +289,7 @@ describe("Models provider login", () => {
           [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
             .find((button) => button.textContent?.trim() === "Cancel")!
             .click();
-          await waitForFast(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
+          await waitForSolid(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
           expect(session?.getStatus()).toBe("cancelled");
         } else {
           completed.resolve();
@@ -304,7 +299,7 @@ describe("Models provider login", () => {
             await submitCredential(page);
             terminalDelivery.resolve();
           }
-          await waitForFast(
+          await waitForSolid(
             () => expect(page.renderRoot.textContent).toContain("Provider credentials saved."),
             { timeout: 3000 },
           );
@@ -366,7 +361,7 @@ describe("Models provider login", () => {
       });
       const page = appendPage(context);
       await chooseLogin(page, "example-browser");
-      await waitForFast(() =>
+      await waitForSolid(() =>
         expect(page.querySelector("openclaw-modal-dialog")?.textContent).toContain(
           outcome === "error" ? "Certificate validation failed." : guidance,
         ),
@@ -411,18 +406,18 @@ describe("Models provider login", () => {
     page.querySelector("openclaw-modal-dialog")!.dispatchEvent(dismissal);
     expect(dismissal.defaultPrevented).toBe(true);
     cancel.resolve({ status: "running" });
-    await waitForFast(() =>
+    await waitForSolid(() =>
       expect(page.renderRoot.textContent).toContain("Credentials are being saved."),
     );
     expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
     expect(page.querySelector<HTMLButtonElement>("[data-models-connect]")?.disabled).toBe(true);
 
     answer.resolve({ done: true, status: "done" });
-    await waitForFast(() =>
+    await waitForSolid(() =>
       expect(page.renderRoot.textContent).toContain("Provider credentials saved."),
     );
     expect(page.renderRoot.textContent).not.toContain("cancelled");
-    await waitForFast(() =>
+    await waitForSolid(() =>
       expect(page.querySelector('[data-provider-id="example"]')).not.toBeNull(),
     );
     expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
@@ -508,7 +503,7 @@ describe("Models provider login", () => {
     const page = appendPage(context);
     await openLogin(page);
     await submitCredential(page);
-    await waitForFast(() =>
+    await waitForSolid(() =>
       expect(page.renderRoot.textContent).toContain("Credentials saved. Continue to finish."),
     );
     page.querySelector<HTMLButtonElement>(".wizard-step__actions .btn")!.click();
@@ -517,7 +512,7 @@ describe("Models provider login", () => {
     expect(first.isSettled()).toBe(false);
 
     unmountPage(page);
-    await waitForFast(() => expect(first.isSettled()).toBe(true));
+    await waitForSolid(() => expect(first.isSettled()).toBe(true));
     expect(first.getStatus()).toBe("error");
     expect(first.getError()).toContain("credentials were saved");
     expect(profiles.has("example:1")).toBe(true);
@@ -533,13 +528,13 @@ describe("Models provider login", () => {
     );
 
     await submitCredential(replacement);
-    await waitForFast(() =>
+    await waitForSolid(() =>
       expect(replacement.renderRoot.textContent).toContain(
         "Credentials saved. Continue to finish.",
       ),
     );
     replacement.querySelector<HTMLButtonElement>(".wizard-step__actions .btn.primary")!.click();
-    await waitForFast(() =>
+    await waitForSolid(() =>
       expect(replacement.renderRoot.textContent).toContain("Provider credentials saved."),
     );
     expect(sessions.size).toBe(2);
@@ -552,7 +547,7 @@ describe("Models provider login", () => {
     await openLogin(page);
     page.querySelector<HTMLButtonElement>(".wizard-step__actions .btn")!.click();
     cancel.resolve({ status: "cancelled" });
-    await waitForFast(() =>
+    await waitForSolid(() =>
       expect(request.mock.calls.some(([method]) => method === "wizard.status")).toBe(true),
     );
     expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
@@ -566,7 +561,7 @@ describe("Models provider login", () => {
       }),
     );
 
-    await waitForFast(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
+    await waitForSolid(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
     expect(page.querySelector<HTMLButtonElement>("[data-models-connect]")?.disabled).toBe(false);
     expect(page.renderRoot.textContent).not.toContain("Provider credentials saved.");
     page.querySelector<HTMLButtonElement>("[data-models-connect]")!.click();
@@ -583,7 +578,7 @@ describe("Models provider login", () => {
     settingsAgentSelection.state.selectedId = "main";
     settingsAgentSelection.state.scopeId = "main";
     notifySelection();
-    await waitForFast(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
+    await waitForSolid(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
 
     cancel.resolve({ status: "running" });
     answer.resolve({ done: true, status: "done" });
@@ -750,7 +745,7 @@ describe("Models provider login", () => {
       ],
     });
     const page = appendPage(context);
-    await waitForFast(() =>
+    await waitForSolid(() =>
       expect(page.querySelector('[data-provider-id="example-owner"]')).not.toBeNull(),
     );
     const card = page.querySelector('[data-provider-id="example-owner"]')!;
@@ -846,8 +841,8 @@ describe("Models provider login", () => {
     expect(page.querySelector("[data-models-login-search]")).toBeNull();
     expect(page.querySelector("[data-models-login-choice]")).toBeNull();
     expect(page.querySelector('openclaw-modal-dialog input[type="password"]')).not.toBeNull();
-    expect(page.addProviderId).toBe("quick-key");
-    expect(page.addProviderOpen).toBe(true);
+    expect(page.state.addProviderId).toBe("quick-key");
+    expect(page.state.addProviderOpen).toBe(true);
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
     expect(request.mock.calls.some(([method]) => method === "models.authLogin")).toBe(false);
     expect(request.mock.calls.some(([method]) => method.startsWith("openclaw.setup."))).toBe(false);
@@ -880,8 +875,7 @@ describe("Models provider login", () => {
       document.body.append(container);
       expect(controller.pageActions.connectDisabled).toBe(false);
       await controller.pageActions.onConnect();
-      const dispose = render(() => controller.render(), container);
-      disposals.push(dispose);
+      const view = mountSolid(() => controller.render(), { container });
       const modal = container.querySelector("openclaw-modal-dialog")!;
       expect(modal.isConnected).toBe(true);
       expect(providerChoices(container)).toEqual([]);
@@ -894,8 +888,8 @@ describe("Models provider login", () => {
           ([method]) => method === "models.authLogin" || method.startsWith("openclaw.setup."),
         ),
       ).toBe(false);
-      disposals.pop()?.();
-      disposals.push(render(() => controller.render(), container));
+      view.unmount();
+      mountSolid(() => controller.render(), { container });
       expect(container.querySelector("[data-models-login-search]")).toBeNull();
       // Discovery can replace the picker before its custom-element update finishes.
       await modal.updateComplete;

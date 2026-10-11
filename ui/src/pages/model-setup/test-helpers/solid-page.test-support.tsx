@@ -1,7 +1,7 @@
-import { render } from "@solidjs/web";
 import { createSignal, flush } from "solid-js";
 import { afterEach } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { ModelSetupController } from "../model-setup-controller.ts";
 import { ModelSetupContent, type ModelSetupPageProps } from "../model-setup-page.tsx";
 
@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 export function createPage(context: ApplicationContext): TestModelSetupPage {
-  const root = document.createElement("openclaw-model-setup-page") as TestModelSetupPage;
+  const root = document.createElement("div") as TestModelSetupPage;
   const [revision, setRevision] = createSignal(0);
   let mounted = false;
   let queued = false;
@@ -63,10 +63,10 @@ export function createPage(context: ApplicationContext): TestModelSetupPage {
         return;
       }
       mounted = true;
-      dispose = render(
+      dispose = mountSolid(
         () => <ModelSetupContent controller={controller} revision={revision} />,
-        root,
-      );
+        { container: root },
+      ).unmount;
       controller.connect();
     },
     unmount: () => {

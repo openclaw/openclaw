@@ -1,11 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { render as mountSolid } from "@solidjs/testing-library";
 import { createSignal, flush, untrack } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { ModelSetupWizard } from "./wizard-view-solid.tsx";
 
 registerEnglishCatalog(registerModelSetupEnglish);

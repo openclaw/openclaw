@@ -417,10 +417,6 @@ export function renderProviderAccountSummary(
   );
 }
 
-export function renderProviderProfiles(card: ModelProviderCard, props: ProviderProfilesViewProps) {
-  return <ProviderProfiles {...props} card={card} />;
-}
-
 export function ProviderProfiles(props: ProviderProfilesViewProps & { card: ModelProviderCard }) {
   const card = () => props.card;
   const groups = createMemo(() => profileGroups(card(), props.profileOrders));
@@ -487,7 +483,7 @@ export function ProviderProfiles(props: ProviderProfilesViewProps & { card: Mode
                 type="button"
                 class="btn btn--sm"
                 disabled={props.addAccountDisabled}
-                onClick={props.onAddAccount}
+                onClick={() => props.onAddAccount?.()}
               >
                 {t("modelProviders.profiles.addAccount")}
               </button>
@@ -498,10 +494,9 @@ export function ProviderProfiles(props: ProviderProfilesViewProps & { card: Mode
           <For each={rows()} keyed={(row) => row.profile.profileId}>
             {(row) => (
               <ProviderProfileRow
+                {...props}
                 row={row()}
-                card={card()}
                 identity={identities().get(row().profile.profileId)!}
-                view={props}
               />
             )}
           </For>
@@ -511,38 +506,35 @@ export function ProviderProfiles(props: ProviderProfilesViewProps & { card: Mode
   );
 }
 
-function ProviderProfileRow(props: {
-  row: { profile: ProviderProfile; group: ReturnType<typeof profileGroups>[number] };
-  card: ModelProviderCard;
-  identity: string;
-  view: ProviderProfilesViewProps;
-}) {
+function ProviderProfileRow(
+  props: ProviderProfilesViewProps & {
+    row: { profile: ProviderProfile; group: ReturnType<typeof profileGroups>[number] };
+    card: ModelProviderCard;
+    identity: string;
+  },
+) {
   let cancelDrag: (() => void) | undefined;
   onCleanup(() => cancelDrag?.());
   const profile = () => props.row.profile;
   const group = () => props.row.group;
   const provider = () => group().provider;
   const order = () => group().order;
-  const complete = () => group().complete;
-  const lock = () => group().lock;
-  const stored = () => group().stored;
-  const explicit = () => group().explicit;
   const index = () => order().indexOf(profile().profileId);
   const canMove = () =>
-    props.view.canMutate && !lock() && complete() && order().length > 1 && index() >= 0;
-  const showMoves = () => !lock() && (complete() || stored()) && order().length > 1;
-  const identity = () => props.identity;
+    props.canMutate && !group().lock && group().complete && order().length > 1 && index() >= 0;
+  const showMoves = () =>
+    !group().lock && (group().complete || group().stored) && order().length > 1;
   const logoutProvider = () =>
     props.card.logoutTargets.find((target) => target.profileIds.includes(profile().profileId))
       ?.provider;
-  const logoutLabel = () => t("modelProviders.logout.actionFor", { account: identity() });
+  const logoutLabel = () => t("modelProviders.logout.actionFor", { account: props.identity });
   const logoutBlocked = () =>
-    !props.view.canMutate ? (props.view.mutationBlockedReason ?? "") : logoutLabel();
+    !props.canMutate ? (props.mutationBlockedReason ?? "") : logoutLabel();
   const reorderBlocked = () =>
-    !props.view.canMutate ? (props.view.mutationBlockedReason ?? "") : (group().explanation ?? "");
+    !props.canMutate ? (props.mutationBlockedReason ?? "") : (group().explanation ?? "");
   const reorder = (targetId: string, position: ArrayDropPosition) => {
     if (canMove()) {
-      props.view.onProfileOrderChange(
+      props.onProfileOrderChange(
         props.card.id,
         provider(),
         moveArrayEntry(order(), profile().profileId, targetId, position),
@@ -581,7 +573,7 @@ function ProviderProfileRow(props: {
             class="model-providers__profile-grip"
             disabled={!canMove()}
             aria-label={t("modelProviders.profiles.reorder", {
-              account: identity(),
+              account: props.identity,
               position: String(index() + 1),
             })}
             aria-keyshortcuts={canMove() ? "ArrowUp ArrowDown" : undefined}
@@ -607,7 +599,7 @@ function ProviderProfileRow(props: {
         ) : (
           <span aria-hidden="true" />
         )}
-        {explicit() && complete() && index() >= 0 ? (
+        {group().explicit && group().complete && index() >= 0 ? (
           <span
             class="model-providers__profile-position"
             aria-label={t("modelProviders.profiles.priority", {
@@ -621,11 +613,11 @@ function ProviderProfileRow(props: {
           </span>
         ) : undefined}
       </span>
-      <ProfileIdentity profile={profile()} identity={identity()} showDetails />
+      <ProfileIdentity profile={profile()} identity={props.identity} showDetails />
       {provider() === "openai" && profile().type !== "api_key" ? (
         <openclaw-model-account-usage
-          prop:client={props.view.usageClient ?? null}
-          prop:agentId={props.view.usageAgentId ?? ""}
+          prop:client={props.usageClient ?? null}
+          prop:agentId={props.usageAgentId ?? ""}
           prop:profileId={profile().profileId}
         />
       ) : undefined}
@@ -639,13 +631,13 @@ function ProviderProfileRow(props: {
             class="model-providers__profile-logout"
             aria-label={logoutLabel()}
             title={logoutBlocked()}
-            disabled={!props.view.canMutate || props.view.busy[`logout:${props.card.id}`]}
+            disabled={!props.canMutate || props.busy[`logout:${props.card.id}`]}
             onClick={() => {
               const targetProvider = logoutProvider();
               if (targetProvider) {
-                props.view.onRequestLogout({
+                props.onRequestLogout({
                   cardId: props.card.id,
-                  label: identity(),
+                  label: props.identity,
                   target: { provider: targetProvider, profileIds: [profile().profileId] },
                 });
               }

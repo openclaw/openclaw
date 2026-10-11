@@ -446,12 +446,12 @@ describe("gateway source replacement across reconnect with a reused client", () 
     });
     mountModelProvidersPage(page);
     await page.updateComplete;
-    await waitForFast(() => expect(page.data?.authStatus?.ts).toBe(2));
+    await waitForFast(() => expect(page.state.data?.authStatus?.ts).toBe(2));
 
     staleAuth.resolve({ ts: 1, providers: [] });
     await Promise.resolve();
     await Promise.resolve();
-    expect(page.data?.authStatus?.ts).toBe(2);
+    expect(page.state.data?.authStatus?.ts).toBe(2);
   });
 
   it("rejects Model Providers route data from an earlier same-client gateway epoch", async () => {
@@ -490,8 +490,8 @@ describe("gateway source replacement across reconnect with a reused client", () 
     };
 
     mountModelProvidersPage(page);
-    await waitForFast(() => expect(page.data?.authStatus?.ts).toBe(2));
-    expect(page.data).not.toBe(staleData);
+    await waitForFast(() => expect(page.state.data?.authStatus?.ts).toBe(2));
+    expect(page.state.data).not.toBe(staleData);
   });
 
   it("preserves matching skills route data while loading the viewer library", async () => {

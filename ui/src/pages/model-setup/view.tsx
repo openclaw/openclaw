@@ -14,7 +14,7 @@ import {
   renderMutationMessage,
   ModelProviderConnectAction,
 } from "../model-providers/view-status.tsx";
-import { CandidateRows, renderCandidateRows } from "./candidate-models.tsx";
+import { CandidateRows, type CandidateRowsProps } from "./candidate-models.tsx";
 import {
   renderActivationFeedback,
   ConfiguredModel,
@@ -34,7 +34,7 @@ registerModelSetupEnglish();
 const MODEL_SETUP_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers";
 
 type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number];
-export type ModelSetupViewProps = Parameters<typeof renderCandidateRows>[0] & {
+export type ModelSetupViewProps = CandidateRowsProps & {
   connection?: ModelProviderLoginController["pageActions"];
   login?: JSX.Element;
   revision?: () => unknown;
@@ -289,12 +289,9 @@ function Manual(props: ModelSetupViewProps & { detected: SystemAgentSetupDetectR
             <span>{t("modelSetup.manual.verifyHint")}</span>
           </div>
           {props.manualError ? (
-            <>
-              {" "}
-              <div id={`${manualId()}-error`} class="callout danger" role="alert">
-                {props.manualError}
-              </div>{" "}
-            </>
+            <div id={`${manualId()}-error`} class="callout danger" role="alert">
+              {props.manualError}
+            </div>
           ) : undefined}
           <button
             type="button"
@@ -356,12 +353,9 @@ function NativeSessionDiscovery(
 
 function renderSetupAccessWarning(canAdmin: boolean) {
   return (
-    <>
-      {" "}
-      <div class="callout warning" role="note">
-        {t(canAdmin ? "modelSetup.access.gatewayTooOld" : "modelSetup.access.adminRequired")}
-      </div>{" "}
-    </>
+    <div class="callout warning" role="note">
+      {t(canAdmin ? "modelSetup.access.gatewayTooOld" : "modelSetup.access.adminRequired")}
+    </div>
   );
 }
 
@@ -468,111 +462,93 @@ function ModelSetupBody(props: ModelSetupViewProps) {
 
 export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
   const content = (
-    <>
-      <div
-        class="model-setup"
-        aria-busy={props.detecting || props.page.phase === "loading" ? "true" : "false"}
-      >
-        <div class="model-setup__intro">
-          <div>
-            {props.embedded ? (
-              <>
-                {" "}
-                <h2>{t("modelSetup.discovery.title")}</h2>
-                <p>
-                  {t("modelSetup.discovery.description", { agent: props.agentLabel ?? "" })}
-                </p>{" "}
-              </>
-            ) : (
-              <>
-                {" "}
-                <h1>{t("modelSetup.heading")}</h1>
-                <p>{t("modelSetup.intro")}</p>{" "}
-              </>
-            )}
-          </div>
-          <Show when={Boolean(props.connection)}>
-            <ModelProviderConnectAction
-              onConnect={() => props.connection?.onConnect()}
-              connectDisabled={props.connection?.connectDisabled ?? true}
-              primary
-            />
-          </Show>
-          {props.page.phase === "ready" &&
-          (props.embedded || !props.page.result.configuredModel) &&
-          props.activation.phase !== "success" &&
-          props.canAdmin &&
-          !props.gatewayTooOld ? (
+    <div
+      class="model-setup"
+      aria-busy={props.detecting || props.page.phase === "loading" ? "true" : "false"}
+    >
+      <div class="model-setup__intro">
+        <div>
+          {props.embedded ? (
             <>
               {" "}
-              <button
-                type="button"
-                class="btn"
-                disabled={props.actionsDisabled || props.detecting}
-                onClick={props.onDetect}
-              >
-                {props.detecting
-                  ? t("modelSetup.verify.checkingButton")
-                  : t("modelSetup.checkAgain")}
+              <h2>{t("modelSetup.discovery.title")}</h2>
+              <p>{t("modelSetup.discovery.description", { agent: props.agentLabel ?? "" })}</p>{" "}
+            </>
+          ) : (
+            <>
+              {" "}
+              <h1>{t("modelSetup.heading")}</h1>
+              <p>{t("modelSetup.intro")}</p>{" "}
+            </>
+          )}
+        </div>
+        <Show when={Boolean(props.connection)}>
+          <ModelProviderConnectAction
+            onConnect={() => props.connection?.onConnect()}
+            connectDisabled={props.connection?.connectDisabled ?? true}
+            primary
+          />
+        </Show>
+        {props.page.phase === "ready" &&
+        (props.embedded || !props.page.result.configuredModel) &&
+        props.activation.phase !== "success" &&
+        props.canAdmin &&
+        !props.gatewayTooOld ? (
+          <>
+            {" "}
+            <button
+              type="button"
+              class="btn"
+              disabled={props.actionsDisabled || props.detecting}
+              onClick={props.onDetect}
+            >
+              {props.detecting ? t("modelSetup.verify.checkingButton") : t("modelSetup.checkAgain")}
+            </button>{" "}
+          </>
+        ) : undefined}
+      </div>
+      {props.canAdmin && !props.gatewayTooOld
+        ? renderActivationFeedback(props.activation)
+        : undefined}
+      {props.refreshWarning ? (
+        <div class="callout warning" role="alert">
+          {props.refreshWarning}
+        </div>
+      ) : undefined}
+      {props.activationUnresolved &&
+      !props.actionsDisabled &&
+      props.activation.phase !== "success" ? (
+        <div class="model-setup__recovery">
+          <p>{t("modelSetup.recovery.unknown")}</p>
+          {props.page.phase === "ready" &&
+          (props.page.result.configuredModel || props.page.result.setupModel) &&
+          props.canVerify &&
+          props.onUseCurrentModel ? (
+            <>
+              {" "}
+              <button type="button" class="btn primary" onClick={props.onUseCurrentModel}>
+                {t("modelSetup.recovery.useCurrent")}
               </button>{" "}
             </>
           ) : undefined}
+          <button type="button" class="btn" onClick={props.onDetect}>
+            {t("modelSetup.checkAgain")}
+          </button>
         </div>
-        {props.canAdmin && !props.gatewayTooOld
-          ? renderActivationFeedback(props.activation)
-          : undefined}
-        {props.refreshWarning ? (
-          <>
-            {" "}
-            <div class="callout warning" role="alert">
-              {props.refreshWarning}
-            </div>{" "}
-          </>
-        ) : undefined}
-        {props.activationUnresolved &&
-        !props.actionsDisabled &&
-        props.activation.phase !== "success" ? (
-          <>
-            {" "}
-            <div class="model-setup__recovery">
-              <p>{t("modelSetup.recovery.unknown")}</p>
-              {props.page.phase === "ready" &&
-              (props.page.result.configuredModel || props.page.result.setupModel) &&
-              props.canVerify &&
-              props.onUseCurrentModel ? (
-                <>
-                  {" "}
-                  <button type="button" class="btn primary" onClick={props.onUseCurrentModel}>
-                    {t("modelSetup.recovery.useCurrent")}
-                  </button>{" "}
-                </>
-              ) : undefined}
-              <button type="button" class="btn" onClick={props.onDetect}>
-                {t("modelSetup.checkAgain")}
-              </button>
-            </div>{" "}
-          </>
-        ) : undefined}
-        {renderMutationMessage(props.connection?.loginMessage)}
-        {props.detectionError ? (
-          <>
-            {" "}
-            <div class="callout warning" role="alert">
-              {props.detectionError}
-            </div>{" "}
-          </>
-        ) : undefined}
-        {props.detecting && props.page.phase === "ready" ? (
-          <>
-            {" "}
-            <div class="muted" role="status">
-              {t("modelSetup.loading")}
-            </div>{" "}
-          </>
-        ) : undefined}
-        <ModelSetupBody {...props} />
-      </div>
-    </>
+      ) : undefined}
+      {renderMutationMessage(props.connection?.loginMessage)}
+      {props.detectionError ? (
+        <div class="callout warning" role="alert">
+          {props.detectionError}
+        </div>
+      ) : undefined}
+      {props.detecting && props.page.phase === "ready" ? (
+        <div class="muted" role="status">
+          {t("modelSetup.loading")}
+        </div>
+      ) : undefined}
+      <ModelSetupBody {...props} />
+    </div>
   );
   const dialogs = (
     <>
@@ -665,8 +641,4 @@ function EmbeddedModelSetup(props: {
       {props.dialogs}
     </>
   );
-}
-
-export function renderModelSetup(props: ModelSetupViewProps): JSX.Element {
-  return <ModelSetupView {...props} />;
 }

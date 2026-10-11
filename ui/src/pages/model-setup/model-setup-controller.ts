@@ -31,7 +31,7 @@ import {
   preparedModelActivation,
 } from "./prepare-options.ts";
 import { manualProviderActivation, revealManualProvider } from "./provider-picker.tsx";
-import { createModelSetupDetectTask, createModelSetupVerifyTask } from "./rpc.ts";
+import { createModelSetupDetectRequest, createModelSetupVerifyRequest } from "./rpc.ts";
 import {
   activationTargetId,
   preparedModelPageState,
@@ -125,7 +125,7 @@ export class ModelSetupController extends ModelPageController {
     actionsDisabled: () => this.actionsDisabled() || this.state.detectionRequest !== null,
     canUseSetup: (client) => this.canUseSetup(client),
     canVerify: (client) => this.canVerify(client),
-    verify: (modelTarget) => this.verifyConnection(modelTarget).then(() => this.verifyTask.value),
+    verify: (modelTarget) => this.verifyConnection(modelTarget),
     setVerifyState: (next) => this.setState("verifyState", next),
     setActivationState: (next) => this.setState("activationState", next),
     setRefreshWarning: (warning) => this.setState("setupRefreshWarning", warning),
@@ -148,7 +148,7 @@ export class ModelSetupController extends ModelPageController {
     () => this.state.pageState,
     (urls) => this.setState("iconUrls", urls),
   );
-  private readonly login = new ModelProviderLoginController(this, {
+  readonly login = new ModelProviderLoginController(this, {
     getScope: () => ({ context: this.context, agentId: this.agentSelection.state.selectedId }),
     getManualProviders: () =>
       this.state.pageState.phase === "ready" ? this.state.pageState.result.manualProviders : [],
@@ -208,7 +208,7 @@ export class ModelSetupController extends ModelPageController {
     gatewayNotRespondingMessage: () => t("modelSetup.wizard.gatewayNotResponding"),
   });
 
-  private readonly detectTask = createModelSetupDetectTask(this, {
+  private readonly runDetection = createModelSetupDetectRequest(this, {
     getHello: () => this.context.gateway.snapshot.hello,
     onComplete: (outcome) => {
       if (
@@ -248,7 +248,7 @@ export class ModelSetupController extends ModelPageController {
     },
   });
 
-  private readonly verifyTask = createModelSetupVerifyTask(this);
+  private readonly runVerification = createModelSetupVerifyRequest(this);
 
   constructor(element: HTMLElement, context: ApplicationContext, notify: () => void) {
     super(element, notify);
@@ -362,7 +362,7 @@ export class ModelSetupController extends ModelPageController {
     this.setState("detectionRequest", null);
     this.setState("detectionError", null);
     this.retireWizardMutation();
-    void this.detectTask.run([null, null, null]);
+    void this.runDetection([null, null, null]);
     this.setState("activationState", { phase: "idle" });
     this.resetVerify();
     this.iconLoader.reset();
@@ -395,8 +395,7 @@ export class ModelSetupController extends ModelPageController {
     }
     const token = {};
     this.setState("detectionRequest", token);
-    await this.detectTask.run([client, this.agentSelection.state.selectedId, token]);
-    const outcome = this.detectTask.value;
+    const outcome = await this.runDetection([client, this.agentSelection.state.selectedId, token]);
     return outcome?.token === token && "value" in outcome ? outcome.value : null;
   }
 
@@ -409,16 +408,16 @@ export class ModelSetupController extends ModelPageController {
 
   private resetVerify(): void {
     this.setState("verifyState", { phase: "idle" });
-    void this.verifyTask.run([null, null, undefined]);
+    void this.runVerification([null, null, undefined]);
   }
 
-  private async verifyConnection(modelTarget?: "utility"): Promise<void> {
+  private async verifyConnection(modelTarget?: "utility") {
     const client = this.context.gateway.snapshot.client;
     if (!this.canVerify(client) || this.actionsDisabled() || this.state.detectionRequest) {
       return;
     }
     this.setState("verifyState", { phase: "checking" });
-    await this.verifyTask.run([client, this.agentSelection.state.selectedId, modelTarget]);
+    return this.runVerification([client, this.agentSelection.state.selectedId, modelTarget]);
   }
 
   private get activationBlocked(): boolean {
@@ -658,10 +657,6 @@ export class ModelSetupController extends ModelPageController {
         );
       }
     }
-  }
-
-  renderLogin(revision: () => unknown) {
-    return this.login.render(revision);
   }
 
   viewProps(): ModelSetupViewProps {

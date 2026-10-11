@@ -1,13 +1,11 @@
 import { setImmediate } from "node:timers/promises";
-import { render } from "@solidjs/web";
-import { createSignal, flush } from "solid-js";
+import { createSignal, onCleanup } from "solid-js";
 import { afterEach, expect, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type {
   ModelAuthStatusProvider,
   ModelAuthStatusResult,
   ModelCatalogResult,
-  ModelsProbeResult,
 } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createGatewayMetadataObserver } from "../../app/gateway-observers.ts";
@@ -29,9 +27,9 @@ import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-
 import { beginModelCatalogRead, publishModelCatalogResult } from "../../lib/model-catalog-cache.ts";
 import { peekModelCatalog } from "../../lib/model-catalog-store.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
-import { waitForFast } from "../../test-helpers/wait-for.ts";
-import type { DefaultModelSelection, ModelBehaviorConfig } from "./data.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
 import { ModelProvidersController } from "./model-providers-controller.ts";
 import { ModelProvidersContent } from "./model-providers-page.tsx";
@@ -58,34 +56,11 @@ afterEach(() => {
 
 export type ModelProvidersPageTestElement = Pick<
   ModelProvidersController,
-  | "renderRoot"
-  | "querySelector"
-  | "querySelectorAll"
-  | "isConnected"
-  | "connect"
-  | "disconnect"
-  | "beforeUpdate"
-  | "afterUpdate"
+  keyof ModelProvidersController
 > & {
-  context: ApplicationContext;
-  updateComplete: Promise<boolean>;
-  busy: Record<string, boolean>;
-  data: ModelProvidersData | null;
-  addProviderId: string;
-  addProviderKey: string;
-  addProviderOpen: boolean;
-  defaultsDraft: (DefaultModelSelection & Partial<ModelBehaviorConfig>) | null;
-  keyDraft: string;
-  keyEditorProvider: string | null;
   profileActions: Pick<ModelProviderProfileActionsController, "logout" | "setOrder" | "probe">;
-  messages: Record<string, { kind: "success" | "error"; text: string; warning?: string }>;
-  profileOrders: Record<string, string[]>;
-  probeResults: Record<string, ModelsProbeResult>;
   refresh: (reason: "forced") => Promise<void>;
-  routeData: ModelProvidersRouteData | undefined;
-  requestUpdate: () => void;
   saveDefaults: () => Promise<void>;
-  selectedAgentId: string;
 };
 
 const modelPickerLabels = {
@@ -128,7 +103,7 @@ export async function drainPageUpdates(page: ModelProvidersPageTestElement): Pro
 export function displayedCatalog(page: ModelProvidersPageTestElement) {
   return peekModelCatalog(
     page.context.gateway.snapshot.client!,
-    { agentId: page.selectedAgentId },
+    { agentId: page.state.selectedAgentId },
     { allowStale: true },
   );
 }
@@ -195,9 +170,9 @@ export function createApiKeyProviderData(): ModelProvidersData {
 }
 
 export async function saveKey(page: ModelProvidersPageTestElement, value: string) {
-  page.data = createApiKeyProviderData();
-  page.keyEditorProvider = "openai";
-  page.keyDraft = value;
+  page.setState("data", createApiKeyProviderData());
+  page.setState("keyEditorProvider", "openai");
+  page.setState("keyDraft", value);
   await page.updateComplete;
   page.querySelector<HTMLButtonElement>(".model-providers__inline-form button")!.click();
 }
@@ -426,8 +401,8 @@ export async function waitForProviders(
   expectedConfig?: Record<string, unknown>,
 ): Promise<void> {
   await page.context.runtimeConfig.ensureLoaded();
-  await waitForFast(() => {
-    expect(page.data?.updatedAt).toEqual(expect.any(Number));
+  await waitForSolid(() => {
+    expect(page.state.data?.updatedAt).toEqual(expect.any(Number));
     expect(page.context.runtimeConfig.state.configLoading).toBe(false);
     if (expectedConfig) {
       expect(currentConfigObject(page.context.runtimeConfig.state)).toEqual(expectedConfig);
@@ -465,7 +440,7 @@ export function createPage(context: ApplicationContext): ModelProvidersPageTestE
   const [revision, setRevision] = createSignal(0);
   let mounted = false;
   let queued = false;
-  let dispose: (() => void) | undefined;
+  let view: ReturnType<typeof mountSolid> | undefined;
   const page = new ModelProvidersController(root, context, () => {
     if (!mounted || queued) {
       return;
@@ -482,6 +457,7 @@ export function createPage(context: ApplicationContext): ModelProvidersPageTestE
       page.afterUpdate();
     });
   });
+  // SAFETY: Tests inspect the existing private action owners without adding a production facade.
   const testPage = page as unknown as ModelProvidersPageTestElement;
   pages.set(testPage, {
     mount: () => {
@@ -490,17 +466,21 @@ export function createPage(context: ApplicationContext): ModelProvidersPageTestE
       }
       document.body.append(root);
       mounted = true;
-      dispose = render(() => <ModelProvidersContent controller={page} revision={revision} />, root);
+      view = mountSolid(
+        () => {
+          onCleanup(() => {
+            mounted = false;
+            page.disconnect();
+          });
+          return <ModelProvidersContent controller={page} revision={revision} />;
+        },
+        { container: root },
+      );
       page.connect();
     },
     unmount: () => {
-      if (!mounted) {
-        return;
-      }
-      mounted = false;
-      page.disconnect();
-      dispose?.();
-      dispose = undefined;
+      view?.unmount();
+      view = undefined;
       root.remove();
     },
   });
@@ -527,7 +507,7 @@ export function appendPage(context: ApplicationContext) {
 }
 
 export function clickLoginChoice(page: ModelProvidersPageTestElement, choice: string) {
-  const option = page.data?.authStatus?.providerCapabilities
+  const option = page.state.data?.authStatus?.providerCapabilities
     ?.flatMap((provider) => provider.loginOptions ?? [])
     .find((candidate) => candidate.id === choice);
   expect(option).toBeDefined();
@@ -540,7 +520,7 @@ export function clickLoginChoice(page: ModelProvidersPageTestElement, choice: st
 
 export async function startSelectedLogin(page: ModelProvidersPageTestElement, choice: string) {
   clickLoginChoice(page, choice);
-  await waitForFast(() =>
+  await waitForSolid(() =>
     expect(page.querySelector<HTMLInputElement>('input[name="wizard-text"]')?.disabled).toBe(false),
   );
 }
@@ -556,5 +536,5 @@ export async function submitCredential(page: ModelProvidersPageTestElement) {
   input.dispatchEvent(new Event("input", { bubbles: true }));
   await page.updateComplete;
   page.querySelector<HTMLButtonElement>('.wizard-step__form button[type="submit"]')!.click();
-  await waitForFast(() => expect(input.disabled).toBe(true));
+  await waitForSolid(() => expect(input.disabled).toBe(true));
 }

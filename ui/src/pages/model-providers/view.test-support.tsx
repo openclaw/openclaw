@@ -1,10 +1,10 @@
-import { render as mountSolid } from "@solidjs/testing-library";
-import { createSignal, flush } from "solid-js";
-import { onTestFinished } from "vitest";
+import { createSignal } from "solid-js";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import type { ModelProviderCard } from "./data.ts";
 import { ModelProviders, type ModelProvidersViewProps } from "./view.tsx";
 
-const mountedViews = new WeakMap<HTMLDivElement, (props: ModelProvidersViewProps) => void>();
+const mountedViews = new WeakMap<HTMLElement, (props: ModelProvidersViewProps) => void>();
 
 export function card(overrides: Partial<ModelProviderCard> = {}): ModelProviderCard {
   return {
@@ -93,25 +93,18 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
   };
 }
 
-export function mount(
-  viewProps: ModelProvidersViewProps,
-  container = document.body.appendChild(document.createElement("div")),
-): HTMLDivElement {
-  const update = mountedViews.get(container);
-  if (update) {
+export function mount(viewProps: ModelProvidersViewProps, container?: HTMLElement): HTMLElement {
+  const update = container && mountedViews.get(container);
+  if (container && update) {
     update({ ...viewProps });
-  } else {
-    const [current, setCurrent] = createSignal(viewProps);
-    const view = mountSolid(() => <ModelProviders {...current()} />, { container });
-    mountedViews.set(container, (next) => setCurrent(next));
-    onTestFinished(() => {
-      view.unmount();
-      mountedViews.delete(container);
-      container.remove();
-    });
+    flush();
+    return container;
   }
+  const [current, setCurrent] = createSignal(viewProps);
+  const view = mountSolid(() => <ModelProviders {...current()} />, { container });
+  mountedViews.set(view.container, (next) => setCurrent(next));
   flush();
-  return container;
+  return view.container;
 }
 
 export function text(element: Element | null): string {

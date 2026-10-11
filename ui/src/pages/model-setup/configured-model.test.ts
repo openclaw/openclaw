@@ -1,11 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { render } from "@solidjs/web";
 import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
-import { renderConfiguredModel } from "./configured-model.tsx";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { ConfiguredModel } from "./configured-model.tsx";
 import type { ModelSetupVerifyState } from "./state.ts";
 
 const disposals: (() => void)[] = [];
@@ -23,9 +23,9 @@ function mount(
   const onVerify = vi.fn();
   const [currentVerify, setVerify] = createSignal(verify);
   disposals.push(
-    render(
+    mountSolid(
       () =>
-        renderConfiguredModel({
+        ConfiguredModel({
           result,
           get verify() {
             return currentVerify();
@@ -34,8 +34,8 @@ function mount(
           actionsDisabled: false,
           onVerify,
         }),
-      container,
-    ),
+      { container },
+    ).unmount,
   );
   return { container, onVerify, setVerify };
 }
@@ -44,7 +44,7 @@ function text(container: Element): string {
   return container.textContent?.replace(/\s+/gu, " ").trim() ?? "";
 }
 
-describe("renderConfiguredModel", () => {
+describe("ConfiguredModel", () => {
   beforeEach(async () => {
     await i18n.setLocale("en");
   });

@@ -138,8 +138,9 @@ describe("renderModelSetup", () => {
     );
 
     expect(text(container)).toContain("Recommended installs");
-    expect(text(container)).toContain("Ollama Run open models locally");
     const card = container.querySelector('[data-recommended-install="ollama"]');
+    expect(card?.querySelector("strong")?.textContent).toBe("Ollama");
+    expect(card?.querySelector(".muted")?.textContent).toBe("Run open models locally");
     const icon = card?.querySelector<HTMLElement>('[data-provider-icon="ollama"]');
     const link = card?.querySelector<HTMLAnchorElement>("a");
     expect(icon).not.toBeNull();
@@ -272,7 +273,12 @@ describe("renderModelSetup", () => {
     expect(container.querySelector('[data-candidate-kind="existing-model"]')).toBeNull();
     expect(container.querySelector('[data-candidate-kind="provider-auto:openai"]')).toBeNull();
     expect(container.querySelector('[data-candidate-kind="claude-cli"]')).not.toBeNull();
-    expect(text(container)).toContain("Selected model OpenAI gpt-5");
+    const current = container.querySelector(".model-setup__current")!;
+    expect(current.querySelector("h2")?.textContent).toBe("Selected model");
+    expect(current.querySelector("strong")?.textContent).toBe("OpenAI");
+    expect(current.querySelector(".model-setup__current-copy .muted")?.textContent).toContain(
+      "gpt-5",
+    );
     const retry = container.querySelector<HTMLButtonElement>(
       '[data-candidate-kind="saved-auth:openai:replacement"] button',
     );
@@ -316,12 +322,16 @@ describe("renderModelSetup", () => {
     const nonAdmin = mount(
       props({ page: { phase: "ready", result }, canAdmin: false, canVerify: false }),
     );
-    expect(text(nonAdmin)).toContain("Selected model OpenAI gpt-5");
-    expect(nonAdmin.querySelector(".model-setup__current button")).toBeNull();
-
     const unsupportedGateway = mount(props({ page: { phase: "ready", result }, canVerify: false }));
-    expect(text(unsupportedGateway)).toContain("Selected model OpenAI gpt-5");
-    expect(unsupportedGateway.querySelector(".model-setup__current button")).toBeNull();
+    for (const page of [nonAdmin, unsupportedGateway]) {
+      const current = page.querySelector(".model-setup__current")!;
+      expect(current.querySelector("h2")?.textContent).toBe("Selected model");
+      expect(current.querySelector("strong")?.textContent).toBe("OpenAI");
+      expect(current.querySelector(".model-setup__current-copy .muted")?.textContent).toContain(
+        "gpt-5",
+      );
+      expect(current.querySelector("button")).toBeNull();
+    }
   });
 
   it.each([true, false])("reports device-code fallback success: %s", async (copied) => {

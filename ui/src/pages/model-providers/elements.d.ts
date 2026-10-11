@@ -19,10 +19,6 @@ declare module "@solidjs/web" {
         "prop:label"?: string;
         "onModal-cancel"?: (event: Event) => void;
       };
-      "openclaw-tooltip": JSX.HTMLAttributes<HTMLElement> & {
-        "prop:content"?: string;
-        "open-on-click"?: boolean;
-      };
     }
   }
 }

@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { render as mountSolid } from "@solidjs/testing-library";
-import { createSignal, flush } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createSignal } from "solid-js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { ModelProviderCard } from "./data.ts";
 import { ProviderProfiles, type ProviderProfilesViewProps } from "./profiles-view.tsx";
 
@@ -48,27 +49,23 @@ const mountedProfiles = new WeakMap<
 function mount(
   providerCard: ModelProviderCard,
   viewProps: ProviderProfilesViewProps,
-  existing?: HTMLElement,
+  container?: HTMLElement,
 ): HTMLElement {
-  const container = existing ?? document.body.appendChild(document.createElement("div"));
-  const update = mountedProfiles.get(container);
-  if (update) {
+  const update = container && mountedProfiles.get(container);
+  if (container && update) {
     update(providerCard, { ...viewProps });
-  } else {
-    const [current, setCurrent] = createSignal({ card: providerCard, props: viewProps });
-    const view = mountSolid(() => <ProviderProfiles {...current().props} card={current().card} />, {
-      container,
-    });
-    mountedProfiles.set(container, (nextCard, nextProps) =>
-      setCurrent({ card: nextCard, props: nextProps }),
-    );
-    onTestFinished(() => {
-      view.unmount();
-      container.remove();
-    });
+    flush();
+    return container;
   }
+  const [current, setCurrent] = createSignal({ card: providerCard, props: viewProps });
+  const view = mountSolid(() => <ProviderProfiles {...current().props} card={current().card} />, {
+    container,
+  });
+  mountedProfiles.set(view.container, (nextCard, nextProps) =>
+    setCurrent({ card: nextCard, props: nextProps }),
+  );
   flush();
-  return container;
+  return view.container;
 }
 
 function reorderCard(): ModelProviderCard {
@@ -477,7 +474,7 @@ describe("renderProviderProfiles", () => {
       ["account:two", "account:three", "account:one", "account:other"],
     ]) {
       grip.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-      await vi.waitFor(() => {
+      await waitForSolid(() => {
         expect(
           [...container.querySelectorAll<HTMLElement>(".model-providers__profile")].map(
             (row) => row.dataset.profileId,

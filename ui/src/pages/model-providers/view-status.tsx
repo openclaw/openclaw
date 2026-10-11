@@ -123,10 +123,3 @@ export function ModelProviderConnectAction(props: ModelProviderConnectActionProp
     </button>
   );
 }
-
-export function renderModelProviderConnectAction(
-  props: ModelProviderConnectActionProps,
-  primary = false,
-) {
-  return <ModelProviderConnectAction {...props} primary={primary} />;
-}

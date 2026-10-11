@@ -19,7 +19,7 @@ registerModelSetupEnglish();
 
 type Candidate = SystemAgentSetupDetectResult["candidates"][number];
 
-export function renderConfiguredUtilityModel(props: {
+export function ConfiguredUtilityModel(props: {
   result: SystemAgentSetupDetectResult;
   activation: ModelSetupActivationState;
   canRepair: boolean;
@@ -127,7 +127,7 @@ const VERIFICATION_BUTTON_LABELS = {
   idle: "modelSetup.verify.button",
 };
 
-export function renderConfiguredModel(props: {
+export function ConfiguredModel(props: {
   result: SystemAgentSetupDetectResult;
   verify: ModelSetupVerifyState;
   canVerify: boolean;
@@ -229,8 +229,3 @@ export function renderActivationFeedback(activation: ModelSetupActivationState) 
     ? renderModelSetupFailure(activation.status, activation.error)
     : undefined;
 }
-
-export {
-  renderConfiguredModel as ConfiguredModel,
-  renderConfiguredUtilityModel as ConfiguredUtilityModel,
-};

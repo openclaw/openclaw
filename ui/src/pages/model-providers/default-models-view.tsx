@@ -191,10 +191,6 @@ function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
   );
 }
 
-export function renderDefaultModels(props: DefaultModelsViewProps) {
-  return <DefaultModels {...props} />;
-}
-
 export function DefaultModels(props: DefaultModelsViewProps) {
   const modelControlsDisabled = () => !props.canMutate || props.models.length === 0;
   const saving = () => Boolean(props.busy.defaults);
@@ -217,181 +213,170 @@ export function DefaultModels(props: DefaultModelsViewProps) {
   const options = createMemo(() =>
     dedupeByKey(props.models, modelCatalogRef).map((model) => modelOption(model, authProviders())),
   );
-  const automaticRef = () => props.automaticUtilityModel;
   const utilityValue = () => props.selection.utilityModel ?? AUTOMATIC_UTILITY_VALUE;
   const utilityRoute = () => formatCompletionRoute(props.utilityRuntime);
-  // The route describes the model in effect, so it joins that option's account detail.
-  const withUtilityRoute = (value: string, detail: string | undefined) =>
-    value === utilityValue() && utilityRoute()
-      ? [detail, utilityRoute()?.label].filter(Boolean).join(" · ")
-      : detail;
-  const automaticBaseRef = () => {
-    const ref = automaticRef();
-    return ref ? splitTrailingAuthProfile(ref).model : "";
-  };
-  const automaticEntry = () =>
-    props.models.find((model) => modelCatalogRef(model) === automaticBaseRef());
-  const automaticModel = createMemo(() => {
-    const ref = automaticRef();
-    return ref
+  const utilityOptions = createMemo(() => {
+    const ref = props.automaticUtilityModel;
+    const base = ref ? splitTrailingAuthProfile(ref).model : "";
+    const entry = props.models.find((model) => modelCatalogRef(model) === base);
+    const automatic = ref
       ? modelOption(
           {
-            ...(automaticEntry() ?? {
-              id: automaticBaseRef(),
-              name: automaticBaseRef(),
-              provider: automaticBaseRef().split("/", 1)[0] ?? "",
-            }),
+            ...(entry ?? { id: base, name: base, provider: base.split("/", 1)[0] ?? "" }),
             selectionRef: ref,
           },
           authProviders(),
         )
       : undefined;
+    // The effective model's route belongs beside its account detail.
+    const withRoute = (value: string, detail: string | undefined) =>
+      value === utilityValue() && utilityRoute()
+        ? [detail, utilityRoute()?.label].filter(Boolean).join(" · ")
+        : detail;
+    return [
+      {
+        value: AUTOMATIC_UTILITY_VALUE,
+        label: ref
+          ? `${t("quickSettings.model.fastModes.auto")} · ${automatic?.label ?? ref}`
+          : t("quickSettings.model.fastModes.auto"),
+        provider: automatic?.provider,
+        detail:
+          ref === null
+            ? t("modelProviders.defaults.automaticUnavailable")
+            : withRoute(AUTOMATIC_UTILITY_VALUE, automatic?.detail),
+      },
+      { value: "", label: t("modelProviders.defaults.disabled") },
+      ...options().map((option) => {
+        const detail = withRoute(option.value, option.detail);
+        return detail === option.detail ? option : Object.assign({}, option, { detail });
+      }),
+    ];
   });
 
-  const body = () => (
-    <div class="model-providers__defaults">
-      {!props.loading && props.models.length === 0 ? (
-        <div class="callout warning">{t("modelProviders.defaults.noModels")}</div>
-      ) : undefined}
-      <SettingsRow
-        title={t("modelProviders.defaults.primary")}
-        control={
-          <ModelPicker
-            label={t("modelProviders.defaults.primary")}
-            value={props.selection.primary}
-            options={[
-              {
-                value: "",
-                label: t("modelProviders.defaults.selectModel"),
-                disabled: !props.canMutate || Boolean(props.selection.primary),
-              },
-              ...(props.canMutate
-                ? options()
-                : options().map((option) => Object.assign({}, option, { disabled: true }))),
-            ]}
-            disabled={props.models.length === 0 || saving()}
-            title={title()}
-            showSelectedDetail={true}
-            onChange={props.onPrimaryChange}
-          />
-        }
-      />
-      <SettingsRow
-        title={
-          <HelpTitle
-            title={t("modelProviders.defaults.utility")}
-            label={t("modelProviders.defaults.utilityHelpLabel")}
-            triggerId={UTILITY_MODEL_HELP_ID}
-            paragraphs={[
-              t("modelProviders.defaults.utilityHelpPurpose"),
-              t("modelProviders.defaults.utilityHelpAutomatic"),
-            ]}
-          />
-        }
-        control={
-          <ModelPicker
-            id={UTILITY_MODEL_PICKER_ID}
-            label={t("modelProviders.defaults.utility")}
-            value={utilityValue()}
-            options={[
-              {
-                value: AUTOMATIC_UTILITY_VALUE,
-                label: props.automaticUtilityModel
-                  ? `${t("quickSettings.model.fastModes.auto")} · ${automaticModel()?.label ?? props.automaticUtilityModel}`
-                  : t("quickSettings.model.fastModes.auto"),
-                provider: automaticModel()?.provider,
-                detail:
-                  automaticRef() === null
-                    ? t("modelProviders.defaults.automaticUnavailable")
-                    : withUtilityRoute(AUTOMATIC_UTILITY_VALUE, automaticModel()?.detail),
-              },
-              { value: "", label: t("modelProviders.defaults.disabled") },
-              ...options().map((option) => {
-                const detail = withUtilityRoute(option.value, option.detail);
-                return detail === option.detail ? option : Object.assign({}, option, { detail });
-              }),
-            ]}
-            disabled={modelControlsDisabled() || saving()}
-            title={title() || utilityRoute()?.detail || ""}
-            showSelectedDetail={true}
-            onChange={(value) =>
-              props.onUtilityChange(value === AUTOMATIC_UTILITY_VALUE ? null : value)
-            }
-          />
-        }
-      />
-      <SettingsRow
-        title={t("chat.modelControls.decisionLabel")}
-        description={t("chat.modelControls.decisionHelp")}
-        control={
-          <DecisionModelPicker
-            id={"model-providers-decision-model"}
-            models={props.decisionModels}
-            value={props.selection.decisionModel}
-            disabled={!props.canMutate || saving()}
-            title={title()}
-            onChange={props.onDecisionChange}
-          />
-        }
-      />
-      <SettingsRow
-        title={t("modelProviders.defaults.fallback")}
-        control={
-          <ModelPicker
-            label={t("modelProviders.defaults.fallback")}
-            value={fallback()}
-            options={[
-              { value: "", label: t("modelProviders.defaults.noFallback") },
-              ...options().filter((option) => option.value !== props.selection.primary),
-            ]}
-            disabled={modelControlsDisabled() || saving() || !props.selection.primary}
-            title={title()}
-            showSelectedDetail={true}
-            onChange={(value) => props.onFallbackChange(value || null)}
-          />
-        }
-      />
-      <BehaviorSetting
-        field={"thinking"}
-        view={props}
-        value={props.thinkingLevel ?? ""}
-        options={thinkingLevels().map((level) => ({
-          value: level,
-          label: THINKING_LEVEL_SET.has(level)
-            ? t(`quickSettings.model.thinkingLevels.${level}`)
-            : formatThinkingOverrideLabel(level),
-        }))}
-        overridden={props.thinkingOverridden}
-        onChange={props.onThinkingChange}
-        onReset={props.onThinkingReset}
-      />
-      <BehaviorSetting<ReturnType<typeof formatFastModeValue>>
-        field={"fastMode"}
-        view={props}
-        value={fastMode()}
-        options={[
-          { value: "auto", label: t("quickSettings.model.fastModes.auto") },
-          { value: "on", label: t("quickSettings.model.fastModes.on") },
-          { value: "off", label: t("quickSettings.model.fastModes.off") },
-        ]}
-        overridden={props.fastModeOverridden}
-        onChange={(value) => {
-          if (value !== fastMode()) {
-            props.onFastModeChange(fastModeOptionValue(value));
-          }
-        }}
-        onReset={props.onFastModeReset}
-      />
-      <CatalogProgress {...props} />
-      {props.canMutate ? renderMutationMessage(props.message) : undefined}
-    </div>
-  );
   return (
     <SettingsSection
       title={t("modelProviders.defaults.title")}
       description={t("modelProviders.defaults.subtitle")}
     >
-      {body()}
+      <div class="model-providers__defaults">
+        {!props.loading && props.models.length === 0 ? (
+          <div class="callout warning">{t("modelProviders.defaults.noModels")}</div>
+        ) : undefined}
+        <SettingsRow
+          title={t("modelProviders.defaults.primary")}
+          control={
+            <ModelPicker
+              label={t("modelProviders.defaults.primary")}
+              value={props.selection.primary}
+              options={[
+                {
+                  value: "",
+                  label: t("modelProviders.defaults.selectModel"),
+                  disabled: !props.canMutate || Boolean(props.selection.primary),
+                },
+                ...(props.canMutate
+                  ? options()
+                  : options().map((option) => Object.assign({}, option, { disabled: true }))),
+              ]}
+              disabled={props.models.length === 0 || saving()}
+              title={title()}
+              showSelectedDetail={true}
+              onChange={props.onPrimaryChange}
+            />
+          }
+        />
+        <SettingsRow
+          title={
+            <HelpTitle
+              title={t("modelProviders.defaults.utility")}
+              label={t("modelProviders.defaults.utilityHelpLabel")}
+              triggerId={UTILITY_MODEL_HELP_ID}
+              paragraphs={[
+                t("modelProviders.defaults.utilityHelpPurpose"),
+                t("modelProviders.defaults.utilityHelpAutomatic"),
+              ]}
+            />
+          }
+          control={
+            <ModelPicker
+              id={UTILITY_MODEL_PICKER_ID}
+              label={t("modelProviders.defaults.utility")}
+              value={utilityValue()}
+              options={utilityOptions()}
+              disabled={modelControlsDisabled() || saving()}
+              title={title() || utilityRoute()?.detail || ""}
+              showSelectedDetail={true}
+              onChange={(value) =>
+                props.onUtilityChange(value === AUTOMATIC_UTILITY_VALUE ? null : value)
+              }
+            />
+          }
+        />
+        <SettingsRow
+          title={t("chat.modelControls.decisionLabel")}
+          description={t("chat.modelControls.decisionHelp")}
+          control={
+            <DecisionModelPicker
+              id={"model-providers-decision-model"}
+              models={props.decisionModels}
+              value={props.selection.decisionModel}
+              disabled={!props.canMutate || saving()}
+              title={title()}
+              onChange={props.onDecisionChange}
+            />
+          }
+        />
+        <SettingsRow
+          title={t("modelProviders.defaults.fallback")}
+          control={
+            <ModelPicker
+              label={t("modelProviders.defaults.fallback")}
+              value={fallback()}
+              options={[
+                { value: "", label: t("modelProviders.defaults.noFallback") },
+                ...options().filter((option) => option.value !== props.selection.primary),
+              ]}
+              disabled={modelControlsDisabled() || saving() || !props.selection.primary}
+              title={title()}
+              showSelectedDetail={true}
+              onChange={(value) => props.onFallbackChange(value || null)}
+            />
+          }
+        />
+        <BehaviorSetting
+          field={"thinking"}
+          view={props}
+          value={props.thinkingLevel ?? ""}
+          options={thinkingLevels().map((level) => ({
+            value: level,
+            label: THINKING_LEVEL_SET.has(level)
+              ? t(`quickSettings.model.thinkingLevels.${level}`)
+              : formatThinkingOverrideLabel(level),
+          }))}
+          overridden={props.thinkingOverridden}
+          onChange={props.onThinkingChange}
+          onReset={props.onThinkingReset}
+        />
+        <BehaviorSetting<ReturnType<typeof formatFastModeValue>>
+          field={"fastMode"}
+          view={props}
+          value={fastMode()}
+          options={[
+            { value: "auto", label: t("quickSettings.model.fastModes.auto") },
+            { value: "on", label: t("quickSettings.model.fastModes.on") },
+            { value: "off", label: t("quickSettings.model.fastModes.off") },
+          ]}
+          overridden={props.fastModeOverridden}
+          onChange={(value) => {
+            if (value !== fastMode()) {
+              props.onFastModeChange(fastModeOptionValue(value));
+            }
+          }}
+          onReset={props.onFastModeReset}
+        />
+        <CatalogProgress {...props} />
+        {props.canMutate ? renderMutationMessage(props.message) : undefined}
+      </div>
     </SettingsSection>
   );
 }

@@ -47,10 +47,6 @@ export type ModelPickerParams = {
   onChange: (value: string) => void;
 };
 
-export function renderModelPicker(params: ModelPickerParams) {
-  return <ModelPicker {...params} />;
-}
-
 export function ModelPicker(props: ModelPickerParams) {
   const customValue = createMemo(() => {
     let value = "__openclaw_custom_model__";

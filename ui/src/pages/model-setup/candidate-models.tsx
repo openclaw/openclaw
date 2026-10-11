@@ -9,7 +9,7 @@ import { activationTargetId, type ModelSetupActivationState } from "./state.ts";
 registerModelSetupEnglish();
 
 type Candidate = SystemAgentSetupDetectResult["candidates"][number];
-type CandidateRowsProps = Parameters<typeof renderProviderIcon>[0] & {
+export type CandidateRowsProps = Parameters<typeof renderProviderIcon>[0] & {
   activation: ModelSetupActivationState;
   actionsDisabled: boolean;
   detecting?: boolean;
@@ -113,11 +113,4 @@ export function CandidateRows(
       </section>
     </Show>
   );
-}
-
-export function renderCandidateRows(
-  props: CandidateRowsProps,
-  result: SystemAgentSetupDetectResult,
-) {
-  return <CandidateRows {...props} result={result} />;
 }

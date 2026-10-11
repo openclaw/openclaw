@@ -21,7 +21,7 @@ export function ModelSetupContent(props: {
     props.revision();
     return props.controller.viewProps();
   });
-  const login = untrack(() => props.controller.renderLogin(props.revision));
+  const login = untrack(() => props.controller.login.render(props.revision));
   return <ModelSetupView {...current()} login={login} revision={props.revision} />;
 }
 

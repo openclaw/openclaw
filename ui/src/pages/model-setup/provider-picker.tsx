@@ -223,11 +223,3 @@ export function ManualProviderPicker(
     </wa-dropdown>
   );
 }
-
-export function renderManualProviderPicker(
-  props: ManualProviderPickerProps,
-  result: Pick<SystemAgentSetupDetectResult, "manualProviders">,
-  provider: ManualProvider | undefined,
-) {
-  return <ManualProviderPicker {...props} result={result} provider={provider} />;
-}

@@ -1,41 +1,12 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Match, Show, Switch } from "solid-js";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
-import { WizardStepControls } from "../../components/solid/wizard-step-controls.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import "../../components/modal-dialog.ts";
-import type { ModelSetupWizardState } from "./state.ts";
-
-const WIZARD_COPY = {
-  auth: {
-    dialog: "modelSetup.wizard.dialogLabel",
-    titleKey: "modelSetup.wizard.title",
-    starting: "modelSetup.wizard.starting",
-  },
-  prepare: {
-    dialog: "modelSetup.wizard.prepareDialogLabel",
-    titleKey: "modelSetup.wizard.prepareTitle",
-    starting: "modelSetup.wizard.prepareStarting",
-  },
-  activate: {
-    dialog: "modelSetup.heading",
-    titleKey: "modelSetup.heading",
-    starting: "modelSetup.wizard.checking",
-  },
-};
-
-export type WizardViewProps = {
-  mode: "auth" | "prepare" | "activate";
-  state: ModelSetupWizardState;
-  refreshWarning: string | null;
-  doneMessage?: string;
-  cancellationNotice?: string | null;
-  value: unknown;
-  onValueChange: (value: unknown) => void;
-  onAnswer: (value: unknown, includeValue?: boolean) => void;
-  onCancel: () => void;
-  onClose: () => void;
-};
+import { WIZARD_COPY } from "./wizard-copy.ts";
+import { WizardStepControls } from "./wizard-step-controls.tsx";
+import type { WizardViewProps } from "./wizard-view.ts";
+export type { WizardViewProps } from "./wizard-view.ts";
 
 export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
   const copy = createMemo(() => WIZARD_COPY[props.mode]);
@@ -166,8 +137,4 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
       </openclaw-modal-dialog>
     </Show>
   );
-}
-
-export function renderModelSetupWizard(props: WizardViewProps): JSX.Element {
-  return <ModelSetupWizard {...props} />;
 }

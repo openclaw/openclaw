@@ -15,48 +15,35 @@ type ModelSetupDetectTaskResult = ModelSetupTaskResult<SystemAgentSetupDetectRes
 };
 
 function createSetupRequest<Args, Result>(
-  host: ControllerHost,
+  host: Pick<ControllerHost, "addController">,
   request: (args: Args, signal: AbortSignal) => Promise<Result | undefined>,
   onComplete?: (result: Result) => void,
 ) {
   let controller: AbortController | undefined;
-  let value: Result | undefined;
-  let completion: Promise<Result | undefined> = Promise.resolve(undefined);
-  const retire = () => {
-    const retired = controller;
-    controller = undefined;
-    retired?.abort();
-  };
-  host.addController({ hostDisconnected: retire });
-  return {
-    get value() {
-      return value;
+  host.addController({
+    hostDisconnected: () => {
+      const retired = controller;
+      controller = undefined;
+      retired?.abort();
     },
-    get taskComplete() {
-      return completion;
-    },
-    abort: retire,
-    run(args: Args): Promise<void> {
-      controller?.abort();
-      const current = new AbortController();
-      controller = current;
-      completion = request(args, current.signal).then((result) => {
-        if (controller === current && !current.signal.aborted) {
-          value = result;
-          if (result !== undefined) {
-            onComplete?.(result);
-          }
-          host.requestUpdate();
-        }
-        return result;
-      });
-      return completion.then(() => undefined);
-    },
+  });
+  return async (args: Args): Promise<Result | undefined> => {
+    controller?.abort();
+    const current = new AbortController();
+    controller = current;
+    const result = await request(args, current.signal);
+    if (controller !== current || current.signal.aborted) {
+      return undefined;
+    }
+    if (result !== undefined) {
+      onComplete?.(result);
+    }
+    return result;
   };
 }
 
-export function createModelSetupDetectTask(
-  host: ControllerHost,
+export function createModelSetupDetectRequest(
+  host: Pick<ControllerHost, "addController">,
   options: {
     getHello: () => ModelSetupConnection["hello"];
     onComplete: (outcome: ModelSetupDetectTaskResult) => void;
@@ -89,7 +76,7 @@ export function createModelSetupDetectTask(
   );
 }
 
-export function createModelSetupVerifyTask(host: ControllerHost) {
+export function createModelSetupVerifyRequest(host: Pick<ControllerHost, "addController">) {
   return createSetupRequest<
     readonly [GatewayBrowserClient | null, string | null, "utility" | undefined],
     ModelSetupTaskResult<SystemAgentSetupVerifyResult>

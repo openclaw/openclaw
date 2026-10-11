@@ -81,10 +81,7 @@ export function ModelSetupSuccessDialog(props: {
             )}
           </div>
           {props.activation.warning ? (
-            <>
-              {" "}
-              <div class="model-setup-success__warning">{props.activation.warning}</div>{" "}
-            </>
+            <div class="model-setup-success__warning">{props.activation.warning}</div>
           ) : undefined}
           <div class="model-setup-success__summary">
             <span>
@@ -119,23 +116,5 @@ export function ModelSetupSuccessDialog(props: {
         </section>
       </openclaw-modal-dialog>
     </>
-  );
-}
-
-export function renderModelSetupSuccessDialog(
-  activation: SuccessActivation,
-  onOpenChat: () => void,
-  onClose: () => void,
-  firstRun: boolean,
-  returnToModels = false,
-) {
-  return (
-    <ModelSetupSuccessDialog
-      activation={activation}
-      onOpenChat={onOpenChat}
-      onClose={onClose}
-      firstRun={firstRun}
-      returnToModels={returnToModels}
-    />
   );
 }

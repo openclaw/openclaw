@@ -20,10 +20,6 @@ export type DecisionModelPickerParams = {
   onChange: (model: string | null) => void;
 };
 
-export function renderDecisionModelPicker(params: DecisionModelPickerParams) {
-  return <DecisionModelPicker {...params} />;
-}
-
 export function DecisionModelPicker(props: DecisionModelPickerParams) {
   const selected = () => props.value?.trim();
   const inherited = () => props.inherit?.model?.trim();

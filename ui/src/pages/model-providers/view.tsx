@@ -229,38 +229,30 @@ function ApiKeyInput(props: {
   );
 }
 
-function KeyEditor(props: { card: ModelProviderCard; view: ModelProvidersViewProps }) {
-  const busy = () => Boolean(props.view.busy[`key:${props.card.id}`]);
+function KeyEditor(props: ModelProvidersViewProps & { card: ModelProviderCard }) {
+  const busy = () => Boolean(props.busy[`key:${props.card.id}`]);
   const authModeBlocked = () =>
     props.card.apiKeySupported === false ||
     Boolean(props.card.configAuthMode && props.card.configAuthMode !== "api-key");
-  const mutationDisabled = () => configMutationDisabled(props.view);
+  const mutationDisabled = () => configMutationDisabled(props);
   return (
-    <Show when={props.view.keyEditorProvider === props.card.id}>
+    <Show when={props.keyEditorProvider === props.card.id}>
       <div class="model-providers__inline-form">
         <ApiKeyInput
-          value={props.view.keyDraft}
+          value={props.keyDraft}
           disabled={busy() || mutationDisabled() || authModeBlocked()}
-          onInput={(value) => props.view.onKeyDraftChange(value)}
+          onInput={(value) => props.onKeyDraftChange(value)}
           replace={props.card.apiKey?.source === "config"}
         />
         <div class="model-providers__form-actions">
           <button
             class="btn primary btn--sm"
-            disabled={
-              busy() || mutationDisabled() || authModeBlocked() || !props.view.keyDraft.trim()
-            }
-            onClick={() =>
-              props.view.onSaveKey(props.card.id, props.card.configKey ?? props.card.id)
-            }
+            disabled={busy() || mutationDisabled() || authModeBlocked() || !props.keyDraft.trim()}
+            onClick={() => props.onSaveKey(props.card.id, props.card.configKey ?? props.card.id)}
           >
             {busy() ? t("modelProviders.saving") : t("common.save")}
           </button>
-          <button
-            class="btn btn--sm"
-            disabled={busy()}
-            onClick={() => props.view.onCloseKeyEditor()}
-          >
+          <button class="btn btn--sm" disabled={busy()} onClick={() => props.onCloseKeyEditor()}>
             {t("common.cancel")}
           </button>
         </div>
@@ -269,85 +261,93 @@ function KeyEditor(props: { card: ModelProviderCard; view: ModelProvidersViewPro
   );
 }
 
-function ProviderActions(props: { card: ModelProviderCard; view: ModelProvidersViewProps }) {
-  const actions = createMemo(() => {
-    const card = props.card;
-    const view = props.view;
-    const credentialProviders = card.credentialProviderIds.length
-      ? card.credentialProviderIds
-      : [card.id];
-    const probeBusy = Boolean(view.busy[`probe:${card.id}`]);
-    const keyBusy = Boolean(view.busy[`key:${card.id}`]);
-    const blocked = view.mutationBlockedReason ?? "";
-    const authModeBlocked = Boolean(card.configAuthMode && card.configAuthMode !== "api-key");
-    const apiKeyUnsupported = card.apiKeySupported === false;
-    const mutationDisabled = configMutationDisabled(view);
-    const keyBlocked = authModeBlocked
-      ? t("modelProviders.apiKey.authModeBlocked", { mode: card.configAuthMode ?? "" })
-      : blocked;
-    return [
-      {
-        id: "connect",
-        visible: view.canConnect(card) && card.profiles.length === 0,
-        disabled: mutationDisabled || view.loginBusy,
-        connectProvider: card.id,
-        label: t("modelProviders.login.action"),
-        onClick: () => view.onConnect(card),
-      },
-      {
-        id: "probe",
-        visible: hasProviderCredentials(card),
-        disabled: probeBusy || !view.canMutate || !view.probeAvailable,
-        title: !view.probeAvailable ? t("modelProviders.probe.unavailable") : blocked,
-        label: probeBusy ? t("modelProviders.probe.testing") : t("modelProviders.probe.test"),
-        onClick: () => view.onProbe(card.id, credentialProviders),
-      },
-      {
-        id: "set-key",
-        visible: !apiKeyUnsupported,
-        disabled: keyBusy || mutationDisabled || authModeBlocked,
-        title: keyBlocked,
-        label: t("modelProviders.apiKey.set"),
-        onClick: () => view.onOpenKeyEditor(card.id),
-      },
-      {
-        id: "remove-key",
-        visible:
-          card.hasConfigApiKey ||
-          card.profiles.some((profile) => profile.type === "api_key" && profile.logoutSupported),
-        disabled: keyBusy || mutationDisabled || authModeBlocked,
-        title: keyBlocked,
-        danger: true,
-        label: t("modelProviders.apiKey.remove"),
-        onClick: () => view.onRemoveKey(card.id, card.configKey ?? card.id),
-      },
-    ];
-  });
+function ProviderActions(props: ModelProvidersViewProps & { card: ModelProviderCard }) {
+  const authModeBlocked = () =>
+    Boolean(props.card.configAuthMode && props.card.configAuthMode !== "api-key");
+  const keyDisabled = () =>
+    Boolean(props.busy[`key:${props.card.id}`]) ||
+    configMutationDisabled(props) ||
+    authModeBlocked();
+  const keyTitle = () =>
+    authModeBlocked()
+      ? t("modelProviders.apiKey.authModeBlocked", { mode: props.card.configAuthMode ?? "" })
+      : (props.mutationBlockedReason ?? "");
   return (
     <div class="model-providers__card-actions">
-      <For each={actions()} keyed={(action) => action.id}>
-        {(action) => (
-          <Show when={action().visible}>
-            <button
-              class={action().danger ? "btn btn--sm danger" : "btn btn--sm"}
-              data-models-connect-provider={action().connectProvider ?? undefined}
-              disabled={action().disabled}
-              title={action().title ?? undefined}
-              onClick={() => action().onClick()}
-            >
-              {action().label}
-            </button>
-          </Show>
-        )}
-      </For>
+      <Show when={props.canConnect(props.card) && props.card.profiles.length === 0}>
+        <button
+          class="btn btn--sm"
+          data-models-connect-provider={props.card.id}
+          disabled={configMutationDisabled(props) || props.loginBusy}
+          onClick={() => props.onConnect(props.card)}
+        >
+          {t("modelProviders.login.action")}
+        </button>
+      </Show>
+      <Show when={hasProviderCredentials(props.card)}>
+        <button
+          class="btn btn--sm"
+          disabled={
+            Boolean(props.busy[`probe:${props.card.id}`]) ||
+            !props.canMutate ||
+            !props.probeAvailable
+          }
+          title={
+            !props.probeAvailable
+              ? t("modelProviders.probe.unavailable")
+              : (props.mutationBlockedReason ?? "")
+          }
+          onClick={() =>
+            props.onProbe(
+              props.card.id,
+              props.card.credentialProviderIds.length
+                ? props.card.credentialProviderIds
+                : [props.card.id],
+            )
+          }
+        >
+          {t(
+            props.busy[`probe:${props.card.id}`]
+              ? "modelProviders.probe.testing"
+              : "modelProviders.probe.test",
+          )}
+        </button>
+      </Show>
+      <Show when={props.card.apiKeySupported !== false}>
+        <button
+          class="btn btn--sm"
+          disabled={keyDisabled()}
+          title={keyTitle()}
+          onClick={() => props.onOpenKeyEditor(props.card.id)}
+        >
+          {t("modelProviders.apiKey.set")}
+        </button>
+      </Show>
+      <Show
+        when={
+          props.card.hasConfigApiKey ||
+          props.card.profiles.some(
+            (profile) => profile.type === "api_key" && profile.logoutSupported,
+          )
+        }
+      >
+        <button
+          class="btn btn--sm danger"
+          disabled={keyDisabled()}
+          title={keyTitle()}
+          onClick={() => props.onRemoveKey(props.card.id, props.card.configKey ?? props.card.id)}
+        >
+          {t("modelProviders.apiKey.remove")}
+        </button>
+      </Show>
     </div>
   );
 }
 
-function ProviderRow(props: { card: ModelProviderCard; view: ModelProvidersViewProps }) {
+function ProviderRow(props: ModelProvidersViewProps & { card: ModelProviderCard }) {
   const card = () => props.card;
   const models = () => modelsText(card());
-  const message = () => props.view.messages[`key:${card().id}`] ?? props.view.messages[card().id];
+  const message = () => props.messages[`key:${card().id}`] ?? props.messages[card().id];
   return (
     <div
       class="settings-row settings-row--stacked model-providers__row"
@@ -369,36 +369,32 @@ function ProviderRow(props: { card: ModelProviderCard; view: ModelProvidersViewP
           {renderProviderStatus(card())}
         </div>
       </div>
-      {card().profiles.length > 0 && props.view.canViewProfiles ? (
+      {card().profiles.length > 0 && props.canViewProfiles ? (
         <ProviderProfiles
-          {...props.view}
-          card={card()}
-          canMutate={props.view.canMutate && !props.view.configBusy}
-          onAddAccount={
-            props.view.canConnect(card()) ? () => props.view.onConnect(card()) : undefined
-          }
-          addAccountDisabled={props.view.loginBusy || configMutationDisabled(props.view)}
+          {...props}
+          canMutate={props.canMutate && !props.configBusy}
+          onAddAccount={props.canConnect(card()) ? () => props.onConnect(card()) : undefined}
+          addAccountDisabled={props.loginBusy || configMutationDisabled(props)}
         />
       ) : (
-        renderCredentialSummary(card(), props.view.credentialAgentLabel)
+        renderCredentialSummary(card(), props.credentialAgentLabel)
       )}
       <div
         class="model-providers__global-metrics"
-        aria-busy={props.view.supplementalLoading ? "true" : "false"}
+        aria-busy={props.supplementalLoading ? "true" : "false"}
       >
         <div class="model-providers__global-metrics-title">{t("modelProviders.globalUsage")}</div>
         {card().usage ? (
           renderProviderUsageDetails(card().usage!)
         ) : (
           <div class="model-providers__no-stats">
-            {t(props.view.supplementalLoading ? "common.loading" : "modelProviders.noStats")}
+            {t(props.supplementalLoading ? "common.loading" : "modelProviders.noStats")}
           </div>
         )}
         {renderLocalCost(card())}
       </div>
-      <ProviderActions card={card()} view={props.view} />{" "}
-      <KeyEditor card={card()} view={props.view} />
-      {renderProbeResult(props.view.probeResults[card().id])} {renderMutationMessage(message())}
+      <ProviderActions {...props} /> <KeyEditor {...props} />
+      {renderProbeResult(props.probeResults[card().id])} {renderMutationMessage(message())}
     </div>
   );
 }
@@ -498,10 +494,6 @@ function renderProviderNoticeRow(text: string) {
   );
 }
 
-export function renderModelProviders(props: ModelProvidersViewProps) {
-  return <ModelProviders {...props} />;
-}
-
 export function ModelProviders(props: ModelProvidersViewProps) {
   return (
     <Show
@@ -598,7 +590,7 @@ function ProviderAccess(props: ModelProvidersViewProps) {
           <For each={matchingCards()} keyed={(card) => card.id}>
             {(card) => (
               <SettingsGroup>
-                <ProviderRow card={card()} view={props} />
+                <ProviderRow {...props} card={card()} />
               </SettingsGroup>
             )}
           </For>
