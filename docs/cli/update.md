@@ -170,6 +170,11 @@ Check `openclaw update status` with the newly installed CLI to distinguish that
 exit failure from the recorded update outcome; the installed driver needs the fix
 before it performs its next update.
 
+Newer packages retain the published 2026.10.1 updater's cleanup entrypoints,
+including its original pending-disposer queue, so that first upgrade can finish
+normally. This compatibility covers the published package, not arbitrary
+development-build filenames.
+
 Updating from inside the installation keeps captured paths anchored to the
 invoking directory while the package is replaced. The updater keeps a valid
 working directory for background workers and restores the original directory
