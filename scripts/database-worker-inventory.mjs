@@ -1032,29 +1032,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/gateway/worker-environments/placement-move-intent.ts",
-    [
-      {
-        tier: "W",
-        operations: ["readWorkerPlacementMovesReadOnly"],
-        evidence:
-          "placement-lifecycle.worker.ts, placement-turn-claims.worker.ts and placement-read-projection.ts call the batch reader in workers. Native getPlacementMove uses another reader.",
-      },
-      {
-        tier: "W",
-        operations: [
-          "deleteExactMove",
-          "requireExactAttachedEnvironment",
-          "createPlacementMoveOps.completeSourceToLocal",
-          "createPlacementMoveOps.beginPlacementMove",
-          "createPlacementMoveOps.recordPlacementMoveError",
-        ],
-        evidence:
-          "Only placement-lifecycle.worker.ts invokes move mutations; placement-store.ts retains only the native getPlacementMove getter for final effect guards.",
-      },
-    ],
-  ],
-  [
     "src/gateway/worker-environments/placement-drain.ts",
     [
       {
@@ -1079,17 +1056,6 @@ const reviewedOperations = new Map([
         operations: ["assertSessionWorkspaceUnreserved"],
         evidence:
           "Dispatch in placement-lifecycle.worker.ts and the placement-turn-claims.ts claim path run in workers. Native placement-store.ts selects clear/wait/validate methods.",
-      },
-    ],
-  ],
-  [
-    "src/gateway/worker-environments/placement-read-projection.ts",
-    [
-      {
-        tier: "T1",
-        operations: ["readWorkerPlacementMoveAuthorityInDatabase"],
-        evidence:
-          "placement-store.readCurrentMoveAuthority serves native move-abandon, move-service recovery, and pending-result guards. Retained until native/SDK and foreign-writer revocation is fully owned at the next Plugin SDK major. Other projection operations remain worker-only.",
       },
     ],
   ],
@@ -1809,6 +1775,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/hooks/install-record-transaction.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["stageHookInstall", "stageHookInstall.rollback"],
+        evidence:
+          "CLI install/update only: cli/hook-install-persistence.ts calls stageHookInstall; hooks/update.ts reaches it only through cli/plugins-update-command.ts. Rollback belongs to that same offline install transaction.",
+      },
+    ],
+  ],
+  [
     "src/secrets/store/secret-store-hidden-github.ts",
     [
       {
@@ -2080,10 +2057,13 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/gateway/worker-environments/placement-move-intent.ts", // Move reads and mutations run only in placement lifecycle, turn-claim, and projection workers.
   "src/state/user-background.store.ts", // Background read/write workers; preference validation and profile merge/link/GitHub-sync also run in shared-state workers.
   "src/gateway/worker-environments/local-workspace-store.kernel.ts", // Projection read/write workers and worktree retirement worker only.
   "src/skills/library/import.kernel.ts", // Upload commands execute only in the shared-state writer.
   "src/skills/library/service.kernel.ts", // Library catalog and revision reads use the shared-state read registry.
+  "src/skills/workshop/changes.kernel.ts", // changes.worker.ts owns append/list SQL through the shared-state registry.
+  "src/skills/workshop/skill-usage.kernel.ts", // changes.worker.ts owns recordSkillUsageInDatabase; host imports are type-only.
   "src/config/sessions/conversation-delivery-store.kernel.ts", // Agent execution registry writes and session transcript worker reads only.
   "extensions/memory-core/src/memory-entry-origin-reads.ts", // Memory search worker origin-read commands only.
   "extensions/memory-core/src/memory-entry-origins-delete.ts", // Memory origin worker delete command only.

@@ -11,6 +11,7 @@ import type {
   SqliteWorkerAdmissionFactory,
   SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
+import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
@@ -167,6 +168,11 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
         readPluginStateObservationCache(identity, { ...typedCommand.input, key }),
       );
       if (cached.every((entry) => entry !== undefined)) {
+        const terminalFailure =
+          openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(databasePath);
+        if (terminalFailure) {
+          throw terminalFailure;
+        }
         operationStarted = true;
         context.admission.assertCurrent();
         assertStateDatabaseReadAllowed(databasePath);
