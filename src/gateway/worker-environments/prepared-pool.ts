@@ -18,6 +18,7 @@ import type {
   WorkerProviderIntentPreparationOptions,
 } from "./provider-intent.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
+import { readWorkerProfileSelection } from "./service-validation.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import { boundedWorkerError } from "./worker-error.js";
 
@@ -414,16 +415,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
           ...("source" in project
             ? { projectRepository: project }
             : { projectPath: project.root, projectCommit: project.baseCommit }),
-          ...(typeof source.profileSnapshot.machineClass === "string"
-            ? { machineClass: source.profileSnapshot.machineClass }
-            : {}),
-          ...(typeof source.profileSnapshot.os === "string"
-            ? { os: source.profileSnapshot.os }
-            : {}),
-          ...(source.profileSnapshot.executionMode === "worker-turn" ||
-          source.profileSnapshot.executionMode === "remote-exec"
-            ? { executionMode: source.profileSnapshot.executionMode }
-            : {}),
+          ...readWorkerProfileSelection(source.profileSnapshot),
           setupAuthorized:
             preparation.setupRecipe !== undefined && preparation.runSetupScript !== false,
           runSetupScript: preparation.runSetupScript,

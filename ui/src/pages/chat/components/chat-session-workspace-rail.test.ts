@@ -267,6 +267,77 @@ describe("session workspace path actions", () => {
     expect(mount.querySelector('button[aria-label="src/edited.ts"]')).not.toBeNull();
   });
 
+  it.each([
+    { filter: "changed", browser: true, restored: 1 },
+    { filter: "read", browser: true, restored: 1 },
+    { filter: "artifacts", browser: true, restored: 1 },
+    { filter: "all", browser: true, restored: 3 },
+    { filter: "all", browser: false, restored: 3 },
+  ] as const)(
+    "explains empty $filter search results (browser: $browser) and recovers",
+    (scenario) => {
+      const workspace = createWorkspace({
+        list: {
+          sessionKey: "agent:main:workspace",
+          files: [
+            { kind: "modified", name: "report.csv", path: "report.csv", missing: false },
+            { kind: "read", name: "report.md", path: "report.md", missing: false },
+          ],
+          artifacts: [{ id: "report", title: "Report", type: "file", download: { mode: "bytes" } }],
+          ...(scenario.browser ? { browser: { path: "", entries: [] } } : {}),
+        },
+      });
+      const mount = document.body.appendChild(document.createElement("div"));
+      const renderRows = () => render(renderSessionWorkspaceRail(workspace), mount);
+      workspace.onSearch = (search) => {
+        workspace.browserSearch = search;
+        if (workspace.list?.browser) {
+          workspace.list.browser.search = search;
+        }
+        renderRows();
+      };
+      workspace.onSetFilter = (filter) => {
+        workspace.filter = filter;
+        renderRows();
+      };
+      renderRows();
+      const search = mount.querySelector<HTMLInputElement>('input[type="search"]')!;
+      search.value = "NO-SUCH-FILE";
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      const label = scenario.filter === "all" ? "All" : `1 ${scenario.filter}`;
+      const chip = [...mount.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")].find(
+        (button) => button.textContent?.trim() === label,
+      );
+      assert(chip, "Expected the selected Files filter to remain available");
+      chip.click();
+      expect(mount.querySelectorAll(".chat-workspace-rail__file-name")).toHaveLength(0);
+      expect(mount.textContent?.match(/No matching files\./g)).toHaveLength(1);
+      expect(chip.getAttribute("aria-pressed")).toBe("true");
+
+      search.value = "";
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(mount.querySelectorAll(".chat-workspace-rail__file-name")).toHaveLength(
+        scenario.restored,
+      );
+      expect(mount.textContent).not.toContain("No matching files.");
+      expect(chip.getAttribute("aria-pressed")).toBe("true");
+
+      search.value = "NO-SUCH-FILE";
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      workspace.loading = true;
+      workspace.list = null;
+      renderRows();
+      expect(mount.textContent).not.toContain("No matching files.");
+      workspace.loading = false;
+      renderRows();
+      expect(mount.textContent).not.toContain("No matching files.");
+      workspace.error = "Files could not be loaded.";
+      renderRows();
+      expect(mount.textContent).toContain(workspace.error);
+      expect(mount.textContent).not.toContain("No matching files.");
+    },
+  );
+
   it.each(["  INVENTORY  REPORT  "])(
     "matches every Files group consistently for %j without collapsing internal spaces",
     (query) => {

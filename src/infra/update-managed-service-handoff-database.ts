@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs, { type BigIntStats, type Stats } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { root as openLockRoot, type Root } from "@openclaw/fs-safe/root";
 import { sql } from "kysely";
 import { z } from "zod";
@@ -13,11 +14,9 @@ import { requireDirectorySync, syncDirectorySync } from "./directory-durability.
 import { hasErrnoCode } from "./errno.js";
 import { acquireFileLockSyncWithRetry } from "./file-lock-sync.js";
 import {
-  createSqliteQueryCache,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
-  prepareSqliteQuerySync,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
@@ -50,7 +49,6 @@ export const leaseQueries = (db: HandoffDatabase) =>
 const HANDOFF_BUSY_TIMEOUT_MS = 5_000;
 const writeAdmissions = new AsyncLocalStorage<{
   owner: string;
-  active: boolean;
   deadline: number;
 }>();
 
@@ -242,20 +240,24 @@ function createMissingDatabaseFile(
   parentReceipt: HandoffDirectoryReceipt,
 ): void {
   let descriptor: number | undefined;
+  let privateFile: ReturnType<typeof createPrivateWindowsFile> | undefined;
   try {
-    descriptor =
-      process.platform === "win32"
-        ? createPrivateWindowsFile(databasePath)
-        : fs.openSync(
-            databasePath,
-            fs.constants.O_RDWR |
-              fs.constants.O_CREAT |
-              fs.constants.O_EXCL |
-              fs.constants.O_NOFOLLOW,
-            0o600,
-          );
+    if (process.platform === "win32") {
+      privateFile = createPrivateWindowsFile(databasePath);
+      descriptor = privateFile.fd;
+    } else {
+      descriptor = fs.openSync(
+        databasePath,
+        fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW,
+        0o600,
+      );
+    }
   } catch (error) {
-    if (!hasErrnoCode(error, "EEXIST")) {
+    const alreadyExists =
+      process.platform === "win32"
+        ? error instanceof FsSafeError && error.code === "already-exists"
+        : hasErrnoCode(error, "EEXIST");
+    if (!alreadyExists) {
       throw error;
     }
   }
@@ -280,7 +282,9 @@ function createMissingDatabaseFile(
     const directorySync = syncDirectorySync(parentReceipt);
     requireDirectorySync(directorySync, "Managed handoff lease directory");
   } finally {
-    if (descriptor !== undefined) {
+    if (privateFile) {
+      privateFile.close();
+    } else if (descriptor !== undefined) {
       fs.closeSync(descriptor);
     }
   }
@@ -373,18 +377,10 @@ export function createManagedHandoffLeaseDatabase(
     }
   };
   const existingTransactions = new WeakMap<HandoffDatabase, ExistingSqliteTransaction>();
-  const validationQuery = createSqliteQueryCache((db) =>
-    prepareSqliteQuerySync<void, LeaseTable>(db, () =>
-      leaseQueries(db).selectFrom("managed_update_handoffs").selectAll().limit(0),
-    ),
-  );
   const existingOptions = existingIdentity
     ? {
         busyTimeoutMs: HANDOFF_BUSY_TIMEOUT_MS,
         assertIdentity: assertCurrent,
-        validate: (db: HandoffDatabase) => {
-          validationQuery(db)();
-        },
       }
     : undefined;
   let readExisting: ReturnType<typeof createExistingSqliteRollbackReader> | undefined;
@@ -422,9 +418,7 @@ export function createManagedHandoffLeaseDatabase(
       writeLockRoot
         ? {
             lockRoot: writeLockRoot,
-            reentrantOwner: writeAdmissions.getStore()?.active
-              ? writeAdmissions.getStore()?.owner
-              : undefined,
+            reentrantOwner: writeAdmissions.getStore()?.owner,
             timeoutMs: HANDOFF_BUSY_TIMEOUT_MS,
           }
         : undefined,
@@ -530,14 +524,10 @@ export function createManagedHandoffLeaseDatabase(
       return accessDatabase(write, operation);
     }
     assertCurrent();
-    const inherited = writeAdmissions.getStore();
-    const admission = inherited?.active
-      ? inherited
-      : {
-          owner: randomUUID(),
-          active: true,
-          deadline: performance.now() + HANDOFF_BUSY_TIMEOUT_MS,
-        };
+    const admission = writeAdmissions.getStore() ?? {
+      owner: randomUUID(),
+      deadline: performance.now() + HANDOFF_BUSY_TIMEOUT_MS,
+    };
     const remaining = () => Math.max(0, Math.ceil(admission.deadline - performance.now()));
     // Wait before pinning a SHARED snapshot, which would block the current writer's commit.
     const release = acquireFileLockSyncWithRetry(databasePath, {
@@ -545,15 +535,9 @@ export function createManagedHandoffLeaseDatabase(
       reentrantOwner: admission.owner,
       timeoutMs: remaining(),
     });
-    try {
-      return runWithSqliteCleanup({ release }, "Managed handoff writer admission", () =>
-        writeAdmissions.run(admission, () => accessDatabase(write, operation, remaining())),
-      );
-    } finally {
-      if (admission !== inherited) {
-        admission.active = false;
-      }
-    }
+    return runWithSqliteCleanup({ release }, "Managed handoff writer admission", () =>
+      writeAdmissions.run(admission, () => accessDatabase(write, operation, remaining())),
+    );
   }
   return Object.assign(withDatabase, {
     forExisting(identity: ManagedUpdateLeaseDatabaseIdentity) {
@@ -575,7 +559,6 @@ export function createManagedHandoffLeaseDatabase(
       };
     },
     transact<T>(db: HandoffDatabase, operation: () => T, options: SqliteTransactionOptions): T {
-      assertCurrent();
       const transact: ExistingSqliteTransaction =
         existingTransactions.get(db) ??
         ((write, transactionOptions) =>
@@ -585,7 +568,6 @@ export function createManagedHandoffLeaseDatabase(
         return transact(
           () => {
             entered = true;
-            assertCurrent();
             return operation();
           },
           {

@@ -6,6 +6,7 @@ import type {
   SessionActorOutcome,
   SessionActorPhaseResults,
 } from "../../config/sessions/session-actor-contract.js";
+import { runSessionActorCommand } from "../../config/sessions/session-actor-scope.js";
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/session-transcript-writer-claim-error.js";
 import {
@@ -57,16 +58,9 @@ export async function appendSessionManagerActor(input: {
     },
   };
   assertCurrent();
-  const snapshot = actor.snapshot(authority);
   let captured: CommittedAppend | undefined;
   let outcome: SessionActorOutcome<AppendValue>;
   try {
-    const command = {
-      commandId: randomUUID(),
-      phaseId: "session-manager.append",
-      expected: snapshot?.version,
-      append,
-    };
     const observer = {
       committed: (value: CommittedAppend) => {
         captured = value;
@@ -75,17 +69,17 @@ export async function appendSessionManagerActor(input: {
         }
       },
     };
-    const execute = () =>
-      input.toolResult
+    outcome = await runSessionActorCommand<AppendValue>(actor, authority, (snapshot) => {
+      const command = {
+        commandId: randomUUID(),
+        phaseId: "session-manager.append",
+        expected: snapshot?.version,
+        append,
+      };
+      return input.toolResult
         ? actor.appendToolResult(command, authority, observer)
         : actor.appendTranscriptEvent(command, authority, observer);
-    outcome = await execute();
-    // The typed stale reply proves no mutation ran; a captured commit always wins.
-    if (outcome.kind === "stale-version" && !captured) {
-      assertCurrent();
-      command.expected = outcome.postimage.version;
-      outcome = await execute();
-    }
+    });
   } catch (cause) {
     if (!captured) {
       if (hasSqliteWorkerOutcomeUnknown(cause)) {
