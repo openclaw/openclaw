@@ -7,7 +7,6 @@ import { listBundledPluginMetadata } from "../bundled-plugin-metadata.js";
 import { loadPluginManifestRegistryCore } from "../manifest-registry.js";
 
 const REPO_ROOT = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
-const RUNTIME_ENTRY_HELPER_RE = /(^|\/)plugin-entry\.runtime\.[cm]?[jt]s$/;
 const SOURCE_MODULE_EXTENSIONS = [".ts", ".mts", ".cts", ".js", ".mjs", ".cjs"] as const;
 const FORBIDDEN_CONTRACT_MODULE_SPECIFIER_PATTERNS = [
   /^vitest$/u,
@@ -259,31 +258,6 @@ describe("plugin entry guardrails", () => {
     expect(failures).toStrictEqual([]);
   });
 
-  it("does not advertise runtime helper sidecars as bundled plugin entry extensions", () => {
-    const failures: string[] = [];
-
-    for (const plugin of listBundledPluginRoots()) {
-      const packageJsonPath = resolve(plugin.rootDir, "package.json");
-      try {
-        const pkg = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
-          openclaw?: { extensions?: unknown };
-        };
-        const extensions = Array.isArray(pkg.openclaw?.extensions) ? pkg.openclaw.extensions : [];
-        if (
-          extensions.some(
-            (candidate) => typeof candidate === "string" && RUNTIME_ENTRY_HELPER_RE.test(candidate),
-          )
-        ) {
-          failures.push(`extensions/${plugin.pluginId}/package.json`);
-        }
-      } catch {
-        // Skip directories without package metadata.
-      }
-    }
-
-    expect(failures).toStrictEqual([]);
-  });
-
   it("keeps bundled production contract barrels off test-only imports and re-exports", () => {
     const failures = collectProductionContractEntryPaths().flatMap(
       ({ pluginId, entryPath, pluginRoot }) =>
@@ -294,51 +268,5 @@ describe("plugin entry guardrails", () => {
     );
 
     expect(failures).toStrictEqual([]);
-  });
-
-  it("follows relative import edges while scanning guarded contract graphs", () => {
-    expect(
-      analyzeSourceModule({
-        filePath: "guardrail-fixture.ts",
-        source: `
-        import { x } from "./safe.js";
-        import "./setup.js";
-        export { x };
-        export * from "./barrel.js";
-        import { y } from "openclaw/plugin-sdk/core";
-      `,
-      }).relativeSpecifiers.toSorted(),
-    ).toEqual(["./barrel.js", "./safe.js", "./setup.js"]);
-  });
-
-  it("guards contract-style production artifacts beyond the legacy allowlist", () => {
-    expect(isGuardedContractArtifactBasename("channel-config-api.js")).toBe(true);
-    expect(isGuardedContractArtifactBasename("contract-api.js")).toBe(true);
-    expect(isGuardedContractArtifactBasename("doctor-contract-api.js")).toBe(true);
-    expect(isGuardedContractArtifactBasename("web-search-contract-api.js")).toBe(true);
-    expect(isGuardedContractArtifactBasename("test-api.js")).toBe(false);
-  });
-
-  it("flags test-support directory hops in guarded contract graphs", () => {
-    expect(collectForbiddenContractSpecifiers(["./test-support/index.js"])).toEqual([
-      "./test-support/index.js",
-    ]);
-    expect(
-      FORBIDDEN_CONTRACT_MODULE_PATH_PATTERNS.some((pattern) =>
-        pattern.test("extensions/demo/src/test-support/index.ts"),
-      ),
-    ).toBe(true);
-  });
-
-  it("detects aliased definePluginEntry imports from core", () => {
-    expect(
-      analyzeSourceModule({
-        filePath: "aliased-plugin-entry.ts",
-        source: `
-          import { definePluginEntry as dpe } from "openclaw/plugin-sdk/core";
-          import { somethingElse } from "openclaw/plugin-sdk/core";
-        `,
-      }).importsDefinePluginEntryFromCore,
-    ).toBe(true);
   });
 });

@@ -2963,7 +2963,6 @@ const pluginSdkEntryOwners = [
   "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
   "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
   "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
-  "src/plugins/contracts/extension-package-project-boundaries.test.ts",
   "plugin-sdk-surface-report",
   "build-all",
   releaseCheck,

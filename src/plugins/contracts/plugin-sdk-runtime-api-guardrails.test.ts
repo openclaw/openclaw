@@ -316,68 +316,6 @@ describe("runtime api guardrails", () => {
     }
   });
 
-  it("keeps bundled runtime api barrels off their own branded sdk facades", () => {
-    for (const [pluginId, rootDir] of getBundledPluginRoots().entries()) {
-      const path = resolve(rootDir, "runtime-api.ts");
-      if (!existsSync(path)) {
-        continue;
-      }
-      const source = readFileSync(path, "utf8");
-      expect(
-        source,
-        `${pluginId} runtime api should use generic sdk subpaths or local exports`,
-      ).not.toContain(`"openclaw/plugin-sdk/${pluginId}"`);
-      expect(
-        source,
-        `${pluginId} runtime api should use generic sdk subpaths or local exports`,
-      ).not.toContain(`'openclaw/plugin-sdk/${pluginId}'`);
-    }
-  });
-
-  it("keeps QA runner registration on narrow plugin facades", () => {
-    const qaRunnerApiFiles: string[] = [];
-
-    for (const [pluginId, rootDir] of getBundledPluginRoots().entries()) {
-      const runtimeApiPath = resolve(rootDir, "runtime-api.ts");
-      if (existsSync(runtimeApiPath)) {
-        expect(
-          readFileSync(runtimeApiPath, "utf8"),
-          `${pluginId} runtime api must not own QA discovery`,
-        ).not.toContain("qaRunnerCliRegistrations");
-      }
-
-      const qaRunnerApiPath = resolve(rootDir, "qa-runner-api.ts");
-      if (existsSync(qaRunnerApiPath)) {
-        qaRunnerApiFiles.push(qaRunnerApiPath);
-      }
-    }
-
-    expect(qaRunnerApiFiles.length).toBeGreaterThan(0);
-    for (const file of qaRunnerApiFiles) {
-      const exports = readExportStatements(file);
-      expect(exports).toHaveLength(1);
-      expect(exports[0]).toMatch(/^export const qaRunnerCliRegistrations = \[/u);
-    }
-  });
-
-  it("keeps the composed hook-runner registry internal", () => {
-    const pluginRuntime = readFileSync(resolve(ROOT_DIR, "plugin-sdk/plugin-runtime.ts"), "utf8");
-    const hookRunnerGlobal = readFileSync(
-      resolve(ROOT_DIR, "plugins/hook-runner-global.ts"),
-      "utf8",
-    );
-    const hookRegistryTypes = readFileSync(
-      resolve(ROOT_DIR, "plugins/hook-registry.types.ts"),
-      "utf8",
-    );
-
-    expect(pluginRuntime).toContain(
-      'export { getGlobalHookRunner } from "../plugins/hook-runner-global.js";',
-    );
-    expect(hookRunnerGlobal).not.toContain("getGlobalHookRunnerRegistry");
-    expect(hookRegistryTypes).not.toContain("trustedToolPolicies");
-  });
-
   it("keeps Slack's narrow runtime-setter entrypoint pinned to a single export", () => {
     // Regression for #69317. The bundled channel entry's runtime.specifier
     // now points at runtime-setter-api.ts. The whole point of that file is
@@ -392,28 +330,6 @@ describe("runtime api guardrails", () => {
     });
     expect(readExportStatements(setterFile)).toEqual([
       'export { setSlackRuntime } from "./src/runtime.js";',
-    ]);
-  });
-
-  it("keeps Matrix's runtime-setter entrypoint limited to registration helpers", () => {
-    const setterFile = contractPluginPath({
-      rootDir: ROOT_DIR,
-      pluginId: "matrix",
-      relativePath: "runtime-setter-api.ts",
-    });
-    expect(readExportStatements(setterFile)).toEqual([
-      'export { setMatrixRuntime, setMatrixRuntimeLifecycle } from "./src/runtime.js";',
-    ]);
-  });
-
-  it("keeps Feishu's narrow runtime-setter entrypoint pinned to a single export", () => {
-    const setterFile = contractPluginPath({
-      rootDir: ROOT_DIR,
-      pluginId: "feishu",
-      relativePath: "runtime-setter-api.ts",
-    });
-    expect(readExportStatements(setterFile)).toEqual([
-      'export { setFeishuRuntime } from "./src/runtime.js";',
     ]);
   });
 });

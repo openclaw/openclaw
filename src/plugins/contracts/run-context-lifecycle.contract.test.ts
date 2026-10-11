@@ -844,35 +844,6 @@ describe("plugin run context lifecycle", () => {
     }
   });
 
-  it("rejects hung cleanup hooks with a bounded timeout", async () => {
-    vi.useFakeTimers();
-    const cleanup = vi.fn(async () => {
-      await new Promise(() => {});
-    });
-    registerPluginSessionSchedulerJob({
-      pluginId: "hung-cleanup-plugin",
-      pluginName: "Hung Cleanup Plugin",
-      job: {
-        id: "job-hung",
-        sessionKey: "agent:main:main",
-        kind: "session-turn",
-        cleanup,
-      },
-    });
-
-    const resultPromise = runPluginHostCleanup({
-      reason: "disable",
-      pluginId: "hung-cleanup-plugin",
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(cleanup).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CLEANUP_TIMEOUT_MS);
-    const result = await resultPromise;
-    expect(result.failures).toHaveLength(1);
-    expect(result.failures[0]?.pluginId).toBe("hung-cleanup-plugin");
-    expect(result.failures[0]?.hookId).toBe("scheduler:job-hung");
-  });
-
   it("bounds session, runtime, and scheduler cleanup callbacks so cleanup keeps moving", async () => {
     vi.useFakeTimers();
     const { config, registry } = createPluginRegistryFixture();

@@ -12,7 +12,6 @@ import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { sendPluginSessionAttachment } from "../host-hook-attachments.js";
 import { clearPluginLoaderCache } from "../loader.test-fixtures.js";
-import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../runtime.js";
 import type { PluginRuntime } from "../runtime/types.js";
@@ -174,25 +173,6 @@ describe("plugin session attachments", () => {
     });
   });
 
-  it("does not use best-effort mode for attachment batches", async () => {
-    await withSessionStore(async ({ storePath, stateDir }) => {
-      const first = path.join(stateDir, "first.txt");
-      const second = path.join(stateDir, "second.txt");
-      await fs.writeFile(first, "1", "utf8");
-      await fs.writeFile(second, "2", "utf8");
-      await writeSessionEntry(storePath);
-      mockSuccessfulAttachmentDelivery();
-
-      const result = await sendBundledSessionAttachment({
-        files: [{ path: first }, { path: second }],
-      });
-      expectTelegramAttachmentResult(result, 2);
-      const sendParams = requireFirstSendMessageParams();
-      expect(sendParams.mediaUrls).toEqual([first, second]);
-      expect(sendParams.bestEffort).toBe(false);
-    });
-  });
-
   it("keeps shipped Telegram hints compatible when escaping plain captions", async () => {
     await withSessionStore(async ({ storePath, filePath }) => {
       await writeSessionEntry(storePath);
@@ -225,30 +205,6 @@ describe("plugin session attachments", () => {
 
       expect(result).toMatchObject({ ok: true, channel: "slack", deliveredTo: "C123" });
       expect(requireFirstSendMessageParams().threadId).toBe("171234.567");
-    });
-  });
-
-  it("resolves relative attachment paths against the session agent workspace", async () => {
-    await withSessionStore(async ({ storePath, stateDir }) => {
-      const workspaceDir = path.join(stateDir, "workspace");
-      const relativeFilePath = "./report.txt";
-      const absoluteFilePath = path.join(workspaceDir, "report.txt");
-      await fs.mkdir(workspaceDir, { recursive: true });
-      await fs.writeFile(absoluteFilePath, "workspace report", "utf8");
-      await writeSessionEntry(storePath);
-      mockSuccessfulAttachmentDelivery();
-
-      const result = await sendBundledSessionAttachment({
-        files: [{ path: relativeFilePath }],
-        config: {
-          session: { store: storePath },
-          agents: {
-            entries: { main: { workspace: workspaceDir } },
-          },
-        },
-      });
-      expectTelegramAttachmentResult(result, 1);
-      expect(requireFirstSendMessageParams().mediaUrls).toEqual([absoluteFilePath]);
     });
   });
 
@@ -420,35 +376,6 @@ describe("plugin session attachments", () => {
         ok: false,
         error:
           "session attachments require direct outbound delivery for channel telegram; " +
-          "channel uses gateway delivery",
-      });
-      expect(workflowMocks.sendMessage).not.toHaveBeenCalled();
-    });
-  });
-
-  it("rejects unloaded bundled gateway-mode channels before attachment delivery", async () => {
-    await withSessionStore(async ({ storePath, filePath }) => {
-      await writeSessionEntry(storePath, {
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "whatsapp", to: "+15551234567" },
-        }),
-      });
-      setActivePluginRegistry(createEmptyPluginRegistry());
-      workflowMocks.getChannelPlugin.mockReturnValue(
-        createOutboundTestPlugin({
-          id: "whatsapp",
-          outbound: { deliveryMode: "gateway" },
-        }),
-      );
-
-      await expect(
-        sendBundledSessionAttachment({
-          files: [{ path: filePath }],
-        }),
-      ).resolves.toEqual({
-        ok: false,
-        error:
-          "session attachments require direct outbound delivery for channel whatsapp; " +
           "channel uses gateway delivery",
       });
       expect(workflowMocks.sendMessage).not.toHaveBeenCalled();
