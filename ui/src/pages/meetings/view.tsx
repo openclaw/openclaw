@@ -216,7 +216,7 @@ function MeetingRow(props: TranscriptsViewProps & { entry: TranscriptSessionSumm
               hour: "2-digit",
               minute: "2-digit",
             })}
-          </time>
+          </time>{" "}
           {props.entry.active ? (
             <span class="meetings-live">{t("meetings.inProgress")}</span>
           ) : duration() ? (

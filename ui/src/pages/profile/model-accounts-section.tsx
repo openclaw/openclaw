@@ -52,7 +52,7 @@ function AccountRow(props: {
     <SettingsRow
       title={
         <>
-          <span class="model-accounts__id">{label()}</span>
+          <span class="model-accounts__id">{label()}</span>{" "}
           <span class="model-accounts__provider">{provider()}</span>
         </>
       }

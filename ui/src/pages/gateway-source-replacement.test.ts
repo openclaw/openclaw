@@ -797,6 +797,4 @@ describe("gateway source replacement across reconnect with a reused client", () 
     expect(request).toHaveBeenCalledWith("skills.status", { agentId: "fresh" });
     expect(request).not.toHaveBeenCalledWith("skills.status", { agentId: "stale" });
   });
-
-
 });

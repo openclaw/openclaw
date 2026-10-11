@@ -261,7 +261,9 @@ function PersonalInstructionsContent() {
                     {t("profilePage.personalInstructions.guidance", {
                       count: String(view().draft.length),
                     })}
-                    {view().file?.missing ? t("profilePage.personalInstructions.missing") : null}
+                    {view().file?.missing
+                      ? ` ${t("profilePage.personalInstructions.missing")}`
+                      : null}
                   </div>
                   <Show when={view().draft.length > 4000}>
                     <div role="alert">{t("profilePage.personalInstructions.tooLong")}</div>
