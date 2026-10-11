@@ -8,6 +8,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   OpenAsyncKeyedStoreOptions,
   OpenKeyedStoreOptions,
+  PluginStateActionAuthority,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
@@ -169,7 +170,10 @@ describe("Reef conversation directory", () => {
         ...options,
         env: { OPENCLAW_STATE_DIR: stateDir },
       });
-    runtime.state.openKeyedStoreV2 = <T>(options: OpenAsyncKeyedStoreOptions, authority) =>
+    runtime.state.openKeyedStoreV2 = <T>(
+      options: OpenAsyncKeyedStoreOptions,
+      authority?: PluginStateActionAuthority,
+    ) =>
       createPluginStateKeyedStoreV2ForTests<T>(
         "reef",
         { ...options, env: { OPENCLAW_STATE_DIR: stateDir } },
@@ -274,7 +278,10 @@ describe("Reef gateway account ownership", () => {
         ...options,
         env: { OPENCLAW_STATE_DIR: stateDir },
       });
-    runtime.state.openKeyedStoreV2 = <T>(options: OpenAsyncKeyedStoreOptions, authority) =>
+    runtime.state.openKeyedStoreV2 = <T>(
+      options: OpenAsyncKeyedStoreOptions,
+      authority?: PluginStateActionAuthority,
+    ) =>
       createPluginStateKeyedStoreV2ForTests<T>(
         "reef",
         { ...options, env: { OPENCLAW_STATE_DIR: stateDir } },

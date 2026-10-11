@@ -4,6 +4,7 @@ import path from "node:path";
 import type {
   OpenAsyncKeyedStoreOptions,
   OpenKeyedStoreOptions,
+  PluginStateActionAuthority,
   PluginStateKeyedStore,
   PluginStateOperation,
   PluginStateOperationDefinitions,
@@ -44,7 +45,10 @@ export function createRuntime(stateDir: string, registrationHost: "worker" | "le
     }
     return store;
   };
-  runtime.state.openKeyedStoreV2 = <T>(options: OpenAsyncKeyedStoreOptions, authority) =>
+  runtime.state.openKeyedStoreV2 = <T>(
+    options: OpenAsyncKeyedStoreOptions,
+    authority?: PluginStateActionAuthority,
+  ) =>
     createPluginStateKeyedStoreV2ForTests<T>(
       "reef",
       { ...options, env: { OPENCLAW_STATE_DIR: stateDir } },
