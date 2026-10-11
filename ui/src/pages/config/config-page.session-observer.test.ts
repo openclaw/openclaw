@@ -140,6 +140,55 @@ describe("ConfigPage navigation", () => {
 
   describe("ConfigPage route selections", () => {
     it.each([
+      { pageId: "communications", section: "transcripts" },
+      { pageId: "ai-agents", section: "session" },
+    ] as const)(
+      "opens the $section advanced editor for a matching hash",
+      async ({ pageId, section }) => {
+        const base = routeContext();
+        const config = { [section]: { enabled: true } };
+        const context: ApplicationContext = {
+          ...base,
+          runtimeConfig: {
+            ...base.runtimeConfig,
+            state: {
+              ...base.runtimeConfig.state,
+              configForm: config,
+              configSchema: {
+                type: "object",
+                properties: {
+                  [section]: { type: "object", properties: { enabled: { type: "boolean" } } },
+                },
+              },
+            },
+          },
+        };
+        const routeData = {
+          pathname: `/settings/${pageId}`,
+          search: `?section=${section}`,
+          hash: "",
+          section,
+          advanced: false,
+          tab: null,
+          targetBlockId: null,
+        };
+        const view = mountConfigPage(context, { pageId, routeData });
+        const editor = view.container.querySelector(`#config-section-${section}`)!;
+        const disclosure = editor.closest("details")!;
+        expect(disclosure.open).toBe(false);
+        view.update({
+          routeData: {
+            ...routeData,
+            hash: `#config-section-${section}`,
+            targetBlockId: `config-section-${section}`,
+          },
+        });
+        await waitForSolid(() => expect(disclosure.open).toBe(true));
+        expect(view.container.querySelector(`#config-section-${section}`)).toBe(editor);
+      },
+    );
+
+    it.each([
       { profile: undefined, writes: 1 },
       { profile: "full", writes: 0 },
     ])("Security Full preserves an explicit choice from $profile", async ({ profile, writes }) => {

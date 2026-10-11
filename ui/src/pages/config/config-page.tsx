@@ -107,7 +107,10 @@ function ConfigBody(props: {
           >
             <SessionStorageSettings
               mutationDisabled={props.controller.mutationDisabled}
-              advancedExpanded={props.config.forceAdvancedSection === "session"}
+              advancedExpanded={
+                props.config.forceAdvancedSection === "session" ||
+                props.routeData?.targetBlockId === "config-section-session"
+              }
               buildEditor={() => editor}
             />
           </Show>
@@ -115,7 +118,10 @@ function ConfigBody(props: {
       >
         <MeetingCaptureSettings
           mutationDisabled={props.controller.mutationDisabled}
-          advancedExpanded={props.config.forceAdvancedSection === "transcripts"}
+          advancedExpanded={
+            props.config.forceAdvancedSection === "transcripts" ||
+            props.routeData?.targetBlockId === "config-section-transcripts"
+          }
           buildEditor={() => editor}
         />
       </Show>
