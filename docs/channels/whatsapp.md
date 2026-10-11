@@ -419,6 +419,17 @@ A liveness check sent to your own number can therefore become agent input with `
     Per-account override: `channels.whatsapp.accounts.<id>.sendReadReceipts`. Self-chat safeguards skip read receipts even when globally enabled (see [Self-chat behavior](/channels/whatsapp#personal-number-and-self-chat-behavior)).
 
   </Accordion>
+
+  <Accordion title="Offline catch-up">
+    By default, messages that WhatsApp queued while the gateway was disconnected are skipped on first connect (only a short grace window and the reconnect catch-up window are processed). To process the whole offline queue:
+
+    ```json5
+    { channels: { whatsapp: { catchUpOfflineMessages: true } } }
+    ```
+
+    Per-account override: `channels.whatsapp.accounts.<id>.catchUpOfflineMessages`. Caught-up messages go through the normal access policy and can trigger replies. Full history sync is never processed.
+
+  </Accordion>
 </AccordionGroup>
 
 ### Delivery, chunking, and media

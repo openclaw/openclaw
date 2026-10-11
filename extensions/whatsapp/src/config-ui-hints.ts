@@ -20,6 +20,10 @@ export const whatsAppChannelConfigUiHints = {
     label: "WhatsApp Self-Phone Mode",
     help: "Same-phone setup (bot uses your personal WhatsApp number).",
   },
+  catchUpOfflineMessages: {
+    label: "WhatsApp Offline Catch-Up",
+    help: "Process messages that WhatsApp queued while the gateway was disconnected, instead of skipping them on connect (default: false). They go through the normal access policy and can trigger replies.",
+  },
   direct: {
     label: "WhatsApp Direct Chat Overrides",
     help: 'Per-conversation overrides keyed by WhatsApp DM id. Applied after a DM is already admitted by dmPolicy; "*" supplies a default without admitting anyone.',

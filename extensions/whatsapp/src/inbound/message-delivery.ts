@@ -93,6 +93,8 @@ type WhatsAppMessageDeliveryOptions = {
   debounceMs?: number;
   /** Bounded reconnect window for offline append auto-replies. */
   appendReplyWindow?: WhatsAppAppendReplyWindow;
+  /** Process offline-queued appends of any age instead of skipping them on connect. */
+  catchUpOfflineMessages?: boolean;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: WebInboundCallbackMessage) => boolean;
   onPendingWorkChanged?: (pendingWorkCount: number, at?: number) => void;
@@ -201,7 +203,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
   });
 
   const shouldSkipStaleAppend = (msg: WAMessage, upsertType: string | undefined): boolean => {
-    if (upsertType !== "append") {
+    if (upsertType !== "append" || options.catchUpOfflineMessages === true) {
       return false;
     }
     const APPEND_RECENT_GRACE_MS = 60_000;
