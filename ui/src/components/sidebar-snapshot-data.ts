@@ -46,8 +46,6 @@ export const sidebarSnapshotSchema = z.object({
   roster: bootRosterSchema.nullable(),
   mode: z.enum(["chip", "roster"]),
   navigationView: z.enum(["pages", "sessions", "online"]),
-  navigationScope: z.enum(["mine", "all"]),
-  scopesEquivalent: z.boolean(),
   pages: session.array(),
   pageScopeId: z.string().nullable(),
   pinnedSessions: session.array(),

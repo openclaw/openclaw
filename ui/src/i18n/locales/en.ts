@@ -1635,8 +1635,6 @@ export const en: TranslationMap & {
     more: "More",
     home: "Home",
     pages: "Pages",
-    scopeMine: "Mine",
-    scopeAll: "All",
     pin: "Pin",
     unpin: "Unpin",
     customize: "Edit pinned items",
@@ -3373,6 +3371,7 @@ export const en: TranslationMap & {
       dropOpenHere: "Open here",
     },
     sidebar: {
+      mySessions: "My sessions",
       updateMacAndGateway: "Update Mac app + Gateway",
       updateGateway: "Update Gateway",
       serverUpdatedTitle: "Server updated",
