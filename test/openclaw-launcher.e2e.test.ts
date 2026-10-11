@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveOpenClawCompileCacheDirectory } from "../node-compile-cache.mjs";
 import { parseNodeReleaseVersion } from "../node-version.mjs";
 import {
   inspectManagedProcessGroup,
@@ -1525,8 +1526,21 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
       const fixtureRoot = await makeLauncherFixture(fixtures);
       const cache = path.join(fixtureRoot, "cache");
       const retired = path.join(cache, "openclaw", "old", "build-retired");
+      const expiredEntry = path.join(retired, "sentinel");
       await fs.mkdir(retired, { recursive: true });
-      await fs.writeFile(path.join(retired, "sentinel"), "preserve restricted cache");
+      await fs.writeFile(expiredEntry, "preserve restricted cache");
+      const expired = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+      const directory = resolveOpenClawCompileCacheDirectory({
+        installRoot: fixtureRoot,
+        env: { NODE_COMPILE_CACHE: cache },
+      });
+      if (!directory) {
+        throw new Error("Fixture compile-cache directory must be available");
+      }
+      // Seed the namespace before aging its maintenance timestamp.
+      await fs.mkdir(directory, { recursive: true });
+      await fs.utimes(expiredEntry, expired, expired);
+      await fs.utimes(path.join(cache, "openclaw"), expired, expired);
       const preload = path.join(fixtureRoot, "observe-maintenance.mjs");
       await fs.writeFile(
         preload,
@@ -1579,7 +1593,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
           cwd: fixtureRoot,
           env: launcherEnv({
             NODE_OPTIONS: undefined,
-            NODE_COMPILE_CACHE: cache,
+            NODE_COMPILE_CACHE: directory,
             OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: "1",
           }),
           encoding: "utf8",
@@ -1590,7 +1604,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
       expect(result.status, result.stderr).toBe(0);
       if (mode === "unrestricted") {
         expect(JSON.parse(result.stdout).maintenanceStarts).toBeGreaterThan(0);
-        await expect(fs.stat(retired)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.stat(expiredEntry)).rejects.toMatchObject({ code: "ENOENT" });
       } else {
         expect(JSON.parse(result.stdout).maintenanceStarts).toBe(0);
         expect(await fs.readFile(path.join(retired, "sentinel"), "utf8")).toBe(
@@ -1656,8 +1670,11 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
       const host = path.join(fixtureRoot, "host.mjs");
       await fs.writeFile(host, "");
       const cache = path.join(fixtureRoot, "cache");
-      const retired = path.join(cache, "openclaw", "old", "build-retired");
-      await fs.mkdir(retired, { recursive: true });
+      const directory = resolveOpenClawCompileCacheDirectory({
+        installRoot: fixtureRoot,
+        env: { NODE_COMPILE_CACHE: cache },
+      });
+      expect(directory).toBeDefined();
       const preloads = ["--import", pathToFileURL(preload).href, "--import", "openclaw/cli-entry"];
       const result = spawnSync(
         testNodeExecPath,
@@ -1666,7 +1683,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
           cwd: fixtureRoot,
           env: launcherEnv({
             NODE_OPTIONS: source === "NODE_OPTIONS" ? preloads.join(" ") : undefined,
-            NODE_COMPILE_CACHE: cache,
+            NODE_COMPILE_CACHE: directory,
             OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: "1",
           }),
           encoding: "utf8",
@@ -1680,7 +1697,6 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
         "maintenance:true",
         "entry:true",
       ]);
-      await expect(fs.stat(retired)).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
 
