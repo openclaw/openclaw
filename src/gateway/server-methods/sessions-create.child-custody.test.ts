@@ -587,15 +587,7 @@ describe("hosted creation transfers accepted child input", () => {
     },
   );
 
-  it.each([
-    "source",
-    "host",
-    "signal",
-    "gateway",
-    "ACL",
-    "lifecycle",
-    "replacement",
-  ] as const)(
+  it.each(["source", "host", "signal", "gateway", "ACL", "lifecycle", "replacement"] as const)(
     "retains the original %s boundary after child ACK and parent closure",
     async (change) => {
       await using fixture = await createHostedChildFixture();
