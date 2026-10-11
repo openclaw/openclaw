@@ -70,9 +70,10 @@ import {
   writeSessionEntrySnapshots,
 } from "./session-entry-snapshots.js";
 import type { SessionEntryWindowFacts } from "./session-entry-window.types.js";
-import type {
-  SessionEntryWritePostimage,
-  SessionEntryWritePostimages,
+import {
+  createSessionEntryWriteRow,
+  type SessionEntryWritePostimage,
+  type SessionEntryWritePostimages,
 } from "./session-entry-write-postimage.js";
 import { resolveSessionPublicShare } from "./session-public-share.js";
 import { readStagedSessionTranscriptUpdatedAt } from "./session-transcript-authority.js";
@@ -740,22 +741,14 @@ export function writeSessionEntry(
           persisted.snapshotsChanged ? persisted.snapshots : undefined,
         )
       : undefined;
-  const snapshotJson = new Map(
-    persisted.snapshots.map(({ field, valueJson }) => [field, valueJson]),
-  );
   const row = persistedEntry
-    ? {
-        ...canonicalPreviousRow,
-        ...sessionNode,
-        ...(persisted.snapshotsChanged
-          ? {
-              session_diff_baseline_json: snapshotJson.get("sessionDiffBaseline") ?? null,
-              skills_snapshot_json: snapshotJson.get("skillsSnapshot") ?? null,
-              system_prompt_report_json: snapshotJson.get("systemPromptReport") ?? null,
-            }
-          : {}),
+    ? createSessionEntryWriteRow({
+        previous: canonicalPreviousRow,
+        node: sessionNode,
+        snapshots: persisted.snapshots,
+        snapshotsChanged: persisted.snapshotsChanged,
         window: written.window.postimage,
-      }
+      })
     : undefined;
   if (actor && persistedEntry && row) {
     actor.entryRows.set(sessionKey, {
