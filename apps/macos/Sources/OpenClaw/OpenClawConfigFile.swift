@@ -75,7 +75,10 @@ enum OpenClawConfigFile {
     static func ensureAppHostedGatewayAuth(environment: [String: String]) throws {
         try self.fileLock.withLock {
             let root = self.loadDictIfReadable()
-            let decision = AppHostedGatewayAuth.decision(root: root, environment: environment)
+            let files = AppHostedGatewayAuth.trustedDotEnvURLs(environment: environment)
+                .map { $0.map(self.readAuthDotEnv) } ?? [.unreadable]
+            let decision = AppHostedGatewayAuth.decision(
+                root: root, environment: environment, trustedDotEnvFiles: files)
             guard decision == .persist else { return }
             let token = try AppHostedGatewayAuth.generateToken()
             let output = AppHostedGatewayAuth.persisting(token: token, in: root ?? [:])
@@ -83,6 +86,24 @@ enum OpenClawConfigFile {
                 throw GatewayHostingError(message: "Could not save the local Gateway authentication token. " +
                     "Check that \(OpenClawPaths.configURL.path) is writable, then retry setup.")
             }
+        }
+    }
+
+    private static func readAuthDotEnv(_ url: URL) -> AppHostedGatewayAuth.DotEnvFile {
+        var info = stat()
+        if lstat(url.path, &info) != 0 { return errno == ENOENT ? .missing : .unreadable }
+        guard stat(url.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else { return .unreadable }
+        do {
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            // Match the Gateway's 1 MiB bound; anything we cannot inspect keeps existing auth.
+            let data = try handle.read(upToCount: 1024 * 1024 + 1) ?? Data()
+            guard data.count <= 1024 * 1024,
+                  let contents = String(data: data, encoding: .utf8)
+            else { return .unreadable }
+            return .contents(contents)
+        } catch {
+            return .unreadable
         }
     }
 

@@ -35,6 +35,12 @@ references, and other authentication modes are preserved. If the token cannot
 be saved, setup stops with a retryable error. This also applies to a local
 Gateway hosted alongside a remote primary connection.
 
+The app also preserves remote fallback credentials, configuration includes,
+trusted dotenv credentials, and enabled login-shell environment imports.
+It leaves authentication unchanged when a credential source is unreadable or
+cannot be resolved safely. Trusted dotenv files are the profile's `.env` and,
+for the default state directory, `~/.config/openclaw/gateway.env`.
+
 The app first copies its runtime to `<state>/runtime/<runtimeBuildId>/`, where
 `<state>` is `~/.openclaw` or `~/.openclaw-<profile>`. Copies use one APFS
 directory clone when available, falling back to a file copy, and are published atomically after provenance and
