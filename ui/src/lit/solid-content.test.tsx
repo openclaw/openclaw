@@ -197,7 +197,7 @@ describe("Lit and Solid content boundaries", () => {
     expect(view.container.querySelector("article")).toBeNull();
   });
 
-  it("updates a stable Solid component through Lit without resetting focus or local state", () => {
+  it("updates a stable Solid component through Lit without resetting focus or local state", async () => {
     const disposed = vi.fn();
     function Counter(props: { label: string }) {
       const [count, setCount] = createSignal(0);
@@ -225,6 +225,7 @@ describe("Lit and Solid content boundaries", () => {
       expect(disposed).not.toHaveBeenCalled();
 
       render(nothing, container);
+      await Promise.resolve();
       expect(disposed).toHaveBeenCalledOnce();
       expect(button.isConnected).toBe(false);
       render(nothing, container);
@@ -235,7 +236,7 @@ describe("Lit and Solid content boundaries", () => {
     }
   });
 
-  it("mounts and reconnects Solid content introduced by a Lit content effect", () => {
+  it("mounts and reconnects Solid content introduced by a Lit content effect", async () => {
     const disposed = vi.fn();
     function Counter(props: { label: string }) {
       const [count, setCount] = createSignal(0);
@@ -266,13 +267,91 @@ describe("Lit and Solid content boundaries", () => {
 
     setPresented(false);
     flush();
-    expect(disposed).toHaveBeenCalledOnce();
+    await Promise.resolve();
+    expect(disposed).not.toHaveBeenCalled();
     setPresented(true);
     flush();
-    expect(view.getByRole("button", { name: "Second: 0" })).not.toBe(button);
+    expect(view.getByRole("button", { name: "Second: 1" })).toBe(button);
     view.unmount();
-    expect(disposed).toHaveBeenCalledTimes(2);
+    await Promise.resolve();
+    expect(disposed).toHaveBeenCalledOnce();
   });
+  it.each(["replace", "unmount"] as const)(
+    "parks nested Solid content and retires it on %s",
+    async (removal) => {
+      const disposed = vi.fn();
+      const disconnected = vi.fn();
+      const reconnected = vi.fn();
+      class Activity extends AsyncDirective {
+        render() {
+          return "Activity";
+        }
+
+        protected override disconnected() {
+          disconnected();
+        }
+
+        protected override reconnected() {
+          reconnected();
+        }
+      }
+      const activity = directive(Activity);
+      function Counter(props: { label: string }) {
+        const [count, setCount] = createSignal(0);
+        onCleanup(disposed);
+        return (
+          <>
+            <button type="button" onClick={() => setCount((current) => current + 1)}>
+              {props.label}: {count()}
+            </button>
+            <LitContent value={html`<span>${activity()}</span>`} />
+          </>
+        );
+      }
+      const [presented, setPresented] = createSignal(true);
+      const [label, setLabel] = createSignal("First");
+      const [shown, setShown] = createSignal(true);
+      const view = mountSolid(() => (
+        <SolidContentPresentation value={presented}>
+          <LitContent
+            value={shown() ? html`${solidContent(Counter, { label: label() })}` : nothing}
+          />
+        </SolidContentPresentation>
+      ));
+      flush();
+      const button = view.getByRole("button", { name: "First: 0" });
+      button.click();
+      flush();
+      setPresented(false);
+      flush();
+      await Promise.resolve();
+      expect(disposed).not.toHaveBeenCalled();
+      expect(disconnected).toHaveBeenCalledOnce();
+
+      setLabel("Second");
+      flush();
+      setPresented(true);
+      flush();
+      expect(view.getByRole("button", { name: "Second: 1" })).toBe(button);
+      expect(reconnected).toHaveBeenCalledOnce();
+      button.focus();
+      expect(document.activeElement).toBe(button);
+
+      setPresented(false);
+      flush();
+      await Promise.resolve();
+      if (removal === "replace") {
+        setShown(false);
+        flush();
+      } else {
+        view.unmount();
+      }
+      await Promise.resolve();
+      expect(disposed).toHaveBeenCalledOnce();
+      expect(button.isConnected).toBe(false);
+      view.unmount();
+    },
+  );
 });
 
 it("updates an isolated Lit outlet and retires its directives without replacing Solid siblings", () => {

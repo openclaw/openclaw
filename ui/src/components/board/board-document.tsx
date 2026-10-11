@@ -14,7 +14,6 @@ import {
 } from "solid-js";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { hasOperatorApprovalsAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
-import { t } from "../../i18n/index.ts";
 import {
   acquireBoardProviderForSession,
   type BoardProvider,
@@ -28,6 +27,7 @@ import {
   isGatewayMethodAdvertised,
 } from "../../lib/gateway-methods.ts";
 import { projectBoardProvider } from "../../lib/reactive/domain-board.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { Icon } from "../solid/icon.tsx";

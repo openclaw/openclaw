@@ -119,6 +119,25 @@ describe("resolveGroupActivationFor", () => {
         ).toBe(activation);
       }
       expect(readEntries(storePath)).toEqual(before);
+      const updatedActivation = activation === "always" ? "mention" : "always";
+      await upsertSessionEntry({
+        storePath,
+        sessionKey: WORK_GROUP_SESSION_KEY,
+        entry: {
+          sessionId: "work-session",
+          updatedAt: 789,
+          groupActivation: updatedActivation,
+        },
+      });
+      expect(
+        await resolveGroupActivationFor({
+          cfg,
+          accountId: "work",
+          sessionKey: WORK_GROUP_SESSION_KEY,
+          agentId: "main",
+          conversationId: GROUP_CONVERSATION_ID,
+        }),
+      ).toBe(updatedActivation);
     },
   );
 

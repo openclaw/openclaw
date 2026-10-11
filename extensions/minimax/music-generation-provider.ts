@@ -5,7 +5,7 @@ import {
   type GeneratedMusicAsset,
   type MusicGenerationProvider,
 } from "openclaw/plugin-sdk/music-generation";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -212,7 +212,7 @@ export function buildMinimaxMusicGenerationProvider(
     label: "MiniMax",
     defaultModel: DEFAULT_MINIMAX_MUSIC_MODEL,
     models: [DEFAULT_MINIMAX_MUSIC_MODEL, "music-2.6-free", "music-cover", "music-cover-free"],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: providerId, ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: providerId, ...ctx }),
     capabilities: {
       generate: {
         maxTracks: 1,
