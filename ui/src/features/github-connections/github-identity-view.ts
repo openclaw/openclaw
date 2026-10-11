@@ -15,8 +15,8 @@ defineSolidBridge<{
       get when() {
         return props.controller !== null;
       },
-      get children() {
-        return createComponent(GitHubIdentity, {
+      children: () =>
+        createComponent(GitHubIdentity, {
           get controller() {
             void props.revision;
             return props.controller!;
@@ -24,8 +24,7 @@ defineSolidBridge<{
           get onOpenConnections() {
             return props.onOpenConnections;
           },
-        });
-      },
+        }),
     }),
   {
     properties: {

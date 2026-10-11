@@ -140,7 +140,7 @@ export const scenes: Scene[] = [
       label: `GitHub connections: ${state}`,
       ready: "#settings-profile-github-connections .settings-row",
       scrollTo: "#settings-profile-github-connections",
-      prepare: async (page) => {
+      prepare: async (page: Page) => {
         const connections = page.locator("#settings-profile-github-connections");
         if (state !== "status") {
           await connections
