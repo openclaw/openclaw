@@ -25,7 +25,7 @@ import { isDeliveredCurrentSourceReplyAsync } from "../../infra/outbound/source-
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
-import { withPreparedChannelReadAuthority } from "../../shared/channel-read-authority.js";
+import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import * as embeddedMessageDelivery from "../embedded-agent-message-delivery.js";
 import { createSandboxBridgeReadFile } from "../sandbox-media-paths.js";
@@ -547,11 +547,7 @@ function* createMessageToolSteps(
         action === "send" &&
         sourceReplySinkDeliveryMode === "message_tool_only" &&
         normalizeOptionalString(trustedTurnContext?.toolContext?.currentSourceTurnId) !== undefined;
-      const prepareUse = messageActionAuthorization.scheduled?.prepareUse;
-      return await withPreparedChannelReadAuthority(
-        prepareUse
-          ? () => prepareUse(Boolean(scheduledRead || scheduledWrite), assertActionCurrent)
-          : undefined,
+      return await withChannelReadAuthority(
         action === "download-file" || scheduledRead || assertDashboardReadCurrent
           ? assertActionCurrent
           : undefined,

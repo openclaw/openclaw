@@ -154,23 +154,15 @@ function readDenialErrorCodeFromMessage(value: unknown): string | undefined {
   return TOOL_DENIAL_ERROR_CODES.find((code) => message === code || message.startsWith(`${code}:`));
 }
 
-function readNestedErrorCodeField(value: unknown): string | undefined {
+function extractErrorCodeField(value: unknown, nested = false): string | undefined {
   const record = asOptionalObjectRecord(value);
+  const cause = nested
+    ? (readDenialErrorCodeFromMessage(record?.message) ??
+      readDenialErrorCodeFromMessage(record?.error))
+    : (extractErrorCodeField(record?.error, true) ??
+      extractErrorCodeField(record?.nodeError, true));
   return (
-    readDenialErrorCodeFromMessage(record?.message) ??
-    readDenialErrorCodeFromMessage(record?.error) ??
-    normalizeOptionalString(record?.code) ??
-    normalizeOptionalString(record?.gatewayCode)
-  );
-}
-
-function extractDirectErrorCodeField(value: unknown): string | undefined {
-  const record = asOptionalObjectRecord(value);
-  return (
-    readNestedErrorCodeField(record?.error) ??
-    readNestedErrorCodeField(record?.nodeError) ??
-    normalizeOptionalString(record?.code) ??
-    normalizeOptionalString(record?.gatewayCode)
+    cause ?? normalizeOptionalString(record?.code) ?? normalizeOptionalString(record?.gatewayCode)
   );
 }
 
@@ -401,7 +393,7 @@ export function extractToolResultText(result: unknown): string | undefined {
 
 export function extractToolErrorCode(result: unknown): string | undefined {
   const record = asOptionalObjectRecord(result);
-  return extractDirectErrorCodeField(record?.details) ?? extractDirectErrorCodeField(record);
+  return extractErrorCodeField(record?.details) ?? extractErrorCodeField(record);
 }
 
 export function isToolResultTimedOut(result: unknown): boolean {

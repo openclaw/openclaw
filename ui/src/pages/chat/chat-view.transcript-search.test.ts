@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
 import { renderChat } from "./chat-view.ts";
@@ -27,7 +28,7 @@ afterEach(() => {
 });
 
 function createPane(paneId = "primary") {
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   containers.push(container);
   document.body.append(container);
   const onClearReply = vi.fn();

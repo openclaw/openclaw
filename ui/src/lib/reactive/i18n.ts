@@ -71,4 +71,6 @@ export function projectI18n(source: TranslationSource) {
 }
 
 /** Solid consumers retain t("key") without loading signals in the existing Lit entry. */
-export const t = projectI18n(i18n).t;
+const translation = projectI18n(i18n);
+export const t = translation.t;
+export const getLocale = translation.locale;
