@@ -540,6 +540,96 @@ describe("per-turn send budget", () => {
     expect(peekTurnSendCount({ sessionKey: ledgerSessionKey, runId, targetKey })).toBe(1);
   });
 
+  it.each([
+    ["delivers", true],
+    ["fails", false],
+  ])(
+    "shares one charge between concurrent same-key Gateway sends when the joined delivery %s",
+    async (_label, delivers) => {
+      // The Gateway joins concurrent requests sharing an idempotency key into one delivery
+      // and reports its outcome to every caller. The runner models that join with a deferred
+      // promise per key, so both calls reserve before either settles.
+      registerImessageGatewayDeliveryPlugin();
+      let settle!: (landed: boolean) => void;
+      const joined = new Promise<boolean>((resolve) => {
+        settle = resolve;
+      });
+      const inFlight = new Map<string, Promise<MessageActionResult>>();
+      mocks.runMessageAction.mockReset();
+      mocks.runMessageAction.mockImplementation((input: RunMessageActionInput) => {
+        const key = String(input.params?.idempotencyKey);
+        const existing = inFlight.get(key);
+        if (existing) {
+          return existing;
+        }
+        const work = joined.then((landed) => {
+          if (!landed) {
+            throw new Error("gateway delivery failed");
+          }
+          return {
+            kind: "send",
+            action: "send",
+            channel: "imessage",
+            to: currentChat,
+            handledBy: "plugin",
+            payload: {},
+            dryRun: false,
+          } as MessageActionResult;
+        });
+        inFlight.set(key, work);
+        return work;
+      });
+      const sessionKey = `agent:test:imessage:direct:gw-join-${String(delivers)}`;
+      const runId = "run-gw-join";
+      const tool = createMessageTool({
+        currentChannelProvider: "imessage",
+        currentChannelId: currentChat,
+        agentId: "test",
+        agentAccountId: "primary",
+        agentSessionKey: sessionKey,
+        runId,
+        sourceReplyDeliveryMode: "message_tool_only",
+        runMessageAction: mocks.runMessageAction as never,
+        config: { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } } as never,
+      });
+      const args = { action: "send", channel: "imessage", message: "once", idempotencyKey: "k1" };
+
+      const pending = Promise.allSettled([
+        tool.execute("call-join-a", { ...args }, undefined),
+        tool.execute("call-join-b", { ...args }, undefined),
+      ]);
+      settle(delivers);
+      const results = await pending;
+
+      // Neither call was falsely capped: both reached the joined delivery.
+      expect(mocks.runMessageAction).toHaveBeenCalledTimes(2);
+      expect(inFlight.size).toBe(1);
+      const ledgerSessionKey = buildTurnSendLedgerSessionKey("test", sessionKey)!;
+      const targetKey = buildTurnSendTargetKey({
+        channel: "imessage",
+        accountId: "primary",
+        target: currentChat,
+      });
+      const count = peekTurnSendCount({ sessionKey: ledgerSessionKey, runId, targetKey });
+      if (delivers) {
+        expect(results.map((result) => result.status)).toEqual(["fulfilled", "fulfilled"]);
+        for (const result of results) {
+          const value = (result as PromiseFulfilledResult<Awaited<ReturnType<typeof send>>>).value;
+          expect(value.details).not.toMatchObject({ status: "suppressed" });
+          expect(softNotice(value)).toBeUndefined();
+        }
+        expect(count).toBe(1);
+      } else {
+        expect(results.map((result) => result.status)).toEqual(["rejected", "rejected"]);
+        expect(count).toBe(0);
+        // The failed operation released its single charge, so a fresh send is admitted.
+        stubSend();
+        const next = await send(tool, "after failure");
+        expect(next.details).not.toMatchObject({ status: "suppressed" });
+      }
+    },
+  );
+
   it("disambiguates a duplicate model-emitted toolCallId into a distinct cap-blocked send, not an idempotent replay", async () => {
     // #119992 / PR #120491: distinct tool-call ids derive distinct idempotency keys, so a
     // second same-target send is a NEW send subject to the cap, never an idempotent replay.
