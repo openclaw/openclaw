@@ -22,7 +22,7 @@ import {
   getUpdateGitComparison,
   isUpdateActionable,
 } from "../../app/update-schedule-projection.ts";
-import { renderExternalSupervisorGuidance } from "../../components/external-supervisor-guidance.ts";
+import "../../components/external-supervisor-guidance.tsx";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsPage,
@@ -137,8 +137,11 @@ function renderRecordedAttempt(props: UpdatesViewProps) {
           })
         : nothing,
     (run?.reason ?? props.update.recordedUpdateAttempt?.reason) ===
-    "external-supervisor-update-required"
-      ? renderExternalSupervisorGuidance(props.update.externalSupervisorGuidance)
+      "external-supervisor-update-required" && props.update.externalSupervisorGuidance
+      ? html`<openclaw-external-supervisor-guidance
+          class="external-supervisor-guidance"
+          .guidance=${props.update.externalSupervisorGuidance}
+        ></openclaw-external-supervisor-guidance>`
       : nothing,
     ...(!failed && !readError
       ? []
