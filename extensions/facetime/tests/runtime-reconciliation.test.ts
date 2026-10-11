@@ -52,6 +52,7 @@ function deferred() {
 
 function observeDeletion() {
   const deleted = deferred();
+  // oxlint-disable-next-line typescript/unbound-method -- The interceptor calls the original with the runtime store as its explicit receiver below.
   const clear = PendingFaceTimeDialStore.prototype.clear;
   vi.spyOn(PendingFaceTimeDialStore.prototype, "clear").mockImplementation(function (
     this: PendingFaceTimeDialStore,
