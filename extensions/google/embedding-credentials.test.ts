@@ -80,7 +80,9 @@ it("keeps an empty remote override from inheriting Google's billing header", asy
     expect(requests).toMatchObject([{ "x-goog-user-project": "" }]);
   } finally {
     server.closeAllConnections();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
     await claim.release();
   }
 });
